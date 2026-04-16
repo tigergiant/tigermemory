@@ -1,0 +1,5 @@
+.obsidian/
+runtime/
+sources/assets/
+*.tmp
+*.log
