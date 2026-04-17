@@ -1,4 +1,5 @@
 .obsidian/
+.omx/
 runtime/
 sources/assets/
 *.tmp
