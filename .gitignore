@@ -6,3 +6,5 @@ sources/assets/
 *.log
 progress.md
 plans/
+__pycache__/
+*.pyc
