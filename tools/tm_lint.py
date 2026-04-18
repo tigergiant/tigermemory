@@ -26,6 +26,10 @@ DASHBOARD_REL = "wiki/operations/lint-dashboard.md"
 STALE_DAYS = int(os.environ.get("LINT_STALE_DAYS", 90))
 INBOX_AGE_DAYS = int(os.environ.get("LINT_INBOX_AGE_DAYS", 14))
 UNREVIEWED_WINDOW_DAYS = int(os.environ.get("LINT_UNREVIEWED_DAYS", 7))
+# C (unreviewed commits) alert threshold: only trigger inbox findings if count
+# reaches this number. Single [unreviewed] commits are normal API blips;
+# sustained batches indicate DeepSeek outage or systemic evasion.
+UNREVIEWED_ALERT_THRESHOLD = int(os.environ.get("LINT_UNREVIEWED_ALERT", 5))
 
 
 def today() -> dt.date:
@@ -368,16 +372,22 @@ def main() -> int:
     if run_ae_g_weekly:
         results["G"] = check_G_contradictions()
 
-    # Write dashboard
+    # Write dashboard (always reflects full results)
     dashboard = render_dashboard(results)
     (REPO / DASHBOARD_REL).write_text(dashboard, encoding="utf-8")
 
-    # Write inbox findings iff any issue
+    # Build trigger_results: same as results but suppress C below threshold
+    # (isolated [unreviewed] commits are noise, batches are signal).
+    trigger_results = dict(results)
+    if isinstance(trigger_results.get("C"), int) and trigger_results["C"] < UNREVIEWED_ALERT_THRESHOLD:
+        trigger_results["C"] = 0
+
+    # Write inbox findings iff any non-noise issue
     wrote_inbox = False
-    if has_any_findings(results):
+    if has_any_findings(trigger_results):
         stamp = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).strftime("%Y-%m-%d-%H%M")
         inbox_rel = f"inbox/{stamp}-linter-lint.md"
-        (REPO / inbox_rel).write_text(render_inbox_findings(results), encoding="utf-8")
+        (REPO / inbox_rel).write_text(render_inbox_findings(trigger_results), encoding="utf-8")
         wrote_inbox = True
         print(f"wrote {inbox_rel}")
 

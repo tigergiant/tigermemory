@@ -1,0 +1,28 @@
+name: Commit Guard
+
+# Server-side enforcement of L3 commit rules. Catches any commit that
+# bypassed the local .git/hooks/commit-msg (including linter auto-commits,
+# --no-verify pushes, and direct token pushes). Red X on invalid commits.
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate pushed commits
+        run: |
+          python3 tools/tm_guard_ci.py "${{ github.event.before }}" "${{ github.event.after }}"
