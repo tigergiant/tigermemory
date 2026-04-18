@@ -149,10 +149,10 @@ def _mem0_request(url: str, data: bytes | None = None) -> str:
 # the tiger-mainmachine Tailscale deployment; override via TM_MCP_ALLOWED_HOSTS
 # (comma-separated) for other topologies. DNS rebinding protection stays on.
 _DEFAULT_ALLOWED_HOSTS = [
-    "localhost",
-    "127.0.0.1",
-    "tiger-mainmachine",
-    "100.122.190.83",
+    "localhost", "localhost:*",
+    "127.0.0.1", "127.0.0.1:*",
+    "tiger-mainmachine", "tiger-mainmachine:*",
+    "100.122.190.83", "100.122.190.83:*",
 ]
 _allowed_hosts_env = os.environ.get("TM_MCP_ALLOWED_HOSTS", "").strip()
 _allowed_hosts = (
