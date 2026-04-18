@@ -32,6 +32,7 @@ except Exception:
     _TZ_CN_IMPL = datetime.timezone(datetime.timedelta(hours=8), name="Asia/Shanghai")
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 AGENTS = {"claude-code", "codex", "openclaw", "hermes", "deerflow", "human", "mem0"}
 ACTIONS = {"create", "update", "archive", "lint", "ingest", "compile"}
@@ -144,7 +145,30 @@ def _mem0_request(url: str, data: bytes | None = None) -> str:
 
 # ---------- MCP Server ----------
 
-mcp = FastMCP("tigermemory")
+# Allowed Host header values for HTTP transport. Defaults cover loopback plus
+# the tiger-mainmachine Tailscale deployment; override via TM_MCP_ALLOWED_HOSTS
+# (comma-separated) for other topologies. DNS rebinding protection stays on.
+_DEFAULT_ALLOWED_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    "tiger-mainmachine",
+    "100.122.190.83",
+]
+_allowed_hosts_env = os.environ.get("TM_MCP_ALLOWED_HOSTS", "").strip()
+_allowed_hosts = (
+    [h.strip() for h in _allowed_hosts_env.split(",") if h.strip()]
+    if _allowed_hosts_env
+    else _DEFAULT_ALLOWED_HOSTS
+)
+
+mcp = FastMCP(
+    "tigermemory",
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=_allowed_hosts,
+        # allowed_origins empty = allow any Origin (no browser-side CORS lock)
+    ),
+)
 
 
 @mcp.tool()
