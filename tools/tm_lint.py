@@ -91,9 +91,15 @@ def check_C_unreviewed_commits() -> int:
 
 
 def check_D_format_drift() -> list[str]:
-    """Run tm_core.lint_page_errors on every wiki page."""
+    """Run tm_core.lint_page_errors on every wiki content page.
+
+    index.md pages are TOC-style lists and exempt from the '## 摘要' /
+    '## 来源' requirement — they should be skipped.
+    """
     findings = []
     for p in REPO.glob("wiki/**/*.md"):
+        if p.name == "index.md":
+            continue
         text = p.read_text(encoding="utf-8", errors="ignore")
         errs = tm_core.lint_page_errors(text)
         if errs:
