@@ -1,0 +1,46 @@
+name: Weekly Inbox Triage
+
+# Classify inbox/*.md by L2 score + target existence.
+# Writes wiki/operations/inbox-triage.md dashboard (linter overwrite-only).
+# Does NOT auto-promote — output is decision support for Cascade/human.
+
+on:
+  schedule:
+    # Sunday 22:30 UTC+8 = Sunday 14:30 UTC
+    - cron: "30 14 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run inbox triage
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          python3 tools/tm_inbox_triage.py
+
+      - name: Commit + push if changed
+        run: |
+          git config user.name "linter-bot"
+          git config user.email "linter@tigermemory.local"
+          DATE=$(TZ=Asia/Shanghai date +%Y-%m-%d)
+          git add wiki/operations/inbox-triage.md || true
+          if git diff --cached --quiet; then
+            echo "No changes, skip commit"
+            exit 0
+          fi
+          git commit -m "[linter] lint: weekly inbox triage ${DATE}"
+          git pull --rebase origin master
+          git push origin master
