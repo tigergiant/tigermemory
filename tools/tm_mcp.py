@@ -121,6 +121,56 @@ def propose_wiki_page(
     if action not in {"create", "update"}:
         raise ValueError("action must be 'create' or 'update'")
 
+    # L2 content review. Hard-block if score < 30; otherwise continue with
+    # existing owner/fallback flow. Score info is returned to caller so the
+    # agent sees issues/suggestions.
+    import tm_review
+    review = tm_review.review_draft(body)
+    commit_suffix = " [unreviewed]" if review.get("review_skipped") else ""
+    if review.get("score") is not None and review["score"] < 30:
+        # Hard block: force draft into inbox with review result embedded,
+        # regardless of whether agent owns the partition.
+        stamp = tm_core.now("%Y-%m-%d-%H%M")
+        date = tm_core.now("%Y-%m-%d")
+        inbox_rel = f"inbox/{stamp}-{agent}-{partition}.md"
+        inbox_path = tm_core.REPO_ROOT / inbox_rel
+        if inbox_path.exists():
+            raise FileExistsError(f"file already exists: {inbox_rel}")
+        issues_md = "\n".join(f"- {i}" for i in review.get("issues", [])) or "- (none)"
+        suggestions_md = "\n".join(f"- {s}" for s in review.get("suggestions", [])) or "- (none)"
+        inbox_content = (
+            "---\n"
+            f"owner: {agent}\n"
+            "status: draft\n"
+            f"updated: {date}\n"
+            "---\n\n"
+            f"# L2-blocked draft: wiki/{partition}/{slug}.md\n\n"
+            f"## L2 review (score {review['score']}/100)\n\n"
+            f"### Issues\n\n{issues_md}\n\n"
+            f"### Suggestions\n\n{suggestions_md}\n\n"
+            f"## Original frontmatter\n\n```yaml\n{frontmatter}\n```\n\n"
+            f"## Original body\n\n{body}\n"
+        )
+        inbox_path.write_text(inbox_content, encoding="utf-8")
+        try:
+            sha = tm_core.git_commit_push(
+                [inbox_rel],
+                f"[{agent}] create: L2-block propose wiki/{partition}/{slug}.md",
+            )
+        except Exception:
+            try:
+                inbox_path.unlink()
+            except OSError:
+                pass
+            raise
+        return {
+            "path": inbox_rel,
+            "committed": True,
+            "commit_sha": sha,
+            "fallback_reason": f"L2 review score {review['score']} < 30",
+            "review": review,
+        }
+
     owners = tm_core.PARTITION_OWNERS[partition]
 
     # Fallback path: non-owner → inbox proposal (committed atomically).
@@ -145,7 +195,7 @@ def propose_wiki_page(
         try:
             sha = tm_core.git_commit_push(
                 [inbox_rel],
-                f"[{agent}] create: propose wiki/{partition}/{slug}.md",
+                f"[{agent}] create: propose wiki/{partition}/{slug}.md" + commit_suffix,
             )
         except Exception:
             try:
@@ -161,6 +211,7 @@ def propose_wiki_page(
                 f"agent '{agent}' is not an owner of wiki/{partition}/ "
                 f"(owners: {sorted(owners)})"
             ),
+            "review": review,
         }
 
     # Owner path.
@@ -195,7 +246,7 @@ def propose_wiki_page(
             files_to_add.append(f"wiki/{partition}/index.md")
 
     try:
-        sha = tm_core.git_commit_push(files_to_add, f"[{agent}] {action}: {wiki_rel}")
+        sha = tm_core.git_commit_push(files_to_add, f"[{agent}] {action}: {wiki_rel}" + commit_suffix)
     except Exception:
         # Roll back disk changes so working tree stays clean.
         if prior_wiki is None:
@@ -209,7 +260,7 @@ def propose_wiki_page(
             index_path.write_text(prior_index, encoding="utf-8")
         raise
 
-    return {"path": wiki_rel, "committed": True, "commit_sha": sha}
+    return {"path": wiki_rel, "committed": True, "commit_sha": sha, "review": review}
 
 
 @mcp.tool()
@@ -293,6 +344,25 @@ def lint_page(path: str) -> dict[str, Any]:
 
     errors = tm_core.lint_page_errors(full_path.read_text(encoding="utf-8"))
     return {"ok": len(errors) == 0, "errors": errors}
+
+
+@mcp.tool()
+def review_draft(body: str) -> dict[str, Any]:
+    """Score a draft body for content quality (L2 pre-review).
+
+    Agents can call this proactively before `propose_wiki_page` to check if
+    their draft is worth submitting. Uses DeepSeek API; fails open on error.
+
+    Args:
+        body: Markdown body to review
+
+    Returns:
+        {"score": int 0-100 | None, "issues": [str], "suggestions": [str],
+         "ready_for_compile": bool, "review_skipped": bool,
+         "reason": str (only if review_skipped)}
+    """
+    import tm_review
+    return tm_review.review_draft(body)
 
 
 @mcp.tool()
