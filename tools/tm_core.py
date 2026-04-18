@@ -44,7 +44,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent  # tools/.. = repo ro
 
 # ---------- Enums (AGENTS.md §3, §4) ----------
 
-AGENTS = {"claude-code", "codex", "openclaw", "hermes", "deerflow", "human", "mem0"}
+AGENTS = {"claude-code", "codex", "openclaw", "hermes", "deerflow", "human", "mem0", "linter"}
 ACTIONS = {"create", "update", "archive", "lint", "ingest", "compile"}
 TOPICS = {"brand", "investment", "operations", "production", "systems", "person", "cross"}
 
@@ -441,6 +441,13 @@ def guard_commit(commit_msg_path: pathlib.Path) -> list[str]:
                 f"agent '{agent}' is not an owner of wiki/{part}/ "
                 f"(owners: {sorted(owners)}). Write to inbox/ instead."
             )
+
+    # Special: wiki/operations/lint-dashboard.md is linter-overwrite-only via 'lint' action.
+    DASHBOARD_PATH = "wiki/operations/lint-dashboard.md"
+    if DASHBOARD_PATH in paths and not (agent == "linter" and action == "lint"):
+        errors.append(
+            f"{DASHBOARD_PATH} is overwrite-only by [linter] lint; other agents must not modify it"
+        )
 
     # 7. Inbox filename convention
     for p in paths:
