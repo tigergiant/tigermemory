@@ -63,6 +63,43 @@ def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
     return r
 
 
+# ---------- git helpers ----------
+
+def _git_pull_rebase() -> None:
+    """pull --rebase; on conflict/failure, abort and raise (AGENTS.md §5.1)."""
+    r = run(["git", "pull", "--rebase"], check=False)
+    if r.returncode != 0:
+        run(["git", "rebase", "--abort"], check=False)
+        raise RuntimeError(
+            f"git pull --rebase failed; rebase aborted. stderr: {r.stderr.strip()}"
+        )
+
+
+def _commit_push(files: list[str], msg: str) -> str:
+    """pull --rebase → add → commit → push (retry 1x). Returns short SHA.
+
+    On rebase conflict at any point, aborts the rebase and raises, per
+    AGENTS.md §5.1. Callers handle cleanup of the working-tree file(s)
+    if needed.
+    """
+    _git_pull_rebase()
+    run(["git", "add", "--"] + files)
+    commit_r = run(["git", "commit", "-m", msg], check=False)
+    if commit_r.returncode != 0:
+        raise RuntimeError(
+            f"git commit failed: {commit_r.stderr.strip() or commit_r.stdout.strip()}"
+        )
+
+    push_r = run(["git", "push"], check=False)
+    if push_r.returncode != 0:
+        _git_pull_rebase()
+        push2 = run(["git", "push"], check=False)
+        if push2.returncode != 0:
+            raise RuntimeError(f"push failed after rebase retry: {push2.stderr.strip()}")
+
+    return run(["git", "rev-parse", "--short", "HEAD"]).stdout.strip()
+
+
 # ---------- Mem0 helpers ----------
 
 def _mem0_key() -> str:
@@ -150,30 +187,15 @@ def write_inbox(agent: str, topic: str, title: str, body: str) -> dict[str, Any]
     )
     path.write_text(content, encoding="utf-8")
 
-    # Commit and push
-    run(["git", "pull", "--rebase"])
-    status = run(["git", "status", "--porcelain=v2", "--branch"], check=False)
-    if "unmerged" in status.stdout.lower():
-        run(["git", "rebase", "--abort"], check=False)
-        raise RuntimeError("unmerged paths detected; aborted. Retry writing as new inbox file.")
-    
-    run(["git", "add", "--", rel])
-    msg = f"[{agent}] create: {title}"
-    commit_r = run(["git", "commit", "-m", msg], check=False)
-    if commit_r.returncode != 0:
-        raise RuntimeError(f"git commit failed: {commit_r.stderr.strip() or commit_r.stdout.strip()}")
-    
-    push_r = run(["git", "push"], check=False)
-    if push_r.returncode != 0:
-        pull2 = run(["git", "pull", "--rebase"], check=False)
-        if pull2.returncode != 0:
-            run(["git", "rebase", "--abort"], check=False)
-            raise RuntimeError("rebase conflict on retry; aborted. Re-write as a new inbox file.")
-        push2 = run(["git", "push"], check=False)
-        if push2.returncode != 0:
-            raise RuntimeError(f"push failed after rebase retry: {push2.stderr.strip()}")
-
-    sha = run(["git", "rev-parse", "--short", "HEAD"]).stdout.strip()
+    try:
+        sha = _commit_push([rel], f"[{agent}] create: {title}")
+    except Exception:
+        # Leave the file on disk would pollute the next commit. Remove it.
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        raise
     # Construct GitHub URL (assumes origin is GitHub)
     try:
         remote_url = run(["git", "config", "--get", "remote.origin.url"]).stdout.strip()
@@ -190,19 +212,28 @@ def write_inbox(agent: str, topic: str, title: str, body: str) -> dict[str, Any]
 
 
 @mcp.tool()
-def propose_wiki_page(agent: str, partition: str, slug: str, frontmatter: str, body: str) -> dict[str, Any]:
+def propose_wiki_page(
+    agent: str,
+    partition: str,
+    slug: str,
+    frontmatter: str,
+    body: str,
+    action: str = "create",
+) -> dict[str, Any]:
     """Write a wiki page if agent owns the partition, otherwise write to inbox.
-    
+
     Args:
         agent: Agent name
         partition: Wiki partition (brand, investment, operations, production, systems, person)
         slug: Page filename without .md
-        frontmatter: YAML frontmatter (without --- delimiters)
+        frontmatter: YAML frontmatter (without --- delimiters; do NOT include 'updated:')
         body: Markdown body content
-    
+        action: "create" (default; fails if page exists) or "update" (required to overwrite)
+
     Returns:
-        {"path": "wiki/...", "committed": true, "fallback_reason": null} on success
-        {"path": "inbox/...", "committed": false, "fallback_reason": "..."} on fallback
+        On owner path:    {"path": "wiki/...", "committed": true, "commit_sha": "..."}
+        On fallback path: {"path": "inbox/...", "committed": true, "commit_sha": "...",
+                           "fallback_reason": "..."}
     """
     if agent not in AGENTS:
         raise ValueError(f"invalid agent '{agent}'")
@@ -210,14 +241,19 @@ def propose_wiki_page(agent: str, partition: str, slug: str, frontmatter: str, b
         raise ValueError(f"invalid partition '{partition}'")
     if not re.fullmatch(r"[a-z0-9\-]+", slug):
         raise ValueError("slug must be lowercase letters/digits/hyphens")
+    if action not in {"create", "update"}:
+        raise ValueError("action must be 'create' or 'update'")
 
+    date = now("%Y-%m-%d")
     owners = PARTITION_OWNERS[partition]
+
     if agent not in owners:
-        # Fallback to inbox
-        date = now("%Y-%m-%d")
+        # Fallback: write + commit inbox proposal (atomically, not a dirty working tree).
         stamp = now("%Y-%m-%d-%H%M")
         inbox_rel = f"inbox/{stamp}-{agent}-{partition}.md"
         inbox_path = REPO_ROOT / inbox_rel
+        if inbox_path.exists():
+            raise FileExistsError(f"file already exists: {inbox_rel}")
         inbox_content = (
             "---\n"
             f"owner: {agent}\n"
@@ -229,69 +265,96 @@ def propose_wiki_page(agent: str, partition: str, slug: str, frontmatter: str, b
             f"## Body\n\n{body}\n"
         )
         inbox_path.write_text(inbox_content, encoding="utf-8")
+        try:
+            sha = _commit_push(
+                [inbox_rel],
+                f"[{agent}] create: propose wiki/{partition}/{slug}.md",
+            )
+        except Exception:
+            try:
+                inbox_path.unlink()
+            except OSError:
+                pass
+            raise
         return {
             "path": inbox_rel,
-            "committed": False,
-            "fallback_reason": f"agent '{agent}' is not an owner of wiki/{partition}/ (owners: {sorted(owners)})"
+            "committed": True,
+            "commit_sha": sha,
+            "fallback_reason": (
+                f"agent '{agent}' is not an owner of wiki/{partition}/ "
+                f"(owners: {sorted(owners)})"
+            ),
         }
 
-    # Agent owns the partition - write directly to wiki
-    date = now("%Y-%m-%d")
+    # Owner path.
     wiki_rel = f"wiki/{partition}/{slug}.md"
     wiki_path = REPO_ROOT / wiki_rel
+    if wiki_path.exists() and action == "create":
+        raise FileExistsError(
+            f"{wiki_rel} already exists; pass action='update' to overwrite"
+        )
+    if not wiki_path.exists() and action == "update":
+        raise FileNotFoundError(
+            f"{wiki_rel} does not exist; pass action='create' (default) to create it"
+        )
+
+    # Strip any caller-supplied 'updated:' line to avoid duplicates.
+    fm_clean = "\n".join(
+        line for line in frontmatter.splitlines() if not re.match(r"^\s*updated\s*:", line)
+    ).strip()
     wiki_content = (
         "---\n"
-        f"{frontmatter}\n"
+        f"{fm_clean}\n"
         f"updated: {date}\n"
         "---\n\n"
         f"{body}\n"
     )
+
+    # Snapshot originals so we can roll back on git failure.
+    prior_wiki = wiki_path.read_text(encoding="utf-8") if wiki_path.exists() else None
     wiki_path.write_text(wiki_content, encoding="utf-8")
 
-    # Also update partition index
     index_path = REPO_ROOT / f"wiki/{partition}/index.md"
-    if index_path.exists():
-        index_content = index_path.read_text(encoding="utf-8")
-        if f"- [{slug}]({slug}.md)" not in index_content:
-            # Append to index
-            index_content += f"\n- [{slug}]({slug}.md)\n"
-            index_path.write_text(index_content, encoding="utf-8")
-
-    # Commit and push
-    run(["git", "pull", "--rebase"])
+    prior_index: str | None = None
     files_to_add = [wiki_rel]
     if index_path.exists():
-        files_to_add.append(f"wiki/{partition}/index.md")
-    run(["git", "add", "--"] + files_to_add)
-    msg = f"[{agent}] create: {wiki_rel}"
-    commit_r = run(["git", "commit", "-m", msg], check=False)
-    if commit_r.returncode != 0:
-        raise RuntimeError(f"git commit failed: {commit_r.stderr.strip() or commit_r.stdout.strip()}")
-    
-    push_r = run(["git", "push"], check=False)
-    if push_r.returncode != 0:
-        pull2 = run(["git", "pull", "--rebase"], check=False)
-        if pull2.returncode != 0:
-            run(["git", "rebase", "--abort"], check=False)
-            raise RuntimeError("rebase conflict on retry; aborted.")
-        push2 = run(["git", "push"], check=False)
-        if push2.returncode != 0:
-            raise RuntimeError(f"push failed after rebase retry: {push2.stderr.strip()}")
+        index_content = index_path.read_text(encoding="utf-8")
+        if f"({slug}.md)" not in index_content:
+            prior_index = index_content
+            if not index_content.endswith("\n"):
+                index_content += "\n"
+            index_content += f"- [{slug}]({slug}.md)\n"
+            index_path.write_text(index_content, encoding="utf-8")
+            files_to_add.append(f"wiki/{partition}/index.md")
 
-    sha = run(["git", "rev-parse", "--short", "HEAD"]).stdout.strip()
+    try:
+        sha = _commit_push(files_to_add, f"[{agent}] {action}: {wiki_rel}")
+    except Exception:
+        # Roll back disk changes so working tree stays clean.
+        if prior_wiki is None:
+            try:
+                wiki_path.unlink()
+            except OSError:
+                pass
+        else:
+            wiki_path.write_text(prior_wiki, encoding="utf-8")
+        if prior_index is not None:
+            index_path.write_text(prior_index, encoding="utf-8")
+        raise
+
     return {"path": wiki_rel, "committed": True, "commit_sha": sha}
 
 
 @mcp.tool()
-def search_memories(query: str, size: int = 5) -> list[dict[str, Any]]:
+def search_memories(query: str, size: int = 5) -> dict[str, Any]:
     """Search Mem0 memories by query.
-    
+
     Args:
         query: Search query text
         size: Number of results to return (default 5)
-    
+
     Returns:
-        List of memory objects from Mem0 API
+        Paginated Mem0 response: {"count": int, "next": ..., "previous": ..., "results": [...]}.
     """
     params = urllib.parse.urlencode(
         {"user_id": "tiger", "query": query, "page": 1, "size": size}
