@@ -442,12 +442,16 @@ def guard_commit(commit_msg_path: pathlib.Path) -> list[str]:
                 f"(owners: {sorted(owners)}). Write to inbox/ instead."
             )
 
-    # Special: wiki/operations/lint-dashboard.md is linter-overwrite-only via 'lint' action.
-    DASHBOARD_PATH = "wiki/operations/lint-dashboard.md"
-    if DASHBOARD_PATH in paths and not (agent == "linter" and action == "lint"):
-        errors.append(
-            f"{DASHBOARD_PATH} is overwrite-only by [linter] lint; other agents must not modify it"
-        )
+    # Special: linter-owned dashboards are overwrite-only by [linter] lint.
+    LINTER_DASHBOARDS = {
+        "wiki/operations/lint-dashboard.md",
+        "wiki/operations/inbox-triage.md",
+    }
+    for dash in LINTER_DASHBOARDS:
+        if dash in paths and not (agent == "linter" and action == "lint"):
+            errors.append(
+                f"{dash} is overwrite-only by [linter] lint; other agents must not modify it"
+            )
 
     # 7. Inbox filename convention
     for p in paths:

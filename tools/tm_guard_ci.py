@@ -22,7 +22,10 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import tm_core
 
-DASHBOARD = "wiki/operations/lint-dashboard.md"
+LINTER_DASHBOARDS = {
+    "wiki/operations/lint-dashboard.md",
+    "wiki/operations/inbox-triage.md",
+}
 # Tolerate the special [unreviewed] tag suffix on commit messages
 UNREVIEWED_TAG = "[unreviewed]"
 
@@ -81,13 +84,14 @@ def validate_commit(sha: str) -> list[str]:
     if "log.md" in paths and not (agent == "claude-code" and action == "compile"):
         errors.append(f"{short}: log.md is append-only via [claude-code] compile")
 
-    # lint-dashboard.md is [linter] lint only
-    if DASHBOARD in paths and not (agent == "linter" and action == "lint"):
-        errors.append(f"{short}: {DASHBOARD} is overwrite-only by [linter] lint")
+    # Linter-owned dashboards are overwrite-only by [linter] lint
+    for dash in LINTER_DASHBOARDS:
+        if dash in paths and not (agent == "linter" and action == "lint"):
+            errors.append(f"{short}: {dash} is overwrite-only by [linter] lint")
 
-    # Partition ownership on wiki/<partition>/ (skip dashboard already handled)
+    # Partition ownership on wiki/<partition>/ (skip dashboards already handled)
     for p in paths:
-        if p == DASHBOARD:
+        if p in LINTER_DASHBOARDS:
             continue
         mp = re.match(r"^wiki/([^/]+)/", p)
         if not mp:
