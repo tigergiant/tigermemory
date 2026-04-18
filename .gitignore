@@ -1,5 +1,7 @@
 .obsidian/
+Obsidian/
 .omx/
+*.base
 runtime/
 sources/assets/
 *.tmp
