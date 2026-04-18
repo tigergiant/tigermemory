@@ -145,14 +145,16 @@ def _mem0_request(url: str, data: bytes | None = None) -> str:
 
 # ---------- MCP Server ----------
 
-# Allowed Host header values for HTTP transport. Defaults cover loopback plus
-# the tiger-mainmachine Tailscale deployment; override via TM_MCP_ALLOWED_HOSTS
-# (comma-separated) for other topologies. DNS rebinding protection stays on.
+# Allowed Host header values for HTTP transport. Defaults cover WSL loopback
+# plus the tigermemory-wsl Tailscale node (clients connect directly, no host
+# portproxy). Override via TM_MCP_ALLOWED_HOSTS (comma-separated) for other
+# topologies. DNS rebinding protection stays on.
 _DEFAULT_ALLOWED_HOSTS = [
     "localhost", "localhost:*",
     "127.0.0.1", "127.0.0.1:*",
-    "tiger-mainmachine", "tiger-mainmachine:*",
-    "100.122.190.83", "100.122.190.83:*",
+    # WSL's own Tailscale identity (direct peer, no portproxy).
+    "tigermemory-wsl", "tigermemory-wsl:*",
+    "100.113.108.21", "100.113.108.21:*",
 ]
 _allowed_hosts_env = os.environ.get("TM_MCP_ALLOWED_HOSTS", "").strip()
 _allowed_hosts = (
