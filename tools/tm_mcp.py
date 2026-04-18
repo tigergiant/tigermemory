@@ -564,17 +564,39 @@ if __name__ == "__main__":
     args = ap.parse_args()
 
     if args.http:
-        # HTTP mode: require API key to be present in env (rudimentary
-        # deployment check; real Bearer enforcement is TODO — see
-        # deploy/mcp/README.md "HTTP security").
+        # HTTP mode: load API key and wrap FastMCP's Starlette app with a
+        # simple Bearer middleware. We bypass FastMCP's OAuth/AuthSettings
+        # path (designed for full OAuth flows) and enforce a single shared
+        # token matching TM_MCP_API_KEY from runtime/openmemory/.env.
         try:
-            _mcp_api_key()
+            expected_key = _mcp_api_key()
         except RuntimeError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)
-        # Bind to requested host/port. FastMCP reads from .settings at run().
-        mcp.settings.host = args.host
-        mcp.settings.port = args.port
-        mcp.run(transport="streamable-http")
+
+        import uvicorn
+        from starlette.middleware.base import BaseHTTPMiddleware
+        from starlette.responses import JSONResponse
+
+        class BearerAuth(BaseHTTPMiddleware):
+            async def dispatch(self, request, call_next):
+                # Allow unauthenticated health probe.
+                if request.url.path == "/healthz":
+                    return JSONResponse({"ok": True})
+                auth = request.headers.get("authorization", "")
+                if not auth.startswith("Bearer "):
+                    return JSONResponse(
+                        {"error": "missing Bearer token"}, status_code=401
+                    )
+                token = auth[7:].strip()
+                if token != expected_key:
+                    return JSONResponse(
+                        {"error": "invalid token"}, status_code=403
+                    )
+                return await call_next(request)
+
+        app = mcp.streamable_http_app()
+        app.add_middleware(BearerAuth)
+        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     else:
         mcp.run()
