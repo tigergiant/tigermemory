@@ -564,15 +564,17 @@ if __name__ == "__main__":
     args = ap.parse_args()
 
     if args.http:
-        # HTTP mode requires API key for authentication
+        # HTTP mode: require API key to be present in env (rudimentary
+        # deployment check; real Bearer enforcement is TODO — see
+        # deploy/mcp/README.md "HTTP security").
         try:
             _mcp_api_key()
         except RuntimeError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)
-        # Set environment variables for uvicorn
-        os.environ["HOST"] = args.host
-        os.environ["PORT"] = str(args.port)
+        # Bind to requested host/port. FastMCP reads from .settings at run().
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
         mcp.run(transport="streamable-http")
     else:
         mcp.run()
