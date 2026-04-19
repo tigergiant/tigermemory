@@ -21,12 +21,14 @@ from __future__ import annotations
 
 import json
 import os
+import socket
+import subprocess
 import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
-
-import urllib.request
+from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import tm_core
 import tm_review
@@ -122,7 +124,7 @@ class ErrorResponse(BaseModel):
 def log_json(level: str, trace_id: str, endpoint: str, status: int, duration_ms: float, **extra: dict) -> None:
     """Emit JSON line to stderr."""
     entry = {
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%S.%fZ", time.gmtime()),
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
         "level": level,
         "trace_id": trace_id,
         "endpoint": endpoint,
@@ -138,16 +140,42 @@ def log_json(level: str, trace_id: str, endpoint: str, status: int, duration_ms:
 _start_time = time.time()
 
 
+def _probe_mem0_reachable() -> bool:
+    """TCP connect probe. Any HTTP response (incl. 4xx) means reachable.
+
+    urllib.urlopen raises on 4xx which previously caused false 'unreachable'
+    when Mem0's root path returned 404. Use a socket connect instead.
+    """
+    try:
+        parsed = urlparse(tm_core.mem0_base())
+        host = parsed.hostname or "localhost"
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        with socket.create_connection((host, port), timeout=2):
+            return True
+    except Exception:
+        return False
+
+
+def _git_sha() -> str | None:
+    """Return short git sha of tigermemory HEAD, or None if unavailable."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(tm_core.REPO_ROOT), "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=True,
+        )
+        return out.stdout.strip() or None
+    except Exception:
+        return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: check Mem0 reachability
-    mem0_ok = False
-    try:
-        urllib.request.urlopen(tm_core.mem0_base(), timeout=2)
-        mem0_ok = True
-    except Exception:
-        pass
-    app.state.mem0_reachable = mem0_ok
+    # Startup: check Mem0 reachability (TCP-level, see _probe_mem0_reachable docstring)
+    app.state.mem0_reachable = _probe_mem0_reachable()
+    app.state.tm_core_version = _git_sha()
     yield
     # Shutdown: nothing to clean up
 
@@ -176,18 +204,11 @@ async def health():
     trace_id = str(uuid.uuid4())
     start = time.time()
     try:
-        # Try to get git sha
-        sha = None
-        try:
-            sha = tm_core.git_sha()
-        except Exception:
-            pass
-
         return HealthResponse(
             ok=True,
             version=VERSION,
-            tm_core_version=sha,
-            mem0_reachable=app.state.mem0_reachable,
+            tm_core_version=app.state.tm_core_version,
+            mem0_reachable=_probe_mem0_reachable(),
             deepseek_reachable=None,
             uptime_seconds=time.time() - _start_time,
         )

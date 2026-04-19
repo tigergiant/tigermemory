@@ -10,3 +10,6 @@ progress.md
 plans/
 __pycache__/
 *.pyc
+deploy/openclaw-ce/node_modules/
+deploy/openclaw-ce/dist/
+deploy/openclaw-ce/*.tsbuildinfo
