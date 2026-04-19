@@ -93,13 +93,13 @@ class ListPartitionResponse(BaseModel):
 
 
 class WriteMemoryRequest(BaseModel):
-    agent: str = Field(..., pattern=r"^(claude-code|codex|openclaw|hermes|deerflow|human|mem0)$")
+    agent: str = Field(..., pattern=r"^(claude-code|codex|openclaw|hermes|deerflow|human|mem0|tigermemory-ce)$")
     topic: str = Field(..., pattern=r"^(brand|investment|operations|production|systems|person|cross)$")
     text: str = Field(..., min_length=1, max_length=10000)
 
 
 class WriteInboxRequest(BaseModel):
-    agent: str = Field(..., pattern=r"^(claude-code|codex|openclaw|hermes|deerflow|human|mem0)$")
+    agent: str = Field(..., pattern=r"^(claude-code|codex|openclaw|hermes|deerflow|human|mem0|tigermemory-ce)$")
     topic: str = Field(..., pattern=r"^(brand|investment|operations|production|systems|person|cross)$")
     title: str = Field(..., min_length=1, max_length=80)
     body: str = Field(..., min_length=1, max_length=50000)
