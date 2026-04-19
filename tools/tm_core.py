@@ -215,7 +215,7 @@ def mcp_api_key() -> str:
 
 
 def mem0_base() -> str:
-    return os.getenv("MEM0_URL", "http://tiger-mainmachine:9765")
+    return _env_value("MEM0_URL")
 
 
 def mem0_request(url: str, data: bytes | None = None) -> str:

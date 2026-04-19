@@ -223,7 +223,7 @@ async def search_memories(req: SearchMemoriesRequest):
     try:
         response_body = tm_core.mem0_search(req.query, req.limit)
         data = json.loads(response_body)
-        results = data.get("results", [])
+        results = data.get("items", [])
         return SearchMemoriesResponse(count=len(results), results=results)
     except Exception as e:
         log_json("error", trace_id, "/search_memories", 500, (time.time() - start) * 1000, detail=str(e))
