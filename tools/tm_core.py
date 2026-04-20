@@ -30,6 +30,7 @@ import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
+from typing import Any
 
 try:
     from zoneinfo import ZoneInfo
@@ -528,3 +529,164 @@ def write_and_commit_inbox(agent: str, topic: str, title: str, body: str) -> tup
             pass
         raise
     return rel, sha
+
+
+# ---------- P6.1 Fact refinement (DeepSeek) ----------
+
+REFINE_DEEPSEEK_ENDPOINT = "https://api.deepseek.com/v1/chat/completions"
+REFINE_DEEPSEEK_MODEL = "deepseek-chat"
+REFINE_DEFAULT_TIMEOUT = 15  # seconds
+REFINE_MIN_TEXT_LEN = 20
+REFINE_MAX_TEXT_LEN = 500
+
+REFINE_PROMPT_TEMPLATE = """你是 Tiger 的记忆提炼助手。从下面的会话摘要中，提取 1-{max_facts} 条对 Tiger 长期有用的结构化事实。
+
+【输出格式】严格 JSON 数组，每条包含:
+- topic: 必须从 [systems, brand, operations, investment, person, production] 选一个
+- text: {min_len}-{max_len} 字中文，一句话描述一个具体事实
+
+【规则】
+1. 只提炼事实，不提炼情绪/感受/流水账
+2. 忽略心跳/巡检/格式化回复/调试日志
+3. 如果整场对话无有价值事实，返回空数组 []
+4. 不要编号、不要 markdown、只输出纯 JSON 数组
+
+【topic 归类指引】
+- systems: 工程、架构、工具链、bug 修复
+- brand: Doodiu / IPFB / Tigerland 等品牌决策
+- operations: 日常运营、协作流程、团队管理
+- investment: 投资、资金、财务决策
+- person: 个人偏好、关系、健康
+- production: 生产制造、供应链、打样
+
+会话摘要将在用户消息中给出。输出 JSON 对象 {{"facts": [...]}}。"""
+
+
+def _call_deepseek_json(
+    system_prompt: str,
+    user_msg: str,
+    *,
+    timeout: int = REFINE_DEFAULT_TIMEOUT,
+    temperature: float = 0.2,
+    max_tokens: int = 1024,
+) -> tuple[bool, Any]:
+    """Low-level DeepSeek JSON call. Returns (ok, parsed_or_reason).
+
+    Bypasses ambient HTTP(S)_PROXY env vars (same pattern as tm_review).
+    On any failure returns (False, reason_str). On success returns (True, parsed_json).
+    """
+    try:
+        key = _env_value("DEEPSEEK_API_KEY")
+    except RuntimeError as e:
+        return False, f"no DEEPSEEK_API_KEY: {e}"
+
+    payload = json.dumps({
+        "model": REFINE_DEEPSEEK_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_msg},
+        ],
+        "temperature": temperature,
+        "response_format": {"type": "json_object"},
+        "max_tokens": max_tokens,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        REFINE_DEEPSEEK_ENDPOINT,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        return False, f"DeepSeek HTTP {e.code}"
+    except urllib.error.URLError as e:
+        return False, f"DeepSeek unreachable: {e.reason}"
+    except Exception as e:
+        return False, f"DeepSeek error: {e}"
+
+    try:
+        api_resp = json.loads(raw)
+        content = api_resp["choices"][0]["message"]["content"]
+        parsed = json.loads(content)
+    except (KeyError, json.JSONDecodeError, TypeError) as e:
+        return False, f"malformed DeepSeek response: {e}"
+
+    return True, parsed
+
+
+def refine_from_summary(
+    summary: str,
+    max_facts: int = 3,
+    *,
+    timeout: int = REFINE_DEFAULT_TIMEOUT,
+) -> list[dict]:
+    """Extract up to max_facts structured facts from a conversation summary.
+
+    Returns a list of {"topic": str, "text": str}. Empty list on:
+    - Empty/too-short summary
+    - DeepSeek API failure (fail-closed: caller treats as "nothing to refine")
+    - All facts failed validation
+
+    Uses DeepSeek chat/completions with response_format=json_object. The model
+    is prompted to return a JSON object with a "facts" key holding the array
+    (JSON mode requires object at root).
+    """
+    if not isinstance(summary, str) or len(summary.strip()) < 30:
+        return []
+    if not isinstance(max_facts, int) or not (1 <= max_facts <= 10):
+        max_facts = 3
+
+    system_prompt = REFINE_PROMPT_TEMPLATE.format(
+        max_facts=max_facts,
+        min_len=REFINE_MIN_TEXT_LEN,
+        max_len=REFINE_MAX_TEXT_LEN,
+    )
+    # DeepSeek json_object mode requires the word "json" in prompts and emits
+    # a JSON object at the root. We ask the model to return {"facts": [...]}
+    user_msg = (
+        "请输出 JSON 对象，结构为 {\"facts\": [...]}，"
+        "facts 是事实数组（每条含 topic 和 text 字段）。\n\n"
+        f"会话摘要：\n{summary[:8000]}"
+    )
+
+    ok, parsed = _call_deepseek_json(
+        system_prompt, user_msg, timeout=timeout, temperature=0.2
+    )
+    if not ok:
+        return []
+
+    # Accept either top-level array, {"facts":[...]}, or {"results":[...]}
+    raw_facts: list = []
+    if isinstance(parsed, list):
+        raw_facts = parsed
+    elif isinstance(parsed, dict):
+        for key in ("facts", "results", "items", "data"):
+            if isinstance(parsed.get(key), list):
+                raw_facts = parsed[key]
+                break
+
+    valid: list[dict] = []
+    for f in raw_facts:
+        if not isinstance(f, dict):
+            continue
+        topic = f.get("topic")
+        text = f.get("text")
+        if not isinstance(topic, str) or topic not in TOPICS or topic == "cross":
+            # cross is not a real partition for facts
+            continue
+        if not isinstance(text, str):
+            continue
+        text = text.strip()
+        if len(text) < REFINE_MIN_TEXT_LEN or len(text) > REFINE_MAX_TEXT_LEN:
+            continue
+        valid.append({"topic": topic, "text": text})
+
+    return valid[:max_facts]

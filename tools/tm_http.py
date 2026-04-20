@@ -109,6 +109,22 @@ class ReviewDraftRequest(BaseModel):
     body: str = Field(..., min_length=1, max_length=20000)
 
 
+class RefineFactsRequest(BaseModel):
+    summary: str = Field(..., min_length=30, max_length=50000)
+    max_facts: int = Field(default=3, ge=1, le=10)
+    session_key: str | None = Field(default=None, max_length=200)
+
+
+class RefinedFact(BaseModel):
+    topic: str
+    text: str
+
+
+class RefineFactsResponse(BaseModel):
+    count: int
+    facts: list[RefinedFact]
+
+
 # ---------- Error Response ----------
 
 
@@ -312,6 +328,29 @@ async def write_inbox(req: WriteInboxRequest):
         raise HTTPException(status_code=503, detail=f"git push failed: {e}")
     finally:
         log_json("info", trace_id, "/write_inbox", 200, (time.time() - start) * 1000, body_len=len(req.body))
+
+
+@app.post("/refine_facts", response_model=RefineFactsResponse)
+async def refine_facts(req: RefineFactsRequest):
+    """P6.1: Distill structured facts from a conversation summary via DeepSeek.
+
+    Returns an empty list on DeepSeek failure (fail-closed). Callers should
+    treat empty as "nothing to write" rather than retrying.
+    """
+    trace_id = str(uuid.uuid4())
+    start = time.time()
+    try:
+        facts = tm_core.refine_from_summary(req.summary, req.max_facts)
+        return RefineFactsResponse(count=len(facts), facts=facts)
+    except Exception as e:
+        log_json("error", trace_id, "/refine_facts", 500, (time.time() - start) * 1000, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        log_json(
+            "info", trace_id, "/refine_facts", 200, (time.time() - start) * 1000,
+            summary_len=len(req.summary), max_facts=req.max_facts,
+            session_key=req.session_key,
+        )
 
 
 @app.post("/review_draft")
