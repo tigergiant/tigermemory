@@ -2,7 +2,7 @@
 """
 tools/tm_mcp.py — tigermemory MCP server (thin adapter over tm_core).
 
-Exposes 8 tools for remote agents (laptop MCP clients):
+Exposes 12 tools for remote agents (laptop MCP clients):
 - write_inbox
 - propose_wiki_page
 - search_memories
@@ -11,6 +11,10 @@ Exposes 8 tools for remote agents (laptop MCP clients):
 - list_partition
 - lint_page
 - lint_repo
+- list_pending_digests   (P6.3)
+- review_digest          (P6.3)
+- approve_fact           (P6.3)
+- mark_digest_reviewed   (P6.3)
 
 All rule enforcement and side effects live in tm_core.py. This module only
 handles MCP tool decoration, HTTP transport (Bearer auth + DNS rebinding
@@ -36,6 +40,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 import tm_core
+import tm_review_tools
 
 
 # ---------- MCP Server ----------
@@ -436,6 +441,123 @@ def lint_repo() -> dict[str, Any]:
         "missing_sources": missing_sources,
         "partition_mismatches": partition_mismatches,
     }
+
+
+# ---------- P6.3 Daily Digest Review Tools ----------
+
+@mcp.tool()
+def list_pending_digests() -> dict[str, Any]:
+    """
+    列出所有未审核的日报（inbox/daily/*.md 中 status != 'reviewed'）。
+    返回: {"digests": [{"date": "2026-04-20", "path": "...", "fact_count": 7, "status": "pending"}, ...]}
+    """
+    try:
+        digests = tm_review_tools.list_pending_digests()
+        return {"ok": True, "digests": digests, "count": len(digests)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@mcp.tool()
+def review_digest(date: str) -> dict[str, Any]:
+    """
+    读取指定日期的日报，返回结构化 facts 清单供人审。
+    参数: date = "2026-04-20"
+    返回: {"ok": True, "date": "...", "facts": [{"id": "fact-001", "topic": "systems", "text": "...", "source_type": "mem0", "source_id": "uuid"}, ...]}
+    """
+    try:
+        digest = tm_review_tools.load_digest(date)
+        if not digest:
+            return {"ok": False, "error": f"Digest not found for date: {date}"}
+        return {
+            "ok": True,
+            "date": date,
+            "facts": digest["facts"],
+            "frontmatter": digest["frontmatter"],
+            "fact_count": len(digest["facts"]),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@mcp.tool()
+def approve_fact(
+    date: str,
+    fact_id: str,
+    action: str,  # "keep", "delete", "promote"
+    promote_partition: str | None = None,
+    promote_slug: str | None = None,
+) -> dict[str, Any]:
+    """
+    对单条事实执行审核操作。
+    - keep: 标记为已审核保留（记录在 review_log）
+    - delete: Mem0 删记录 / inbox 文件 archive 到 archive/deleted/
+    - promote: 转 wiki page（走 L2 review），需给 partition + slug
+    返回: {"ok": true, "action": "...", "result": {...}}
+    """
+    try:
+        # Load digest to find the fact
+        digest = tm_review_tools.load_digest(date)
+        if not digest:
+            return {"ok": False, "error": f"Digest not found: {date}"}
+        
+        # Find fact by ID
+        fact = None
+        for f in digest["facts"]:
+            if f.get("id") == fact_id:
+                fact = f
+                break
+        if not fact:
+            return {"ok": False, "error": f"Fact not found: {fact_id}"}
+        
+        # Execute action
+        if action == "keep":
+            result = {"fact_id": fact_id, "action": "keep", "ok": True}
+        elif action == "delete":
+            result = tm_review_tools.execute_delete(fact)
+        elif action == "promote":
+            if not promote_partition or not promote_slug:
+                return {"ok": False, "error": "promote requires promote_partition and promote_slug"}
+            result = tm_review_tools.execute_promote(fact, promote_partition, promote_slug)
+        else:
+            return {"ok": False, "error": f"Invalid action: {action} (must be keep/delete/promote)"}
+        
+        # Append to review log
+        log_entry = {
+            "fact_id": fact_id,
+            "action": action,
+            "result": result,
+        }
+        if action == "promote":
+            log_entry["promoted_to"] = f"wiki/{promote_partition}/{promote_slug}.md"
+        
+        tm_review_tools.append_review_log(date, log_entry)
+        
+        return {"ok": True, "action": action, "result": result}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@mcp.tool()
+def mark_digest_reviewed(date: str) -> dict[str, Any]:
+    """
+    日报全部 fact 处理完后，把日报 frontmatter status 改为 'reviewed'，并 commit 到 git。
+    返回: {"ok": true, "committed": true, "commit_sha": "..."}
+    """
+    try:
+        # Update status
+        updated = tm_review_tools.save_digest_with_log(date, {"status": "reviewed"})
+        if not updated:
+            return {"ok": False, "error": f"Failed to update digest: {date}"}
+        
+        # Commit
+        repo_root = tm_core.REPO_ROOT
+        digest_path = f"inbox/daily/{date}.md"
+        sha = tm_core.git_commit_push([digest_path], f"[human] review: mark {date} digest as reviewed")
+        
+        return {"ok": True, "committed": True, "commit_sha": sha}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 # ---------- Entry point ----------

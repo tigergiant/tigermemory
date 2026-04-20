@@ -53,12 +53,22 @@ DIGEST_PROMPT_TEMPLATE = """你是 Tiger 的记忆日报助手。根据下面提
 严格返回 JSON 对象：
 {{
   "tldr": "3-5句话总结",
-  "facts_by_topic": {{
-    "systems": [{{"text": "...", "source": "mem0-id-xxx" or "inbox-filename"}}],
-    ...
-  }},
+  "facts": [
+    {{
+      "fact_id": "fact-001",
+      "topic": "systems",
+      "text": "...",
+      "source_type": "mem0",
+      "source_id": "uuid-or-filename"
+    }}
+  ],
   "audit_suggestions": ["建议1", "建议2"]
 }}
+
+注意：
+- fact_id 格式为 fact-XXX（三位数字）
+- source_type 只能是 "mem0" 或 "inbox"
+- source_id 对 mem0 是 UUID，对 inbox 是文件名
 
 【输入数据】
 目标日期：{date}
@@ -371,12 +381,28 @@ def _render_digest_markdown(
         return ""
     
     tldr = deepseek_result.get("tldr", "")
-    facts_by_topic = deepseek_result.get("facts_by_topic", {})
     audit_suggestions = deepseek_result.get("audit_suggestions", [])
+    
+    # Support both old (facts_by_topic) and new (facts array) formats
+    facts_by_topic = deepseek_result.get("facts_by_topic", {})
+    facts_array = deepseek_result.get("facts", [])
+    
+    if facts_array and not facts_by_topic:
+        # Convert facts array to facts_by_topic dict
+        facts_by_topic = {}
+        for fact in facts_array:
+            if isinstance(fact, dict):
+                topic = fact.get("topic", "unknown")
+                if topic not in facts_by_topic:
+                    facts_by_topic[topic] = []
+                facts_by_topic[topic].append(fact)
     
     # Build source lists
     mem_ids = [m.get("id", "unknown") for m in memories]
     inbox_names = [f["filename"] for f in inbox_files]
+    
+    # Topic list (used for ordering)
+    valid_topics = ["systems", "brand", "operations", "investment", "person", "production"]
     
     # Count facts per topic
     topic_counts = {}
@@ -386,30 +412,62 @@ def _render_digest_markdown(
             topic_counts[topic] = len(facts)
             total_facts += len(facts)
     
-    # Render markdown
+    # Build structured facts for frontmatter (P6.3 review support)
+    structured_facts = []
+    fact_counter = 0
+    for topic in valid_topics:
+        facts = facts_by_topic.get(topic, [])
+        if not isinstance(facts, list):
+            continue
+        for fact in facts:
+            if not isinstance(fact, dict):
+                continue
+            fact_counter += 1
+            fact_id = fact.get("fact_id", f"fact-{fact_counter:03d}")
+            source_type = fact.get("source_type", "unknown")
+            source_id = fact.get("source_id", fact.get("source", "unknown"))
+            text = fact.get("text", "")
+            structured_facts.append({
+                "id": fact_id,
+                "topic": topic,
+                "text": text,
+                "source_type": source_type,
+                "source_id": source_id,
+            })
+    
+    # Render YAML frontmatter with facts array (manual YAML to avoid dependency)
+    facts_yaml_lines = ["facts:"]
+    for fact in structured_facts:
+        facts_yaml_lines.append(f"  - id: {fact['id']}")
+        facts_yaml_lines.append(f"    topic: {fact['topic']}")
+        facts_yaml_lines.append(f"    text: {repr(fact['text'])}")  # Use repr for safe string
+        facts_yaml_lines.append(f"    source_type: {fact['source_type']}")
+        facts_yaml_lines.append(f"    source_id: {fact['source_id']}")
+    
     lines = [
         "---",
         f'source: tigermemory-digest',
         f'topic: daily',
         f'date: {date_str}',
         f'generated_at: {datetime.datetime.now(TZ_CN).isoformat()}',
+        f'status: pending',
         f'mem0_count: {len(memories)}',
         f'inbox_count: {len(inbox_files)}',
-        f'fact_count: {total_facts}',
-        "---",
-        "",
-        f"# Daily Digest {date_str}",
-        "",
-        "## TL;DR",
-        "",
-        tldr if tldr else "(当日无显著活动记录)",
-        "",
-        "## 事实清单（可审核）",
-        "",
+        f'fact_count: {len(structured_facts)}',
     ]
+    lines.extend(facts_yaml_lines)
+    lines.append("---")
+    lines.append("")
+    lines.append(f"# Daily Digest {date_str}")
+    lines.append("")
+    lines.append("## TL;DR")
+    lines.append("")
+    lines.append(tldr if tldr else "(当日无显著活动记录)")
+    lines.append("")
+    lines.append("## 事实清单（可审核）")
+    lines.append("")
     
     # Facts by topic
-    valid_topics = ["systems", "brand", "operations", "investment", "person", "production"]
     for topic in valid_topics:
         facts = facts_by_topic.get(topic, [])
         if not isinstance(facts, list) or not facts:
@@ -417,10 +475,13 @@ def _render_digest_markdown(
         
         lines.append(f"### {topic}")
         lines.append("")
-        for i, fact in enumerate(facts, 1):
-            text = fact.get("text", "") if isinstance(fact, dict) else str(fact)
-            source = fact.get("source", "unknown") if isinstance(fact, dict) else "unknown"
-            lines.append(f"- [fact-{i:03d}] {text} (source: {source})")
+        for fact in facts:
+            if not isinstance(fact, dict):
+                continue
+            fact_id = fact.get("fact_id", f"fact-{fact_counter:03d}")
+            text = fact.get("text", "")
+            source = fact.get("source", "unknown")
+            lines.append(f"- [{fact_id}] {text} (source: {source})")
         lines.append("")
     
     # Source references
