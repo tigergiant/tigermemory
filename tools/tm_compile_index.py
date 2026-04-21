@@ -43,6 +43,7 @@ PARTITIONS = ["brand", "investment", "operations", "person", "production", "syst
 PAGES_HEADING = "## 页面"
 SUMMARY_HEADING_RE = re.compile(r"^##\s+摘要\s*$", re.MULTILINE)
 FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
+FRONTMATTER_BLOCK_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 H1_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 INDEX_ITEM_RE = re.compile(r"^\s*-\s*\[([^\]]+)\]\(([^)]+)\)")
 
@@ -73,7 +74,53 @@ def _truncate(s: str, limit: int = MAX_SUMMARY_LEN) -> str:
     return s[:cut].rstrip(" ，。,.；;:") + "…"
 
 
+def _parse_aliases(fm: str) -> list[str]:
+    """Parse YAML aliases field from frontmatter text.
+
+    Supports two forms:
+      inline: aliases: [A, B, C]
+      block:  aliases:
+                - A
+                - B
+    """
+    # Inline form
+    m = re.search(r"^aliases:\s*\[(.+?)\]\s*$", fm, re.MULTILINE)
+    if m:
+        items = [s.strip().strip('"').strip("'") for s in m.group(1).split(",")]
+        return [s for s in items if s]
+    # Block form
+    m = re.search(r"^aliases:\s*\n((?:\s*-\s*.+(?:\n|$))+)", fm, re.MULTILINE)
+    if m:
+        results: list[str] = []
+        for line in m.group(1).splitlines():
+            mm = re.match(r"^\s*-\s*(.+?)\s*$", line)
+            if mm:
+                v = mm.group(1).strip().strip('"').strip("'")
+                if v:
+                    results.append(v)
+        return results
+    return []
+
+
+def extract_page_aliases(text: str) -> list[str]:
+    """Return list of frontmatter aliases (empty if none or no frontmatter)."""
+    m = FRONTMATTER_BLOCK_RE.match(text)
+    if not m:
+        return []
+    return _parse_aliases(m.group(1))
+
+
 def extract_page_title(text: str) -> str:
+    """Return the preferred display label for the page.
+
+    Priority:
+      1. frontmatter aliases[0]  (Chinese-friendly display name)
+      2. H1 heading
+      3. empty (caller falls back to filename stem)
+    """
+    aliases = extract_page_aliases(text)
+    if aliases:
+        return aliases[0]
     body = _strip_frontmatter(text)
     m = H1_RE.search(body)
     return m.group(1).strip() if m else ""
