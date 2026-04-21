@@ -690,3 +690,278 @@ def refine_from_summary(
         valid.append({"topic": topic, "text": text})
 
     return valid[:max_facts]
+
+
+# ---------- Phase B1: MiniMax M2 adapter + suggest_wiki_patches ----------
+
+# MiniMax M2 is a reasoning model: responses are wrapped in <think>...</think>
+# before the real payload. Its json_object mode is also weak — outputs often
+# come fenced in ```json ... ```. Both must be stripped.
+
+MINIMAX_DEFAULT_TIMEOUT = 120  # reasoning is slower than chat
+MINIMAX_DEFAULT_MAX_TOKENS = 4096
+
+_MINIMAX_THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+_MINIMAX_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```\s*$", re.DOTALL)
+
+
+def _strip_minimax_artifacts(raw: str) -> str:
+    """Remove <think>...</think> reasoning and ```json ... ``` fences."""
+    cleaned = _MINIMAX_THINK_RE.sub("", raw).strip()
+    m = _MINIMAX_FENCE_RE.match(cleaned)
+    if m:
+        cleaned = m.group(1).strip()
+    return cleaned
+
+
+def _call_minimax_json(
+    system_prompt: str,
+    user_msg: str,
+    *,
+    timeout: int = MINIMAX_DEFAULT_TIMEOUT,
+    temperature: float = 0.2,
+    max_tokens: int = MINIMAX_DEFAULT_MAX_TOKENS,
+) -> tuple[bool, Any]:
+    """Same contract as _call_deepseek_json but against MiniMax M2.
+
+    Reads MINIMAX_API_KEY / MINIMAX_BASE_URL / MINIMAX_MODEL from .env.
+    Strips reasoning and markdown fences before json.loads.
+    """
+    try:
+        key = _env_value("MINIMAX_API_KEY")
+        base = _env_value("MINIMAX_BASE_URL").rstrip("/")
+        model = _env_value("MINIMAX_MODEL")
+    except RuntimeError as e:
+        return False, f"no MiniMax config: {e}"
+
+    payload = json.dumps({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_msg},
+        ],
+        "temperature": temperature,
+        "response_format": {"type": "json_object"},
+        "max_tokens": max_tokens,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        f"{base}/chat/completions",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        return False, f"MiniMax HTTP {e.code}"
+    except urllib.error.URLError as e:
+        return False, f"MiniMax unreachable: {e.reason}"
+    except Exception as e:
+        return False, f"MiniMax error: {e}"
+
+    try:
+        api_resp = json.loads(raw)
+        content = api_resp["choices"][0]["message"]["content"]
+        cleaned = _strip_minimax_artifacts(content)
+        parsed = json.loads(cleaned)
+    except (KeyError, json.JSONDecodeError, TypeError) as e:
+        return False, f"malformed MiniMax response: {e}"
+
+    return True, parsed
+
+
+# ---------- suggest_wiki_patches (Phase B1) ----------
+
+SUGGEST_PATCH_MAX_PAGES_IN_PROMPT = 60    # keep prompt bounded
+SUGGEST_PATCH_MAX_SUMMARY_CHARS = 6000    # cap input summary
+SUGGEST_PATCH_DEFAULT_MAX = 5
+SUGGEST_PATCH_TYPES = {"append", "update_section", "new_section"}
+
+SUGGEST_PATCH_PROMPT = """你是 tigermemory wiki 的编辑助手。根据对话摘要和现有 wiki 页目录，判断该对话是否应该更新某些已有 wiki 页。
+
+严格规则：
+1. 只能针对 `wiki_catalog` 中**已存在**的页产出 patch。禁止编造页路径。
+2. 如果对话涉及**全新主题**（catalog 里没有对应 entity 页），返回空数组 patches=[]。新主题由另一条管道处理。
+3. 每个 patch 必须完整包含：
+   - page: wiki 页相对路径，必须是 wiki_catalog 中出现过的 page 字段原样拷贝
+   - type: "append" | "update_section" | "new_section"
+     * append: 在页的末尾追加新事实，无需指定 section
+     * update_section: 修正或扩充某个已有 section
+     * new_section: 新增一个 section
+   - section: 目标 section 标题（如 "已验证现状" / "待确认" / "规划"）。type=append 时填空字符串""
+   - content: 要追加或改写的 markdown 片段，简洁精炼，不要含 frontmatter 或 h1
+   - rationale: 一句话说明为什么这段对话触发了这个 patch（供人类评审）
+4. 至多返回 {max_patches} 个 patch。如果不确定该不该改某页，**宁可不返**。
+5. 不要输出任何评论、think 过程、代码块包裹，只输出 json 对象。
+
+输出格式：
+```
+{{"patches": [{{"page": "...", "type": "...", "section": "...", "content": "...", "rationale": "..."}}]}}
+```
+"""
+
+
+def suggest_wiki_patches(
+    summary: str,
+    wiki_catalog: list[dict],
+    *,
+    max_patches: int = SUGGEST_PATCH_DEFAULT_MAX,
+    timeout: int = MINIMAX_DEFAULT_TIMEOUT,
+) -> list[dict]:
+    """Propose patches to existing wiki pages based on a conversation summary.
+
+    Args:
+        summary: conversation summary (e.g. OpenClaw autoCompactionSummary).
+        wiki_catalog: list of {"page": str (relative path), "summary": str}.
+            Typically derived from `wiki/<partition>/index.md` entries.
+        max_patches: cap on output.
+        timeout: LLM request timeout.
+
+    Returns:
+        List of dicts {"page", "type", "section", "content", "rationale"},
+        validated against wiki_catalog's page set. Empty on any failure
+        (fail-closed) or if model returns no patches.
+
+    Design notes:
+    - Fail-closed: any LLM/parse error -> []. Caller treats as "no suggestions".
+    - Ground-truth paths: patches referring to pages not in wiki_catalog are
+      dropped. This is the hard rule against hallucinated paths.
+    - Empty catalog -> [] immediately (nothing to patch).
+    """
+    if not isinstance(summary, str) or len(summary.strip()) < 30:
+        return []
+    if not isinstance(wiki_catalog, list) or not wiki_catalog:
+        return []
+    if not isinstance(max_patches, int) or not (1 <= max_patches <= 20):
+        max_patches = SUGGEST_PATCH_DEFAULT_MAX
+
+    # Build a bounded prompt view of the catalog
+    catalog = wiki_catalog[:SUGGEST_PATCH_MAX_PAGES_IN_PROMPT]
+    allowed_pages = {entry["page"] for entry in catalog if isinstance(entry, dict) and "page" in entry}
+    if not allowed_pages:
+        return []
+
+    catalog_lines = [
+        f"- {e['page']} — {e.get('summary', '')}"
+        for e in catalog
+        if isinstance(e, dict) and "page" in e
+    ]
+    catalog_text = "\n".join(catalog_lines)
+    summary_text = summary.strip()[:SUGGEST_PATCH_MAX_SUMMARY_CHARS]
+
+    system_prompt = SUGGEST_PATCH_PROMPT.format(max_patches=max_patches)
+    user_msg = (
+        f"wiki_catalog:\n{catalog_text}\n\n"
+        f"会话摘要：\n{summary_text}\n\n"
+        "请输出 json 对象 {\"patches\": [...]}。"
+    )
+
+    ok, parsed = _call_minimax_json(
+        system_prompt, user_msg, timeout=timeout, temperature=0.1
+    )
+    if not ok:
+        return []
+
+    raw_patches: list = []
+    if isinstance(parsed, dict):
+        for key in ("patches", "results", "items"):
+            if isinstance(parsed.get(key), list):
+                raw_patches = parsed[key]
+                break
+    elif isinstance(parsed, list):
+        raw_patches = parsed
+
+    valid: list[dict] = []
+    for p in raw_patches:
+        if not isinstance(p, dict):
+            continue
+        page = p.get("page")
+        ptype = p.get("type")
+        section = p.get("section", "")
+        content = p.get("content")
+        rationale = p.get("rationale", "")
+        if not isinstance(page, str) or page not in allowed_pages:
+            continue  # hallucinated path, drop
+        if ptype not in SUGGEST_PATCH_TYPES:
+            continue
+        if ptype in ("update_section", "new_section") and not (isinstance(section, str) and section.strip()):
+            continue
+        if not isinstance(content, str) or not content.strip():
+            continue
+        valid.append({
+            "page": page,
+            "type": ptype,
+            "section": section.strip() if isinstance(section, str) else "",
+            "content": content.strip(),
+            "rationale": rationale.strip() if isinstance(rationale, str) else "",
+        })
+
+    return valid[:max_patches]
+
+
+def save_wiki_patches_to_inbox(
+    patches: list[dict],
+    source: str,
+    *,
+    summary_excerpt: str = "",
+) -> str:
+    """Serialize a patch suggestion list into a reviewable inbox file.
+
+    Returns the relative path of the written file. Raises ValueError on bad
+    input. Uses Asia/Shanghai time for filename and frontmatter.
+
+    The file is written directly under `inbox/` with topic='cross' because a
+    single suggest_wiki_patches call can span multiple partitions.
+    """
+    validate_agent(source)
+    if not isinstance(patches, list) or not patches:
+        raise ValueError("patches must be a non-empty list")
+
+    now = datetime.datetime.now(TZ_CN)
+    stamp = now.strftime("%Y-%m-%d-%H%M")
+    date_str = now.strftime("%Y-%m-%d")
+    fname = f"{stamp}-{source}-cross-wiki-patches.md"
+    rel = f"inbox/{fname}"
+    path = REPO_ROOT / rel
+
+    lines: list[str] = [
+        "---",
+        f"owner: {source}",
+        "status: proposal",
+        f"updated: {date_str}",
+        "type: wiki-patches",
+        "---",
+        "",
+        f"# Wiki Patch Suggestions ({stamp})",
+        "",
+        f"Generated by `suggest_wiki_patches` from a conversation summary. "
+        f"{len(patches)} patch(es) proposed. Review and apply manually or via"
+        " a future review tool.",
+        "",
+    ]
+    if summary_excerpt:
+        excerpt = summary_excerpt.strip()[:500]
+        lines += ["## 源摘要", "", excerpt, ""]
+
+    lines += ["## Patches", ""]
+    for i, p in enumerate(patches, 1):
+        lines.append(f"### {i}. `{p['page']}` — {p['type']}")
+        if p.get("section"):
+            lines.append(f"- **section**: {p['section']}")
+        lines.append(f"- **rationale**: {p.get('rationale', '')}")
+        lines.append("")
+        lines.append("```markdown")
+        lines.append(p["content"])
+        lines.append("```")
+        lines.append("")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return rel
