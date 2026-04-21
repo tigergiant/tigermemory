@@ -38,7 +38,7 @@ IGNORE_PATHS = ('inbox/', 'archive/', 'sources/', '.git/', '.tmp/')
 RE_MD_RELATIVE_LINK = re.compile(r'\[([^\]]+)\]\((\.\.?/[^)]+\.md)\)')
 RE_MD_SAME_PARTITION_LINK = re.compile(r'\[([^\]]+)\]\(([a-zA-Z0-9\-_]+\.md)\)')
 RE_OBSIDIAN_WIKILINK = re.compile(r'\[\[([^\]|]+)(\|[^\]]+)?\]\]')
-RE_CODE_BLOCK = re.compile(r'```[\s\S]*?```')
+RE_CODE_BLOCK = re.compile(r'(?m)^[ \t]*```[\s\S]*?^[ \t]*```')
 
 PARTITIONS = ("brand", "investment", "operations", "production", "systems", "person")
 
@@ -145,7 +145,7 @@ def scan_wiki_references(repo_root: str) -> dict[str, list[str]]:
             
             # 匹配同分区链接
             for match in RE_MD_SAME_PARTITION_LINK.finditer(content_clean):
-                target = match.group(1)
+                target = match.group(2)
                 if target.endswith('.md'):
                     normalized = _normalize_path(target, partition, repo_root)
                     if normalized and normalized in all_pages:
