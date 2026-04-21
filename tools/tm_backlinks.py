@@ -12,6 +12,7 @@ CLI:
   python3 tools/tm_backlinks.py write    # 写入 dashboard
   python3 tools/tm_backlinks.py diff     # stdout 显示差异
 """
+from __future__ import annotations
 
 import os
 import re
