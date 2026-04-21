@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -32,6 +33,42 @@ from urllib.parse import urlparse
 
 import tm_core
 import tm_review
+
+_INDEX_ITEM_RE = re.compile(r"^\s*-\s*\[([^\]]+)\]\(([^)]+)\)(?:\s*[—\-]\s*(.+))?$")
+_PARTITIONS = ("brand", "investment", "operations", "production", "systems", "person")
+
+
+def _load_wiki_catalog(partition: str) -> list[dict]:
+    """Parse `wiki/<partition>/index.md` into a list of {page, summary} dicts.
+
+    `partition="all"` unions every partition. Pages that already have a
+    curated one-line summary in the index are used verbatim; pages without
+    a summary are included with an empty summary field.
+    """
+    parts = _PARTITIONS if partition == "all" else (partition,)
+    items: list[dict] = []
+    for part in parts:
+        idx = tm_core.REPO_ROOT / "wiki" / part / "index.md"
+        if not idx.exists():
+            continue
+        in_pages = False
+        for line in idx.read_text(encoding="utf-8").splitlines():
+            if line.strip() == "## 页面":
+                in_pages = True
+                continue
+            if not in_pages:
+                continue
+            m = _INDEX_ITEM_RE.match(line)
+            if not m:
+                continue
+            fn = m.group(2).strip()
+            if fn == "index.md" or fn.startswith("http"):
+                continue
+            items.append({
+                "page": f"wiki/{part}/{fn}",
+                "summary": (m.group(3) or "").strip(),
+            })
+    return items
 
 try:
     from fastapi import FastAPI, HTTPException, Request
@@ -123,6 +160,34 @@ class RefinedFact(BaseModel):
 class RefineFactsResponse(BaseModel):
     count: int
     facts: list[RefinedFact]
+
+
+class SuggestPatchesRequest(BaseModel):
+    summary: str = Field(..., min_length=30, max_length=50000)
+    partition: str = Field(
+        default="all",
+        pattern=r"^(brand|investment|operations|production|systems|person|all)$",
+    )
+    max_patches: int = Field(default=5, ge=1, le=20)
+    save: bool = Field(default=True)
+    source: str = Field(
+        default="claude-code",
+        pattern=r"^(claude-code|codex|openclaw|hermes|deerflow|human|tigermemory-ce)$",
+    )
+
+
+class WikiPatchItem(BaseModel):
+    page: str
+    type: str
+    section: str
+    content: str
+    rationale: str
+
+
+class SuggestPatchesResponse(BaseModel):
+    count: int
+    patches: list[WikiPatchItem]
+    inbox_path: str | None = None
 
 
 # ---------- Error Response ----------
@@ -387,6 +452,52 @@ async def refine_facts(req: RefineFactsRequest):
             "info", trace_id, "/refine_facts", 200, (time.time() - start) * 1000,
             summary_len=len(req.summary), max_facts=req.max_facts,
             session_key=req.session_key,
+        )
+
+
+@app.post("/suggest_wiki_patches", response_model=SuggestPatchesResponse)
+async def suggest_wiki_patches(req: SuggestPatchesRequest):
+    """Phase B1: propose patches to existing wiki pages from a conversation summary.
+
+    Loads the wiki catalog from index.md (single partition or all). Calls
+    tm_core.suggest_wiki_patches (MiniMax M2). Optionally writes the result
+    to inbox/YYYY-MM-DD-HHMM-<source>-cross.md.
+
+    Fail-closed: returns count=0 / patches=[] on any LLM failure.
+    """
+    trace_id = str(uuid.uuid4())
+    start = time.time()
+    inbox_path = None
+    try:
+        catalog = _load_wiki_catalog(req.partition)
+        if not catalog:
+            return SuggestPatchesResponse(count=0, patches=[], inbox_path=None)
+
+        patches = tm_core.suggest_wiki_patches(
+            req.summary, catalog, max_patches=req.max_patches
+        )
+        if patches and req.save:
+            try:
+                inbox_path = tm_core.save_wiki_patches_to_inbox(
+                    patches, req.source, summary_excerpt=req.summary
+                )
+            except (ValueError, OSError) as e:
+                log_json("warn", trace_id, "/suggest_wiki_patches", 200,
+                         (time.time() - start) * 1000, save_error=str(e))
+
+        return SuggestPatchesResponse(
+            count=len(patches), patches=patches, inbox_path=inbox_path
+        )
+    except Exception as e:
+        log_json("error", trace_id, "/suggest_wiki_patches", 500,
+                 (time.time() - start) * 1000, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        log_json(
+            "info", trace_id, "/suggest_wiki_patches", 200,
+            (time.time() - start) * 1000,
+            partition=req.partition, summary_len=len(req.summary),
+            saved=inbox_path is not None,
         )
 
 
