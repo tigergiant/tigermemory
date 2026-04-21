@@ -232,6 +232,22 @@ async def health():
         log_json("info", trace_id, "/health", 200, (time.time() - start) * 1000)
 
 
+def _normalize_mem0_item(item: dict) -> dict:
+    """Normalize a Mem0 record for OpenClaw consumption.
+
+    Mem0 stores user metadata under the key `metadata_` (trailing underscore)
+    but OpenClaw's context-engine expects `metadata`. We rename it here so the
+    plugin can read `item.metadata.source` / `item.metadata.topic` directly.
+    Returns a shallow copy with the fixed key; original response is untouched.
+    """
+    if not isinstance(item, dict):
+        return item
+    out = dict(item)
+    if "metadata_" in out and "metadata" not in out:
+        out["metadata"] = out.pop("metadata_")
+    return out
+
+
 @app.post("/search_memories", response_model=SearchMemoriesResponse)
 async def search_memories(req: SearchMemoriesRequest):
     trace_id = str(uuid.uuid4())
@@ -239,7 +255,8 @@ async def search_memories(req: SearchMemoriesRequest):
     try:
         response_body = tm_core.mem0_search(req.query, req.limit)
         data = json.loads(response_body)
-        results = data.get("items", [])
+        raw_results = data.get("items", [])
+        results = [_normalize_mem0_item(r) for r in raw_results]
         return SearchMemoriesResponse(count=len(results), results=results)
     except Exception as e:
         log_json("error", trace_id, "/search_memories", 500, (time.time() - start) * 1000, detail=str(e))
