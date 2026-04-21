@@ -43,8 +43,12 @@ PARTITIONS = ["brand", "investment", "operations", "person", "production", "syst
 PAGES_HEADING = "## 页面"
 SUMMARY_HEADING_RE = re.compile(r"^##\s+摘要\s*$", re.MULTILINE)
 FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
+FRONTMATTER_BLOCK_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 H1_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 INDEX_ITEM_RE = re.compile(r"^\s*-\s*\[([^\]]+)\]\(([^)]+)\)")
+INDEX_ITEM_WITH_SUMMARY_RE = re.compile(
+    r"^\s*-\s*\[([^\]]+)\]\(([^)]+)\)(?:\s*—\s*(.+?))?\s*$"
+)
 
 MAX_SUMMARY_LEN = 120
 
@@ -73,7 +77,53 @@ def _truncate(s: str, limit: int = MAX_SUMMARY_LEN) -> str:
     return s[:cut].rstrip(" ，。,.；;:") + "…"
 
 
+def _parse_aliases(fm: str) -> list[str]:
+    """Parse YAML aliases field from frontmatter text.
+
+    Supports two forms:
+      inline: aliases: [A, B, C]
+      block:  aliases:
+                - A
+                - B
+    """
+    # Inline form
+    m = re.search(r"^aliases:\s*\[(.+?)\]\s*$", fm, re.MULTILINE)
+    if m:
+        items = [s.strip().strip('"').strip("'") for s in m.group(1).split(",")]
+        return [s for s in items if s]
+    # Block form
+    m = re.search(r"^aliases:\s*\n((?:\s*-\s*.+(?:\n|$))+)", fm, re.MULTILINE)
+    if m:
+        results: list[str] = []
+        for line in m.group(1).splitlines():
+            mm = re.match(r"^\s*-\s*(.+?)\s*$", line)
+            if mm:
+                v = mm.group(1).strip().strip('"').strip("'")
+                if v:
+                    results.append(v)
+        return results
+    return []
+
+
+def extract_page_aliases(text: str) -> list[str]:
+    """Return list of frontmatter aliases (empty if none or no frontmatter)."""
+    m = FRONTMATTER_BLOCK_RE.match(text)
+    if not m:
+        return []
+    return _parse_aliases(m.group(1))
+
+
 def extract_page_title(text: str) -> str:
+    """Return the preferred display label for the page.
+
+    Priority:
+      1. frontmatter aliases[0]  (Chinese-friendly display name)
+      2. H1 heading
+      3. empty (caller falls back to filename stem)
+    """
+    aliases = extract_page_aliases(text)
+    if aliases:
+        return aliases[0]
     body = _strip_frontmatter(text)
     m = H1_RE.search(body)
     return m.group(1).strip() if m else ""
@@ -155,10 +205,25 @@ def list_partition_pages(partition_dir: pathlib.Path) -> list[pathlib.Path]:
     return pages
 
 
-def compile_partition_index(partition: str) -> tuple[str, str]:
+def _extract_bullet_summary(line: str) -> str:
+    """Extract the ' — summary' portion from an index bullet line, if present."""
+    m = INDEX_ITEM_WITH_SUMMARY_RE.match(line)
+    if m and m.group(3):
+        return m.group(3).strip()
+    return ""
+
+
+def compile_partition_index(
+    partition: str,
+    refresh_labels: bool = False,
+) -> tuple[str, str]:
     """Return (new_index_text, old_index_text).
 
     Creates a fresh index.md if one does not exist.
+
+    When ``refresh_labels`` is True, every bullet is regenerated so the label
+    reflects the current frontmatter aliases or H1. The human-curated summary
+    (the ' — ...' tail) is preserved from the existing bullet when available.
     """
     partition_dir = WIKI_ROOT / partition
     if not partition_dir.is_dir():
@@ -180,17 +245,24 @@ def compile_partition_index(partition: str) -> tuple[str, str]:
     new_pages = sorted(fn for fn in present if fn not in ordered)
     ordered.extend(new_pages)
 
-    # Reuse existing bullet lines byte-for-byte (preserve human-curated
-    # summaries). Only generate new bullets for pages that were not previously
-    # indexed.
+    # Default mode: reuse existing bullet lines byte-for-byte (preserve
+    # human-curated summaries). Only generate new bullets for pages that were
+    # not previously indexed.
+    #
+    # refresh_labels mode: regenerate every bullet with the latest label from
+    # aliases/H1, but keep the ' — summary' tail from the existing bullet when
+    # we have one.
     lines: list[str] = []
     for fn in ordered:
-        if fn in existing_lines:
+        if fn in existing_lines and not refresh_labels:
             lines.append(existing_lines[fn])
             continue
         text = present[fn].read_text(encoding="utf-8")
         title = extract_page_title(text) or fn[:-3]
-        summary = extract_page_summary(text)
+        summary = (
+            _extract_bullet_summary(existing_lines.get(fn, ""))
+            or extract_page_summary(text)
+        )
         if summary:
             lines.append(f"- [{title}]({fn}) — {summary}")
         else:
@@ -226,7 +298,7 @@ def _diff(old: str, new: str, label: str) -> Iterable[str]:
 def cmd_check(args: argparse.Namespace) -> int:
     any_diff = False
     for part in _resolve_partitions(args.partition):
-        new, old = compile_partition_index(part)
+        new, old = compile_partition_index(part, refresh_labels=args.refresh_labels)
         if new != old:
             any_diff = True
             print(f"DIFF wiki/{part}/index.md", file=sys.stderr)
@@ -236,7 +308,7 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 def cmd_diff(args: argparse.Namespace) -> int:
     for part in _resolve_partitions(args.partition):
-        new, old = compile_partition_index(part)
+        new, old = compile_partition_index(part, refresh_labels=args.refresh_labels)
         if new != old:
             print(f"=== wiki/{part}/index.md ===")
             sys.stdout.writelines(_diff(old, new, f"wiki/{part}/index.md"))
@@ -246,7 +318,7 @@ def cmd_diff(args: argparse.Namespace) -> int:
 def cmd_write(args: argparse.Namespace) -> int:
     changed = []
     for part in _resolve_partitions(args.partition):
-        new, old = compile_partition_index(part)
+        new, old = compile_partition_index(part, refresh_labels=args.refresh_labels)
         if new != old:
             (WIKI_ROOT / part / "index.md").write_text(new, encoding="utf-8")
             changed.append(part)
@@ -264,6 +336,11 @@ def main() -> None:
     for name, fn in (("check", cmd_check), ("diff", cmd_diff), ("write", cmd_write)):
         sp = sub.add_parser(name)
         sp.add_argument("--partition", default=None, help="limit to one partition")
+        sp.add_argument(
+            "--refresh-labels",
+            action="store_true",
+            help="regenerate bullet labels from aliases/H1 (preserves summaries)",
+        )
         sp.set_defaults(func=fn)
 
     args = p.parse_args()

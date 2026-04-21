@@ -46,6 +46,34 @@ updated: 2026-04-21
 Beta 页没有摘要标题，只有 h1 下的直接段落。
 """
 
+PAGE_WITH_INLINE_ALIAS = """---
+owner: claude-code
+status: active
+aliases: [中文别名]
+---
+
+# English Title
+
+## 摘要
+
+英文 H1 搭配中文别名。
+"""
+
+PAGE_WITH_BLOCK_ALIAS = """---
+owner: claude-code
+status: active
+aliases:
+  - 别名甲
+  - 别名乙
+---
+
+# Gamma Page
+
+## 摘要
+
+块格式别名的样例。
+"""
+
 
 class CompileIndexTest(unittest.TestCase):
     def setUp(self):
@@ -129,6 +157,54 @@ class CompileIndexTest(unittest.TestCase):
         page = f"# Page\n\n## 摘要\n\n{long}\n"
         s = m.extract_page_summary(page)
         self.assertLessEqual(len(s), m.MAX_SUMMARY_LEN + 1)
+
+    def test_inline_alias_used_as_label_on_new_page(self):
+        self._write("aliased.md", PAGE_WITH_INLINE_ALIAS)
+        new, _ = m.compile_partition_index("test")
+        self.assertIn("[中文别名](aliased.md)", new)
+        self.assertNotIn("[English Title]", new)
+
+    def test_block_alias_form_parsed_and_first_entry_wins(self):
+        self._write("gamma.md", PAGE_WITH_BLOCK_ALIAS)
+        new, _ = m.compile_partition_index("test")
+        self.assertIn("[别名甲](gamma.md)", new)
+        self.assertNotIn("别名乙](gamma.md)", new)
+        self.assertNotIn("[Gamma Page]", new)
+
+    def test_refresh_labels_updates_label_and_keeps_summary(self):
+        (self.tmp / "test" / "index.md").write_text(
+            "# Test\n\n## 页面\n\n- [English Title](aliased.md) — 手工精简摘要\n",
+            encoding="utf-8",
+        )
+        self._write("aliased.md", PAGE_WITH_INLINE_ALIAS)
+        # Default: preserves byte-for-byte, label stays old
+        default, _ = m.compile_partition_index("test", refresh_labels=False)
+        self.assertIn("[English Title](aliased.md)", default)
+        # Refresh: label updated, summary preserved
+        refreshed, _ = m.compile_partition_index("test", refresh_labels=True)
+        self.assertIn("[中文别名](aliased.md)", refreshed)
+        self.assertIn("手工精简摘要", refreshed)
+        self.assertNotIn("English Title", refreshed)
+
+    def test_refresh_labels_no_alias_falls_back_to_h1(self):
+        (self.tmp / "test" / "index.md").write_text(
+            "# Test\n\n## 页面\n\n- [Old Label](alpha.md) — 旧摘要\n",
+            encoding="utf-8",
+        )
+        self._write("alpha.md", PAGE_WITH_SUMMARY)
+        refreshed, _ = m.compile_partition_index("test", refresh_labels=True)
+        # H1 wins since no alias
+        self.assertIn("[Alpha Page](alpha.md)", refreshed)
+        self.assertIn("旧摘要", refreshed)
+
+    def test_extract_page_aliases_handles_quoted_entries(self):
+        text = """---
+aliases: ["引号中文", '单引号']
+---
+
+# H1
+"""
+        self.assertEqual(m.extract_page_aliases(text), ["引号中文", "单引号"])
 
 
 if __name__ == "__main__":
