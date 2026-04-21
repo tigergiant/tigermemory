@@ -248,6 +248,22 @@ def _normalize_mem0_item(item: dict) -> dict:
     return out
 
 
+def _synthesize_rank_score(rank: int, total: int) -> float:
+    """Rank-based synthetic score in [0.2, 1.0].
+
+    OpenMemory CE does not return a similarity score — its search is a
+    substring filter over the memory list, already ordered by relevance.
+    We assign a linearly decaying score so OpenClaw's `recallScoreThreshold`
+    keeps meaningful semantics (top results pass, tail results filtered).
+
+    When true vector search is available (Mem0 Pro or upstream upgrade),
+    remove this synthesis and pass the native score through.
+    """
+    if total <= 1:
+        return 1.0
+    return round(1.0 - 0.8 * (rank / (total - 1)), 3)
+
+
 @app.post("/search_memories", response_model=SearchMemoriesResponse)
 async def search_memories(req: SearchMemoriesRequest):
     trace_id = str(uuid.uuid4())
@@ -256,8 +272,12 @@ async def search_memories(req: SearchMemoriesRequest):
         response_body = tm_core.mem0_search(req.query, req.limit)
         data = json.loads(response_body)
         raw_results = data.get("items", [])
-        results = [_normalize_mem0_item(r) for r in raw_results]
-        return SearchMemoriesResponse(count=len(results), results=results)
+        normalized = [_normalize_mem0_item(r) for r in raw_results]
+        total = len(normalized)
+        for rank, r in enumerate(normalized):
+            if "score" not in r or r.get("score") is None:
+                r["score"] = _synthesize_rank_score(rank, total)
+        return SearchMemoriesResponse(count=total, results=normalized)
     except Exception as e:
         log_json("error", trace_id, "/search_memories", 500, (time.time() - start) * 1000, detail=str(e))
         raise HTTPException(status_code=502, detail=f"mem0 unreachable: {e}")
