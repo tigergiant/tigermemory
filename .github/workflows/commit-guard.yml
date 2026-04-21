@@ -26,3 +26,7 @@ jobs:
       - name: Validate pushed commits
         run: |
           python3 tools/tm_guard_ci.py "${{ github.event.before }}" "${{ github.event.after }}"
+
+      - name: Check wiki index drift (Phase B0)
+        run: |
+          python3 tools/tm_compile_index.py check

@@ -26,20 +26,40 @@ jobs:
           git config user.name "tigermemory-linter"
           git config user.email "linter@tigermemory.local"
 
+      - name: Compile wiki indexes (B0 deterministic compiler)
+        run: |
+          python3 tools/tm_compile_index.py write
+
+      - name: Commit index changes if any
+        run: |
+          git add wiki/brand/index.md wiki/investment/index.md wiki/operations/index.md \
+                  wiki/person/index.md wiki/production/index.md wiki/systems/index.md || true
+          if git diff --cached --quiet; then
+            echo "No index drift, skipping compile commit"
+          else
+            git commit -m "[linter] compile: regenerate wiki indexes (tm_compile_index)"
+          fi
+
       - name: Run L4 lint
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
           python3 tools/tm_lint.py
 
-      - name: Commit + push if changed
+      - name: Commit lint changes if any
         run: |
           git add wiki/operations/lint-dashboard.md inbox/ || true
           if git diff --cached --quiet; then
-            echo "No changes, skip commit"
+            echo "No lint changes"
+          else
+            git commit -m "[linter] lint: daily L4 scan $(TZ=Asia/Shanghai date +%Y-%m-%d)"
+          fi
+
+      - name: Push
+        run: |
+          if git diff --quiet origin/master..HEAD; then
+            echo "Nothing to push"
             exit 0
           fi
-          # Disable commit-msg hook (guard is tm_io.py level, GH runner doesn't have it installed)
-          git commit -m "[linter] lint: daily L4 scan $(TZ=Asia/Shanghai date +%Y-%m-%d)"
           git pull --rebase
           git push
