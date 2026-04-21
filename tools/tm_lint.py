@@ -258,6 +258,7 @@ def render_dashboard(results: dict[str, Any]) -> str:
         "---",
         "owner: linter",
         "status: active",
+        'aliases: ["Lint 仪表板"]',
         f"updated: {date}",
         "---",
         "",

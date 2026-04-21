@@ -200,6 +200,7 @@ def compile_dashboard(backlinks: dict[str, list[str]], all_pages: list[str]) -> 
         "---",
         "owner: linter",
         "status: active",
+        'aliases: ["反链仪表板"]',
         f"updated: {date_str}",
         "---",
         "",
