@@ -43,12 +43,8 @@ PARTITIONS = ["brand", "investment", "operations", "person", "production", "syst
 PAGES_HEADING = "## 页面"
 SUMMARY_HEADING_RE = re.compile(r"^##\s+摘要\s*$", re.MULTILINE)
 FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
-FRONTMATTER_BLOCK_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 H1_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 INDEX_ITEM_RE = re.compile(r"^\s*-\s*\[([^\]]+)\]\(([^)]+)\)")
-INDEX_ITEM_WITH_SUMMARY_RE = re.compile(
-    r"^\s*-\s*\[([^\]]+)\]\(([^)]+)\)(?:\s*—\s*(.+?))?\s*$"
-)
 
 MAX_SUMMARY_LEN = 120
 
@@ -77,53 +73,7 @@ def _truncate(s: str, limit: int = MAX_SUMMARY_LEN) -> str:
     return s[:cut].rstrip(" ，。,.；;:") + "…"
 
 
-def _parse_aliases(fm: str) -> list[str]:
-    """Parse YAML aliases field from frontmatter text.
-
-    Supports two forms:
-      inline: aliases: [A, B, C]
-      block:  aliases:
-                - A
-                - B
-    """
-    # Inline form
-    m = re.search(r"^aliases:\s*\[(.+?)\]\s*$", fm, re.MULTILINE)
-    if m:
-        items = [s.strip().strip('"').strip("'") for s in m.group(1).split(",")]
-        return [s for s in items if s]
-    # Block form
-    m = re.search(r"^aliases:\s*\n((?:\s*-\s*.+(?:\n|$))+)", fm, re.MULTILINE)
-    if m:
-        results: list[str] = []
-        for line in m.group(1).splitlines():
-            mm = re.match(r"^\s*-\s*(.+?)\s*$", line)
-            if mm:
-                v = mm.group(1).strip().strip('"').strip("'")
-                if v:
-                    results.append(v)
-        return results
-    return []
-
-
-def extract_page_aliases(text: str) -> list[str]:
-    """Return list of frontmatter aliases (empty if none or no frontmatter)."""
-    m = FRONTMATTER_BLOCK_RE.match(text)
-    if not m:
-        return []
-    return _parse_aliases(m.group(1))
-
-
 def extract_page_title(text: str) -> str:
-    """Return the preferred display label for the page.
-
-    Priority:
-      1. frontmatter aliases[0]  (Chinese-friendly display name)
-      2. H1 heading
-      3. empty (caller falls back to filename stem)
-    """
-    aliases = extract_page_aliases(text)
-    if aliases:
-        return aliases[0]
     body = _strip_frontmatter(text)
     m = H1_RE.search(body)
     return m.group(1).strip() if m else ""
@@ -205,14 +155,6 @@ def list_partition_pages(partition_dir: pathlib.Path) -> list[pathlib.Path]:
     return pages
 
 
-def _extract_bullet_summary(line: str) -> str:
-    """Extract the ' — summary' portion from an index bullet line, if present."""
-    m = INDEX_ITEM_WITH_SUMMARY_RE.match(line)
-    if m and m.group(3):
-        return m.group(3).strip()
-    return ""
-
-
 def compile_partition_index(
     partition: str,
     refresh_labels: bool = False,
@@ -245,24 +187,26 @@ def compile_partition_index(
     new_pages = sorted(fn for fn in present if fn not in ordered)
     ordered.extend(new_pages)
 
-    # Default mode: reuse existing bullet lines byte-for-byte (preserve
-    # human-curated summaries). Only generate new bullets for pages that were
-    # not previously indexed.
-    #
-    # refresh_labels mode: regenerate every bullet with the latest label from
-    # aliases/H1, but keep the ' — summary' tail from the existing bullet when
-    # we have one.
+    # Build bullet lines. When refresh_labels is False, reuse existing bullets
+    # byte-for-byte to preserve human-curated summaries. When True, regenerate
+    # every bullet with the latest title (aliases/H1) but preserve summary tail.
     lines: list[str] = []
     for fn in ordered:
-        if fn in existing_lines and not refresh_labels:
-            lines.append(existing_lines[fn])
-            continue
         text = present[fn].read_text(encoding="utf-8")
         title = extract_page_title(text) or fn[:-3]
-        summary = (
-            _extract_bullet_summary(existing_lines.get(fn, ""))
-            or extract_page_summary(text)
-        )
+        summary = extract_page_summary(text)
+
+        if fn in existing_lines and not refresh_labels:
+            # Preserve existing bullet as-is
+            lines.append(existing_lines[fn])
+            continue
+
+        # Try to preserve summary from existing bullet when refreshing
+        if fn in existing_lines and refresh_labels:
+            old_line = existing_lines[fn]
+            if " — " in old_line:
+                summary = old_line.split(" — ", 1)[1].rstrip("\n")
+
         if summary:
             lines.append(f"- [{title}]({fn}) — {summary}")
         else:
