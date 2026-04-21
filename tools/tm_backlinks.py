@@ -18,8 +18,7 @@ import os
 import re
 import sys
 import hashlib
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import NamedTuple
 
@@ -194,7 +193,7 @@ def compile_dashboard(backlinks: dict[str, list[str]], all_pages: list[str]) -> 
     hubs = sorted(all_with_counts, key=lambda x: -x[1])[:10]
     
     # 生成日期
-    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    now = datetime.now(timezone(timedelta(hours=8)))
     date_str = now.strftime("%Y-%m-%d")
     
     lines = [
