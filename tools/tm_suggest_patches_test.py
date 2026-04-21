@@ -176,7 +176,7 @@ class SaveWikiPatchesTest(unittest.TestCase):
         rel = tm_core.save_wiki_patches_to_inbox(patches, "claude-code",
                                                   summary_excerpt="test summary")
         self.assertTrue(rel.startswith("inbox/"))
-        self.assertTrue(rel.endswith("-claude-code-cross-wiki-patches.md"))
+        self.assertTrue(rel.endswith("-claude-code-cross.md"))
         body = (self.tmp / rel).read_text(encoding="utf-8")
         self.assertIn("type: wiki-patches", body)
         self.assertIn("wiki/systems/alpha.md", body)

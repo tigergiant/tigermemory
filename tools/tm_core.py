@@ -924,10 +924,13 @@ def save_wiki_patches_to_inbox(
     if not isinstance(patches, list) or not patches:
         raise ValueError("patches must be a non-empty list")
 
+    # Filename follows standard inbox convention (AGENTS.md §5.4) to pass the
+    # guard: YYYY-MM-DD-HHMM-<agent>-<topic>.md. The wiki-patches nature is
+    # declared via `type: wiki-patches` in the frontmatter instead.
     now = datetime.datetime.now(TZ_CN)
     stamp = now.strftime("%Y-%m-%d-%H%M")
     date_str = now.strftime("%Y-%m-%d")
-    fname = f"{stamp}-{source}-cross-wiki-patches.md"
+    fname = f"{stamp}-{source}-cross.md"
     rel = f"inbox/{fname}"
     path = REPO_ROOT / rel
 
