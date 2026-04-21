@@ -714,6 +714,10 @@ def _strip_minimax_artifacts(raw: str) -> str:
     return cleaned
 
 
+_MINIMAX_RETRYABLE = {429, 500, 502, 503, 504, 529}
+_MINIMAX_RETRY_DELAYS = (1, 3)  # seconds; 2 retries total (3 attempts)
+
+
 def _call_minimax_json(
     system_prompt: str,
     user_msg: str,
@@ -726,6 +730,10 @@ def _call_minimax_json(
 
     Reads MINIMAX_API_KEY / MINIMAX_BASE_URL / MINIMAX_MODEL from .env.
     Strips reasoning and markdown fences before json.loads.
+
+    Retries on transient upstream errors (HTTP 429/5xx/529 overload) with a
+    short exponential backoff. Non-retryable errors (4xx auth, parse
+    failures) return immediately.
     """
     try:
         key = _env_value("MINIMAX_API_KEY")
@@ -745,26 +753,40 @@ def _call_minimax_json(
         "max_tokens": max_tokens,
     }).encode("utf-8")
 
-    req = urllib.request.Request(
-        f"{base}/chat/completions",
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-
-    try:
-        with opener.open(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8")
-    except urllib.error.HTTPError as e:
-        return False, f"MiniMax HTTP {e.code}"
-    except urllib.error.URLError as e:
-        return False, f"MiniMax unreachable: {e.reason}"
-    except Exception as e:
-        return False, f"MiniMax error: {e}"
+    last_err: str = "MiniMax error: exhausted retries"
+    for attempt in range(len(_MINIMAX_RETRY_DELAYS) + 1):
+        req = urllib.request.Request(
+            f"{base}/chat/completions",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        try:
+            with opener.open(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8")
+            break  # success -> parse below
+        except urllib.error.HTTPError as e:
+            last_err = f"MiniMax HTTP {e.code}"
+            if e.code in _MINIMAX_RETRYABLE and attempt < len(_MINIMAX_RETRY_DELAYS):
+                import time as _time
+                _time.sleep(_MINIMAX_RETRY_DELAYS[attempt])
+                continue
+            return False, last_err
+        except urllib.error.URLError as e:
+            last_err = f"MiniMax unreachable: {e.reason}"
+            if attempt < len(_MINIMAX_RETRY_DELAYS):
+                import time as _time
+                _time.sleep(_MINIMAX_RETRY_DELAYS[attempt])
+                continue
+            return False, last_err
+        except Exception as e:
+            return False, f"MiniMax error: {e}"
+    else:
+        return False, last_err
 
     try:
         api_resp = json.loads(raw)
@@ -808,12 +830,16 @@ SUGGEST_PATCH_PROMPT = """你是 tigermemory wiki 的编辑助手。根据对话
 """
 
 
+SUGGEST_PATCH_LLMS = {"auto", "minimax", "deepseek"}
+
+
 def suggest_wiki_patches(
     summary: str,
     wiki_catalog: list[dict],
     *,
     max_patches: int = SUGGEST_PATCH_DEFAULT_MAX,
     timeout: int = MINIMAX_DEFAULT_TIMEOUT,
+    llm: str = "auto",
 ) -> list[dict]:
     """Propose patches to existing wiki pages based on a conversation summary.
 
@@ -823,6 +849,8 @@ def suggest_wiki_patches(
             Typically derived from `wiki/<partition>/index.md` entries.
         max_patches: cap on output.
         timeout: LLM request timeout.
+        llm: "auto" (MiniMax first, fallback to DeepSeek on upstream outage),
+            "minimax" (MiniMax only), "deepseek" (DeepSeek only).
 
     Returns:
         List of dicts {"page", "type", "section", "content", "rationale"},
@@ -834,6 +862,9 @@ def suggest_wiki_patches(
     - Ground-truth paths: patches referring to pages not in wiki_catalog are
       dropped. This is the hard rule against hallucinated paths.
     - Empty catalog -> [] immediately (nothing to patch).
+    - Auto fallback: MiniMax 529 overload / 5xx / unreachable -> DeepSeek.
+      Auth/parse failures on MiniMax do NOT fall through (would likely also
+      fail or charge DeepSeek quota pointlessly).
     """
     if not isinstance(summary, str) or len(summary.strip()) < 30:
         return []
@@ -841,6 +872,8 @@ def suggest_wiki_patches(
         return []
     if not isinstance(max_patches, int) or not (1 <= max_patches <= 20):
         max_patches = SUGGEST_PATCH_DEFAULT_MAX
+    if llm not in SUGGEST_PATCH_LLMS:
+        llm = "auto"
 
     # Build a bounded prompt view of the catalog
     catalog = wiki_catalog[:SUGGEST_PATCH_MAX_PAGES_IN_PROMPT]
@@ -863,9 +896,28 @@ def suggest_wiki_patches(
         "请输出 json 对象 {\"patches\": [...]}。"
     )
 
-    ok, parsed = _call_minimax_json(
-        system_prompt, user_msg, timeout=timeout, temperature=0.1
-    )
+    # Route: auto tries MiniMax first, falls back to DeepSeek on upstream
+    # outage (retryable HTTP or unreachable). Explicit llm= skips fallback.
+    ok, parsed = False, None
+    if llm in ("auto", "minimax"):
+        ok, parsed = _call_minimax_json(
+            system_prompt, user_msg, timeout=timeout, temperature=0.1
+        )
+        if not ok and llm == "auto" and isinstance(parsed, str):
+            # Fallback only on transport/overload errors, not auth/parse.
+            transient = (
+                "unreachable" in parsed
+                or any(f"HTTP {c}" in parsed for c in _MINIMAX_RETRYABLE)
+            )
+            if transient:
+                ok, parsed = _call_deepseek_json(
+                    system_prompt, user_msg, timeout=timeout, temperature=0.1
+                )
+    elif llm == "deepseek":
+        ok, parsed = _call_deepseek_json(
+            system_prompt, user_msg, timeout=timeout, temperature=0.1
+        )
+
     if not ok:
         return []
 

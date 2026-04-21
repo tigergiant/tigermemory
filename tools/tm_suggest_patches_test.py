@@ -154,6 +154,64 @@ class SuggestWikiPatchesTest(unittest.TestCase):
         self.assertEqual(len(out), 1)
 
 
+class LLMFallbackTest(unittest.TestCase):
+    """Verify MiniMax -> DeepSeek fallback logic for `auto` mode."""
+
+    def setUp(self):
+        self._orig_mm = tm_core._call_minimax_json
+        self._orig_ds = tm_core._call_deepseek_json
+
+    def tearDown(self):
+        tm_core._call_minimax_json = self._orig_mm
+        tm_core._call_deepseek_json = self._orig_ds
+
+    def _ok_patch(self, src):
+        return {"patches": [
+            {"page": "wiki/systems/alpha.md", "type": "append", "content": f"from {src}"}
+        ]}
+
+    def test_auto_falls_back_on_minimax_529(self):
+        tm_core._call_minimax_json = lambda *a, **k: (False, "MiniMax HTTP 529")
+        tm_core._call_deepseek_json = lambda *a, **k: (True, self._ok_patch("deepseek"))
+        out = tm_core.suggest_wiki_patches(SUMMARY, CATALOG)
+        self.assertEqual(len(out), 1)
+        self.assertIn("from deepseek", out[0]["content"])
+
+    def test_auto_does_not_fallback_on_auth_error(self):
+        tm_core._call_minimax_json = lambda *a, **k: (False, "MiniMax HTTP 401")
+        ds_called = []
+        def ds_fake(*a, **k):
+            ds_called.append(1)
+            return (True, self._ok_patch("deepseek"))
+        tm_core._call_deepseek_json = ds_fake
+        out = tm_core.suggest_wiki_patches(SUMMARY, CATALOG)
+        self.assertEqual(out, [])
+        self.assertEqual(ds_called, [], "DeepSeek must not be called on 401 from MiniMax")
+
+    def test_explicit_minimax_skips_fallback(self):
+        tm_core._call_minimax_json = lambda *a, **k: (False, "MiniMax HTTP 529")
+        ds_called = []
+        def ds_fake(*a, **k):
+            ds_called.append(1)
+            return (True, self._ok_patch("deepseek"))
+        tm_core._call_deepseek_json = ds_fake
+        out = tm_core.suggest_wiki_patches(SUMMARY, CATALOG, llm="minimax")
+        self.assertEqual(out, [])
+        self.assertEqual(ds_called, [], "llm='minimax' must not fall back")
+
+    def test_explicit_deepseek_skips_minimax(self):
+        mm_called = []
+        def mm_fake(*a, **k):
+            mm_called.append(1)
+            return (True, self._ok_patch("minimax"))
+        tm_core._call_minimax_json = mm_fake
+        tm_core._call_deepseek_json = lambda *a, **k: (True, self._ok_patch("deepseek"))
+        out = tm_core.suggest_wiki_patches(SUMMARY, CATALOG, llm="deepseek")
+        self.assertEqual(len(out), 1)
+        self.assertIn("from deepseek", out[0]["content"])
+        self.assertEqual(mm_called, [], "llm='deepseek' must skip MiniMax")
+
+
 class SaveWikiPatchesTest(unittest.TestCase):
     def setUp(self):
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="tm_b1_"))
