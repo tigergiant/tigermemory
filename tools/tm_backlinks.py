@@ -253,6 +253,13 @@ def compile_dashboard(backlinks: dict[str, list[str]], all_pages: list[str]) -> 
                 lines.append("- Referenced by (0): *(orphan)*")
             lines.append("")
     
+    lines.extend([
+        "## 来源",
+        "",
+        "- 内部文档",
+        "",
+    ])
+    
     return '\n'.join(lines)
 
 
