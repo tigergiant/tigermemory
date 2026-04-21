@@ -69,6 +69,9 @@ DIGEST_PROMPT_TEMPLATE = """你是 Tiger 的记忆日报助手。根据下面提
 - fact_id 格式为 fact-XXX（三位数字）
 - source_type 只能是 "mem0" 或 "inbox"
 - source_id 对 mem0 是 UUID，对 inbox 是文件名
+- 事实必须来自真实输入内容：Mem0 记忆的 content 字段或 inbox 文件的 summary 字段。
+  严禁根据文件名猜测（例如不要写"XX agent XXXX performed systems-related activities"）。
+  如果一条 inbox 的 summary 为空或只剩元数据，就不要为它生成 fact。
 
 【输入数据】
 目标日期：{date}
@@ -264,6 +267,31 @@ def _fetch_memories_for_date(date_str: str) -> list[dict[str, Any]]:
     return filtered
 
 
+INBOX_SUMMARY_MAX_CHARS = 800
+
+
+def _read_inbox_summary(path: Path) -> str:
+    """Read an inbox file and return a plain-text excerpt of its body.
+
+    Strips YAML frontmatter (between leading --- fences) and returns up to
+    INBOX_SUMMARY_MAX_CHARS characters of the body. Failures return "".
+    """
+    try:
+        content = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+    body = content
+    if body.startswith("---"):
+        # Find closing --- fence; be tolerant of CRLF/LF.
+        end = body.find("\n---", 3)
+        if end != -1:
+            body = body[end + 4 :].lstrip("\r\n")
+    body = body.strip()
+    if len(body) > INBOX_SUMMARY_MAX_CHARS:
+        body = body[:INBOX_SUMMARY_MAX_CHARS].rstrip() + "…"
+    return body
+
+
 def _list_inbox_for_date(date_str: str) -> list[dict[str, Any]]:
     """List inbox files created on target date.
     
@@ -296,6 +324,7 @@ def _list_inbox_for_date(date_str: str) -> list[dict[str, Any]]:
                     "agent": agent,
                     "topic": topic,
                     "size": f.stat().st_size,
+                    "summary": _read_inbox_summary(f),
                 })
     
     # Sort by filename (chronological within day due to HHMM)
@@ -324,6 +353,7 @@ def _synthesize_digest(date_str: str, memories: list[dict], inbox_files: list[di
             "filename": f["filename"],
             "topic": f["topic"],
             "agent": f["agent"],
+            "summary": f.get("summary", ""),
         })
     
     # Build prompt
