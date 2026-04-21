@@ -4,6 +4,7 @@
 
 扫描 wiki 页面，从 H1 提取中文别名，写入 frontmatter。
 """
+from __future__ import annotations
 
 import os
 import sys
@@ -12,6 +13,45 @@ import argparse
 from pathlib import Path
 
 PARTITIONS = ("brand", "investment", "operations", "production", "systems", "person")
+
+# 手动映射：文件路径 -> 中文别名（覆盖自动提取失败的页面）
+MANUAL_ALIASES = {
+    # index 页面
+    "brand/index.md": "品牌",
+    "investment/index.md": "投资",
+    "operations/index.md": "运营",
+    "person/index.md": "人物",
+    "production/index.md": "生产",
+    "systems/index.md": "系统",
+    # operations
+    "operations/hermes-tigermemory-integration.md": "Hermes tigermemory 接入",
+    "operations/inbox-triage.md": "收件箱分拣仪表板",
+    "operations/mem0-backup.md": "Mem0 备份与恢复",
+    # person
+    "person/tiger.md": "虎哥",
+    # production
+    "production/doodiu-erp-design-inspiration.md": "Doodiu ERP 设计灵感库",
+    "production/doodiu-erp-github-learning.md": "Doodiu ERP GitHub 学习资源库",
+    # systems
+    "systems/agent-onboarding.md": "Agent 新手入门问题",
+    "systems/ai-cloud-brain.md": "AI 云大脑",
+    "systems/claudehub-clarification.md": "ClaudeHub 外部资料源说明",
+    "systems/deerflow-thread-artifact-contract.md": "DeerFlow Thread 与 Artifact 契约",
+    "systems/doodiu-erp-structure.md": "Doodiu ERP 结构",
+    "systems/doodiu-erp.md": "Doodiu ERP",
+    "systems/dsa-bridge.md": "DSA Bridge 日报分析桥接",
+    "systems/family-investment-dashboard.md": "家庭投资仪表板",
+    "systems/investment-research-mcp.md": "投研 MCP",
+    "systems/manifest-schema-reference.md": "Manifest Schema 参考",
+    "systems/newproject-clarification.md": "New Project 外部资料源说明",
+    "systems/openclaw-ce-api-notes.md": "OpenClaw CE API 笔记",
+    "systems/openclaw-ce-plugin-spec.md": "OpenClaw CE 插件规范",
+    "systems/openclaw-memory-stack-clarification.md": "OpenClaw 记忆栈说明",
+    "systems/openclaw-runtime.md": "OpenClaw 运行时",
+    "systems/wiki-lint-rules.md": "Wiki Lint 规则",
+    "systems/windsurf-memory-sync.md": "Windsurf Cascade 记忆同步规则",
+    "systems/wsl-proxy-env-policy.md": "WSL 代理环境策略",
+}
 
 
 def extract_frontmatter(text: str) -> tuple[str | None, str]:
@@ -84,13 +124,16 @@ def is_chinese_friendly(text: str) -> bool:
     return chinese_chars / total_chars >= 0.30
 
 
-def generate_alias(h1: str | None) -> tuple[str | None, str]:
+def generate_alias(h1: str | None, rel_key: str | None = None) -> tuple[str | None, str]:
     """
-    从 H1 生成 alias。
+    从 H1 生成 alias，优先查手动映射表。
     Returns: (alias, reason)
     - alias: str 或 None（skip）
     - reason: 说明为何使用或跳过
     """
+    if rel_key and rel_key in MANUAL_ALIASES:
+        return MANUAL_ALIASES[rel_key], "OK (manual)"
+    
     if not h1:
         return None, "SKIP: no H1 found"
     
@@ -143,7 +186,7 @@ def inject_aliases_to_frontmatter(fm_text: str, alias: str) -> str:
     return '\n'.join(new_lines)
 
 
-def process_page(page_path: Path, dry_run: bool = True, overwrite: bool = False) -> tuple[str, str]:
+def process_page(page_path: Path, dry_run: bool = True, overwrite: bool = False, rel_key: str | None = None) -> tuple[str, str]:
     """
     处理单个页面。
     Returns: (status, detail)
@@ -162,7 +205,7 @@ def process_page(page_path: Path, dry_run: bool = True, overwrite: bool = False)
     
     # 提取 H1 并生成 alias
     h1 = extract_h1(body)
-    alias, reason = generate_alias(h1)
+    alias, reason = generate_alias(h1, rel_key=rel_key)
     
     if alias is None:
         return "SKIP", reason
@@ -192,11 +235,9 @@ def cmd_check(args):
             continue
         
         for md_file in sorted(part_dir.glob("*.md")):
-            if md_file.name == "index.md":
-                continue
-            
             rel_path = f"wiki/{part}/{md_file.name}"
-            status, detail = process_page(md_file, dry_run=True, overwrite=args.overwrite)
+            rel_key = f"{part}/{md_file.name}"
+            status, detail = process_page(md_file, dry_run=True, overwrite=args.overwrite, rel_key=rel_key)
             
             if status == "OK":
                 print(f"{rel_path}: {detail}")
@@ -228,11 +269,9 @@ def cmd_write(args):
             continue
         
         for md_file in sorted(part_dir.glob("*.md")):
-            if md_file.name == "index.md":
-                continue
-            
             rel_path = f"wiki/{part}/{md_file.name}"
-            status, detail = process_page(md_file, dry_run=False, overwrite=args.overwrite)
+            rel_key = f"{part}/{md_file.name}"
+            status, detail = process_page(md_file, dry_run=False, overwrite=args.overwrite, rel_key=rel_key)
             
             if status == "OK":
                 print(f"WRITTEN: {rel_path}: {detail}")
