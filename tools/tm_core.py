@@ -45,7 +45,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent  # tools/.. = repo ro
 
 # ---------- Enums (AGENTS.md §3, §4) ----------
 
-AGENTS = {"claude-code", "codex", "openclaw", "hermes", "deerflow", "human", "mem0", "linter", "tigermemory-ce"}
+AGENTS = {"claude-code", "codex", "openclaw", "hermes", "deerflow", "human", "mem0", "linter", "tigermemory-ce", "kimi"}
 ACTIONS = {"create", "update", "archive", "lint", "ingest", "compile"}
 TOPICS = {"brand", "investment", "operations", "production", "systems", "person", "cross"}
 

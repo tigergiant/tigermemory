@@ -93,7 +93,7 @@ def write_inbox(agent: str, topic: str, title: str, body: str) -> dict[str, Any]
     """Create inbox/YYYY-MM-DD-HHMM-<agent>-<topic>.md and commit-push atomically.
 
     Args:
-        agent: Agent name (claude-code, codex, openclaw, hermes, deerflow, human, mem0)
+        agent: Agent name (claude-code, codex, openclaw, hermes, deerflow, human, mem0, kimi)
         topic: Topic name (brand, investment, operations, production, systems, person, cross)
         title: 1-80 char title (letters/digits/CJK/space/-/_)
         body: Markdown body content
