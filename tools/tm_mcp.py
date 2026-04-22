@@ -2,7 +2,7 @@
 """
 tools/tm_mcp.py — tigermemory MCP server (thin adapter over tm_core).
 
-Exposes 12 tools for remote agents (laptop MCP clients):
+Exposes 14 tools for remote agents (laptop MCP clients):
 - write_inbox
 - propose_wiki_page
 - search_memories
@@ -10,6 +10,8 @@ Exposes 12 tools for remote agents (laptop MCP clients):
 - read_page
 - list_partition
 - lint_page
+- ipfb_copywriting
+- review_draft
 - lint_repo
 - list_pending_digests   (P6.3)
 - review_digest          (P6.3)
@@ -364,6 +366,46 @@ def lint_page(path: str) -> dict[str, Any]:
 
     errors = tm_core.lint_page_errors(full_path.read_text(encoding="utf-8"))
     return {"ok": len(errors) == 0, "errors": errors}
+
+
+@mcp.tool()
+def ipfb_copywriting(
+    task_type: str = "daily_product",
+    channel: str = "wechat",
+    wave: str | None = None,
+    product: str | None = None,
+    history_query: str | None = None,
+    history_limit: int = 5,
+    excerpt_chars: int = 2500,
+) -> dict[str, Any]:
+    """Return the IPFB copywriting capability bundle.
+
+    This is the MCP-tool version of `wiki/brand/ipfb-copywriting-skill.md`.
+    It does not generate final copy by itself; it returns the required
+    writing rules, source excerpts, read order, hard constraints, checklist
+    contract, and optional historical examples for the caller to draft from.
+
+    Args:
+        task_type: daily_product, series_campaign, holiday, preorder, celebrity
+        channel: wechat, xiaohongshu, poster, preorder, etc.
+        wave: Optional campaign/wave name, e.g. 觉知半夏, 都市游牧
+        product: Optional product/category keyword, e.g. 衬衫, 连衣裙
+        history_query: Optional keyword search for historical accepted/rejected copy
+        history_limit: Number of historical examples to return
+        excerpt_chars: Max chars per source excerpt
+
+    Returns:
+        Structured IPFB copywriting context and examples.
+    """
+    return tm_core.ipfb_copywriting_context(
+        task_type=task_type,
+        channel=channel,
+        wave=wave,
+        product=product,
+        history_query=history_query,
+        history_limit=history_limit,
+        excerpt_chars=excerpt_chars,
+    )
 
 
 @mcp.tool()

@@ -363,6 +363,161 @@ def lint_page_errors(text: str) -> list[str]:
     return errors
 
 
+# ---------- IPFB copywriting capability ----------
+
+IPFB_COPYWRITING_FILES = {
+    "skill": "wiki/brand/ipfb-copywriting-skill.md",
+    "guide": "wiki/brand/ipfb-copywriting-guide.md",
+    "brand_guide": "wiki/brand/ipfb-brand-guide.md",
+    "design_plan": "wiki/brand/ipfb-26-summer-design-plan.md",
+    "product_plan": "wiki/brand/ipfb-26-summer-product-plan.md",
+    "history": "sources/documents/brand/IPFB历史发文文案.txt",
+}
+
+
+def _read_repo_text(rel: str) -> str:
+    path = REPO_ROOT / rel
+    if not path.exists():
+        raise FileNotFoundError(f"not found: {rel}")
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def _source_entry(rel: str, limit: int) -> dict[str, Any]:
+    path = REPO_ROOT / rel
+    if not path.exists():
+        return {"path": rel, "exists": False, "excerpt": ""}
+    return {"path": rel, "exists": True, "excerpt": _excerpt_text(_read_repo_text(rel), limit)}
+
+
+def _excerpt_text(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "\n...[truncated]..."
+
+
+def _history_examples(query: str | None, limit: int) -> list[dict[str, str | int]]:
+    if limit <= 0:
+        return []
+    if not (REPO_ROOT / IPFB_COPYWRITING_FILES["history"]).exists():
+        return []
+    text = _read_repo_text(IPFB_COPYWRITING_FILES["history"])
+    lines = text.splitlines()
+    if not query:
+        examples: list[dict[str, str | int]] = []
+        for i, line in enumerate(lines):
+            if "IPFB" not in line:
+                continue
+            block = "\n".join(lines[i : min(i + 7, len(lines))]).strip()
+            if block:
+                examples.append({"line": i + 1, "text": block})
+            if len(examples) >= limit:
+                break
+        return examples
+
+    tokens = [t.strip() for t in re.split(r"[\s,，/、]+", query) if t.strip()]
+    examples = []
+    seen: set[int] = set()
+    for i, line in enumerate(lines):
+        if i in seen or not any(token in line for token in tokens):
+            continue
+        start = max(0, i - 2)
+        end = min(len(lines), i + 7)
+        block = "\n".join(lines[start:end]).strip()
+        if block:
+            examples.append({"line": start + 1, "text": block})
+            seen.update(range(start, end))
+        if len(examples) >= limit:
+            break
+    return examples
+
+
+def ipfb_copywriting_context(
+    task_type: str = "daily_product",
+    channel: str = "wechat",
+    wave: str | None = None,
+    product: str | None = None,
+    history_query: str | None = None,
+    history_limit: int = 5,
+    excerpt_chars: int = 2500,
+) -> dict[str, Any]:
+    """Return the IPFB copywriting capability bundle for MCP callers."""
+    task_map = {
+        "daily_product": "朋友圈 / 小红书单品日常宣发",
+        "series_campaign": "系列大片 / 波段上新",
+        "holiday": "节日海报",
+        "preorder": "订货会倒计时",
+        "celebrity": "明星同款",
+    }
+    if task_type not in task_map:
+        raise ValueError(f"invalid task_type '{task_type}' (allowed: {sorted(task_map)})")
+
+    sources: dict[str, dict[str, Any]] = {}
+    for key in ("skill", "guide", "brand_guide"):
+        rel = IPFB_COPYWRITING_FILES[key]
+        sources[key] = _source_entry(rel, excerpt_chars)
+
+    if task_type in {"series_campaign", "daily_product"} or wave:
+        for key in ("design_plan", "product_plan"):
+            rel = IPFB_COPYWRITING_FILES[key]
+            sources[key] = _source_entry(rel, excerpt_chars)
+
+    if history_query is None:
+        query_parts = [part for part in (wave, product, task_map[task_type]) if part]
+        history_query = " ".join(query_parts) if query_parts else None
+
+    return {
+        "ok": True,
+        "capability": "ipfb-copywriting",
+        "description": "IPFB 品牌宣发文案上下文包；调用者据此起稿，tigermemory 只提供规则、资料和自检。",
+        "task": {
+            "task_type": task_type,
+            "task_type_label": task_map[task_type],
+            "channel": channel,
+            "wave": wave,
+            "product": product,
+        },
+        "read_order": [
+            {
+                "path": IPFB_COPYWRITING_FILES["guide"],
+                "when": "每次必读",
+                "focus": "核心准则、雷区、抬头、标题、正文结构、hashtag、CTA、自检清单",
+            },
+            {
+                "path": IPFB_COPYWRITING_FILES["design_plan"],
+                "when": "写系列大片 / 波段主题时必读",
+                "focus": "对应波段的核心主题、色彩、情绪关键词、系列概念词",
+            },
+            {
+                "path": IPFB_COPYWRITING_FILES["product_plan"],
+                "when": "写单品 / 波段核心品类时必读",
+                "focus": "对应波段的场景定位、核心品类、单品卖点",
+            },
+            {
+                "path": IPFB_COPYWRITING_FILES["history"],
+                "when": "遇到新场景 / 没把握时检索",
+                "focus": "历史通过稿与被拒稿的真实审稿样本",
+            },
+        ],
+        "hard_rules": [
+            "系列概念词不可自造，必须来自设计企划。",
+            "波段场景不可乱用，必须和商品企划/设计企划对齐。",
+            "文案要有画面、感官和留白，不做电商卖点堆砌。",
+            "禁用电商词：热卖、爆款、藏肉、显瘦、显高、百搭、承包、必入、神套装、性价比等。",
+            "交稿前必须用 ipfb-copywriting-skill.md 的自检清单逐项检查。",
+        ],
+        "output_contract": {
+            "draft_count": 2,
+            "relationship": "两稿互补，不是同一句话微调。",
+            "include_hashtags": True,
+            "final_review": "虎哥 / 辉总最终审稿；新反馈应写入 inbox 或更新准则。",
+        },
+        "sources": sources,
+        "history_query": history_query,
+        "history_examples": _history_examples(history_query, history_limit),
+        "maintenance_note": "如果辉总/虎哥有新审稿偏好，只追加范例或雷区，不推翻核心规则。",
+    }
+
+
 # ---------- Guard (commit-msg hook) ----------
 
 def guard_commit(commit_msg_path: pathlib.Path) -> list[str]:
