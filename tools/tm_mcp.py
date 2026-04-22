@@ -612,7 +612,7 @@ def mark_digest_reviewed(date: str) -> dict[str, Any]:
         # Commit
         repo_root = tm_core.REPO_ROOT
         digest_path = f"inbox/daily/{date}.md"
-        sha = tm_core.git_commit_push([digest_path], f"[human] review: mark {date} digest as reviewed")
+        sha = tm_core.git_commit_push([digest_path], f"[human] update: mark {date} digest as reviewed")
         
         return {"ok": True, "committed": True, "commit_sha": sha}
     except Exception as e:

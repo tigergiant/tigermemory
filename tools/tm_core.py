@@ -78,6 +78,7 @@ COMMIT_MSG_RE = re.compile(
 INBOX_NAME_RE = re.compile(
     r"^inbox/\d{4}-\d{2}-\d{2}-\d{4}-(?P<agent>[a-z0-9\-]+)-(?P<topic>[a-z]+)\.md$"
 )
+DAILY_DIGEST_RE = re.compile(r"^inbox/daily/\d{4}-\d{2}-\d{2}\.md$")
 WIKI_PATH_RE = re.compile(r"^wiki/(?P<partition>[a-z]+)/[^/]+\.md$")
 FRONTMATTER_UPDATED_RE = re.compile(r"^updated:\s*(\S+)\s*$", re.MULTILINE)
 
@@ -612,6 +613,8 @@ def guard_commit(commit_msg_path: pathlib.Path) -> list[str]:
     # 7. Inbox filename convention
     for p in paths:
         if p.startswith("inbox/") and p != "inbox/.gitkeep" and p.endswith(".md"):
+            if DAILY_DIGEST_RE.match(p):
+                continue
             im = INBOX_NAME_RE.match(p)
             if not im:
                 errors.append(
@@ -621,6 +624,11 @@ def guard_commit(commit_msg_path: pathlib.Path) -> list[str]:
                 continue
             if agent is not None and im.group("agent") not in AGENTS:
                 errors.append(f"inbox '{p}' has unknown agent token")
+            if im.group("topic") not in TOPICS:
+                errors.append(
+                    f"inbox '{p}' has invalid topic '{im.group('topic')}' "
+                    f"(allowed: {sorted(TOPICS)})"
+                )
 
     # 8. Frontmatter `updated` must be today (Asia/Shanghai) for added/modified md
     today = now("%Y-%m-%d")
