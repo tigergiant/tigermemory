@@ -472,6 +472,9 @@ def guard_commit(commit_msg_path: pathlib.Path) -> list[str]:
     for st, p in staged:
         if st == "D" or not p.endswith(".md"):
             continue
+        # Archived files preserve the original `updated` date (rename is not a content update).
+        if p.startswith("archive/"):
+            continue
         blob = staged_blob(p)
         if not blob or not blob.startswith("---"):
             continue
