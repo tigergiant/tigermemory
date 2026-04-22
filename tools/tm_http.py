@@ -130,13 +130,13 @@ class ListPartitionResponse(BaseModel):
 
 
 class WriteMemoryRequest(BaseModel):
-    agent: str = Field(..., pattern=r"^(claude-code|codex|openclaw|hermes|deerflow|human|mem0|tigermemory-ce|kimi)$")
+    agent: str = Field(..., pattern=r"^(claude-code|codex|openclaw|hermes|deerflow|human|linter|mem0|tigermemory-ce|kimi)$")
     topic: str = Field(..., pattern=r"^(brand|investment|operations|production|systems|person|cross)$")
     text: str = Field(..., min_length=1, max_length=10000)
 
 
 class WriteInboxRequest(BaseModel):
-    agent: str = Field(..., pattern=r"^(claude-code|codex|openclaw|hermes|deerflow|human|mem0|tigermemory-ce|kimi)$")
+    agent: str = Field(..., pattern=r"^(claude-code|codex|openclaw|hermes|deerflow|human|linter|mem0|tigermemory-ce|kimi)$")
     topic: str = Field(..., pattern=r"^(brand|investment|operations|production|systems|person|cross)$")
     title: str = Field(..., min_length=1, max_length=80)
     body: str = Field(..., min_length=1, max_length=50000)
@@ -172,7 +172,7 @@ class SuggestPatchesRequest(BaseModel):
     save: bool = Field(default=True)
     source: str = Field(
         default="claude-code",
-        pattern=r"^(claude-code|codex|openclaw|hermes|deerflow|human|tigermemory-ce|kimi)$",
+        pattern=r"^(claude-code|codex|openclaw|hermes|deerflow|human|linter|tigermemory-ce|kimi)$",
     )
 
 

@@ -34,7 +34,7 @@ updated: 2026-04-16
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| owner | 是 | 主要维护者：claude-code / openclaw / hermes / deerflow / human |
+| owner | 是 | 主要维护者（AGENTS.md §3 常规 agent 8 项）：claude-code / codex / openclaw / hermes / deerflow / human / linter / kimi |
 | status | 是 | active / draft / archived |
 | updated | 是 | 最后更新日期，YYYY-MM-DD |
 
