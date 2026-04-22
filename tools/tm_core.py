@@ -99,7 +99,7 @@ def now(fmt: str) -> str:
 
 def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
     """Run a command in REPO_ROOT, capturing output. Raises GitError if check=True and rc!=0."""
-    r = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+    r = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if check and r.returncode != 0:
         raise GitError(
             f"cmd failed: {' '.join(cmd)}\nstderr: {r.stderr.strip()}\nstdout: {r.stdout.strip()}"
