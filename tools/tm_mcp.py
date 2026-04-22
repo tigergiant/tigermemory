@@ -21,10 +21,12 @@ handles MCP tool decoration, HTTP transport (Bearer auth + DNS rebinding
 protection), and exception→JSON mapping.
 
 Usage:
-  python tools/tm_mcp.py --stdio          # default for local clients
+  python tools/tm_mcp.py --stdio                    # default for local clients
+  python tools/tm_mcp.py --stdio --role=reader      # read-only (DeerFlow / untrusted)
   python tools/tm_mcp.py --http --host 0.0.0.0 --port 9766
 
 HTTP mode requires TM_MCP_API_KEY in runtime/openmemory/.env.
+Role controls exposed tools: 'writer' (default) = all 12 tools; 'reader' = 7 read-only tools.
 """
 from __future__ import annotations
 
@@ -63,6 +65,10 @@ _allowed_hosts = (
     else _DEFAULT_ALLOWED_HOSTS
 )
 
+# Role-based access control (P2-11). Default 'writer' exposes all 12 tools;
+# 'reader' restricts to 7 read-only tools.
+_ROLE: str = "writer"
+
 mcp = FastMCP(
     "tigermemory",
     transport_security=TransportSecuritySettings(
@@ -73,10 +79,17 @@ mcp = FastMCP(
 )
 
 
+def _require_writer() -> None:
+    """Raise PermissionError if current role is reader."""
+    if _ROLE == "reader":
+        raise PermissionError(f"tool disabled in role='reader' (current role='{_ROLE}')")
+
+
 # ---------- Tools ----------
 
 @mcp.tool()
 def write_inbox(agent: str, topic: str, title: str, body: str) -> dict[str, Any]:
+    _require_writer()
     """Create inbox/YYYY-MM-DD-HHMM-<agent>-<topic>.md and commit-push atomically.
 
     Args:
@@ -105,6 +118,7 @@ def propose_wiki_page(
     body: str,
     action: str = "create",
 ) -> dict[str, Any]:
+    _require_writer()
     """Write a wiki page if agent owns the partition, otherwise write to inbox.
 
     Args:
@@ -284,6 +298,7 @@ def search_memories(query: str, size: int = 5) -> dict[str, Any]:
 
 @mcp.tool()
 def write_memory(agent: str, topic: str, text: str) -> dict[str, Any]:
+    _require_writer()
     """Write a memory to Mem0 with enforced metadata.
 
     Args:
@@ -488,6 +503,7 @@ def approve_fact(
     promote_partition: str | None = None,
     promote_slug: str | None = None,
 ) -> dict[str, Any]:
+    _require_writer()
     """
     对单条事实执行审核操作。
     - keep: 标记为已审核保留（记录在 review_log）
@@ -540,6 +556,7 @@ def approve_fact(
 
 @mcp.tool()
 def mark_digest_reviewed(date: str) -> dict[str, Any]:
+    _require_writer()
     """
     日报全部 fact 处理完后，把日报 frontmatter status 改为 'reviewed'，并 commit 到 git。
     返回: {"ok": true, "committed": true, "commit_sha": "..."}
@@ -568,7 +585,12 @@ if __name__ == "__main__":
     ap.add_argument("--http", action="store_true", help="Use HTTP transport")
     ap.add_argument("--host", default="0.0.0.0", help="HTTP host (default: 0.0.0.0)")
     ap.add_argument("--port", type=int, default=9766, help="HTTP port (default: 9766)")
+    ap.add_argument("--role", choices=["writer", "reader"], default="writer",
+                    help="Access role: writer (default, all tools) or reader (7 read-only tools)")
     args = ap.parse_args()
+
+    # Set global role before MCP starts.
+    _ROLE = args.role
 
     if args.http:
         # HTTP mode: load API key and wrap FastMCP's Starlette app with a
