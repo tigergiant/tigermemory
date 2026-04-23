@@ -444,7 +444,8 @@ def lint_repo() -> dict[str, Any]:
     missing_sources: list[str] = []
     partition_mismatches: list[str] = []
 
-    # Orphan pages (not linked from index)
+    # Orphan pages (not linked from index). Linter-owned dashboards are
+    # exempt — they're auto-generated and intentionally not listed in index.
     for partition in tm_core.PARTITION_OWNERS.keys():
         partition_dir = tm_core.REPO_ROOT / "wiki" / partition
         index_path = partition_dir / "index.md"
@@ -454,8 +455,11 @@ def lint_repo() -> dict[str, Any]:
         for page_file in partition_dir.glob("*.md"):
             if page_file.name == "index.md":
                 continue
+            rel = f"wiki/{partition}/{page_file.name}"
+            if rel in tm_core.LINTER_DASHBOARDS:
+                continue
             if page_file.stem not in index_content:
-                orphan_pages.append(f"wiki/{partition}/{page_file.name}")
+                orphan_pages.append(rel)
 
     # Stale inbox drafts (>7 days old by mtime)
     seven_days_ago = datetime.datetime.now(tm_core.TZ_CN) - datetime.timedelta(days=7)
@@ -473,7 +477,9 @@ def lint_repo() -> dict[str, Any]:
             except Exception:
                 pass
 
-    # Wiki pages without '## 来源' section + owner/partition mismatch
+    # Wiki pages without '## 来源' section + owner/partition mismatch.
+    # Linter-owned dashboards are exempt from both checks — they're auto-
+    # generated (no human-authored sources) and owner:linter is by design.
     for partition in tm_core.PARTITION_OWNERS.keys():
         partition_dir = tm_core.REPO_ROOT / "wiki" / partition
         if not partition_dir.exists():
@@ -481,16 +487,17 @@ def lint_repo() -> dict[str, Any]:
         for page_file in partition_dir.glob("*.md"):
             if page_file.name == "index.md":
                 continue
+            rel = f"wiki/{partition}/{page_file.name}"
+            if rel in tm_core.LINTER_DASHBOARDS:
+                continue
             content = page_file.read_text(encoding="utf-8")
             if "## 来源" not in content:
-                missing_sources.append(f"wiki/{partition}/{page_file.name}")
+                missing_sources.append(rel)
             m = re.search(r"^owner:\s*(\S+)", content, re.MULTILINE)
             if m:
                 owner = m.group(1)
                 if owner not in tm_core.PARTITION_OWNERS[partition] and owner != "human":
-                    partition_mismatches.append(
-                        f"wiki/{partition}/{page_file.name} (owner: {owner})"
-                    )
+                    partition_mismatches.append(f"{rel} (owner: {owner})")
 
     return {
         "orphan_pages": orphan_pages,
