@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# tigermemory post-commit hook
+#
+# Prints a one-line reminder when the local HEAD gets ahead of the upstream.
+# Informational only — never fails the commit, never calls the network.
+#
+# This covers one of the three recurring concurrent-write incidents:
+# "agent committed but forgot to push". The reminder is the cheapest
+# possible surface: zero network calls, zero dependencies, runs locally
+# right after `git commit` finishes.
+
+set -u
+
+# Silently skip if there's no upstream (new branch, detached HEAD, etc.).
+upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)
+if [ -z "$upstream" ]; then
+  exit 0
+fi
+
+# Count local commits not yet in upstream (using cached remote-tracking ref,
+# so this hook is offline-safe and fast).
+ahead=$(git rev-list --count "$upstream..HEAD" 2>/dev/null || echo 0)
+if [ "$ahead" -gt 0 ]; then
+  printf '\ntigermemory: local HEAD is ahead of %s by %s commit(s).\n' "$upstream" "$ahead"
+  printf '             close the loop:  git push\n\n'
+fi
+
+exit 0
