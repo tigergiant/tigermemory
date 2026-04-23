@@ -496,6 +496,8 @@ def lint_repo() -> dict[str, Any]:
             m = re.search(r"^owner:\s*(\S+)", content, re.MULTILINE)
             if m:
                 owner = m.group(1)
+                if owner == "linter":
+                    continue
                 if owner not in tm_core.PARTITION_OWNERS[partition] and owner != "human":
                     partition_mismatches.append(f"{rel} (owner: {owner})")
 
