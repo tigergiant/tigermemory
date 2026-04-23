@@ -1,0 +1,22 @@
+#!/bin/sh
+# tigermemory pre-commit hook — blocks mojibake writes into markdown files.
+# Install with: git config core.hooksPath .githooks
+#
+# Bypass (human emergency only): git commit --no-verify
+
+set -e
+ROOT="$(git rev-parse --show-toplevel)"
+
+PY=""
+for cand in "py -3" python3 python; do
+  if $cand -c "import sys" >/dev/null 2>&1; then
+    PY="$cand"
+    break
+  fi
+done
+if [ -z "$PY" ]; then
+  echo "tigermemory pre-commit: no working python found (tried py -3, python3, python)" >&2
+  exit 1
+fi
+
+exec $PY "$ROOT/tools/tm_mojibake_guard.py"
