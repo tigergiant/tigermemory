@@ -8,6 +8,7 @@ and writes an inbox findings file iff any issues found.
 from __future__ import annotations
 
 import datetime as dt
+import argparse
 import json
 import os
 import pathlib
@@ -347,7 +348,7 @@ def render_inbox_findings(results: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def main() -> int:
+def collect_results(run_all: bool = False) -> dict[str, Any]:
     now_date = today()
     dow = now_date.isoweekday()  # Mon=1..Sun=7
     doy = now_date.timetuple().tm_yday
@@ -356,8 +357,7 @@ def main() -> int:
     run_ae_g_weekly = (dow == 7)  # Sunday
     run_f_3day = (doy % 3 == 0)
 
-    # Allow override via CLI: --all / --check A,B,C
-    if "--all" in sys.argv:
+    if run_all:
         run_ae_g_weekly = True
         run_f_3day = True
 
@@ -372,6 +372,11 @@ def main() -> int:
         results["F"] = check_F_missing_sources()
     if run_ae_g_weekly:
         results["G"] = check_G_contradictions()
+    return results
+
+
+def write_lint_outputs(results: dict[str, Any]) -> bool:
+    """Write the dashboard and optional inbox findings. Returns whether inbox was written."""
 
     # Write dashboard (always reflects full results)
     dashboard = render_dashboard(results)
@@ -391,9 +396,40 @@ def main() -> int:
         (REPO / inbox_rel).write_text(render_inbox_findings(trigger_results), encoding="utf-8")
         wrote_inbox = True
         print(f"wrote {inbox_rel}")
+    return wrote_inbox
 
-    print(f"updated {DASHBOARD_REL}")
+
+def print_results(results: dict[str, Any], wrote_dashboard: bool = False) -> None:
+    if wrote_dashboard:
+        print(f"updated {DASHBOARD_REL}")
     print(json.dumps({k: (len(v) if isinstance(v, list) else v) for k, v in results.items()}))
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="tm_lint.py",
+        description="Run tigermemory lint checks. Default mode writes the lint dashboard for CI compatibility.",
+    )
+    parser.add_argument("--all", dest="all_global", action="store_true", help="run weekly/LLM checks too")
+    sub = parser.add_subparsers(dest="cmd")
+
+    check_p = sub.add_parser("check", help="run checks without writing files")
+    check_p.add_argument("--all", dest="all_sub", action="store_true", help="run weekly/LLM checks too")
+
+    write_p = sub.add_parser("write-dashboard", help="run checks and write dashboard/inbox outputs")
+    write_p.add_argument("--all", dest="all_sub", action="store_true", help="run weekly/LLM checks too")
+
+    args = parser.parse_args(argv)
+    cmd = args.cmd or "write-dashboard"
+    run_all = bool(args.all_global or getattr(args, "all_sub", False))
+
+    results = collect_results(run_all=run_all)
+    if cmd == "check":
+        print_results(results, wrote_dashboard=False)
+        return 0
+
+    write_lint_outputs(results)
+    print_results(results, wrote_dashboard=True)
     return 0
 
 

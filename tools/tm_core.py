@@ -136,7 +136,6 @@ def git_commit_push(files: list[str], msg: str) -> str:
     rebase first. Callers are responsible for rolling back on-disk changes
     if they want a clean working tree after failure.
     """
-    git_pull_rebase()
     run(["git", "add", "--"] + files)
     commit_r = run(["git", "commit", "-m", msg], check=False)
     if commit_r.returncode != 0:
@@ -152,6 +151,91 @@ def git_commit_push(files: list[str], msg: str) -> str:
             raise GitError(f"push failed after rebase retry: {push2.stderr.strip()}")
 
     return run(["git", "rev-parse", "--short", "HEAD"]).stdout.strip()
+
+
+def git_session_status() -> dict[str, Any]:
+    """Return a read-only session preflight snapshot for agent start/end checks."""
+    status_r = run(["git", "status", "--porcelain=v1"], check=True)
+    lines = [line for line in status_r.stdout.splitlines() if line]
+
+    staged = 0
+    unstaged = 0
+    untracked = 0
+    for line in lines:
+        xy = line[:2]
+        if xy == "??":
+            untracked += 1
+            continue
+        if xy[0] != " ":
+            staged += 1
+        if xy[1] != " ":
+            unstaged += 1
+
+    unmerged_r = run(["git", "diff", "--name-only", "--diff-filter=U"], check=False)
+    unmerged = [line for line in unmerged_r.stdout.splitlines() if line]
+
+    branch_r = run(["git", "branch", "--show-current"], check=False)
+    branch = branch_r.stdout.strip() if branch_r.returncode == 0 else ""
+    head_r = run(["git", "rev-parse", "--verify", "HEAD"], check=False)
+    head = head_r.stdout.strip() if head_r.returncode == 0 else ""
+
+    upstream_r = run(
+        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+        check=False,
+    )
+    upstream = upstream_r.stdout.strip() if upstream_r.returncode == 0 else ""
+    ahead = 0
+    behind = 0
+    if upstream:
+        ab_r = run(["git", "rev-list", "--left-right", "--count", f"HEAD...{upstream}"], check=False)
+        if ab_r.returncode == 0:
+            parts = ab_r.stdout.split()
+            if len(parts) == 2:
+                ahead = int(parts[0])
+                behind = int(parts[1])
+
+    hooks_r = run(["git", "config", "--get", "core.hooksPath"], check=False)
+    hooks_path = hooks_r.stdout.strip() if hooks_r.returncode == 0 else ""
+    hooks_dir = REPO_ROOT / hooks_path if hooks_path else None
+    required_hooks = ["pre-commit", "commit-msg", "post-commit"]
+    hooks_installed = bool(
+        hooks_dir
+        and hooks_path.replace("\\", "/") == ".githooks"
+        and all((hooks_dir / name).exists() for name in required_hooks)
+    )
+
+    blockers: list[str] = []
+    if not branch:
+        blockers.append("detached HEAD")
+    if unmerged:
+        blockers.append(f"unmerged paths: {len(unmerged)}")
+    if lines:
+        blockers.append(f"dirty worktree: {len(lines)}")
+    if ahead:
+        blockers.append(f"unpushed commits: {ahead}")
+    if behind:
+        blockers.append(f"local branch behind upstream: {behind}")
+    if not hooks_installed:
+        blockers.append("git hooks not installed via core.hooksPath=.githooks")
+
+    return {
+        "ok": not blockers,
+        "branch": branch or None,
+        "detached": not bool(branch),
+        "head": head or None,
+        "upstream": upstream or None,
+        "ahead": ahead,
+        "behind": behind,
+        "dirty_count": len(lines),
+        "staged_count": staged,
+        "unstaged_count": unstaged,
+        "untracked_count": untracked,
+        "unmerged_count": len(unmerged),
+        "hooks_path": hooks_path or None,
+        "hooks_installed": hooks_installed,
+        "blockers": blockers,
+        "paths": lines,
+    }
 
 
 def git_remote_blob_url(rel_path: str, branch: str = "master") -> str:

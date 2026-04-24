@@ -13,6 +13,8 @@ Usage:
   tm_io.py mem0-write   --agent <name> --topic <topic>                   # text  on stdin
   tm_io.py mem0-search  --query <q> [--size N]
   tm_io.py lint-page    <path>
+  tm_io.py status       [--json]
+  tm_io.py preflight    [--json]
   tm_io.py guard        --commit-msg-file <path>                         # called by git hook
 
 Exit codes:
@@ -22,10 +24,12 @@ Exit codes:
   3  git operation failed (GitError)
   4  Mem0 API failure (RuntimeError from Mem0)
   5  guard rejected the commit
+  6  preflight blocked
 """
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import sys
 
@@ -124,6 +128,53 @@ def cmd_lint_page(args: argparse.Namespace) -> None:
     print("OK")
 
 
+# ---------- session status / preflight ----------
+
+def _print_status(status: dict, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(status, ensure_ascii=False, indent=2))
+        return
+    print(f"ok: {status['ok']}")
+    print(f"branch: {status['branch'] or '(detached)'}")
+    print(f"upstream: {status['upstream'] or '(none)'}")
+    print(f"head: {status['head'] or '(none)'}")
+    print(f"ahead: {status['ahead']}")
+    print(f"behind: {status['behind']}")
+    print(f"dirty_count: {status['dirty_count']}")
+    print(f"staged_count: {status['staged_count']}")
+    print(f"unstaged_count: {status['unstaged_count']}")
+    print(f"untracked_count: {status['untracked_count']}")
+    print(f"unmerged_count: {status['unmerged_count']}")
+    print(f"hooks_path: {status['hooks_path'] or '(unset)'}")
+    print(f"hooks_installed: {status['hooks_installed']}")
+    if status["blockers"]:
+        print("blockers:")
+        for item in status["blockers"]:
+            print(f"  - {item}")
+    if status["paths"]:
+        print("paths:")
+        for item in status["paths"]:
+            print(f"  - {item}")
+
+
+def cmd_status(args: argparse.Namespace) -> None:
+    try:
+        status = tm_core.git_session_status()
+    except tm_core.GitError as e:
+        _die(str(e), code=3)
+    _print_status(status, args.json)
+
+
+def cmd_preflight(args: argparse.Namespace) -> None:
+    try:
+        status = tm_core.git_session_status()
+    except tm_core.GitError as e:
+        _die(str(e), code=3)
+    _print_status(status, args.json)
+    if not status["ok"]:
+        sys.exit(6)
+
+
 # ---------- guard (called by commit-msg hook) ----------
 
 def cmd_guard(args: argparse.Namespace) -> None:
@@ -174,6 +225,14 @@ def main() -> None:
     lp = sub.add_parser("lint-page", help="validate a Wiki page against PAGE_FORMATS.md")
     lp.add_argument("path")
     lp.set_defaults(func=cmd_lint_page)
+
+    st = sub.add_parser("status", help="print a read-only agent session status snapshot")
+    st.add_argument("--json", action="store_true")
+    st.set_defaults(func=cmd_status)
+
+    pf = sub.add_parser("preflight", help="fail if the session cannot safely start or end")
+    pf.add_argument("--json", action="store_true")
+    pf.set_defaults(func=cmd_preflight)
 
     g = sub.add_parser(
         "guard",
