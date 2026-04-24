@@ -2,7 +2,9 @@
 """
 tools/tm_mcp.py — tigermemory MCP server (thin adapter over tm_core).
 
-Exposes 14 tools for remote agents (laptop MCP clients):
+Exposes 16 tools for remote agents (laptop MCP clients):
+- check_worktree
+- close_session
 - write_inbox
 - propose_wiki_page
 - search_memories
@@ -28,7 +30,7 @@ Usage:
   python tools/tm_mcp.py --http --host 0.0.0.0 --port 9766
 
 HTTP mode requires TM_MCP_API_KEY in runtime/openmemory/.env.
-Role controls exposed tools: 'writer' (default) = all 12 tools; 'reader' = 7 read-only tools.
+Role controls write tools: 'writer' (default) can call all tools; 'reader' can call read-only tools.
 """
 from __future__ import annotations
 
@@ -67,8 +69,8 @@ _allowed_hosts = (
     else _DEFAULT_ALLOWED_HOSTS
 )
 
-# Role-based access control (P2-11). Default 'writer' exposes all 12 tools;
-# 'reader' restricts to 7 read-only tools.
+# Role-based access control (P2-11). Default 'writer' can call all tools;
+# 'reader' is blocked by _require_writer() on write tools.
 _ROLE: str = "writer"
 
 mcp = FastMCP(
@@ -88,6 +90,73 @@ def _require_writer() -> None:
 
 
 # ---------- Tools ----------
+
+@mcp.tool()
+def check_worktree() -> dict[str, Any]:
+    """Return a read-only git/worktree preflight snapshot.
+
+    Agents should call this before editing files. The result is based on the
+    same kernel as `tm_io.py status/preflight` and includes dirty counts,
+    ahead/behind, unmerged paths, and hook installation state.
+
+    Returns:
+        {
+            "ok": bool,
+            "phase": "start",
+            "status": {...},
+            "blockers": [str],
+            "recommended_action": str
+        }
+    """
+    status = tm_core.git_session_status()
+    blockers = list(status["blockers"])
+    if blockers:
+        action = "Report blockers and do not edit files until the owner/human resolves them."
+    else:
+        action = "Safe to start work."
+    return {
+        "ok": not blockers,
+        "phase": "start",
+        "status": status,
+        "blockers": blockers,
+        "recommended_action": action,
+    }
+
+
+@mcp.tool()
+def close_session() -> dict[str, Any]:
+    """Return whether this agent session is safe to close.
+
+    This tool is intentionally read-only: it does not commit, stash, pull,
+    push, or repair anything. It only reports blockers so agents cannot claim
+    completion while local changes, unpushed commits, or branch drift remain.
+
+    Returns:
+        {
+            "ok": bool,
+            "phase": "close",
+            "status": {...},
+            "blockers": [str],
+            "recommended_action": str
+        }
+    """
+    status = tm_core.git_session_status()
+    blockers = list(status["blockers"])
+    if blockers:
+        action = (
+            "Do not close the session. Commit/push owned changes or report "
+            "unowned blockers explicitly."
+        )
+    else:
+        action = "Safe to close session."
+    return {
+        "ok": not blockers,
+        "phase": "close",
+        "status": status,
+        "blockers": blockers,
+        "recommended_action": action,
+    }
+
 
 @mcp.tool()
 def write_inbox(agent: str, topic: str, title: str, body: str) -> dict[str, Any]:
@@ -637,7 +706,7 @@ if __name__ == "__main__":
     ap.add_argument("--host", default="0.0.0.0", help="HTTP host (default: 0.0.0.0)")
     ap.add_argument("--port", type=int, default=9766, help="HTTP port (default: 9766)")
     ap.add_argument("--role", choices=["writer", "reader"], default="writer",
-                    help="Access role: writer (default, all tools) or reader (7 read-only tools)")
+                    help="Access role: writer (default, all tools) or reader (read-only tools)")
     args = ap.parse_args()
 
     # Set global role before MCP starts.
