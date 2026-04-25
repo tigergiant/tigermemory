@@ -363,7 +363,7 @@ def propose_wiki_page(
 
 @mcp.tool()
 def search_memories(query: str, size: int = 5) -> dict[str, Any]:
-    """Search Mem0 memories by query.
+    """[检索 Mem0 长期记忆] Search Mem0 memories by query. Not for web search — use minimax_search for that.
 
     Args:
         query: Search query text
@@ -713,10 +713,9 @@ def minimax_vision(
     prompt: str = "Describe the image in detail.",
     timeout: int = 120,
 ) -> dict[str, Any]:
-    """Describe an image using MiniMax VLM (via mmx-cli).
+    """[图片理解/视觉 VLM] Describe an image using MiniMax VLM.
 
-    Enables any text-only agent to understand images by delegating to
-    MiniMax's vision model. Accepts local file paths or URLs.
+    Use for: reading/understanding image content. Accepts local path or URL.
 
     Args:
         image: Local file path or URL to the image.
@@ -735,7 +734,7 @@ def minimax_video(
     image: str | None = None,
     timeout: int = 600,
 ) -> dict[str, Any]:
-    """Generate a video with MiniMax Hailuo 2.3 (via mmx-cli).
+    """[视频生成] Generate a video with MiniMax Hailuo 2.3.
 
     Args:
         prompt: Text description for the video.
@@ -755,7 +754,7 @@ def minimax_speech(
     voice: str | None = None,
     timeout: int = 120,
 ) -> dict[str, Any]:
-    """Synthesize speech from text using MiniMax Speech 2.8 (via mmx-cli).
+    """[语音合成/TTS] Synthesize speech from text using MiniMax Speech 2.8.
 
     Args:
         text: Text to convert to speech.
@@ -774,7 +773,7 @@ def minimax_music(
     prompt: str,
     timeout: int = 300,
 ) -> dict[str, Any]:
-    """Generate music using MiniMax Music 2.6 (via mmx-cli).
+    """[音乐生成] Generate music using MiniMax Music 2.6.
 
     Args:
         prompt: Description of the music to generate.
@@ -792,7 +791,7 @@ def minimax_image(
     prompt: str,
     timeout: int = 120,
 ) -> dict[str, Any]:
-    """Generate an image using MiniMax image-01 (via mmx-cli).
+    """[图片生成] Generate an image using MiniMax image-01.
 
     Args:
         prompt: Description of the image to generate.
@@ -810,7 +809,7 @@ def minimax_search(
     query: str,
     timeout: int = 30,
 ) -> dict[str, Any]:
-    """Web search via MiniMax search API (via mmx-cli).
+    """[联网搜索] Web search via MiniMax search API. Not for Mem0 memory search — use search_memories for that.
 
     Args:
         query: Search query text.
@@ -824,7 +823,7 @@ def minimax_search(
 
 @mcp.tool()
 def minimax_quota() -> dict[str, Any]:
-    """Show current MiniMax Token Plan quota usage.
+    """[MiniMax 配额查询] Show current MiniMax Token Plan quota usage.
 
     Returns:
         {"ok": true, "raw": "<quota table text>"}
