@@ -2,7 +2,7 @@
 """
 tools/tm_mcp.py — tigermemory MCP server (thin adapter over tm_core).
 
-Exposes 16 tools for remote agents (laptop MCP clients):
+Exposes 23 tools for remote agents (laptop MCP clients):
 - check_worktree
 - close_session
 - write_inbox
@@ -19,6 +19,13 @@ Exposes 16 tools for remote agents (laptop MCP clients):
 - review_digest          (P6.3)
 - approve_fact           (P6.3)
 - mark_digest_reviewed   (P6.3)
+- minimax_vision         (MiniMax CLI)
+- minimax_video          (MiniMax CLI)
+- minimax_speech         (MiniMax CLI)
+- minimax_music          (MiniMax CLI)
+- minimax_image          (MiniMax CLI)
+- minimax_search         (MiniMax CLI)
+- minimax_quota          (MiniMax CLI)
 
 All rule enforcement and side effects live in tm_core.py. This module only
 handles MCP tool decoration, HTTP transport (Bearer auth + DNS rebinding
@@ -46,6 +53,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 import tm_core
+import tm_minimax
 import tm_review_tools
 
 
@@ -695,6 +703,133 @@ def mark_digest_reviewed(date: str) -> dict[str, Any]:
         return {"ok": True, "committed": True, "commit_sha": sha}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+# ---------- MiniMax CLI Tools ----------
+
+@mcp.tool()
+def minimax_vision(
+    image: str,
+    prompt: str = "Describe the image in detail.",
+    timeout: int = 120,
+) -> dict[str, Any]:
+    """Describe an image using MiniMax VLM (via mmx-cli).
+
+    Enables any text-only agent to understand images by delegating to
+    MiniMax's vision model. Accepts local file paths or URLs.
+
+    Args:
+        image: Local file path or URL to the image.
+        prompt: Question or instruction about the image.
+        timeout: Request timeout in seconds (default 120).
+
+    Returns:
+        {"ok": true, "description": "...", "image": "...", "prompt": "..."}
+    """
+    return tm_minimax.vision_describe(image, prompt, timeout)
+
+
+@mcp.tool()
+def minimax_video(
+    prompt: str,
+    image: str | None = None,
+    timeout: int = 600,
+) -> dict[str, Any]:
+    """Generate a video with MiniMax Hailuo 2.3 (via mmx-cli).
+
+    Args:
+        prompt: Text description for the video.
+        image: Optional reference image (path or URL).
+        timeout: Request timeout in seconds (default 600).
+
+    Returns:
+        mmx JSON response with task_id or download info.
+    """
+    _require_writer()
+    return tm_minimax.video_generate(prompt, image, timeout)
+
+
+@mcp.tool()
+def minimax_speech(
+    text: str,
+    voice: str | None = None,
+    timeout: int = 120,
+) -> dict[str, Any]:
+    """Synthesize speech from text using MiniMax Speech 2.8 (via mmx-cli).
+
+    Args:
+        text: Text to convert to speech.
+        voice: Optional voice ID.
+        timeout: Request timeout in seconds (default 120).
+
+    Returns:
+        mmx JSON response with output file path or audio data.
+    """
+    _require_writer()
+    return tm_minimax.speech_synthesize(text, voice, timeout)
+
+
+@mcp.tool()
+def minimax_music(
+    prompt: str,
+    timeout: int = 300,
+) -> dict[str, Any]:
+    """Generate music using MiniMax Music 2.6 (via mmx-cli).
+
+    Args:
+        prompt: Description of the music to generate.
+        timeout: Request timeout in seconds (default 300).
+
+    Returns:
+        mmx JSON response with output info.
+    """
+    _require_writer()
+    return tm_minimax.music_generate(prompt, timeout)
+
+
+@mcp.tool()
+def minimax_image(
+    prompt: str,
+    timeout: int = 120,
+) -> dict[str, Any]:
+    """Generate an image using MiniMax image-01 (via mmx-cli).
+
+    Args:
+        prompt: Description of the image to generate.
+        timeout: Request timeout in seconds (default 120).
+
+    Returns:
+        mmx JSON response with output info.
+    """
+    _require_writer()
+    return tm_minimax.image_generate(prompt, timeout)
+
+
+@mcp.tool()
+def minimax_search(
+    query: str,
+    timeout: int = 30,
+) -> dict[str, Any]:
+    """Web search via MiniMax search API (via mmx-cli).
+
+    Args:
+        query: Search query text.
+        timeout: Request timeout in seconds (default 30).
+
+    Returns:
+        mmx JSON response with search results.
+    """
+    return tm_minimax.search_query(query, timeout)
+
+
+@mcp.tool()
+def minimax_quota() -> dict[str, Any]:
+    """Show current MiniMax Token Plan quota usage.
+
+    Returns:
+        {"ok": true, "raw": "<quota table text>"}
+    """
+    return tm_minimax.quota_show()
 
 
 # ---------- Entry point ----------
