@@ -294,39 +294,46 @@ def _read_inbox_summary(path: Path) -> str:
 
 def _list_inbox_for_date(date_str: str) -> list[dict[str, Any]]:
     """List inbox files created on target date.
-    
+
     Inbox filename format: YYYY-MM-DD-HHMM-<agent>-<topic>.md
     We parse the date part from filename.
+
+    Scans both `inbox/` (live queue) and `archive/inbox/` (already-processed) so
+    files moved out of the live queue during the day still get included in the
+    nightly digest. Dedupes by filename.
     """
-    inbox_dir = REPO_ROOT / "inbox"
-    if not inbox_dir.exists():
-        return []
-    
     target_prefix = date_str  # "2026-04-20"
     files: list[dict[str, Any]] = []
-    
-    for f in inbox_dir.glob("*.md"):
-        if f.name == ".gitkeep":
+    seen: set[str] = set()
+
+    scan_dirs = [REPO_ROOT / "inbox", REPO_ROOT / "archive" / "inbox"]
+
+    for inbox_dir in scan_dirs:
+        if not inbox_dir.exists():
             continue
-        # Parse filename: 2026-04-20-1205-claude-code-systems.md
-        parts = f.stem.split("-")
-        if len(parts) >= 3:
-            # First 3 parts are date
-            file_date = "-".join(parts[:3])
-            if file_date == target_prefix:
-                # Extract agent and topic from filename
-                agent = parts[3] if len(parts) > 3 else "unknown"
-                topic = parts[4] if len(parts) > 4 else "unknown"
-                files.append({
-                    "filename": f.name,
-                    "path": str(f.relative_to(REPO_ROOT)),
-                    "date": file_date,
-                    "agent": agent,
-                    "topic": topic,
-                    "size": f.stat().st_size,
-                    "summary": _read_inbox_summary(f),
-                })
-    
+        for f in inbox_dir.glob("*.md"):
+            if f.name == ".gitkeep" or f.name in seen:
+                continue
+            # Parse filename: 2026-04-20-1205-claude-code-systems.md
+            parts = f.stem.split("-")
+            if len(parts) >= 3:
+                # First 3 parts are date
+                file_date = "-".join(parts[:3])
+                if file_date == target_prefix:
+                    # Extract agent and topic from filename
+                    agent = parts[3] if len(parts) > 3 else "unknown"
+                    topic = parts[4] if len(parts) > 4 else "unknown"
+                    files.append({
+                        "filename": f.name,
+                        "path": str(f.relative_to(REPO_ROOT)),
+                        "date": file_date,
+                        "agent": agent,
+                        "topic": topic,
+                        "size": f.stat().st_size,
+                        "summary": _read_inbox_summary(f),
+                    })
+                    seen.add(f.name)
+
     # Sort by filename (chronological within day due to HHMM)
     files.sort(key=lambda x: x["filename"])
     return files
