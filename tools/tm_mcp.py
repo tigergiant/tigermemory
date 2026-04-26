@@ -454,7 +454,7 @@ def write_memory(agent: str, topic: str, text: str, force_inbox: bool = False) -
     rel, sha = tm_core.write_and_commit_inbox(
         agent,
         decision.topic_inferred,
-        f"Routed memory ({decision.score})",
+        f"Routed memory {decision.score}",
         text,
         frontmatter_extra=fm_extra,
     )

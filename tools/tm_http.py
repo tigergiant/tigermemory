@@ -124,7 +124,7 @@ def _write_memory_with_review(agent: str, topic: str, text: str, force_inbox: bo
     rel, sha = tm_core.write_and_commit_inbox(
         agent,
         decision.topic_inferred,
-        f"Routed memory ({decision.score})",
+        f"Routed memory {decision.score}",
         text,
         frontmatter_extra=fm_extra,
     )
