@@ -49,6 +49,8 @@ jobs:
       - name: Commit lint changes if any
         run: |
           git add wiki/operations/lint-dashboard.md inbox/ || true
+          # digest views are gitignored (real-time regenerated) — force-add for canonical commit
+          git add -f inbox/daily/*.md || true
           if git diff --cached --quiet; then
             echo "No lint changes"
           else

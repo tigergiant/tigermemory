@@ -8,6 +8,9 @@ sources/assets/
 *.log
 *.code-workspace
 progress.md
+# Real-time digest views: regenerated continuously by debounced timer;
+# canonical commit owned by daily-lint cron (force-add).
+inbox/daily/*.md
 plans/
 __pycache__/
 *.pyc
