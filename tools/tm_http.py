@@ -29,6 +29,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from typing import Any
 from urllib.parse import urlparse
 
 import tm_core
@@ -69,6 +70,70 @@ def _load_wiki_catalog(partition: str) -> list[dict]:
                 "summary": (m.group(3) or "").strip(),
             })
     return items
+
+
+def _review_metadata(review: dict[str, Any], route: str) -> dict[str, Any]:
+    metadata: dict[str, Any] = {"llm_review_route": route}
+    if review.get("review_skipped"):
+        metadata["llm_review_skipped"] = True
+        if review.get("reason"):
+            metadata["llm_review_reason"] = str(review["reason"])[:200]
+        return metadata
+    if review.get("score") is not None:
+        metadata["llm_review_score"] = review["score"]
+        metadata["llm_ready_for_compile"] = bool(review.get("ready_for_compile"))
+    return metadata
+
+
+def _write_memory_with_review(agent: str, topic: str, text: str) -> dict[str, Any]:
+    review = tm_review.review_draft(text)
+    score = review.get("score")
+    if isinstance(score, int) and score < 30:
+        rel, sha = tm_core.write_and_commit_inbox(agent, topic, "L2-blocked memory", text)
+        return {
+            "route": "inbox",
+            "path": rel,
+            "commit_sha": sha,
+            "url": tm_core.git_remote_blob_url(rel),
+            "fallback_reason": f"L2 review score {score} < 30",
+            "review": review,
+        }
+    data = json.loads(tm_core.mem0_write(
+        agent,
+        topic,
+        text,
+        _review_metadata(review, "direct_memory"),
+    ))
+    data["route"] = "mem0"
+    data["review"] = review
+    return data
+
+
+def _write_inbox_with_review(agent: str, topic: str, title: str, body: str) -> dict[str, Any]:
+    review = tm_review.review_draft(f"# {title}\n\n{body}")
+    rel, sha = tm_core.write_and_commit_inbox(agent, topic, title, body)
+    result: dict[str, Any] = {
+        "path": rel,
+        "commit_sha": sha,
+        "url": tm_core.git_remote_blob_url(rel),
+        "review": review,
+        "memory_route": "inbox",
+    }
+    score = review.get("score")
+    if topic != "person" and (review.get("review_skipped") or (isinstance(score, int) and score >= 70)):
+        try:
+            mem = json.loads(tm_core.mem0_write(
+                agent,
+                topic,
+                body,
+                _review_metadata(review, "inbox_auto_mirror"),
+            ))
+            result["memory_route"] = "inbox_and_mem0"
+            result["memory"] = mem
+        except Exception as e:
+            result["memory_error"] = str(e)
+    return result
+
 
 try:
     from fastapi import FastAPI, HTTPException, Request
@@ -408,12 +473,10 @@ async def write_memory(req: WriteMemoryRequest):
     trace_id = str(uuid.uuid4())
     start = time.time()
     try:
-        response_body = tm_core.mem0_write(req.agent, req.topic, req.text)
-        data = json.loads(response_body)
-        return data
+        return _write_memory_with_review(req.agent, req.topic, req.text)
     except Exception as e:
         log_json("error", trace_id, "/write_memory", 502, (time.time() - start) * 1000, detail=str(e))
-        raise HTTPException(status_code=502, detail=f"mem0 unreachable: {e}")
+        raise HTTPException(status_code=502, detail=f"write_memory failed: {e}")
     finally:
         log_json("info", trace_id, "/write_memory", 200, (time.time() - start) * 1000, text_len=len(req.text))
 
@@ -423,11 +486,10 @@ async def write_inbox(req: WriteInboxRequest):
     trace_id = str(uuid.uuid4())
     start = time.time()
     try:
-        rel, sha = tm_core.write_and_commit_inbox(req.agent, req.topic, req.title, req.body)
-        return {"path": rel, "commit_sha": sha, "url": tm_core.git_remote_blob_url(rel)}
+        return _write_inbox_with_review(req.agent, req.topic, req.title, req.body)
     except Exception as e:
         log_json("error", trace_id, "/write_inbox", 503, (time.time() - start) * 1000, detail=str(e))
-        raise HTTPException(status_code=503, detail=f"git push failed: {e}")
+        raise HTTPException(status_code=503, detail=f"write_inbox failed: {e}")
     finally:
         log_json("info", trace_id, "/write_inbox", 200, (time.time() - start) * 1000, body_len=len(req.body))
 

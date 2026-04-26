@@ -92,9 +92,27 @@ mcp = FastMCP(
 
 
 def _require_writer() -> None:
-    """Raise PermissionError if current role is reader."""
-    if _ROLE == "reader":
-        raise PermissionError(f"tool disabled in role='reader' (current role='{_ROLE}')")
+    """Raise PermissionError if current role is not 'writer'."""
+    if _ROLE != "writer":
+        raise PermissionError(f"write tool not allowed for role={_ROLE}")
+
+
+def _review_for_memory(text: str) -> dict[str, Any]:
+    import tm_review
+    return tm_review.review_draft(text)
+
+
+def _review_metadata(review: dict[str, Any], route: str) -> dict[str, Any]:
+    metadata: dict[str, Any] = {"llm_review_route": route}
+    if review.get("review_skipped"):
+        metadata["llm_review_skipped"] = True
+        if review.get("reason"):
+            metadata["llm_review_reason"] = str(review["reason"])[:200]
+        return metadata
+    if review.get("score") is not None:
+        metadata["llm_review_score"] = review["score"]
+        metadata["llm_ready_for_compile"] = bool(review.get("ready_for_compile"))
+    return metadata
 
 
 # ---------- Tools ----------
@@ -180,12 +198,29 @@ def write_inbox(agent: str, topic: str, title: str, body: str) -> dict[str, Any]
     Returns:
         {"path": "inbox/...", "commit_sha": "...", "url": "https://github.com/..."}
     """
+    review = _review_for_memory(f"# {title}\n\n{body}")
     rel, sha = tm_core.write_and_commit_inbox(agent, topic, title, body)
-    return {
+    result: dict[str, Any] = {
         "path": rel,
         "commit_sha": sha,
         "url": tm_core.git_remote_blob_url(rel),
+        "review": review,
+        "memory_route": "inbox",
     }
+    score = review.get("score")
+    if topic != "person" and (review.get("review_skipped") or (isinstance(score, int) and score >= 70)):
+        try:
+            mem = json.loads(tm_core.mem0_write(
+                agent,
+                topic,
+                body,
+                _review_metadata(review, "inbox_auto_mirror"),
+            ))
+            result["memory_route"] = "inbox_and_mem0"
+            result["memory"] = mem
+        except Exception as e:
+            result["memory_error"] = str(e)
+    return result
 
 
 @mcp.tool()
@@ -388,7 +423,32 @@ def write_memory(agent: str, topic: str, text: str) -> dict[str, Any]:
     Returns:
         {"id": "..."} or the full response from Mem0 API
     """
-    return json.loads(tm_core.mem0_write(agent, topic, text))
+    review = _review_for_memory(text)
+    score = review.get("score")
+    if isinstance(score, int) and score < 30:
+        rel, sha = tm_core.write_and_commit_inbox(
+            agent,
+            topic,
+            "L2-blocked memory",
+            text,
+        )
+        return {
+            "route": "inbox",
+            "path": rel,
+            "commit_sha": sha,
+            "url": tm_core.git_remote_blob_url(rel),
+            "fallback_reason": f"L2 review score {score} < 30",
+            "review": review,
+        }
+    data = json.loads(tm_core.mem0_write(
+        agent,
+        topic,
+        text,
+        _review_metadata(review, "direct_memory"),
+    ))
+    data["route"] = "mem0"
+    data["review"] = review
+    return data
 
 
 @mcp.tool()

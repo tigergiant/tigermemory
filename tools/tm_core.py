@@ -332,16 +332,19 @@ def mem0_request(url: str, data: bytes | None = None) -> str:
         raise RuntimeError(f"Mem0 unreachable: {e.reason}")
 
 
-def mem0_write(agent: str, topic: str, text: str) -> str:
+def mem0_write(agent: str, topic: str, text: str, metadata_extra: dict[str, Any] | None = None) -> str:
     """POST a memory with enforced metadata. Returns raw response body."""
     validate_agent(agent)
     validate_topic(topic)
     if not text.strip():
         raise ValueError("text required")
+    metadata = {"source": agent, "topic": topic}
+    if metadata_extra:
+        metadata.update(metadata_extra)
     payload = json.dumps({
         "user_id": "tiger",
         "text": text,
-        "metadata": {"source": agent, "topic": topic},
+        "metadata": metadata,
     }).encode("utf-8")
     return mem0_request(f"{mem0_base()}/api/v1/memories/", data=payload)
 
