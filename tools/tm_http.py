@@ -34,6 +34,7 @@ from urllib.parse import urlparse
 
 import tm_core
 import tm_review
+import tm_route
 
 _INDEX_ITEM_RE = re.compile(r"^\s*-\s*\[([^\]]+)\]\(([^)]+)\)(?:\s*[—\-]\s*(.+))?$")
 _PARTITIONS = ("brand", "investment", "operations", "production", "systems", "person")
@@ -85,54 +86,72 @@ def _review_metadata(review: dict[str, Any], route: str) -> dict[str, Any]:
     return metadata
 
 
-def _write_memory_with_review(agent: str, topic: str, text: str) -> dict[str, Any]:
-    review = tm_review.review_draft(text)
-    score = review.get("score")
-    if isinstance(score, int) and score < 30:
-        rel, sha = tm_core.write_and_commit_inbox(agent, topic, "L2-blocked memory", text)
+def _write_memory_with_review(agent: str, topic: str, text: str, force_inbox: bool = False) -> dict[str, Any]:
+    decision = tm_route.route_memory(text, topic, agent)
+    if force_inbox:
+        decision = tm_route.RouteDecision(
+            route="inbox", score=decision.score, topic_inferred=decision.topic_inferred,
+            issues=decision.issues, reasons=f"force_inbox override: {decision.reasons}",
+            is_transient=decision.is_transient, is_sensitive=decision.is_sensitive,
+            needs_human_review=decision.needs_human_review, unreviewed=decision.unreviewed,
+        )
+
+    if decision.route == "discard":
         return {
-            "route": "inbox",
-            "path": rel,
-            "commit_sha": sha,
-            "url": tm_core.git_remote_blob_url(rel),
-            "fallback_reason": f"L2 review score {score} < 30",
-            "review": review,
+            "route": "discard",
+            "score": decision.score,
+            "issues": decision.issues,
+            "reasons": decision.reasons,
         }
-    data = json.loads(tm_core.mem0_write(
+
+    if decision.route == "mem0":
+        data = json.loads(tm_core.mem0_write(
+            agent,
+            decision.topic_inferred,
+            text,
+            metadata_extra=decision.as_metadata(),
+        ))
+        data["route"] = "mem0"
+        data["score"] = decision.score
+        data["topic_inferred"] = decision.topic_inferred
+        data["reasons"] = decision.reasons
+        return data
+
+    # route == "inbox"
+    fm_extra = decision.as_metadata()
+    fm_extra["routed_by"] = "tigermemory"
+    fm_extra["route_decision_reason"] = decision.reasons
+    rel, sha = tm_core.write_and_commit_inbox(
         agent,
-        topic,
+        decision.topic_inferred,
+        f"Routed memory ({decision.score})",
         text,
-        _review_metadata(review, "direct_memory"),
-    ))
-    data["route"] = "mem0"
-    data["review"] = review
-    return data
-
-
-def _write_inbox_with_review(agent: str, topic: str, title: str, body: str) -> dict[str, Any]:
-    review = tm_review.review_draft(f"# {title}\n\n{body}")
-    rel, sha = tm_core.write_and_commit_inbox(agent, topic, title, body)
-    result: dict[str, Any] = {
+        frontmatter_extra=fm_extra,
+    )
+    return {
+        "route": "inbox",
         "path": rel,
         "commit_sha": sha,
         "url": tm_core.git_remote_blob_url(rel),
-        "review": review,
+        "score": decision.score,
+        "topic_inferred": decision.topic_inferred,
+        "reasons": decision.reasons,
+        "unreviewed": decision.unreviewed,
+    }
+
+
+def _write_inbox_with_review(agent: str, topic: str, title: str, body: str, reason: str) -> dict[str, Any]:
+    fm_extra = {
+        "routed_by": "tigermemory",
+        "route_decision_reason": reason.strip()[:200],
+    }
+    rel, sha = tm_core.write_and_commit_inbox(agent, topic, title, body, frontmatter_extra=fm_extra)
+    return {
+        "path": rel,
+        "commit_sha": sha,
+        "url": tm_core.git_remote_blob_url(rel),
         "memory_route": "inbox",
     }
-    score = review.get("score")
-    if topic != "person" and (review.get("review_skipped") or (isinstance(score, int) and score >= 70)):
-        try:
-            mem = json.loads(tm_core.mem0_write(
-                agent,
-                topic,
-                body,
-                _review_metadata(review, "inbox_auto_mirror"),
-            ))
-            result["memory_route"] = "inbox_and_mem0"
-            result["memory"] = mem
-        except Exception as e:
-            result["memory_error"] = str(e)
-    return result
 
 
 try:
@@ -198,6 +217,7 @@ class WriteMemoryRequest(BaseModel):
     agent: str = Field(..., pattern=r"^(claude-code|codex|openclaw|hermes|deerflow|human|linter|mem0|tigermemory-ce|kimi)$")
     topic: str = Field(..., pattern=r"^(brand|investment|operations|production|systems|person|cross)$")
     text: str = Field(..., min_length=1, max_length=10000)
+    force_inbox: bool = False
 
 
 class WriteInboxRequest(BaseModel):
@@ -205,6 +225,7 @@ class WriteInboxRequest(BaseModel):
     topic: str = Field(..., pattern=r"^(brand|investment|operations|production|systems|person|cross)$")
     title: str = Field(..., min_length=1, max_length=80)
     body: str = Field(..., min_length=1, max_length=50000)
+    reason: str = Field(..., min_length=1, max_length=200)
 
 
 class ReviewDraftRequest(BaseModel):
@@ -486,7 +507,7 @@ async def write_inbox(req: WriteInboxRequest):
     trace_id = str(uuid.uuid4())
     start = time.time()
     try:
-        return _write_inbox_with_review(req.agent, req.topic, req.title, req.body)
+        return _write_inbox_with_review(req.agent, req.topic, req.title, req.body, req.reason)
     except Exception as e:
         log_json("error", trace_id, "/write_inbox", 503, (time.time() - start) * 1000, detail=str(e))
         raise HTTPException(status_code=503, detail=f"write_inbox failed: {e}")

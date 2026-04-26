@@ -185,42 +185,33 @@ def close_session() -> dict[str, Any]:
 
 
 @mcp.tool()
-def write_inbox(agent: str, topic: str, title: str, body: str) -> dict[str, Any]:
+def write_inbox(agent: str, topic: str, title: str, body: str, reason: str) -> dict[str, Any]:
     _require_writer()
-    """Create inbox/YYYY-MM-DD-HHMM-<agent>-<topic>.md and commit-push atomically.
+    """Explicit human-review channel. Always writes to inbox with routed_by signature.
 
     Args:
         agent: Agent name (claude-code, codex, openclaw, hermes, deerflow, human, mem0, kimi)
         topic: Topic name (brand, investment, operations, production, systems, person, cross)
         title: 1-80 char title (letters/digits/CJK/space/-/_)
         body: Markdown body content
+        reason: Why this content needs human review (recorded in frontmatter)
 
     Returns:
         {"path": "inbox/...", "commit_sha": "...", "url": "https://github.com/..."}
     """
-    review = _review_for_memory(f"# {title}\n\n{body}")
-    rel, sha = tm_core.write_and_commit_inbox(agent, topic, title, body)
-    result: dict[str, Any] = {
+    if not reason or not reason.strip():
+        raise ValueError("reason is required for write_inbox")
+    fm_extra = {
+        "routed_by": "tigermemory",
+        "route_decision_reason": reason.strip()[:200],
+    }
+    rel, sha = tm_core.write_and_commit_inbox(agent, topic, title, body, frontmatter_extra=fm_extra)
+    return {
         "path": rel,
         "commit_sha": sha,
         "url": tm_core.git_remote_blob_url(rel),
-        "review": review,
         "memory_route": "inbox",
     }
-    score = review.get("score")
-    if topic != "person" and (review.get("review_skipped") or (isinstance(score, int) and score >= 70)):
-        try:
-            mem = json.loads(tm_core.mem0_write(
-                agent,
-                topic,
-                body,
-                _review_metadata(review, "inbox_auto_mirror"),
-            ))
-            result["memory_route"] = "inbox_and_mem0"
-            result["memory"] = mem
-        except Exception as e:
-            result["memory_error"] = str(e)
-    return result
 
 
 @mcp.tool()
@@ -411,44 +402,72 @@ def search_memories(query: str, size: int = 5) -> dict[str, Any]:
 
 
 @mcp.tool()
-def write_memory(agent: str, topic: str, text: str) -> dict[str, Any]:
+def write_memory(agent: str, topic: str, text: str, force_inbox: bool = False) -> dict[str, Any]:
     _require_writer()
-    """Write a memory to Mem0 with enforced metadata.
+    """Single canonical entry for agent memory writes. Server-side LLM routes to mem0 / inbox / discard.
 
     Args:
         agent: Agent name
         topic: Topic name
         text: Memory text content
+        force_inbox: If True, bypass routing and write directly to inbox (agent requests human review)
 
     Returns:
-        {"id": "..."} or the full response from Mem0 API
+        {"route": "mem0", "id": "..."} or {"route": "inbox", "path": "...", "commit_sha": "..."}
+        or {"route": "discard", "score": int, "issues": [...]}
     """
-    review = _review_for_memory(text)
-    score = review.get("score")
-    if isinstance(score, int) and score < 30:
-        rel, sha = tm_core.write_and_commit_inbox(
-            agent,
-            topic,
-            "L2-blocked memory",
-            text,
+    import tm_route
+    decision = tm_route.route_memory(text, topic, agent)
+    if force_inbox:
+        decision = tm_route.RouteDecision(
+            route="inbox", score=decision.score, topic_inferred=decision.topic_inferred,
+            issues=decision.issues, reasons=f"force_inbox override: {decision.reasons}",
+            is_transient=decision.is_transient, is_sensitive=decision.is_sensitive,
+            needs_human_review=decision.needs_human_review, unreviewed=decision.unreviewed,
         )
+
+    if decision.route == "discard":
         return {
-            "route": "inbox",
-            "path": rel,
-            "commit_sha": sha,
-            "url": tm_core.git_remote_blob_url(rel),
-            "fallback_reason": f"L2 review score {score} < 30",
-            "review": review,
+            "route": "discard",
+            "score": decision.score,
+            "issues": decision.issues,
+            "reasons": decision.reasons,
         }
-    data = json.loads(tm_core.mem0_write(
+
+    if decision.route == "mem0":
+        data = json.loads(tm_core.mem0_write(
+            agent,
+            decision.topic_inferred,
+            text,
+            metadata_extra=decision.as_metadata(),
+        ))
+        data["route"] = "mem0"
+        data["score"] = decision.score
+        data["topic_inferred"] = decision.topic_inferred
+        data["reasons"] = decision.reasons
+        return data
+
+    # route == "inbox"
+    fm_extra = decision.as_metadata()
+    fm_extra["routed_by"] = "tigermemory"
+    fm_extra["route_decision_reason"] = decision.reasons
+    rel, sha = tm_core.write_and_commit_inbox(
         agent,
-        topic,
+        decision.topic_inferred,
+        f"Routed memory ({decision.score})",
         text,
-        _review_metadata(review, "direct_memory"),
-    ))
-    data["route"] = "mem0"
-    data["review"] = review
-    return data
+        frontmatter_extra=fm_extra,
+    )
+    return {
+        "route": "inbox",
+        "path": rel,
+        "commit_sha": sha,
+        "url": tm_core.git_remote_blob_url(rel),
+        "score": decision.score,
+        "topic_inferred": decision.topic_inferred,
+        "reasons": decision.reasons,
+        "unreviewed": decision.unreviewed,
+    }
 
 
 @mcp.tool()

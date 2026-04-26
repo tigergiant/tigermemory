@@ -415,15 +415,29 @@ def inbox_rel_path(agent: str, topic: str, stamp: str | None = None) -> str:
     return f"inbox/{stamp}-{agent}-{topic}.md"
 
 
-def render_inbox_body(agent: str, title: str, body: str, date: str | None = None) -> str:
+def render_inbox_body(
+    agent: str,
+    title: str,
+    body: str,
+    date: str | None = None,
+    frontmatter_extra: dict[str, Any] | None = None,
+) -> str:
     """Render standard inbox frontmatter + body."""
     if date is None:
         date = now("%Y-%m-%d")
+    extra_lines = ""
+    if frontmatter_extra:
+        for k, v in frontmatter_extra.items():
+            if isinstance(v, bool):
+                extra_lines += f"{k}: {'true' if v else 'false'}\n"
+            else:
+                extra_lines += f"{k}: {v}\n"
     return (
         "---\n"
         f"owner: {agent}\n"
         "status: draft\n"
         f"updated: {date}\n"
+        f"{extra_lines}"
         "---\n\n"
         f"# {title}\n\n"
         f"{body}\n"
@@ -770,7 +784,13 @@ def guard_commit(commit_msg_path: pathlib.Path) -> list[str]:
 
 # ---------- High-level write operations ----------
 
-def write_inbox_file(agent: str, topic: str, title: str, body: str) -> str:
+def write_inbox_file(
+    agent: str,
+    topic: str,
+    title: str,
+    body: str,
+    frontmatter_extra: dict[str, Any] | None = None,
+) -> str:
     """Write inbox file. Returns relative path. Does NOT commit.
 
     Raises ValueError on bad input, FileExistsError on timestamp collision.
@@ -785,16 +805,22 @@ def write_inbox_file(agent: str, topic: str, title: str, body: str) -> str:
     path = REPO_ROOT / rel
     if path.exists():
         raise FileExistsError(f"file already exists: {rel}")
-    path.write_text(render_inbox_body(agent, title, body), encoding="utf-8")
+    path.write_text(render_inbox_body(agent, title, body, frontmatter_extra=frontmatter_extra), encoding="utf-8")
     return rel
 
 
-def write_and_commit_inbox(agent: str, topic: str, title: str, body: str) -> tuple[str, str]:
+def write_and_commit_inbox(
+    agent: str,
+    topic: str,
+    title: str,
+    body: str,
+    frontmatter_extra: dict[str, Any] | None = None,
+) -> tuple[str, str]:
     """Atomic: write inbox file + commit-push. Returns (rel_path, short_sha).
 
     On git failure, removes the on-disk file so working tree stays clean.
     """
-    rel = write_inbox_file(agent, topic, title, body)
+    rel = write_inbox_file(agent, topic, title, body, frontmatter_extra=frontmatter_extra)
     path = REPO_ROOT / rel
     try:
         sha = git_commit_push([rel], f"[{agent}] create: {title}")
