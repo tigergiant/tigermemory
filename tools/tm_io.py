@@ -45,13 +45,71 @@ def _die(msg: str, code: int = 2) -> None:
 
 def cmd_write_inbox(args: argparse.Namespace) -> None:
     body = sys.stdin.read().strip()
+    if not body:
+        _die("body required on stdin", code=2)
+
+    import tm_route
+
+    if args.force_inbox:
+        fm_extra = {"routed_by": "tigermemory", "route_decision_reason": "force_inbox CLI"}
+        try:
+            rel = tm_core.write_inbox_file(args.agent, args.topic, args.title, body, frontmatter_extra=fm_extra)
+        except ValueError as e:
+            _die(str(e), code=2)
+        except FileExistsError as e:
+            _die(str(e), code=2)
+        print(json.dumps({"route": "inbox", "path": rel}))
+        return
+
+    decision = tm_route.route_memory(body, args.topic, args.agent)
+
+    if decision.route == "discard":
+        print(json.dumps({
+            "route": "discard",
+            "score": decision.score,
+            "issues": decision.issues,
+            "reasons": decision.reasons,
+        }))
+        return
+
+    if decision.route == "mem0":
+        try:
+            resp = tm_core.mem0_write(
+                args.agent,
+                decision.topic_inferred,
+                body,
+                metadata_extra=decision.as_metadata(),
+            )
+        except ValueError as e:
+            _die(str(e), code=2)
+        except RuntimeError as e:
+            _die(str(e), code=4)
+        print(resp)
+        return
+
+    # route == "inbox"
+    fm_extra = decision.as_metadata()
+    fm_extra["routed_by"] = "tigermemory"
+    fm_extra["route_decision_reason"] = decision.reasons
     try:
-        rel = tm_core.write_inbox_file(args.agent, args.topic, args.title, body)
+        rel = tm_core.write_inbox_file(
+            args.agent,
+            decision.topic_inferred,
+            args.title,
+            body,
+            frontmatter_extra=fm_extra,
+        )
     except ValueError as e:
         _die(str(e), code=2)
     except FileExistsError as e:
         _die(str(e), code=2)
-    print(rel)
+    print(json.dumps({
+        "route": "inbox",
+        "path": rel,
+        "score": decision.score,
+        "reasons": decision.reasons,
+        "unreviewed": decision.unreviewed,
+    }))
 
 
 # ---------- commit-push ----------
@@ -199,10 +257,11 @@ def main() -> None:
     p = argparse.ArgumentParser(prog="tm_io.py", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    w = sub.add_parser("write-inbox", help="write a new inbox file")
+    w = sub.add_parser("write-inbox", help="write a new inbox file (routed via tm_route by default)")
     w.add_argument("--agent", required=True)
     w.add_argument("--topic", required=True)
     w.add_argument("--title", required=True)
+    w.add_argument("--force-inbox", action="store_true", help="skip routing, write directly to inbox")
     w.set_defaults(func=cmd_write_inbox)
 
     c = sub.add_parser("commit-push", help="atomic git add/commit/push with rules")
