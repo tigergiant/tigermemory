@@ -1,6 +1,6 @@
 #!/bin/sh
 # tigermemory pre-commit hook — blocks mojibake writes into markdown files.
-# + inbox routing signature check (warn-only until codex P3.5 migration confirmed)
+# + inbox routing signature check (enforce mode: rejects unsigned inbox commits)
 # Install with: git config core.hooksPath .githooks
 #
 # Bypass (human emergency only): git commit --no-verify
@@ -30,7 +30,6 @@ for f in $staged_inbox; do
     echo "  use: python tools/tm_io.py write-inbox ..." >&2
     echo "       or MCP write_memory / write_inbox tools" >&2
     echo "  direct git add inbox/*.md is forbidden." >&2
-    # WARN-ONLY: switch to exit 1 after codex P3.5 migration is confirmed
-    # exit 1
+    exit 1
   fi
 done
