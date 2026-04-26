@@ -6,6 +6,7 @@ runtime/
 sources/assets/
 *.tmp
 *.log
+*.code-workspace
 progress.md
 plans/
 __pycache__/
