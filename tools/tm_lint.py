@@ -222,7 +222,7 @@ def _deepseek_judge(system_prompt: str, user_msg: str) -> dict | None:
     except KeyError:
         return None
     payload = json.dumps({
-        "model": "deepseek-chat",
+        "model": "deepseek-v4-flash",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg[:8000]},  # cap context

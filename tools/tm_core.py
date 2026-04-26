@@ -795,7 +795,7 @@ def write_and_commit_inbox(agent: str, topic: str, title: str, body: str) -> tup
 # ---------- P6.1 Fact refinement (DeepSeek) ----------
 
 REFINE_DEEPSEEK_ENDPOINT = "https://api.deepseek.com/v1/chat/completions"
-REFINE_DEEPSEEK_MODEL = "deepseek-chat"
+REFINE_DEEPSEEK_MODEL = "deepseek-v4-flash"
 REFINE_DEFAULT_TIMEOUT = 15  # seconds
 REFINE_MIN_TEXT_LEN = 20
 REFINE_MAX_TEXT_LEN = 500
