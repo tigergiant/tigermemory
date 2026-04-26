@@ -332,13 +332,28 @@ def mem0_request(url: str, data: bytes | None = None) -> str:
         raise RuntimeError(f"Mem0 unreachable: {e.reason}")
 
 
-def mem0_write(agent: str, topic: str, text: str, metadata_extra: dict[str, Any] | None = None) -> str:
+def mem0_write(
+    agent: str,
+    topic: str,
+    text: str,
+    metadata_extra: dict[str, Any] | None = None,
+    *,
+    route_decision: str | None = None,
+    route_score: int | None = None,
+    route_topic_inferred: str | None = None,
+) -> str:
     """POST a memory with enforced metadata. Returns raw response body."""
     validate_agent(agent)
     validate_topic(topic)
     if not text.strip():
         raise ValueError("text required")
-    metadata = {"source": agent, "topic": topic}
+    metadata: dict[str, Any] = {"source": agent, "topic": topic}
+    if route_decision is not None:
+        metadata["route_decision"] = route_decision
+    if route_score is not None:
+        metadata["route_score"] = route_score
+    if route_topic_inferred is not None:
+        metadata["route_topic_inferred"] = route_topic_inferred
     if metadata_extra:
         metadata.update(metadata_extra)
     payload = json.dumps({
