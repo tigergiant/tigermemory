@@ -29,6 +29,13 @@ LINTER_DASHBOARDS = {
 # Tolerate the special [unreviewed] tag suffix on commit messages
 UNREVIEWED_TAG = "[unreviewed]"
 
+# Inbox signature: any added inbox/*.md must declare routing provenance.
+# Mirror of .githooks/pre-commit; catches commits that bypassed the local hook
+# (fresh clones without core.hooksPath, --no-verify pushes, token pushes).
+# Excludes inbox/daily/*.md (digest products) — handled by regex below.
+INBOX_FILE_RE = re.compile(r"^inbox/[^/]+\.md$")
+ROUTED_BY_RE = re.compile(r"^routed_by:\s*(tigermemory|human-direct)\s*$", re.M)
+
 
 def validate_commit(sha: str) -> list[str]:
     """Return list of violations for a single commit; empty = clean."""
@@ -63,6 +70,33 @@ def validate_commit(sha: str) -> list[str]:
         capture_output=True, text=True, check=True,
     ).stdout
     paths = [p for p in paths_out.splitlines() if p]
+
+    # Inbox routing signature: any added inbox/*.md (excluding inbox/daily/) must
+    # carry `routed_by: tigermemory` (LLM-routed) or `routed_by: human-direct`
+    # (human emergency edit). Mirrors .githooks/pre-commit so CI catches bypasses.
+    added_out = subprocess.run(
+        ["git", "diff-tree", "--no-commit-id", "--name-only", "-r",
+         "--diff-filter=A", sha],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    added_paths = [p for p in added_out.splitlines() if p]
+    for p in added_paths:
+        if not INBOX_FILE_RE.match(p):
+            continue
+        try:
+            blob = subprocess.run(
+                ["git", "show", f"{sha}:{p}"],
+                capture_output=True, text=True, check=True,
+            ).stdout
+        except subprocess.CalledProcessError:
+            errors.append(f"{short}: '{p}' could not be read for signature check")
+            continue
+        if not ROUTED_BY_RE.search(blob):
+            errors.append(
+                f"{short}: '{p}' missing 'routed_by: tigermemory' frontmatter "
+                "(use tm_io.py write-inbox or MCP write_memory; "
+                "direct git add inbox/*.md is forbidden)"
+            )
 
     # sources/ immutability
     for p in paths:
