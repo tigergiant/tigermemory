@@ -25,6 +25,7 @@ import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -86,6 +87,47 @@ def _review_metadata(review: dict[str, Any], route: str) -> dict[str, Any]:
     return metadata
 
 
+# ---------- Debounced digest auto-refresh ----------
+#
+# After every successful write (mem0 or inbox), schedule a digest regen of
+# today's file. Debounced so a burst of writes coalesces into one synthesis.
+# Writes only to `inbox/daily/YYYY-MM-DD.md`; the 03:15 cron still owns the
+# canonical commit. This gives the user a near-real-time view of the day's
+# accumulated facts via the live file.
+
+DIGEST_DEBOUNCE_SECONDS = int(os.environ.get("TM_DIGEST_DEBOUNCE_SECONDS", "180"))
+_digest_timer: threading.Timer | None = None
+_digest_lock = threading.Lock()
+
+
+def _refresh_digest_today() -> None:
+    """Background callback: regenerate today's digest file. Logs failures."""
+    try:
+        # Lazy import: tm_digest pulls in DeepSeek SDK; avoid at module load
+        from tm_digest import generate_daily_digest
+        today = datetime.now(tm_core.TZ_CN).strftime("%Y-%m-%d")
+        result = generate_daily_digest(target_date=today, dry_run=False)
+        log_json(
+            "info", str(uuid.uuid4()), "/_digest_refresh", 200, 0,
+            ok=result.get("ok"), path=result.get("path"),
+            facts=result.get("fact_count"), reason=result.get("reason"),
+        )
+    except Exception as e:
+        log_json("error", str(uuid.uuid4()), "/_digest_refresh", 500, 0, detail=str(e))
+
+
+def _schedule_digest_refresh() -> None:
+    """Debounced trigger: each call resets a DIGEST_DEBOUNCE_SECONDS timer."""
+    global _digest_timer
+    with _digest_lock:
+        if _digest_timer is not None:
+            _digest_timer.cancel()
+        t = threading.Timer(DIGEST_DEBOUNCE_SECONDS, _refresh_digest_today)
+        t.daemon = True
+        _digest_timer = t
+        t.start()
+
+
 def _write_memory_with_review(agent: str, topic: str, text: str, force_inbox: bool = False) -> dict[str, Any]:
     decision = tm_route.route_memory(text, topic, agent)
     if force_inbox:
@@ -115,6 +157,7 @@ def _write_memory_with_review(agent: str, topic: str, text: str, force_inbox: bo
         data["score"] = decision.score
         data["topic_inferred"] = decision.topic_inferred
         data["reasons"] = decision.reasons
+        _schedule_digest_refresh()
         return data
 
     # route == "inbox"
@@ -128,6 +171,7 @@ def _write_memory_with_review(agent: str, topic: str, text: str, force_inbox: bo
         text,
         frontmatter_extra=fm_extra,
     )
+    _schedule_digest_refresh()
     return {
         "route": "inbox",
         "path": rel,
@@ -146,6 +190,7 @@ def _write_inbox_with_review(agent: str, topic: str, title: str, body: str, reas
         "route_decision_reason": reason.strip()[:200],
     }
     rel, sha = tm_core.write_and_commit_inbox(agent, topic, title, body, frontmatter_extra=fm_extra)
+    _schedule_digest_refresh()
     return {
         "path": rel,
         "commit_sha": sha,
