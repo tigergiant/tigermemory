@@ -557,6 +557,37 @@ def _history_examples(query: str | None, limit: int) -> list[dict[str, str | int
     return examples
 
 
+def _mem0_recent_feedback(days: int = 30, limit: int = 10) -> list[dict[str, Any]]:
+    """Query Mem0 for recent IPFB/brand feedback. Fail-open: returns [] on error."""
+    queries = ["IPFB 文案 辉总 反馈 审稿", "IPFB 禁用 短语 风格 偏好"]
+    results: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for q in queries:
+        try:
+            raw = mem0_search(q, size=limit)
+            data = json.loads(raw)
+            items = data.get("items") or data.get("results") or []
+            for item in items:
+                mid = item.get("id", "")
+                if mid in seen_ids:
+                    continue
+                seen_ids.add(mid)
+                meta = item.get("metadata") or item.get("meta") or {}
+                topic = meta.get("topic", "")
+                if topic and topic not in ("brand", "person", "cross"):
+                    continue
+                results.append({
+                    "id": mid,
+                    "text": (item.get("memory") or item.get("text") or "")[:300],
+                    "topic": topic,
+                    "created_at": item.get("created_at", ""),
+                    "source": meta.get("source", "unknown"),
+                })
+        except Exception:
+            pass
+    return results[:limit]
+
+
 def ipfb_copywriting_context(
     task_type: str = "daily_product",
     channel: str = "wechat",
@@ -630,6 +661,7 @@ def ipfb_copywriting_context(
             "文案要有画面、感官和留白，不做电商卖点堆砌。",
             "禁用电商词：热卖、爆款、藏肉、显瘦、显高、百搭、承包、必入、神套装、性价比等。",
             "交稿前必须用 ipfb-copywriting-skill.md 的自检清单逐项检查。",
+            "起稿前必须阅读本返回值的 recent_feedback 字段，避免重复已被拒的短语或意象。",
         ],
         "output_contract": {
             "draft_count": 2,
@@ -640,6 +672,8 @@ def ipfb_copywriting_context(
         "sources": sources,
         "history_query": history_query,
         "history_examples": _history_examples(history_query, history_limit),
+        "recent_feedback": _mem0_recent_feedback(days=30, limit=10),
+        "recent_feedback_note": "Mem0 近 30 天 IPFB/品牌相关记忆。起稿前必须阅读，避免重复犯错。",
         "maintenance_note": "如果辉总/虎哥有新审稿偏好，只追加范例或雷区，不推翻核心规则。",
     }
 
