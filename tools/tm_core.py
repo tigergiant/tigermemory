@@ -574,7 +574,7 @@ def _mem0_recent_feedback(days: int = 30, limit: int = 10) -> list[dict[str, Any
                 seen_ids.add(mid)
                 meta = item.get("metadata_") or item.get("metadata") or {}
                 topic = meta.get("topic", "")
-                if topic and topic not in ("brand", "person", "cross"):
+                if topic and topic not in ("brand", "person", "cross", "production"):
                     continue
                 results.append({
                     "id": mid,
