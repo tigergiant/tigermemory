@@ -392,9 +392,45 @@ async def lifespan(app: FastAPI):
     # Shutdown: nothing to clean up
 
 
+# ---------- Bearer Auth Middleware ----------
+# When TM_MCP_API_KEY is set and bind is not localhost, enforce Bearer auth.
+# Health endpoint (/health) is exempt for tunnel health checks.
+
+_API_KEY: str | None = None
+try:
+    _API_KEY = tm_core.mcp_api_key()
+except RuntimeError:
+    pass  # key not configured; auth disabled (localhost-only is safe)
+
+
+class _OptionalBearerAuth:
+    """ASGI middleware: enforce Bearer token when _API_KEY is set."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or _API_KEY is None:
+            return await self.app(scope, receive, send)
+        path = scope.get("path", "")
+        if path == "/health":
+            return await self.app(scope, receive, send)
+        # Check Authorization header
+        headers = dict(scope.get("headers", []))
+        auth = (headers.get(b"authorization", b"")).decode("latin-1", errors="replace")
+        if not auth.startswith("Bearer "):
+            response = JSONResponse({"error": "missing Bearer token"}, status_code=401)
+            return await response(scope, receive, send)
+        if auth[7:].strip() != _API_KEY:
+            response = JSONResponse({"error": "invalid token"}, status_code=403)
+            return await response(scope, receive, send)
+        return await self.app(scope, receive, send)
+
+
 # ---------- FastAPI App ----------
 
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(_OptionalBearerAuth)
 
 
 @app.exception_handler(Exception)

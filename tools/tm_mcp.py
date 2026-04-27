@@ -69,6 +69,8 @@ _DEFAULT_ALLOWED_HOSTS = [
     # WSL's own Tailscale identity (direct peer, no portproxy).
     "tigermemory-wsl", "tigermemory-wsl:*",
     "100.113.108.21", "100.113.108.21:*",
+    # Cloudflare Tunnel public hostnames (phone / remote clients).
+    "tm.doodiu.cloud", "tm-api.doodiu.cloud",
 ]
 _allowed_hosts_env = os.environ.get("TM_MCP_ALLOWED_HOSTS", "").strip()
 _allowed_hosts = (
