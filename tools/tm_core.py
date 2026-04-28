@@ -558,7 +558,12 @@ def _history_examples(query: str | None, limit: int) -> list[dict[str, str | int
 
 
 def _mem0_recent_feedback(days: int = 30, limit: int = 10) -> list[dict[str, Any]]:
-    """Query Mem0 for recent IPFB/brand feedback. Fail-open: returns [] on error."""
+    """Query Mem0 for recent IPFB/brand feedback. Fail-open: returns [] on error.
+
+    Skips promotion markers (content contains '已固化于'): those are accounting
+    entries pointing to guide content, not feedback to inject into撰稿 context.
+    Otherwise the撰稿人 sees the marker text as if it were a new instruction.
+    """
     queries = ["IPFB 文案 辉总 反馈 审稿", "IPFB 禁用 短语 风格 偏好"]
     results: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
@@ -576,9 +581,12 @@ def _mem0_recent_feedback(days: int = 30, limit: int = 10) -> list[dict[str, Any
                 topic = meta.get("topic", "")
                 if topic and topic not in ("brand", "person", "cross", "production"):
                     continue
+                content = item.get("content") or item.get("memory") or ""
+                if "已固化于" in content:
+                    continue  # promotion marker — already in guide, do not re-inject
                 results.append({
                     "id": mid,
-                    "text": (item.get("content") or item.get("memory") or "")[:300],
+                    "text": content[:300],
                     "topic": topic,
                     "created_at": item.get("created_at", ""),
                     "source": meta.get("source", "unknown"),
