@@ -101,9 +101,9 @@ def route_memory(
     ok, parsed = tm_core._call_deepseek_json(
         ROUTE_PROMPT,
         text.strip()[:8000],
-        timeout=10,
+        timeout=20,  # 2026-04-29: reasoning model needs slack for hidden thinking
         temperature=0.1,
-        max_tokens=1024,
+        max_tokens=2048,  # 2026-04-29: conservative buffer for reasoning + JSON output
     )
 
     if not ok:

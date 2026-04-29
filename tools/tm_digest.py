@@ -380,7 +380,7 @@ def _synthesize_digest(date_str: str, memories: list[dict], inbox_files: list[di
                 user_msg="请根据以上数据生成日报 JSON。",
                 timeout=DIGEST_DEEPSEEK_TIMEOUT,
                 temperature=0.3,
-                max_tokens=2048,
+                max_tokens=4096,  # 2026-04-29: bumped from 2048; reasoning model + multi-fact synthesis
             )
             
             if not ok:

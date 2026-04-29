@@ -229,7 +229,7 @@ def _deepseek_judge(system_prompt: str, user_msg: str) -> dict | None:
         ],
         "response_format": {"type": "json_object"},
         "temperature": 0.1,
-        "max_tokens": 512,
+        "max_tokens": 2048,  # 2026-04-29: bumped from 512; reasoning model truncates short outputs
     }).encode("utf-8")
     req = urllib.request.Request(
         "https://api.deepseek.com/v1/chat/completions",
