@@ -147,18 +147,39 @@ def _write_memory_with_review(agent: str, topic: str, text: str, force_inbox: bo
         }
 
     if decision.route == "mem0":
-        data = json.loads(tm_core.mem0_write(
-            agent,
-            decision.topic_inferred,
-            text,
-            metadata_extra=decision.as_metadata(),
-        ))
-        data["route"] = "mem0"
-        data["score"] = decision.score
-        data["topic_inferred"] = decision.topic_inferred
-        data["reasons"] = decision.reasons
-        _schedule_digest_refresh()
-        return data
+        try:
+            data = json.loads(tm_core.mem0_write(
+                agent,
+                decision.topic_inferred,
+                text,
+                metadata_extra=decision.as_metadata(),
+            ))
+            data["route"] = "mem0"
+            data["score"] = decision.score
+            data["topic_inferred"] = decision.topic_inferred
+            data["reasons"] = decision.reasons
+            _schedule_digest_refresh()
+            return data
+        except RuntimeError as e:
+            # 2026-04-30: Mem0 write timeout/failure → fall back to inbox so
+            # the user's data is never lost. Log so we can spot regressions.
+            err = str(e)
+            log_json(
+                "warn", str(uuid.uuid4()), "/_write_memory_fallback", 200, 0,
+                detail=err, agent=agent, topic=decision.topic_inferred,
+                text_len=len(text),
+            )
+            decision = tm_route.RouteDecision(
+                route="inbox", score=decision.score,
+                topic_inferred=decision.topic_inferred,
+                issues=decision.issues,
+                reasons=f"mem0 write failed, fallback to inbox: {err[:120]} | original: {decision.reasons}",
+                is_transient=decision.is_transient,
+                is_sensitive=decision.is_sensitive,
+                needs_human_review=decision.needs_human_review,
+                unreviewed=decision.unreviewed,
+            )
+            # fall through to inbox branch below
 
     # route == "inbox"
     fm_extra = decision.as_metadata()

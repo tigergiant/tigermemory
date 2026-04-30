@@ -26,6 +26,7 @@ import json
 import os
 import pathlib
 import re
+import socket
 import subprocess
 import urllib.error
 import urllib.parse
@@ -313,8 +314,25 @@ def mem0_base() -> str:
     return _env_value("MEM0_URL")
 
 
-def mem0_request(url: str, data: bytes | None = None) -> str:
-    """GET (data=None) or POST to Mem0. Raises RuntimeError with HTTP code / reason on failure."""
+# 2026-04-30: tiered Mem0 timeouts. Hardcoded 30s used to mask slow LLM calls
+# inside Mem0 (fact-extract + categorize). With DeepSeek thinking disabled,
+# normal latency is 1-3s; 10/15s caps surface regressions early and let callers
+# fall back to inbox without holding the request open.
+MEM0_READ_TIMEOUT = 10   # search / list
+MEM0_WRITE_TIMEOUT = 15  # POST /memories — slowest path (Mem0 internal LLM)
+
+
+def mem0_request(
+    url: str,
+    data: bytes | None = None,
+    *,
+    timeout: int = MEM0_READ_TIMEOUT,
+) -> str:
+    """GET (data=None) or POST to Mem0. Raises RuntimeError with HTTP code / reason on failure.
+
+    Raises RuntimeError("Mem0 timeout: ...") specifically on socket timeout so
+    callers can distinguish transient slowness from hard failures and degrade.
+    """
     key = mem0_key()
     headers = {"Authorization": f"Bearer {key}"}
     if data is not None:
@@ -323,13 +341,17 @@ def mem0_request(url: str, data: bytes | None = None) -> str:
         url, data=data, headers=headers, method=("POST" if data else "GET")
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read().decode("utf-8")
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"Mem0 HTTP {e.code}: {body}")
     except urllib.error.URLError as e:
-        raise RuntimeError(f"Mem0 unreachable: {e.reason}")
+        # socket.timeout is wrapped as URLError(reason=socket.timeout(...))
+        reason = e.reason
+        if isinstance(reason, socket.timeout) or "timed out" in str(reason).lower():
+            raise RuntimeError(f"Mem0 timeout: {reason} (limit={timeout}s)")
+        raise RuntimeError(f"Mem0 unreachable: {reason}")
 
 
 def mem0_write(
@@ -361,7 +383,11 @@ def mem0_write(
         "text": text,
         "metadata": metadata,
     }).encode("utf-8")
-    return mem0_request(f"{mem0_base()}/api/v1/memories/", data=payload)
+    return mem0_request(
+        f"{mem0_base()}/api/v1/memories/",
+        data=payload,
+        timeout=MEM0_WRITE_TIMEOUT,
+    )
 
 
 def mem0_search(query: str, size: int = 5) -> str:
@@ -369,7 +395,10 @@ def mem0_search(query: str, size: int = 5) -> str:
     params = urllib.parse.urlencode(
         {"user_id": "tiger", "query": query, "page": 1, "size": size}
     )
-    return mem0_request(f"{mem0_base()}/api/v1/memories/?{params}")
+    return mem0_request(
+        f"{mem0_base()}/api/v1/memories/?{params}",
+        timeout=MEM0_READ_TIMEOUT,
+    )
 
 
 # ---------- Validators ----------
