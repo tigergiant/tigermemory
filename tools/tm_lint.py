@@ -229,7 +229,8 @@ def _deepseek_judge(system_prompt: str, user_msg: str) -> dict | None:
         ],
         "response_format": {"type": "json_object"},
         "temperature": 0.1,
-        "max_tokens": 2048,  # 2026-04-29: bumped from 512; reasoning model truncates short outputs
+        "max_tokens": 2048,  # generous; with thinking disabled typical use is <300 tokens
+        "thinking": {"type": "disabled"},  # 2026-04-30: skip reasoning for lint JSON; 4x faster, equivalent to legacy deepseek-chat
     }).encode("utf-8")
     req = urllib.request.Request(
         "https://api.deepseek.com/v1/chat/completions",

@@ -933,6 +933,7 @@ def _call_deepseek_json(
         "temperature": temperature,
         "response_format": {"type": "json_object"},
         "max_tokens": max_tokens,
+        "thinking": {"type": "disabled"},  # 2026-04-30: skip reasoning for JSON tasks; see api-docs.deepseek.com/zh-cn/guides/thinking_mode
     }).encode("utf-8")
 
     req = urllib.request.Request(
