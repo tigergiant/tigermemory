@@ -22,6 +22,29 @@ fi
 
 $PY "$ROOT/tools/tm_mojibake_guard.py"
 
+# F2: cross-worktree drift guard.
+# Prevents committing on top of a stale local HEAD when another worktree
+# (D:\tigermemory vs ~/tigermemory) or MCP server has already pushed to origin.
+# See inbox/2026-04-30-1349-claude-code-systems.md §F2 for context.
+# Bypass: TM_SKIP_DRIFT_GUARD=1 (offline / local-only repo). --no-verify is human-only.
+if [ -z "${TM_SKIP_DRIFT_GUARD:-}" ]; then
+  upstream=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || true)
+  if [ -n "$upstream" ]; then
+    # Quiet fetch with timeout; if offline, skip guard rather than block work.
+    if git fetch --quiet --no-tags origin 2>/dev/null; then
+      behind=$(git rev-list --count "HEAD..$upstream" 2>/dev/null || echo 0)
+      if [ "$behind" -gt 0 ]; then
+        echo "[tigermemory pre-commit] cross-worktree drift detected: HEAD is $behind commit(s) behind $upstream." >&2
+        echo "  another worktree (D:\\tigermemory <-> ~/tigermemory) or MCP server pushed to origin." >&2
+        echo "  resolve: git pull --rebase origin master  (then retry commit)" >&2
+        echo "  bypass:  TM_SKIP_DRIFT_GUARD=1 git commit ...   (offline / read-only mirror)" >&2
+        echo "  --no-verify is human emergency only; do not use to skirt drift." >&2
+        exit 1
+      fi
+    fi
+  fi
+fi
+
 # Inbox routing signature check
 staged_inbox=$(git diff --cached --name-only --diff-filter=A | grep -E '^inbox/[^/]+\.md$' || true)
 for f in $staged_inbox; do
