@@ -398,12 +398,22 @@ def mem0_write(
     route_score: int | None = None,
     route_topic_inferred: str | None = None,
     timeout: int = MEM0_WRITE_TIMEOUT,
+    infer: bool = False,
 ) -> str:
     """POST a memory with enforced metadata. Returns raw response body.
 
     `timeout` defaults to `MEM0_WRITE_TIMEOUT` but callers (e.g. tm_http
     `_write_memory_with_review`) may pass a smaller value when they have a
     tight remaining budget for the overall request.
+
+    `infer` defaults to False (2026-04-30, P5): tigermemory already runs
+    `tm_route.route_memory` to do LLM-based fact evaluation before this
+    point, so Mem0's internal fact-extract LLM is redundant AND has been
+    observed to silently drop technical content (returning {"results":[]}
+    when its "Personal Information Organizer" prompt judges the text as
+    non-personal). Setting infer=False stores text verbatim, ~1-2s latency,
+    no data loss. Requires the OpenMemory router to forward the field
+    (deploy/openmemory/patches/app/routers/memories.py P5 patch).
     """
     validate_agent(agent)
     validate_topic(topic)
@@ -422,6 +432,7 @@ def mem0_write(
         "user_id": "tiger",
         "text": text,
         "metadata": metadata,
+        "infer": infer,
     }).encode("utf-8")
     return mem0_request(
         f"{mem0_base()}/api/v1/memories/",
