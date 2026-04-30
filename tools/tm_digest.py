@@ -381,6 +381,7 @@ def _synthesize_digest(date_str: str, memories: list[dict], inbox_files: list[di
                 timeout=DIGEST_DEEPSEEK_TIMEOUT,
                 temperature=0.3,
                 max_tokens=4096,  # 2026-04-29: bumped from 2048; reasoning model + multi-fact synthesis
+                purpose="digest",
             )
             
             if not ok:

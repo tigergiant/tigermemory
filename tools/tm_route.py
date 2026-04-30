@@ -104,6 +104,7 @@ def route_memory(
         timeout=20,  # 2026-04-29: reasoning model needs slack for hidden thinking
         temperature=0.1,
         max_tokens=2048,  # 2026-04-29: conservative buffer for reasoning + JSON output
+        purpose="route_memory",
     )
 
     if not ok:

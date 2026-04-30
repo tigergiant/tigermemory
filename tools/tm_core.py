@@ -28,6 +28,8 @@ import pathlib
 import re
 import socket
 import subprocess
+import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -104,6 +106,38 @@ class GitError(RuntimeError):
 def now(fmt: str) -> str:
     """Format current time in Asia/Shanghai TZ."""
     return datetime.datetime.now(TZ_CN).strftime(fmt)
+
+
+# ---------- LLM observability ----------
+
+def _log_llm_call(
+    model: str,
+    purpose: str,
+    duration_ms: float,
+    ok: bool,
+    **extra: Any,
+) -> None:
+    """Emit a JSON line to stderr capturing one LLM API call's metadata.
+
+    2026-04-30: surfaces latency regressions (e.g. DeepSeek thinking mode
+    silently re-enabling, or MiniMax overload climbing from 8s to 60s).
+    Picked up by systemd journal for both tm-http and tm-mcp services.
+    Best-effort: never raises, never blocks the caller.
+    """
+    try:
+        entry = {
+            "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+            "level": "info" if ok else "warn",
+            "kind": "llm_call",
+            "model": model,
+            "purpose": purpose,
+            "duration_ms": round(duration_ms, 1),
+            "ok": ok,
+            **{k: v for k, v in extra.items() if v is not None},
+        }
+        print(json.dumps(entry, ensure_ascii=False), file=sys.stderr, flush=True)
+    except Exception:
+        pass
 
 
 # ---------- Subprocess ----------
@@ -942,15 +976,21 @@ def _call_deepseek_json(
     timeout: int = REFINE_DEFAULT_TIMEOUT,
     temperature: float = 0.2,
     max_tokens: int = 1024,
+    purpose: str = "unknown",
 ) -> tuple[bool, Any]:
     """Low-level DeepSeek JSON call. Returns (ok, parsed_or_reason).
 
     Bypasses ambient HTTP(S)_PROXY env vars (same pattern as tm_review).
     On any failure returns (False, reason_str). On success returns (True, parsed_json).
+    Emits one `kind=llm_call` JSON log line to stderr per call (see
+    `_log_llm_call`); `purpose` tags the caller for grouping in journal.
     """
+    prompt_chars = len(system_prompt) + len(user_msg)
     try:
         key = _env_value("DEEPSEEK_API_KEY")
     except RuntimeError as e:
+        _log_llm_call(REFINE_DEEPSEEK_MODEL, purpose, 0.0, False,
+                      error=f"no DEEPSEEK_API_KEY: {e}", prompt_chars=prompt_chars)
         return False, f"no DEEPSEEK_API_KEY: {e}"
 
     payload = json.dumps({
@@ -976,23 +1016,45 @@ def _call_deepseek_json(
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
+    t0 = time.monotonic()
     try:
         with opener.open(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as e:
+        dur = (time.monotonic() - t0) * 1000
+        _log_llm_call(REFINE_DEEPSEEK_MODEL, purpose, dur, False,
+                      error=f"HTTP {e.code}", prompt_chars=prompt_chars, timeout_s=timeout)
         return False, f"DeepSeek HTTP {e.code}"
     except urllib.error.URLError as e:
+        dur = (time.monotonic() - t0) * 1000
+        _log_llm_call(REFINE_DEEPSEEK_MODEL, purpose, dur, False,
+                      error=f"unreachable: {e.reason}", prompt_chars=prompt_chars, timeout_s=timeout)
         return False, f"DeepSeek unreachable: {e.reason}"
     except Exception as e:
+        dur = (time.monotonic() - t0) * 1000
+        _log_llm_call(REFINE_DEEPSEEK_MODEL, purpose, dur, False,
+                      error=str(e), prompt_chars=prompt_chars, timeout_s=timeout)
         return False, f"DeepSeek error: {e}"
+    dur = (time.monotonic() - t0) * 1000
 
     try:
         api_resp = json.loads(raw)
         content = api_resp["choices"][0]["message"]["content"]
         parsed = json.loads(content)
     except (KeyError, json.JSONDecodeError, TypeError) as e:
+        _log_llm_call(REFINE_DEEPSEEK_MODEL, purpose, dur, False,
+                      error=f"malformed: {e}", prompt_chars=prompt_chars,
+                      response_chars=len(raw))
         return False, f"malformed DeepSeek response: {e}"
 
+    usage = api_resp.get("usage") or {}
+    _log_llm_call(
+        REFINE_DEEPSEEK_MODEL, purpose, dur, True,
+        prompt_chars=prompt_chars,
+        response_chars=len(content) if isinstance(content, str) else None,
+        tokens_in=usage.get("prompt_tokens"),
+        tokens_out=usage.get("completion_tokens"),
+    )
     return True, parsed
 
 
@@ -1032,7 +1094,8 @@ def refine_from_summary(
     )
 
     ok, parsed = _call_deepseek_json(
-        system_prompt, user_msg, timeout=timeout, temperature=0.2
+        system_prompt, user_msg, timeout=timeout, temperature=0.2,
+        purpose="refine_facts",
     )
     if not ok:
         return []
@@ -1099,6 +1162,7 @@ def _call_minimax_json(
     timeout: int = MINIMAX_DEFAULT_TIMEOUT,
     temperature: float = 0.2,
     max_tokens: int = MINIMAX_DEFAULT_MAX_TOKENS,
+    purpose: str = "unknown",
 ) -> tuple[bool, Any]:
     """Same contract as _call_deepseek_json but against MiniMax M2.
 
@@ -1107,13 +1171,18 @@ def _call_minimax_json(
 
     Retries on transient upstream errors (HTTP 429/5xx/529 overload) with a
     short exponential backoff. Non-retryable errors (4xx auth, parse
-    failures) return immediately.
+    failures) return immediately. Emits one `kind=llm_call` JSON log line
+    per terminal outcome (see `_log_llm_call`); retried attempts are
+    consolidated into the final entry's `attempts` field.
     """
+    prompt_chars = len(system_prompt) + len(user_msg)
     try:
         key = _env_value("MINIMAX_API_KEY")
         base = _env_value("MINIMAX_BASE_URL").rstrip("/")
         model = _env_value("MINIMAX_MODEL")
     except RuntimeError as e:
+        _log_llm_call("minimax", purpose, 0.0, False,
+                      error=f"no MiniMax config: {e}", prompt_chars=prompt_chars)
         return False, f"no MiniMax config: {e}"
 
     payload = json.dumps({
@@ -1128,7 +1197,10 @@ def _call_minimax_json(
     }).encode("utf-8")
 
     last_err: str = "MiniMax error: exhausted retries"
+    t_total0 = time.monotonic()
+    attempts_used = 0
     for attempt in range(len(_MINIMAX_RETRY_DELAYS) + 1):
+        attempts_used = attempt + 1
         req = urllib.request.Request(
             f"{base}/chat/completions",
             data=payload,
@@ -1146,21 +1218,36 @@ def _call_minimax_json(
         except urllib.error.HTTPError as e:
             last_err = f"MiniMax HTTP {e.code}"
             if e.code in _MINIMAX_RETRYABLE and attempt < len(_MINIMAX_RETRY_DELAYS):
-                import time as _time
-                _time.sleep(_MINIMAX_RETRY_DELAYS[attempt])
+                time.sleep(_MINIMAX_RETRY_DELAYS[attempt])
                 continue
+            dur = (time.monotonic() - t_total0) * 1000
+            _log_llm_call(model, purpose, dur, False,
+                          error=f"HTTP {e.code}", prompt_chars=prompt_chars,
+                          attempts=attempts_used, timeout_s=timeout)
             return False, last_err
         except urllib.error.URLError as e:
             last_err = f"MiniMax unreachable: {e.reason}"
             if attempt < len(_MINIMAX_RETRY_DELAYS):
-                import time as _time
-                _time.sleep(_MINIMAX_RETRY_DELAYS[attempt])
+                time.sleep(_MINIMAX_RETRY_DELAYS[attempt])
                 continue
+            dur = (time.monotonic() - t_total0) * 1000
+            _log_llm_call(model, purpose, dur, False,
+                          error=f"unreachable: {e.reason}", prompt_chars=prompt_chars,
+                          attempts=attempts_used, timeout_s=timeout)
             return False, last_err
         except Exception as e:
+            dur = (time.monotonic() - t_total0) * 1000
+            _log_llm_call(model, purpose, dur, False,
+                          error=str(e), prompt_chars=prompt_chars,
+                          attempts=attempts_used, timeout_s=timeout)
             return False, f"MiniMax error: {e}"
     else:
+        dur = (time.monotonic() - t_total0) * 1000
+        _log_llm_call(model, purpose, dur, False,
+                      error=last_err, prompt_chars=prompt_chars,
+                      attempts=attempts_used, timeout_s=timeout)
         return False, last_err
+    dur = (time.monotonic() - t_total0) * 1000
 
     try:
         api_resp = json.loads(raw)
@@ -1168,8 +1255,20 @@ def _call_minimax_json(
         cleaned = _strip_minimax_artifacts(content)
         parsed = json.loads(cleaned)
     except (KeyError, json.JSONDecodeError, TypeError) as e:
+        _log_llm_call(model, purpose, dur, False,
+                      error=f"malformed: {e}", prompt_chars=prompt_chars,
+                      attempts=attempts_used, response_chars=len(raw))
         return False, f"malformed MiniMax response: {e}"
 
+    usage = api_resp.get("usage") or {}
+    _log_llm_call(
+        model, purpose, dur, True,
+        prompt_chars=prompt_chars,
+        response_chars=len(content) if isinstance(content, str) else None,
+        attempts=attempts_used,
+        tokens_in=usage.get("prompt_tokens"),
+        tokens_out=usage.get("completion_tokens"),
+    )
     return True, parsed
 
 
@@ -1275,7 +1374,8 @@ def suggest_wiki_patches(
     ok, parsed = False, None
     if llm in ("auto", "minimax"):
         ok, parsed = _call_minimax_json(
-            system_prompt, user_msg, timeout=timeout, temperature=0.1
+            system_prompt, user_msg, timeout=timeout, temperature=0.1,
+            purpose="suggest_wiki_patches",
         )
         if not ok and llm == "auto" and isinstance(parsed, str):
             # Fallback only on transport/overload errors, not auth/parse.
@@ -1285,11 +1385,13 @@ def suggest_wiki_patches(
             )
             if transient:
                 ok, parsed = _call_deepseek_json(
-                    system_prompt, user_msg, timeout=timeout, temperature=0.1
+                    system_prompt, user_msg, timeout=timeout, temperature=0.1,
+                    purpose="suggest_wiki_patches_fallback",
                 )
     elif llm == "deepseek":
         ok, parsed = _call_deepseek_json(
-            system_prompt, user_msg, timeout=timeout, temperature=0.1
+            system_prompt, user_msg, timeout=timeout, temperature=0.1,
+            purpose="suggest_wiki_patches",
         )
 
     if not ok:
