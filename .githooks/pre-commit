@@ -48,7 +48,7 @@ fi
 # Inbox routing signature check
 staged_inbox=$(git diff --cached --name-only --diff-filter=A | grep -E '^inbox/[^/]+\.md$' || true)
 for f in $staged_inbox; do
-  if ! grep -q '^routed_by: tigermemory$' "$ROOT/$f"; then
+  if ! grep -qE '^routed_by: (tigermemory|human-direct)$' "$ROOT/$f"; then
     echo "[tigermemory pre-commit] $f missing 'routed_by: tigermemory' frontmatter." >&2
     echo "  use: python tools/tm_io.py write-inbox ..." >&2
     echo "       or MCP write_memory / write_inbox tools" >&2

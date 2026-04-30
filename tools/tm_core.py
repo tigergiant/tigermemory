@@ -856,7 +856,7 @@ def guard_commit(commit_msg_path: pathlib.Path) -> list[str]:
     # 7. Inbox filename convention
     for p in paths:
         if p.startswith("inbox/") and p != "inbox/.gitkeep" and p.endswith(".md"):
-            if DAILY_DIGEST_RE.match(p):
+            if DAILY_DIGEST_RE.match(p) or p == "inbox/index.md":
                 continue
             im = INBOX_NAME_RE.match(p)
             if not im:
