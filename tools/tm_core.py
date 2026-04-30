@@ -397,8 +397,14 @@ def mem0_write(
     route_decision: str | None = None,
     route_score: int | None = None,
     route_topic_inferred: str | None = None,
+    timeout: int = MEM0_WRITE_TIMEOUT,
 ) -> str:
-    """POST a memory with enforced metadata. Returns raw response body."""
+    """POST a memory with enforced metadata. Returns raw response body.
+
+    `timeout` defaults to `MEM0_WRITE_TIMEOUT` but callers (e.g. tm_http
+    `_write_memory_with_review`) may pass a smaller value when they have a
+    tight remaining budget for the overall request.
+    """
     validate_agent(agent)
     validate_topic(topic)
     if not text.strip():
@@ -420,7 +426,7 @@ def mem0_write(
     return mem0_request(
         f"{mem0_base()}/api/v1/memories/",
         data=payload,
-        timeout=MEM0_WRITE_TIMEOUT,
+        timeout=timeout,
     )
 
 

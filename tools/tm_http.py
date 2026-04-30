@@ -99,6 +99,14 @@ DIGEST_DEBOUNCE_SECONDS = int(os.environ.get("TM_DIGEST_DEBOUNCE_SECONDS", "180"
 _digest_timer: threading.Timer | None = None
 _digest_lock = threading.Lock()
 
+# 2026-04-30: end-to-end budget for /write_memory. Worst-case path is
+# route_memory(DeepSeek 10s) + mem0_write(15s) = 25s. If route alone burns
+# most of the budget, we skip mem0 and degrade to inbox so the caller is
+# never held longer than the budget. Min 5s reserved for mem0 attempt;
+# below that, force inbox immediately.
+WRITE_MEMORY_TOTAL_BUDGET_S = int(os.environ.get("TM_WRITE_MEMORY_BUDGET_S", "25"))
+WRITE_MEMORY_MEM0_MIN_RESERVE_S = 5
+
 
 def _refresh_digest_today() -> None:
     """Background callback: regenerate today's digest file. Logs failures."""
@@ -129,6 +137,10 @@ def _schedule_digest_refresh() -> None:
 
 
 def _write_memory_with_review(agent: str, topic: str, text: str, force_inbox: bool = False) -> dict[str, Any]:
+    # 2026-04-30: enforce end-to-end budget. route_memory may take up to
+    # ~10s of DeepSeek; if it does, we reserve at least
+    # WRITE_MEMORY_MEM0_MIN_RESERVE_S for mem0_write or fall back to inbox.
+    t0 = time.monotonic()
     decision = tm_route.route_memory(text, topic, agent)
     if force_inbox:
         decision = tm_route.RouteDecision(
@@ -147,39 +159,67 @@ def _write_memory_with_review(agent: str, topic: str, text: str, force_inbox: bo
         }
 
     if decision.route == "mem0":
-        try:
-            data = json.loads(tm_core.mem0_write(
-                agent,
-                decision.topic_inferred,
-                text,
-                metadata_extra=decision.as_metadata(),
-            ))
-            data["route"] = "mem0"
-            data["score"] = decision.score
-            data["topic_inferred"] = decision.topic_inferred
-            data["reasons"] = decision.reasons
-            _schedule_digest_refresh()
-            return data
-        except RuntimeError as e:
-            # 2026-04-30: Mem0 write timeout/failure → fall back to inbox so
-            # the user's data is never lost. Log so we can spot regressions.
-            err = str(e)
+        elapsed = time.monotonic() - t0
+        remaining = WRITE_MEMORY_TOTAL_BUDGET_S - elapsed
+        if remaining < WRITE_MEMORY_MEM0_MIN_RESERVE_S:
+            # Route ate the budget; degrade to inbox immediately rather than
+            # holding the request open for a likely-doomed mem0 attempt.
             log_json(
-                "warn", str(uuid.uuid4()), "/_write_memory_fallback", 200, 0,
-                detail=err, agent=agent, topic=decision.topic_inferred,
-                text_len=len(text),
+                "warn", str(uuid.uuid4()), "/_write_memory_budget_exhausted", 200, 0,
+                detail=f"route consumed {elapsed:.1f}s of {WRITE_MEMORY_TOTAL_BUDGET_S}s budget",
+                agent=agent, topic=decision.topic_inferred,
             )
             decision = tm_route.RouteDecision(
                 route="inbox", score=decision.score,
                 topic_inferred=decision.topic_inferred,
                 issues=decision.issues,
-                reasons=f"mem0 write failed, fallback to inbox: {err[:120]} | original: {decision.reasons}",
+                reasons=f"budget exhausted by route ({elapsed:.1f}s/{WRITE_MEMORY_TOTAL_BUDGET_S}s); fallback to inbox | original: {decision.reasons}",
                 is_transient=decision.is_transient,
                 is_sensitive=decision.is_sensitive,
                 needs_human_review=decision.needs_human_review,
                 unreviewed=decision.unreviewed,
             )
-            # fall through to inbox branch below
+        else:
+            # Pass the smaller of (configured Mem0 write timeout, remaining
+            # budget) so a slow Mem0 cannot blow the overall deadline.
+            mem0_timeout = max(
+                WRITE_MEMORY_MEM0_MIN_RESERVE_S,
+                int(min(tm_core.MEM0_WRITE_TIMEOUT, remaining)),
+            )
+            try:
+                data = json.loads(tm_core.mem0_write(
+                    agent,
+                    decision.topic_inferred,
+                    text,
+                    metadata_extra=decision.as_metadata(),
+                    timeout=mem0_timeout,
+                ))
+                data["route"] = "mem0"
+                data["score"] = decision.score
+                data["topic_inferred"] = decision.topic_inferred
+                data["reasons"] = decision.reasons
+                _schedule_digest_refresh()
+                return data
+            except RuntimeError as e:
+                # 2026-04-30: Mem0 write timeout/failure → fall back to inbox so
+                # the user's data is never lost. Log so we can spot regressions.
+                err = str(e)
+                log_json(
+                    "warn", str(uuid.uuid4()), "/_write_memory_fallback", 200, 0,
+                    detail=err, agent=agent, topic=decision.topic_inferred,
+                    text_len=len(text), mem0_timeout=mem0_timeout,
+                )
+                decision = tm_route.RouteDecision(
+                    route="inbox", score=decision.score,
+                    topic_inferred=decision.topic_inferred,
+                    issues=decision.issues,
+                    reasons=f"mem0 write failed, fallback to inbox: {err[:120]} | original: {decision.reasons}",
+                    is_transient=decision.is_transient,
+                    is_sensitive=decision.is_sensitive,
+                    needs_human_review=decision.needs_human_review,
+                    unreviewed=decision.unreviewed,
+                )
+                # fall through to inbox branch below
 
     # route == "inbox"
     fm_extra = decision.as_metadata()

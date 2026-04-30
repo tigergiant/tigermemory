@@ -101,7 +101,10 @@ def route_memory(
     ok, parsed = tm_core._call_deepseek_json(
         ROUTE_PROMPT,
         text.strip()[:8000],
-        timeout=20,  # 2026-04-29: reasoning model needs slack for hidden thinking
+        # 2026-04-30: thinking disabled in tm_core; typical latency 1-3s.
+        # 10s cap surfaces upstream regressions early and protects the
+        # write_memory end-to-end budget (see WRITE_MEMORY_TOTAL_BUDGET_S).
+        timeout=10,
         temperature=0.1,
         max_tokens=2048,  # 2026-04-29: conservative buffer for reasoning + JSON output
         purpose="route_memory",
