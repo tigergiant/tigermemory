@@ -35,7 +35,7 @@ if [ -z "${TM_SKIP_DRIFT_GUARD:-}" ]; then
       behind=$(git rev-list --count "HEAD..$upstream" 2>/dev/null || echo 0)
       if [ "$behind" -gt 0 ]; then
         echo "[tigermemory pre-commit] cross-worktree drift detected: HEAD is $behind commit(s) behind $upstream." >&2
-        echo "  another worktree (D:\\tigermemory <-> ~/tigermemory) or MCP server pushed to origin." >&2
+        echo "  another worktree (D:/tigermemory <-> ~/tigermemory) or MCP server pushed to origin." >&2
         echo "  resolve: git pull --rebase origin master  (then retry commit)" >&2
         echo "  bypass:  TM_SKIP_DRIFT_GUARD=1 git commit ...   (offline / read-only mirror)" >&2
         echo "  --no-verify is human emergency only; do not use to skirt drift." >&2
