@@ -61,6 +61,7 @@ PARTITION_OWNERS: dict[str, set[str]] = {
     "production": {"claude-code"},
     "systems":    {"claude-code", "codex"},
     "person":     {"claude-code"},  # sensitive; claude-code reviews writes
+    "self-evolution": {"claude-code"},  # meta-layer; claude-code owns, others via inbox
 }
 
 # Meta-rule files: only claude-code or human may modify.

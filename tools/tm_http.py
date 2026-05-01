@@ -38,7 +38,7 @@ import tm_review
 import tm_route
 
 _INDEX_ITEM_RE = re.compile(r"^\s*-\s*\[([^\]]+)\]\(([^)]+)\)(?:\s*[—\-]\s*(.+))?$")
-_PARTITIONS = ("brand", "investment", "operations", "production", "systems", "person")
+_PARTITIONS = ("brand", "investment", "operations", "production", "systems", "person", "self-evolution")
 
 
 def _load_wiki_catalog(partition: str) -> list[dict]:

@@ -12,7 +12,7 @@ import re
 import argparse
 from pathlib import Path
 
-PARTITIONS = ("brand", "investment", "operations", "production", "systems", "person")
+PARTITIONS = ("brand", "investment", "operations", "production", "systems", "person", "self-evolution")
 
 # 手动映射：文件路径 -> 中文别名（覆盖自动提取失败的页面）
 MANUAL_ALIASES = {

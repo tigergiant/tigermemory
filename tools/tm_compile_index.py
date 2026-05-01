@@ -38,7 +38,7 @@ from typing import Iterable
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 WIKI_ROOT = REPO_ROOT / "wiki"
-PARTITIONS = ["brand", "investment", "operations", "person", "production", "systems"]
+PARTITIONS = ["brand", "investment", "operations", "person", "production", "self-evolution", "systems"]
 
 PAGES_HEADING = "## 页面"
 SUMMARY_HEADING_RE = re.compile(r"^##\s+摘要\s*$", re.MULTILINE)

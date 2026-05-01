@@ -40,7 +40,7 @@ RE_MD_SAME_PARTITION_LINK = re.compile(r'\[([^\]]+)\]\(([a-zA-Z0-9\-_]+\.md)\)')
 RE_OBSIDIAN_WIKILINK = re.compile(r'\[\[([^\]|]+)(\|[^\]]+)?\]\]')
 RE_CODE_BLOCK = re.compile(r'(?m)^[ \t]*```[\s\S]*?^[ \t]*```')
 
-PARTITIONS = ("brand", "investment", "operations", "production", "systems", "person")
+PARTITIONS = ("brand", "investment", "operations", "production", "systems", "person", "self-evolution")
 
 
 def _strip_code_blocks(text: str) -> str:

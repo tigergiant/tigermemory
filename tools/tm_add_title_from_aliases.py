@@ -9,7 +9,7 @@ import re
 import argparse
 from pathlib import Path
 
-PARTITIONS = ("brand", "investment", "operations", "production", "systems", "person")
+PARTITIONS = ("brand", "investment", "operations", "production", "systems", "person", "self-evolution")
 
 
 def extract_frontmatter(text: str) -> tuple[str | None, str]:
