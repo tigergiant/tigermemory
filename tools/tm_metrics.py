@@ -81,6 +81,15 @@ def _git(*args: str) -> str:
 
 
 def _count_jsonl_in_month(path: pathlib.Path, since: str, until: str) -> int:
+    """Count JSONL records in `path` whose ts falls in the given month
+    AND whose `purpose` field is "real" (or absent — legacy records
+    written before the purpose field existed are treated as real to
+    avoid silently dropping pre-Patch3 history).
+
+    Records with purpose="test" or purpose="validation" are skipped:
+    these come from manual probes (e.g. tm_reject_log.py append --purpose test)
+    or in-session validation runs and must not contaminate governance metrics.
+    """
     if not path.exists():
         return 0
     count = 0
@@ -96,8 +105,16 @@ def _count_jsonl_in_month(path: pathlib.Path, since: str, until: str) -> int:
                 continue
             ts = rec.get("ts", "")
             # ts format: "2026-05-02T11:01:09+08:00" — month prefix match suffices
-            if ts.startswith(since_prefix):
-                count += 1
+            if not ts.startswith(since_prefix):
+                continue
+            purpose = rec.get("purpose", "real")
+            if purpose != "real":
+                continue
+            # Legacy guard=test_manual records (written before --purpose existed)
+            # are also excluded for hygiene.
+            if rec.get("guard") == "test_manual":
+                continue
+            count += 1
     return count
 
 
@@ -151,17 +168,65 @@ def collect_inbox_backlog() -> int:
 
 
 def collect_guards_modified(since: str, until: str) -> int:
-    """Count distinct commits that touched .githooks/ or tools/tm_*.py."""
-    out = _git(
+    """Count distinct commits that touched .githooks/ or tools/tm_*.py.
+
+    Path narrowed (Patch3, 2026-05-02): previously `tools/` was used as a
+    pathspec, which counted every helper change including unrelated ones
+    (tm_digest.py / tm_review.py / tm_route.py). Now we run two passes —
+    once for `.githooks/` (any file) and once for `tools/` filtered by
+    diff-tree to only count commits whose `tools/tm_*.py` files actually
+    changed (mostly tm_io / tm_core / tm_mojibake_guard / tm_lessons /
+    tm_reject_log / tm_metrics, i.e. files that implement the governance
+    guards or measurement themselves).
+    """
+    shas: set[str] = set()
+
+    # All commits touching .githooks/ qualify.
+    hook_out = _git(
         "log",
         f"--since={since}",
         f"--until={until}",
         "--pretty=format:%H",
         "--",
         ".githooks/",
+    )
+    for line in hook_out.splitlines():
+        line = line.strip()
+        if line:
+            shas.add(line)
+
+    # For tools/, only count commits that touched tools/tm_*.py.
+    tools_out = _git(
+        "log",
+        f"--since={since}",
+        f"--until={until}",
+        "--name-only",
+        "--pretty=format:__SHA__%H",
+        "--",
         "tools/",
     )
-    shas = {line.strip() for line in out.splitlines() if line.strip()}
+    cur_sha: str = ""
+    for raw in tools_out.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("__SHA__"):
+            cur_sha = line[len("__SHA__"):]
+            continue
+        # Only count tools/tm_*.py governance/metrics files. Excludes
+        # tools/tm_digest.py / tm_route.py / tm_review.py / etc., which
+        # don't implement guards or evolution measurement.
+        if line.startswith("tools/tm_") and line.endswith(".py"):
+            if line in {
+                "tools/tm_io.py",
+                "tools/tm_core.py",
+                "tools/tm_mojibake_guard.py",
+                "tools/tm_lessons.py",
+                "tools/tm_reject_log.py",
+                "tools/tm_metrics.py",
+                "tools/tm_lint.py",
+            } and cur_sha:
+                shas.add(cur_sha)
     return len(shas)
 
 

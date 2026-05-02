@@ -35,8 +35,15 @@ def log_reject(
     file: Optional[str] = None,
     line: Optional[int] = None,
     msg: Optional[str] = None,
+    purpose: Optional[str] = None,
 ) -> None:
-    """Append one JSONL line. Never raises; logging is best-effort."""
+    """Append one JSONL line. Never raises; logging is best-effort.
+
+    `purpose` defaults to "real" but should be "test" for manual probes
+    (e.g. `tm_reject_log.py append --purpose test`) and "validation"
+    for in-session verification by an agent or auditor. tm_metrics.py
+    only counts purpose == "real" toward governance metrics.
+    """
     try:
         LOG_DIR.mkdir(exist_ok=True)
         record = {
@@ -48,6 +55,7 @@ def log_reject(
             "file": file,
             "line": line,
             "msg": msg,
+            "purpose": purpose or "real",
         }
         with LOG_FILE.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -62,6 +70,7 @@ def cmd_append(args: argparse.Namespace) -> int:
         file=args.file,
         line=args.line,
         msg=args.msg,
+        purpose=args.purpose,
     )
     return 0
 
@@ -74,6 +83,9 @@ def main() -> None:
     sp.add_argument("--file", default=None)
     sp.add_argument("--line", type=int, default=None)
     sp.add_argument("--msg", default=None)
+    sp.add_argument("--purpose", default="real",
+                    choices=["real", "test", "validation"],
+                    help="real (counted in metrics) / test (manual probe) / validation (in-session audit)")
     sp.set_defaults(func=cmd_append)
     args = p.parse_args()
     sys.exit(args.func(args))

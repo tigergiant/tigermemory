@@ -120,7 +120,7 @@ def _excerpt(text: str, query_tokens: List[str], width: int = 80) -> str:
     return ""
 
 
-def _log_invocation(query: str, hits: List[str]) -> None:
+def _log_invocation(query: str, hits: List[str], purpose: str = "real") -> None:
     LOG_DIR.mkdir(exist_ok=True)
     record = {
         "ts": datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).isoformat(timespec="seconds"),
@@ -128,6 +128,7 @@ def _log_invocation(query: str, hits: List[str]) -> None:
         "query": query,
         "hits": len(hits),
         "top": hits[:3],
+        "purpose": purpose,
     }
     with LOG_FILE.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -161,7 +162,7 @@ def cmd_search(args: argparse.Namespace) -> int:
     top = scored[: args.top]
     top_slugs = [p.stem for _, p, _, _ in top]
 
-    _log_invocation(query, top_slugs)
+    _log_invocation(query, top_slugs, purpose=args.purpose)
 
     if not top:
         print(f"no relevant lessons found for query: {query!r}")
@@ -189,6 +190,9 @@ def main() -> None:
     sp = sub.add_parser("search", help="search lessons by keyword(s)")
     sp.add_argument("keywords", nargs="+", help="one or more search keywords")
     sp.add_argument("--top", type=int, default=3, help="number of results (default 3)")
+    sp.add_argument("--purpose", default="real",
+                    choices=["real", "test", "validation"],
+                    help="real (counted in metrics) / test (manual probe) / validation (in-session audit)")
     sp.set_defaults(func=cmd_search)
 
     args = p.parse_args()
