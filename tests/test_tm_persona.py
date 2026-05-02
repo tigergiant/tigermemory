@@ -158,3 +158,16 @@ def test_no_llm_imports():
     imported = set(sys.modules.keys())
     overlap = forbidden & imported
     assert not overlap, f"tm_persona leaked external deps: {overlap}"
+
+
+# ------------------------------------------------------------------
+# CLI subcommands
+# ------------------------------------------------------------------
+
+def test_cmd_check_exits_zero_and_lists_sources():
+    import argparse
+
+    args = argparse.Namespace()
+    rc = tm_persona.cmd_check(args)
+    # In a clean git checkout all SOURCE_PATHS should be tracked
+    assert rc == 0, f"cmd_check returned {rc}; expected 0 in tracked repo"

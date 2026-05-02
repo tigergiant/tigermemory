@@ -236,6 +236,30 @@ def cmd_compile(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_check(_args: argparse.Namespace) -> int:
+    """Verify all source files exist and are tracked by git."""
+    import subprocess
+
+    all_ok = True
+    for rel in SOURCE_PATHS:
+        path = REPO_ROOT / rel
+        if not path.exists():
+            print(f"MISSING {rel}", file=sys.stderr)
+            all_ok = False
+            continue
+        try:
+            subprocess.check_output(
+                ["git", "ls-files", "--error-unmatch", rel],
+                cwd=REPO_ROOT,
+                stderr=subprocess.STDOUT,
+            )
+            print(f"OK      {rel}")
+        except subprocess.CalledProcessError:
+            print(f"UNTRACKED {rel}", file=sys.stderr)
+            all_ok = False
+    return 0 if all_ok else 1
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="tm_persona.py", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -243,6 +267,9 @@ def main() -> None:
     compile_p = sub.add_parser("compile", help="compile onboarding snapshot")
     compile_p.add_argument("--depth", default="5min")
     compile_p.set_defaults(func=cmd_compile)
+
+    check_p = sub.add_parser("check", help="verify source files are present and tracked")
+    check_p.set_defaults(func=cmd_check)
 
     args = parser.parse_args()
     sys.exit(args.func(args))
