@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import sys
 import urllib.error
 import urllib.request
@@ -72,6 +73,17 @@ def fail(msg: str) -> None:
 
 
 _DEFAULT_UA = "tigermemory-mcp-bridge/1.0"
+
+# Optional: skip TLS cert verification. Useful for direct-IP fallback when
+# the Cloudflare-fronted path fails (common in CN networks) and the origin
+# is fronted by a self-signed cert (e.g. Caddy `tls internal`).
+# Only set when you trust the network path AND the destination IP.
+INSECURE = bool(os.environ.get("TM_MCP_BRIDGE_INSECURE"))
+SSL_CTX: ssl.SSLContext | None = None
+if INSECURE:
+    SSL_CTX = ssl.create_default_context()
+    SSL_CTX.check_hostname = False
+    SSL_CTX.verify_mode = ssl.CERT_NONE
 
 
 def build_headers() -> dict[str, str]:
@@ -125,7 +137,7 @@ def forward(rpc: dict[str, Any]) -> list[dict[str, Any]]:
     data = json.dumps(rpc).encode("utf-8")
     req = urllib.request.Request(URL, data=data, headers=build_headers(), method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=TIMEOUT, context=SSL_CTX) as resp:
             sid = _session_id_from(resp.headers)
             if sid and sid != SESSION_ID:
                 SESSION_ID = sid
@@ -197,7 +209,7 @@ def main() -> None:
     if not API_KEY:
         fail("TM_MCP_API_KEY env var is required")
 
-    log(f"bridge up: url={URL} timeout={TIMEOUT}")
+    log(f"bridge up: url={URL} timeout={TIMEOUT} insecure={INSECURE}")
     stdin = sys.stdin.buffer
     stdout = sys.stdout.buffer
 
