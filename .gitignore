@@ -5,6 +5,7 @@ Obsidian/
 runtime/
 sources/assets/
 *.tmp
+.tmp/
 *.log
 *.code-workspace
 progress.md

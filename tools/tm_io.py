@@ -238,6 +238,17 @@ def cmd_preflight(args: argparse.Namespace) -> None:
 def cmd_guard(args: argparse.Namespace) -> None:
     errors = tm_core.guard_commit(pathlib.Path(args.commit_msg_file))
     if errors:
+        # Best-effort log to .tmp/guard-rejects.jsonl for tm_metrics.
+        try:
+            from tm_reject_log import log_reject  # type: ignore
+            log_reject(
+                guard="commit_msg",
+                file=str(args.commit_msg_file),
+                msg="; ".join(errors)[:300],
+            )
+        except Exception:
+            pass
+
         print("tigermemory guard rejected this commit:", file=sys.stderr)
         for e in errors:
             print(f"  - {e}", file=sys.stderr)

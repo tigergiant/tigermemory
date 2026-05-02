@@ -107,6 +107,19 @@ def main() -> int:
     if not offenses:
         return 0
 
+    # Best-effort log of this reject event so tm_metrics can count it.
+    try:
+        from tm_reject_log import log_reject  # type: ignore
+        first = offenses[0]
+        log_reject(
+            guard="mojibake",
+            file=first[0],
+            line=first[1],
+            msg=f"{len(offenses)} offending line(s); first: {first[2].strip()[:80]}",
+        )
+    except Exception:
+        pass
+
     print("=" * 60, file=sys.stderr)
     print("tm_mojibake_guard: commit REJECTED — mojibake detected.", file=sys.stderr)
     print("", file=sys.stderr)

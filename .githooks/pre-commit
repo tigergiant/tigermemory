@@ -39,6 +39,7 @@ if [ -z "${TM_SKIP_DRIFT_GUARD:-}" ]; then
         echo "  resolve: git pull --rebase origin master  (then retry commit)" >&2
         echo "  bypass:  TM_SKIP_DRIFT_GUARD=1 git commit ...   (offline / read-only mirror)" >&2
         echo "  --no-verify is human emergency only; do not use to skirt drift." >&2
+        $PY "$ROOT/tools/tm_reject_log.py" append --guard drift --msg "HEAD behind $upstream by $behind commit(s)" 2>/dev/null || true
         exit 1
       fi
     fi
@@ -53,6 +54,7 @@ for f in $staged_inbox; do
     echo "  use: python tools/tm_io.py write-inbox ..." >&2
     echo "       or MCP write_memory / write_inbox tools" >&2
     echo "  direct git add inbox/*.md is forbidden." >&2
+    $PY "$ROOT/tools/tm_reject_log.py" append --guard routed_by --file "$f" --msg "missing routed_by frontmatter" 2>/dev/null || true
     exit 1
   fi
 done
