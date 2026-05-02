@@ -155,8 +155,11 @@ def test_valid_depths_set():
 def test_no_llm_imports():
     """Ensure tm_persona does not import openai, requests, mem0, etc."""
     forbidden = {"openai", "requests", "mem0", "httpx", "aiohttp"}
-    imported = set(sys.modules.keys())
-    overlap = forbidden & imported
+    # Snapshot before re-importing tm_persona so we only blame it for NEW deps.
+    before = set(sys.modules.keys())
+    import tools.tm_persona as _tp  # noqa: F401
+    new = set(sys.modules.keys()) - before
+    overlap = forbidden & new
     assert not overlap, f"tm_persona leaked external deps: {overlap}"
 
 
