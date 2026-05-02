@@ -2,7 +2,7 @@
 """
 tools/tm_mcp.py — tigermemory MCP server (thin adapter over tm_core).
 
-Exposes 23 tools for remote agents (laptop MCP clients):
+Exposes 24 tools for remote agents (laptop MCP clients):
 - check_worktree
 - close_session
 - write_inbox
@@ -11,6 +11,7 @@ Exposes 23 tools for remote agents (laptop MCP clients):
 - write_memory
 - read_page
 - list_partition
+- get_agent_onboarding
 - lint_page
 - ipfb_copywriting
 - review_draft
@@ -54,6 +55,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 import tm_core
 import tm_minimax
+import tm_persona
 import tm_review_tools
 
 
@@ -505,6 +507,24 @@ def list_partition(partition: str) -> list[str]:
     if not partition_dir.exists():
         return []
     return sorted(f.stem for f in partition_dir.glob("*.md") if f.name != "index.md")
+
+
+@mcp.tool()
+def get_agent_onboarding(depth: str = "5min") -> dict[str, Any]:
+    """Return a deterministic tigermemory agent onboarding snapshot.
+
+    Args:
+        depth: "30s", "5min", or "full"
+
+    Returns:
+        {"depth": "...", "content": "...", "sources": [...]}.
+    """
+    content = tm_persona.compile_snapshot(depth)
+    return {
+        "depth": depth,
+        "content": content,
+        "sources": list(tm_persona.SOURCE_PATHS),
+    }
 
 
 @mcp.tool()
