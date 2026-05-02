@@ -48,9 +48,13 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent  # tools/.. = repo ro
 
 # ---------- Enums (AGENTS.md §3, §4) ----------
 
-AGENTS = {"claude-code", "codex", "openclaw", "hermes", "deerflow", "human", "mem0", "linter", "tigermemory-ce", "kimi"}
+AGENTS = {"claude-code", "cascade", "codex", "openclaw", "hermes", "deerflow", "human", "mem0", "linter", "tigermemory-ce", "kimi"}
 ACTIONS = {"create", "update", "archive", "lint", "ingest", "compile"}
-TOPICS = {"brand", "investment", "operations", "production", "systems", "person", "cross"}
+# Topic enum used by inbox filenames + Mem0 metadata.topic.
+# Note: file-name regex INBOX_NAME_RE allows only [a-z]+ (no hyphens), so the
+# `self-evolution` partition uses topic key `selfevolution` (no hyphen). The
+# topic-to-partition mapping is documented in AGENTS.md §5.4.
+TOPICS = {"brand", "investment", "operations", "production", "systems", "person", "selfevolution", "cross"}
 
 # Partition ownership per AGENTS.md §4. Values are the agents allowed to
 # write wiki/<partition>/*.md directly. Anyone else must go via inbox.
@@ -828,8 +832,14 @@ def guard_commit(commit_msg_path: pathlib.Path) -> list[str]:
         errors.append("log.md is append-only via [claude-code] compile; agents must not write it")
 
     # 6. Partition ownership + atomicity on wiki/
+    # LINTER_DASHBOARDS are auto-generated overwrite-only pages; they have
+    # their own check immediately below. Excluding them here lets a pure
+    # `[linter] lint` dashboard-refresh commit pass owner check (linter is
+    # not in any partition's owner set by design).
     wiki_partitions: set[str] = set()
     for p in paths:
+        if p in LINTER_DASHBOARDS:
+            continue
         wm = WIKI_PATH_RE.match(p)
         if wm:
             wiki_partitions.add(wm.group("partition"))
