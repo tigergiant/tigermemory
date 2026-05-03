@@ -27,6 +27,17 @@ $PY "$ROOT/tools/tm_mojibake_guard.py"
 # (D:\tigermemory vs ~/tigermemory) or MCP server has already pushed to origin.
 # See inbox/2026-04-30-1349-claude-code-systems.md §F2 for context.
 # Bypass: TM_SKIP_DRIFT_GUARD=1 (offline / local-only repo). --no-verify is human-only.
+#
+# 2026-05-03 relaxation: if the staged diff is ONLY new inbox/*.md files
+# (all A, no M/D, no wiki/tools/etc), skip drift check. Inbox filenames are
+# minute-timestamp-unique across agents/worktrees, so fast-forward push is
+# guaranteed; drift cannot cause content conflicts. This unblocks parallel
+# memory writes from Claw/mobile agents without forcing WSL to pre-pull.
+staged_all=$(git diff --cached --name-status)
+staged_non_inbox_add=$(echo "$staged_all" | awk '$1 != "A" || $2 !~ /^inbox\/[^/]+\.md$/' | grep -v '^$' || true)
+if [ -n "$staged_all" ] && [ -z "$staged_non_inbox_add" ]; then
+  TM_SKIP_DRIFT_GUARD=1
+fi
 if [ -z "${TM_SKIP_DRIFT_GUARD:-}" ]; then
   upstream=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || true)
   if [ -n "$upstream" ]; then
