@@ -28,6 +28,7 @@ def test_compile_snapshot_30s():
     # Must contain the six canonical bullets (contract from agent-onboarding.md)
     assert "git pull --ff-only origin master" in out
     assert "tm_lessons.py search" in out
+    assert 'get_agent_onboarding("30s")' in out
     assert "selfevolution" in out
     assert "write_memory" in out or "write_inbox" in out
     assert "commit + push" in out or "同回合 push" in out
@@ -49,6 +50,7 @@ def test_compile_snapshot_5min():
     # Must still mention core keywords
     assert "git pull --ff-only origin master" in out
     assert "tm_lessons.py search" in out
+    assert 'get_agent_onboarding("30s")' in out
     assert "selfevolution" in out
     # 5min should be longer than 30s
     assert len(out) > 1500, f"5min length {len(out)} suspiciously short"
@@ -175,3 +177,8 @@ def test_cmd_check_exits_zero_and_lists_sources():
     rc = tm_persona.cmd_check(args)
     # In a clean git checkout all SOURCE_PATHS should be tracked
     assert rc == 0, f"cmd_check returned {rc}; expected 0 in tracked repo"
+
+
+def test_snapshot_page_required_phrases_are_declared():
+    assert tm_persona.SNAPSHOT_PAGE == "wiki/systems/agent-onboarding.md"
+    assert "继续开发条件" in tm_persona.SNAPSHOT_PAGE_REQUIRED_PHRASES

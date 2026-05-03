@@ -29,6 +29,13 @@ SOURCE_PATHS = [
     "wiki/systems/agent-write-toolkit.md",
     "wiki/self-evolution/lessons/index.md",
 ]
+SNAPSHOT_PAGE = "wiki/systems/agent-onboarding.md"
+SNAPSHOT_PAGE_REQUIRED_PHRASES = [
+    "v0.2.3 接入状态",
+    "暂时停止大功能开发",
+    "继续开发条件",
+    "get_agent_onboarding",
+]
 
 LESSONS_DIR = REPO_ROOT / "wiki" / "self-evolution" / "lessons"
 VALID_DEPTHS = {"30s", "5min", "full"}
@@ -101,6 +108,7 @@ def render_30s() -> str:
 
 - 开工先做：`git pull --ff-only origin master`，再用 `git status --short | Measure-Object -Line` 判断完整 dirty 行数，并跑 `py tools/tm_io.py preflight`。
 - 开工还必须跑 lessons 检索：`$env:TM_AGENT="<agent>"; py tools/tm_lessons.py search "<任务关键词>"`，读 top-3，避免重复事故。
+- 首次/陌生 agent 再读本快照：`py tools/tm_persona.py compile --depth 30s` 或 MCP `get_agent_onboarding("30s")`。
 - 写入边界：只写自己拥有的 wiki 分区；不确定、跨分区、self-evolution 提案走 inbox；`topic` 用 `selfevolution`，不是 `self-evolution`。
 - 写入入口：inbox 用 `tm_io.py write-inbox` 或 MCP `write_inbox`；稳定 wiki 用 owner 路径；对话级事实用 `write_memory` 路由，不直接造 inbox 文件。
 - 结论纪律：计划、推断、已验证现状必须分开；依赖本机/服务状态的结论先查 live state；不要把“准备做”写成“已落地”。
@@ -118,6 +126,7 @@ def render_5min(lessons: list[Lesson]) -> str:
             "`git status --short | Measure-Object -Line`，用完整行数判断 dirty，不看终端尾部。",
             "`py tools/tm_io.py preflight`，blocker 非空就停下来报告。",
             '`py tools/tm_lessons.py search "<任务关键词>"`，读 top-3 lesson 后再动手。',
+            '首次/陌生 agent 跑 `py tools/tm_persona.py compile --depth 30s` 或 MCP `get_agent_onboarding("30s")`。',
         ]
     )
     write_boundaries = _bullet_lines(
@@ -241,7 +250,8 @@ def cmd_check(_args: argparse.Namespace) -> int:
     import subprocess
 
     all_ok = True
-    for rel in SOURCE_PATHS:
+    tracked_paths = SOURCE_PATHS + [SNAPSHOT_PAGE]
+    for rel in tracked_paths:
         path = REPO_ROOT / rel
         if not path.exists():
             print(f"MISSING {rel}", file=sys.stderr)
@@ -256,6 +266,11 @@ def cmd_check(_args: argparse.Namespace) -> int:
             print(f"OK      {rel}")
         except subprocess.CalledProcessError:
             print(f"UNTRACKED {rel}", file=sys.stderr)
+            all_ok = False
+    snapshot_text = _read_source(SNAPSHOT_PAGE) if (REPO_ROOT / SNAPSHOT_PAGE).exists() else ""
+    for phrase in SNAPSHOT_PAGE_REQUIRED_PHRASES:
+        if phrase not in snapshot_text:
+            print(f"SNAPSHOT_MISSING_PHRASE {phrase}", file=sys.stderr)
             all_ok = False
     return 0 if all_ok else 1
 
