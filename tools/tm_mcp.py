@@ -393,7 +393,11 @@ def propose_wiki_page(
 
 @mcp.tool()
 def search_memories(query: str, size: int = 5) -> dict[str, Any]:
-    """[检索 Mem0 长期记忆] Search Mem0 memories by query. Not for web search — use minimax_search for that.
+    """[检索 Mem0 事件记忆] Search Mem0 (atomic event-style memories: "X 部署了" "Y 工具不适合审稿").
+
+    Mem0 只存事件型原子记忆，**不存长文**（品牌指南 / IPFB 文案历史 / 系统架构文档 / 个人档案在 wiki/sources 里）。
+    **"过去写过什么 / 之前的决策 / 历史文案" 类问题必须同时调 `search_wiki`**，否则只看到一半。
+    Web 搜索用 `minimax_search`。
 
     Args:
         query: Search query text
@@ -403,6 +407,32 @@ def search_memories(query: str, size: int = 5) -> dict[str, Any]:
         Paginated Mem0 response: {"count": int, "next": ..., "previous": ..., "results": [...]}
     """
     return json.loads(tm_core.mem0_search(query, size))
+
+
+@mcp.tool()
+def search_wiki(
+    query: str,
+    size: int = 5,
+    include_sources: bool = True,
+    include_inbox: bool = False,
+) -> list[dict[str, Any]]:
+    """[检索 Wiki / sources 长文知识] File-based search over wiki/ and sources/ markdown/text.
+
+    与 `search_memories` 互补：Mem0 存事件原子记忆，wiki/sources 存长文知识
+    （品牌指南、IPFB 历史文案、系统架构、个人档案、研究报告）。
+    **"回忆 / 历史 / 过去的 / 之前写过什么" 类问题：两个 search 工具都要调**。
+
+    Args:
+        query: 空格分隔 token；每个 token 都必须命中（AND 语义）。CJK 直接子串匹配。
+        size: 返回条数（默认 5）。
+        include_sources: 是否扫 sources/（IPFB 历史文案等原始材料），默认 True。
+        include_inbox: 是否扫 inbox/（未审核草稿），默认 False。
+
+    Returns:
+        按命中次数降序 [{path, score, title, snippet}, ...]。
+        拿到 path 后用 `read_page` 读全文。
+    """
+    return tm_core.search_wiki(query, size, include_sources, include_inbox)
 
 
 @mcp.tool()

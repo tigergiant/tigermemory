@@ -470,6 +470,111 @@ def mem0_search(query: str, size: int = 5) -> str:
     )
 
 
+# ---------- Wiki search (file-based) ----------
+
+_SEARCH_ROOTS = {
+    "wiki": ("wiki",),
+    "sources": ("sources",),
+    "inbox": ("inbox",),
+}
+_SEARCH_EXTS = {".md", ".txt"}
+
+
+def _score_file_for_query(text_lower: str, tokens: list[str]) -> int:
+    """Return sum of (occurrences of each token). 0 if any token missing — AND semantics."""
+    total = 0
+    for t in tokens:
+        c = text_lower.count(t)
+        if c == 0:
+            return 0  # require every token to appear at least once
+        total += c
+    return total
+
+
+def _best_snippet(text: str, tokens: list[str], width: int = 200) -> str:
+    """Return a ~width-char window around the earliest token hit."""
+    lower = text.lower()
+    hits = [lower.find(t) for t in tokens if lower.find(t) >= 0]
+    if not hits:
+        return text[:width].strip()
+    start = max(0, min(hits) - 40)
+    end = min(len(text), start + width)
+    snippet = text[start:end].replace("\n", " ").strip()
+    return ("…" if start > 0 else "") + snippet + ("…" if end < len(text) else "")
+
+
+def search_wiki(
+    query: str,
+    size: int = 5,
+    include_sources: bool = True,
+    include_inbox: bool = False,
+) -> list[dict[str, Any]]:
+    """File-based search over wiki/ (+ optional sources/, inbox/) markdown/text.
+
+    Complements mem0_search: Mem0 stores atomic event-style memories; wiki
+    stores long-form knowledge (brand guides, IPFB copy history, system docs,
+    person profile). When an agent asks "what did we write/decide about X",
+    both stores should be consulted.
+
+    Args:
+        query: Whitespace-separated tokens. CJK handled as substring.
+        size: Max results to return.
+        include_sources: Also scan sources/ (IPFB copy history, brand docs).
+        include_inbox: Also scan inbox/ (raw unreviewed drafts; default off).
+
+    Returns:
+        List of {path, score, title, snippet}, sorted by score desc.
+    """
+    q = (query or "").strip()
+    if not q:
+        return []
+    tokens = [t.lower() for t in q.split() if t.strip()]
+    if not tokens:
+        return []
+
+    roots: list[str] = list(_SEARCH_ROOTS["wiki"])
+    if include_sources:
+        roots.extend(_SEARCH_ROOTS["sources"])
+    if include_inbox:
+        roots.extend(_SEARCH_ROOTS["inbox"])
+
+    results: list[dict[str, Any]] = []
+    for root in roots:
+        root_path = REPO_ROOT / root
+        if not root_path.exists():
+            continue
+        for p in root_path.rglob("*"):
+            if not p.is_file() or p.suffix.lower() not in _SEARCH_EXTS:
+                continue
+            try:
+                text = p.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            score = _score_file_for_query(text.lower(), tokens)
+            if score == 0:
+                continue
+            # Title: first markdown H1 or first non-empty line stripped.
+            title = ""
+            for line in text.splitlines():
+                s = line.strip()
+                if s.startswith("# "):
+                    title = s[2:].strip()
+                    break
+                if s and not s.startswith("---") and ":" not in s[:20]:
+                    title = s[:80]
+                    break
+            rel = p.relative_to(REPO_ROOT).as_posix()
+            results.append({
+                "path": rel,
+                "score": score,
+                "title": title,
+                "snippet": _best_snippet(text, tokens),
+            })
+
+    results.sort(key=lambda r: (-r["score"], r["path"]))
+    return results[:max(1, size)]
+
+
 # ---------- Validators ----------
 
 def validate_agent(name: str) -> None:
