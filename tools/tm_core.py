@@ -56,16 +56,24 @@ ACTIONS = {"create", "update", "archive", "lint", "ingest", "compile"}
 # topic-to-partition mapping is documented in AGENTS.md §5.4.
 TOPICS = {"brand", "investment", "operations", "production", "systems", "person", "selfevolution", "cross"}
 
-# Partition ownership per AGENTS.md §4. Values are the agents allowed to
-# write wiki/<partition>/*.md directly. Anyone else must go via inbox.
+# Partition ownership per AGENTS.md §4.
+# 2026-05-04 policy change (虎哥 directive): every agent write is human-authorized,
+# multi-agent identity gating only spammed inbox. All regular agents may now
+# write to all partitions directly, gated only by L2 review score (>=30) and
+# the wiki/person/ PII restriction. The PARTITION_OWNERS map is retained so
+# downstream guards (tm_guard_ci, lint partition-mismatch) keep working without
+# code churn — we just expanded the owner sets.
+_ALL_REGULAR_AGENTS: set[str] = {
+    "claude-code", "cascade", "codex", "openclaw", "hermes", "deerflow", "kimi",
+}
 PARTITION_OWNERS: dict[str, set[str]] = {
-    "brand":      {"openclaw", "claude-code"},
-    "investment": {"deerflow", "claude-code"},
-    "operations": {"hermes",   "claude-code"},
-    "production": {"claude-code"},
-    "systems":    {"claude-code", "codex"},
-    "person":     {"claude-code"},  # sensitive; claude-code reviews writes
-    "self-evolution": {"claude-code"},  # meta-layer; claude-code owns, others via inbox
+    "brand":          set(_ALL_REGULAR_AGENTS),
+    "investment":     set(_ALL_REGULAR_AGENTS),
+    "operations":     set(_ALL_REGULAR_AGENTS),
+    "production":     set(_ALL_REGULAR_AGENTS),
+    "systems":        set(_ALL_REGULAR_AGENTS),
+    "person":         {"claude-code"},  # sensitive; PII black-list, claude-code only
+    "self-evolution": set(_ALL_REGULAR_AGENTS),
 }
 
 # Meta-rule files: only claude-code or human may modify.
