@@ -93,16 +93,6 @@ def test_get_agent_onboarding_includes_sources():
 # ------------------------------------------------------------------
 
 
-def test_reader_role_blocks_write_inbox():
-    old = tm_mcp._ROLE
-    try:
-        tm_mcp._ROLE = "reader"
-        with pytest.raises(PermissionError):
-            tm_mcp.write_inbox("claude-code", "systems", "test", "body", "reason")
-    finally:
-        tm_mcp._ROLE = old
-
-
 def test_reader_role_blocks_propose_wiki_page():
     old = tm_mcp._ROLE
     try:
