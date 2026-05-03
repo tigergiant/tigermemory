@@ -192,6 +192,11 @@ def git_commit_push(files: list[str], msg: str) -> str:
     run(["git", "add", "--"] + files)
     commit_r = run(["git", "commit", "-m", msg], check=False)
     if commit_r.returncode != 0:
+        # Unstage what we just added so failed commits don't pollute the index
+        # and trip subsequent unrelated commits (pre-commit hooks scan
+        # `git diff --cached`, so stale staged-add entries survive across
+        # caller's on-disk cleanup).
+        run(["git", "restore", "--staged", "--"] + files, check=False)
         raise GitError(
             f"git commit failed: {commit_r.stderr.strip() or commit_r.stdout.strip()}"
         )
