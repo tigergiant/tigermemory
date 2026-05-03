@@ -155,9 +155,10 @@ def test_valid_depths_set():
 def test_no_llm_imports():
     """Ensure tm_persona does not import openai, requests, mem0, etc."""
     forbidden = {"openai", "requests", "mem0", "httpx", "aiohttp"}
-    # Snapshot before re-importing tm_persona so we only blame it for NEW deps.
+    # ASSUMPTION: pytest was launched from REPO_ROOT so '' is in sys.path,
+    # making 'tools' resolvable as a namespace package.
     before = set(sys.modules.keys())
-    import tools.tm_persona as _tp  # noqa: F401
+    import tools.tm_persona as _tp  # noqa: F401  # fresh key → executes top-level
     new = set(sys.modules.keys()) - before
     overlap = forbidden & new
     assert not overlap, f"tm_persona leaked external deps: {overlap}"
