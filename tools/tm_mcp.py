@@ -189,36 +189,6 @@ def close_session() -> dict[str, Any]:
 
 
 @mcp.tool()
-def write_inbox(agent: str, topic: str, title: str, body: str, reason: str) -> dict[str, Any]:
-    _require_writer()
-    """Explicit human-review channel. Always writes to inbox with routed_by signature.
-
-    Args:
-        agent: Agent name (claude-code, codex, openclaw, hermes, deerflow, human, mem0, kimi)
-        topic: Topic name (brand, investment, operations, production, systems, person, cross)
-        title: 1-80 char title (letters/digits/CJK/space/-/_)
-        body: Markdown body content
-        reason: Why this content needs human review (recorded in frontmatter)
-
-    Returns:
-        {"path": "inbox/...", "commit_sha": "...", "url": "https://github.com/..."}
-    """
-    if not reason or not reason.strip():
-        raise ValueError("reason is required for write_inbox")
-    fm_extra = {
-        "routed_by": "tigermemory",
-        "route_decision_reason": reason.strip()[:200],
-    }
-    rel, sha = tm_core.write_and_commit_inbox(agent, topic, title, body, frontmatter_extra=fm_extra)
-    return {
-        "path": rel,
-        "commit_sha": sha,
-        "url": tm_core.git_remote_blob_url(rel),
-        "memory_route": "inbox",
-    }
-
-
-@mcp.tool()
 def propose_wiki_page(
     agent: str,
     partition: str,
@@ -566,25 +536,6 @@ def get_agent_onboarding(depth: str = "5min") -> dict[str, Any]:
 
 
 @mcp.tool()
-def lint_page(path: str) -> dict[str, Any]:
-    """Validate a wiki page against PAGE_FORMATS.md.
-
-    Args:
-        path: Relative path to the page
-
-    Returns:
-        {"ok": true, "errors": []} on success
-        {"ok": false, "errors": ["error1", "error2"]} on failure
-    """
-    full_path = tm_core.REPO_ROOT / path
-    if not full_path.exists():
-        raise FileNotFoundError(f"not found: {path}")
-
-    errors = tm_core.lint_page_errors(full_path.read_text(encoding="utf-8"))
-    return {"ok": len(errors) == 0, "errors": errors}
-
-
-@mcp.tool()
 def ipfb_copywriting(
     task_type: str = "daily_product",
     channel: str = "wechat",
@@ -625,36 +576,30 @@ def ipfb_copywriting(
 
 
 @mcp.tool()
-def review_draft(body: str) -> dict[str, Any]:
-    """Score a draft body for content quality (L2 pre-review).
+def lint_repo(path: str | None = None) -> dict[str, Any]:
+    """Lint tigermemory repository.
 
-    Agents can call this proactively before `propose_wiki_page` to check if
-    their draft is worth submitting. Uses DeepSeek API; fails open on error.
+    Two modes:
+    - path=None (default): full repo governance scan (orphan pages, stale
+      drafts, missing sources, partition mismatches).
+    - path="wiki/<partition>/<slug>.md": validate a single page against
+      PAGE_FORMATS.md (frontmatter shape, headings).
 
     Args:
-        body: Markdown body to review
+        path: Optional relative page path. Omit for repo-wide scan.
 
     Returns:
-        {"score": int 0-100 | None, "issues": [str], "suggestions": [str],
-         "ready_for_compile": bool, "review_skipped": bool,
-         "reason": str (only if review_skipped)}
+        Repo scan: {"orphan_pages": [...], "stale_drafts": [...],
+                    "missing_sources": [...], "partition_mismatches": [...]}
+        Page scan: {"ok": bool, "errors": [str]}
     """
-    import tm_review
-    return tm_review.review_draft(body)
+    if path is not None:
+        full_path = tm_core.REPO_ROOT / path
+        if not full_path.exists():
+            raise FileNotFoundError(f"not found: {path}")
+        errors = tm_core.lint_page_errors(full_path.read_text(encoding="utf-8"))
+        return {"ok": len(errors) == 0, "errors": errors}
 
-
-@mcp.tool()
-def lint_repo() -> dict[str, Any]:
-    """Scan entire repository for governance issues.
-
-    Returns:
-        {
-            "orphan_pages": ["wiki/..."],
-            "stale_drafts": ["inbox/..."],
-            "missing_sources": ["wiki/..."],
-            "partition_mismatches": ["wiki/..."]
-        }
-    """
     orphan_pages: list[str] = []
     stale_drafts: list[str] = []
     missing_sources: list[str] = []
@@ -725,29 +670,43 @@ def lint_repo() -> dict[str, Any]:
     }
 
 
-# ---------- P6.3 Daily Digest Review Tools ----------
+# ---------- Daily Digest Review Tools ----------
 
 @mcp.tool()
-def list_pending_digests() -> dict[str, Any]:
-    """
-    列出所有未审核的日报（inbox/daily/*.md 中 status != 'reviewed'）。
-    返回: {"digests": [{"date": "2026-04-20", "path": "...", "fact_count": 7, "status": "pending"}, ...]}
+def review_digest(date: str | None = None, action: str | None = None) -> dict[str, Any]:
+    """日报审稿统一入口。
+
+    三种用法（按参数区分）：
+    - 不传参数：列出所有未审核的日报
+      返回 {"ok": True, "digests": [...], "count": N}
+    - 只传 date：读取该日报的 facts 列表（供人审）
+      返回 {"ok": True, "date": ..., "facts": [...], "frontmatter": ..., "fact_count": N}
+    - date + action="mark_reviewed"：把日报 frontmatter status 改为 'reviewed' 并 commit
+      返回 {"ok": True, "committed": True, "commit_sha": ...}
+
+    Args:
+        date: "YYYY-MM-DD"，省略则列出待审日报
+        action: "mark_reviewed" 触发收尾，省略则只读
     """
     try:
-        digests = tm_review_tools.list_pending_digests()
-        return {"ok": True, "digests": digests, "count": len(digests)}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+        if date is None:
+            digests = tm_review_tools.list_pending_digests()
+            return {"ok": True, "digests": digests, "count": len(digests)}
 
+        if action == "mark_reviewed":
+            _require_writer()
+            updated = tm_review_tools.save_digest_with_log(date, {"status": "reviewed"})
+            if not updated:
+                return {"ok": False, "error": f"Failed to update digest: {date}"}
+            digest_path = f"inbox/daily/{date}.md"
+            sha = tm_core.git_commit_push(
+                [digest_path], f"[human] update: mark {date} digest as reviewed"
+            )
+            return {"ok": True, "committed": True, "commit_sha": sha}
 
-@mcp.tool()
-def review_digest(date: str) -> dict[str, Any]:
-    """
-    读取指定日期的日报，返回结构化 facts 清单供人审。
-    参数: date = "2026-04-20"
-    返回: {"ok": True, "date": "...", "facts": [{"id": "fact-001", "topic": "systems", "text": "...", "source_type": "mem0", "source_id": "uuid"}, ...]}
-    """
-    try:
+        if action is not None:
+            return {"ok": False, "error": f"Invalid action: {action} (allowed: mark_reviewed)"}
+
         digest = tm_review_tools.load_digest(date)
         if not digest:
             return {"ok": False, "error": f"Digest not found for date: {date}"}
@@ -817,29 +776,6 @@ def approve_fact(
         tm_review_tools.append_review_log(date, log_entry)
         
         return {"ok": True, "action": action, "result": result}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-
-@mcp.tool()
-def mark_digest_reviewed(date: str) -> dict[str, Any]:
-    _require_writer()
-    """
-    日报全部 fact 处理完后，把日报 frontmatter status 改为 'reviewed'，并 commit 到 git。
-    返回: {"ok": true, "committed": true, "commit_sha": "..."}
-    """
-    try:
-        # Update status
-        updated = tm_review_tools.save_digest_with_log(date, {"status": "reviewed"})
-        if not updated:
-            return {"ok": False, "error": f"Failed to update digest: {date}"}
-        
-        # Commit
-        repo_root = tm_core.REPO_ROOT
-        digest_path = f"inbox/daily/{date}.md"
-        sha = tm_core.git_commit_push([digest_path], f"[human] update: mark {date} digest as reviewed")
-        
-        return {"ok": True, "committed": True, "commit_sha": sha}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
