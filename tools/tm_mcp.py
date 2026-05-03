@@ -689,7 +689,7 @@ def review_digest(date: str | None = None, action: str | None = None) -> dict[st
         action: "mark_reviewed" 触发收尾，省略则只读
     """
     try:
-        if date is None:
+        if date is None or not date.strip():
             digests = tm_review_tools.list_pending_digests()
             return {"ok": True, "digests": digests, "count": len(digests)}
 
