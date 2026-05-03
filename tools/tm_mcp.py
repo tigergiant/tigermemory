@@ -260,7 +260,9 @@ def propose_wiki_page(
         # regardless of whether agent owns the partition.
         stamp = tm_core.now("%Y-%m-%d-%H%M")
         date = tm_core.now("%Y-%m-%d")
-        inbox_rel = f"inbox/{stamp}-{agent}-{partition}.md"
+        # Inbox filename uses topic key (no hyphens), not partition name.
+        topic_key = partition.replace("-", "")
+        inbox_rel = f"inbox/{stamp}-{agent}-{topic_key}.md"
         inbox_path = tm_core.REPO_ROOT / inbox_rel
         if inbox_path.exists():
             raise FileExistsError(f"file already exists: {inbox_rel}")
@@ -307,7 +309,9 @@ def propose_wiki_page(
     if agent not in owners:
         stamp = tm_core.now("%Y-%m-%d-%H%M")
         date = tm_core.now("%Y-%m-%d")
-        inbox_rel = f"inbox/{stamp}-{agent}-{partition}.md"
+        # Inbox filename uses topic key (no hyphens), not partition name.
+        topic_key = partition.replace("-", "")
+        inbox_rel = f"inbox/{stamp}-{agent}-{topic_key}.md"
         inbox_path = tm_core.REPO_ROOT / inbox_rel
         if inbox_path.exists():
             raise FileExistsError(f"file already exists: {inbox_rel}")
