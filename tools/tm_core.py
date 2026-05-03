@@ -175,7 +175,20 @@ def git_commit_push(files: list[str], msg: str) -> str:
     Raises GitError on failure. On rebase conflict at any point, aborts the
     rebase first. Callers are responsible for rolling back on-disk changes
     if they want a clean working tree after failure.
+
+    2026-05-03: pull --rebase at entry to self-heal cross-worktree drift
+    (WSL MCP writes vs D:\\ human edits). Without this, the F2 pre-commit
+    drift guard rejects every write after the peer worktree pushes, forcing
+    manual `git pull` on the MCP host. The target files are written to disk
+    but untracked at this point, so rebase cannot conflict on them.
     """
+    # Self-heal: if origin is ahead (peer worktree pushed), pull first.
+    # Skip silently if offline / no upstream; the hook will handle it.
+    pull_r = run(["git", "pull", "--rebase", "--autostash", "origin", "master"], check=False)
+    if pull_r.returncode != 0:
+        run(["git", "rebase", "--abort"], check=False)
+        # Don't raise: maybe offline. Let commit+push attempt proceed;
+        # the pre-commit hook will surface a clean error if truly stale.
     run(["git", "add", "--"] + files)
     commit_r = run(["git", "commit", "-m", msg], check=False)
     if commit_r.returncode != 0:
