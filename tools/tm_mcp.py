@@ -370,6 +370,99 @@ def propose_wiki_page(
 
 
 @mcp.tool()
+def write_sources(
+    agent: str,
+    subdir: str,
+    slug: str,
+    source_url: str,
+    fetched_by: str,
+    body: str,
+    page_title: str = "",
+    status: str = "ok",
+    failure_reason: str = "",
+    action: str = "create",
+) -> dict[str, Any]:
+    _require_writer()
+    """Write a sources/<subdir>/<slug>.md file with provenance frontmatter.
+
+    Use this when ingesting external materials (scraped official docs, PDF
+    extracts, Mem0 dumps, etc.). The commit-guard requires every sources/
+    file to carry source_url + fetched_at + fetched_by; this tool fills them
+    automatically (fetched_at = server-side now, Asia/Shanghai).
+
+    Args:
+        agent: Agent name (validated against AGENTS set)
+        subdir: Topic subdir under sources/ (e.g. "huawei-celia"). Lower-case
+            letters / digits / hyphens. Required, no flat sources/*.md.
+        slug: Filename without .md (e.g. "01-openclaw-mode"). Same charset.
+        source_url: Origin URL (must start with http:// or https://)
+        fetched_by: Tool/agent identifier (e.g. "openclaw-via-playwright")
+        body: Markdown body content (without frontmatter)
+        page_title: Optional, original page <title> or H1
+        status: "ok" (default) | "partial" | "failed"
+        failure_reason: Required if status != "ok"
+        action: "create" (default; fails if exists) | "update" (overwrite)
+
+    Returns:
+        {"path": "sources/...", "committed": true, "commit_sha": "..."}
+    """
+    tm_core.validate_agent(agent)
+    if not re.fullmatch(r"[a-z0-9\-]+", subdir):
+        raise ValueError(f"invalid subdir '{subdir}' (lowercase letters/digits/hyphens)")
+    if not re.fullmatch(r"[a-z0-9\-]+", slug):
+        raise ValueError(f"invalid slug '{slug}' (lowercase letters/digits/hyphens)")
+    if not (source_url.startswith("http://") or source_url.startswith("https://")):
+        raise ValueError(f"source_url must start with http(s)://, got: {source_url!r}")
+    if not fetched_by.strip():
+        raise ValueError("fetched_by is required (non-empty)")
+    if action not in {"create", "update"}:
+        raise ValueError("action must be 'create' or 'update'")
+    if status not in {"ok", "partial", "failed"}:
+        raise ValueError("status must be 'ok', 'partial', or 'failed'")
+    if status != "ok" and not failure_reason.strip():
+        raise ValueError("failure_reason required when status != 'ok'")
+
+    rel = f"sources/{subdir}/{slug}.md"
+    full_path = tm_core.REPO_ROOT / rel
+    if full_path.exists() and action == "create":
+        raise FileExistsError(f"{rel} already exists; pass action='update' to overwrite")
+    if not full_path.exists() and action == "update":
+        raise FileNotFoundError(f"{rel} does not exist; pass action='create' (default)")
+
+    fetched_at = datetime.datetime.now(tm_core.TZ_CN).isoformat(timespec="seconds")
+    fm_lines = [
+        f"source_url: {source_url}",
+        f"fetched_at: {fetched_at}",
+        f"fetched_by: {fetched_by}",
+    ]
+    if page_title:
+        fm_lines.append(f"page_title: {page_title}")
+    fm_lines.append(f"status: {status}")
+    if failure_reason:
+        fm_lines.append(f"failure_reason: {failure_reason}")
+    content = "---\n" + "\n".join(fm_lines) + "\n---\n\n" + body
+    if not content.endswith("\n"):
+        content += "\n"
+
+    full_path.parent.mkdir(parents=True, exist_ok=True)
+    prior = full_path.read_text(encoding="utf-8") if full_path.exists() else None
+    full_path.write_text(content, encoding="utf-8")
+    try:
+        sha = tm_core.git_commit_push([rel], f"[{agent}] ingest: {rel}")
+    except Exception:
+        if prior is None:
+            try:
+                full_path.unlink()
+            except OSError:
+                pass
+        else:
+            full_path.write_text(prior, encoding="utf-8")
+        raise
+
+    return {"path": rel, "committed": True, "commit_sha": sha}
+
+
+@mcp.tool()
 def search_memories(query: str, size: int = 5) -> dict[str, Any]:
     """[检索 Mem0 事件记忆] Search Mem0 (atomic event-style memories: "X 部署了" "Y 工具不适合审稿").
 
