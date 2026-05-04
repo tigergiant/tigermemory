@@ -2,31 +2,29 @@
 """
 tools/tm_mcp.py — tigermemory MCP server (thin adapter over tm_core).
 
-Exposes 24 tools for remote agents (laptop MCP clients):
-- check_worktree
-- close_session
-- write_inbox
-- propose_wiki_page
-- search_memories
-- write_memory
-- read_page
-- list_partition
-- get_agent_onboarding
-- lint_page
-- ipfb_copywriting
-- review_draft
-- lint_repo
-- list_pending_digests   (P6.3)
-- review_digest          (P6.3)
-- approve_fact           (P6.3)
-- mark_digest_reviewed   (P6.3)
-- minimax_vision         (MiniMax CLI)
-- minimax_video          (MiniMax CLI)
-- minimax_speech         (MiniMax CLI)
-- minimax_music          (MiniMax CLI)
-- minimax_image          (MiniMax CLI)
-- minimax_search         (MiniMax CLI)
-- minimax_quota          (MiniMax CLI)
+Exposes 21 tools for remote agents (laptop MCP clients):
+
+Read tools (callable in both writer and reader roles):
+- check_worktree            — git/worktree preflight snapshot
+- close_session             — session-close blocker check
+- search_memories           — Mem0 atomic event memory search
+- search_wiki               — wiki/sources file-based search
+- read_page                 — read wiki/inbox file content
+- list_partition            — list slugs in a wiki partition
+- get_agent_onboarding      — onboarding snapshot
+- ipfb_copywriting          — IPFB copywriting capability bundle (read-mostly)
+- lint_repo                 — repo-wide or single-page lint
+- review_digest             — daily digest review (list/read/mark-reviewed)
+- minimax_quota             — MiniMax token-plan quota query
+- minimax_vision            — image VLM understanding (external)
+- minimax_search            — web search (external)
+
+Write tools (writer role only):
+- propose_wiki_page         — wiki page draft with L2 review + inbox fallback
+- write_sources             — sources/<subdir>/<slug>.md ingest with provenance frontmatter
+- write_memory              — single canonical memory write (LLM-routed)
+- approve_fact              — daily-digest fact approval
+- minimax_image / video / speech / music — generative media (external, writer-gated)
 
 All rule enforcement and side effects live in tm_core.py. This module only
 handles MCP tool decoration, HTTP transport (Bearer auth + DNS rebinding
@@ -39,6 +37,10 @@ Usage:
 
 HTTP mode requires TM_MCP_API_KEY in runtime/openmemory/.env.
 Role controls write tools: 'writer' (default) can call all tools; 'reader' can call read-only tools.
+
+Note: OpenClaw 5.2's `tigermemory-ce` plugin uses HTTP endpoints in
+`tools/tm_http.py` (port 8790), NOT this MCP server. See
+`wiki/systems/tigermemory-agent-access.md` for the full integration map.
 """
 from __future__ import annotations
 
