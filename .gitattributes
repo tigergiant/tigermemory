@@ -1,0 +1,4 @@
+# Force LF line endings on Markdown files.
+# Prevents Windows editors (VS Code/Obsidian) from silently converting .md to CRLF,
+# which showed up as 96 spurious "M" modifications on 2026-05-05 before this rule existed.
+*.md text eol=lf
