@@ -324,24 +324,48 @@ def score_case(case: EvalCase, hits: list[SearchHit], k: int) -> bool:
     return _contains_all(hits, case.must_contain, k)
 
 
+def _mem0_unavailable(errors: list[str]) -> bool:
+    return any(error.startswith("mem0 unavailable:") for error in errors)
+
+
+def _runtime_unavailable_case(case: EvalCase, errors: list[str], *, grouped: bool) -> bool:
+    if not _mem0_unavailable(errors):
+        return False
+    if case.scope == "mem0":
+        return True
+    return grouped and case.scope == "all" and tm_core.primary_search_scope(case.query) == "mem0"
+
+
 def evaluate(cases: list[EvalCase], top_k: int, *, fuse: bool = False, grouped: bool = False) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     hit1 = 0
     hit3 = 0
+    quality_hit1 = 0
+    quality_hit3 = 0
+    quality_total = 0
+    runtime_unavailable_count = 0
     for case in cases:
         start = time.perf_counter()
         hits, errors = run_search(case.scope, case.query, top_k, fuse=fuse, grouped=grouped)
         latency_ms = round((time.perf_counter() - start) * 1000, 2)
         case_hit1 = score_case(case, hits, 1)
         case_hit3 = score_case(case, hits, min(3, top_k))
+        runtime_unavailable = _runtime_unavailable_case(case, errors, grouped=grouped)
         hit1 += int(case_hit1)
         hit3 += int(case_hit3)
+        if runtime_unavailable:
+            runtime_unavailable_count += 1
+        else:
+            quality_total += 1
+            quality_hit1 += int(case_hit1)
+            quality_hit3 += int(case_hit3)
         rows.append({
             "id": case.id,
             "query": case.query,
             "scope": case.scope,
             "hit1": case_hit1,
             "hit3": case_hit3,
+            "runtime_unavailable": runtime_unavailable,
             "latency_ms": latency_ms,
             "expected_paths": case.expected_paths,
             "must_contain": case.must_contain,
@@ -365,6 +389,12 @@ def evaluate(cases: list[EvalCase], top_k: int, *, fuse: bool = False, grouped: 
         "hit3": hit3,
         "hit1_rate": round(hit1 / total, 4),
         "hit3_rate": round(hit3 / total, 4),
+        "quality_case_count": quality_total,
+        "quality_hit1": quality_hit1,
+        "quality_hit3": quality_hit3,
+        "quality_hit1_rate": round(quality_hit1 / quality_total, 4) if quality_total else 0.0,
+        "quality_hit3_rate": round(quality_hit3 / quality_total, 4) if quality_total else 0.0,
+        "runtime_unavailable_count": runtime_unavailable_count,
         "top_k": top_k,
         "fuse": fuse,
         "grouped": grouped,
@@ -383,9 +413,23 @@ def print_report(report: dict[str, Any]) -> None:
     print(f"cases: {report['case_count']}")
     print(f"hit@1: {report['hit1']}/{report['case_count']} ({report['hit1_rate']:.0%})")
     print(f"hit@3: {report['hit3']}/{report['case_count']} ({report['hit3_rate']:.0%})")
+    if report["runtime_unavailable_count"]:
+        print(
+            "quality cases: "
+            f"{report['quality_case_count']} "
+            f"(runtime-unavailable excluded: {report['runtime_unavailable_count']})"
+        )
+        print(
+            f"quality hit@1: {report['quality_hit1']}/{report['quality_case_count']} "
+            f"({report['quality_hit1_rate']:.0%})"
+        )
+        print(
+            f"quality hit@3: {report['quality_hit3']}/{report['quality_case_count']} "
+            f"({report['quality_hit3_rate']:.0%})"
+        )
     print()
     for row in report["results"]:
-        status = "OK" if row["hit3"] else "MISS"
+        status = "RUNTIME" if row["runtime_unavailable"] else ("OK" if row["hit3"] else "MISS")
         print(f"{status} {row['id']} [{row['scope']}] {row['query']} ({row['latency_ms']} ms)")
         if row["errors"]:
             for error in row["errors"]:
@@ -396,7 +440,7 @@ def print_report(report: dict[str, Any]) -> None:
             print(f"  expected_paths: {row['expected_paths']}")
             print(f"  must_contain: {row['must_contain']}")
     print()
-    print("Note: first baseline records current behavior; thresholds should be set after reviewing misses.")
+    print("Note: quality hit@k excludes cases whose target runtime is unavailable; raw hit@k keeps the full case set.")
 
 
 def cmd_eval(args: argparse.Namespace) -> int:

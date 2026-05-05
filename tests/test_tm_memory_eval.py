@@ -133,7 +133,32 @@ def test_eval_report_shape_with_stubbed_search(monkeypatch):
     assert report["case_count"] == 1
     assert report["hit1"] == 1
     assert report["hit3"] == 1
+    assert report["quality_case_count"] == 1
+    assert report["runtime_unavailable_count"] == 0
     assert report["results"][0]["top_results"][0]["path"] == "wiki/systems/target.md"
+
+
+def test_eval_excludes_runtime_unavailable_mem0_from_quality_denominator(monkeypatch):
+    case = tm_memory_eval.EvalCase(
+        id="mem0-down",
+        query="tigermemory onboarding",
+        scope="mem0",
+        expected_paths=[],
+        must_contain=["tigermemory"],
+        notes="",
+    )
+
+    monkeypatch.setattr(
+        tm_memory_eval,
+        "run_search",
+        lambda _scope, _query, _top_k, **_kw: ([], ["mem0 unavailable: offline"]),
+    )
+    report = tm_memory_eval.evaluate([case], top_k=3)
+
+    assert report["hit3"] == 0
+    assert report["runtime_unavailable_count"] == 1
+    assert report["quality_case_count"] == 0
+    assert report["results"][0]["runtime_unavailable"] is True
 
 
 def test_grouped_search_uses_intent_primary_for_all_scope(monkeypatch):
