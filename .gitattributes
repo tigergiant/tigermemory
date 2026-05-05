@@ -1,4 +1,11 @@
-# Force LF line endings on Markdown files.
-# Prevents Windows editors (VS Code/Obsidian) from silently converting .md to CRLF,
-# which showed up as 96 spurious "M" modifications on 2026-05-05 before this rule existed.
+# Force LF line endings on tracked text files.
+# Prevents Windows editors (VS Code/Obsidian) from silently converting files to CRLF,
+# which on 2026-05-05 showed up as 96 spurious "M" on .md and 9 more on .py/.sh.
 *.md text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+*.ts text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
