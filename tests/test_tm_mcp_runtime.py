@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pathlib
 import sys
+import json
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
@@ -141,5 +142,81 @@ def test_writer_role_allows_get_agent_onboarding():
         tm_mcp._ROLE = "writer"
         result = tm_mcp.get_agent_onboarding("30s")
         assert result["depth"] == "30s"
+    finally:
+        tm_mcp._ROLE = old
+
+
+# ------------------------------------------------------------------
+# search_tigermemory — grouped unified search, no fused ranking
+# ------------------------------------------------------------------
+
+
+def _stub_mem0_empty(monkeypatch):
+    monkeypatch.setattr(
+        tm_mcp.tm_core,
+        "mem0_search",
+        lambda _query, size=5: json.dumps({"items": []}, ensure_ascii=False),
+    )
+
+
+def test_search_tigermemory_auto_groups_and_prefers_onboarding(monkeypatch):
+    _stub_mem0_empty(monkeypatch)
+
+    result = tm_mcp.search_tigermemory("git pull ff-only origin master preflight", top_k=3)
+
+    assert result["strategy"] == "grouped-intent-budget-v1"
+    assert result["primary_scope"] == "onboarding"
+    assert set(result["groups"]) == {"wiki", "lessons", "onboarding", "mem0"}
+    assert result["primary_results"]
+    assert result["primary_results"][0]["source"] == "onboarding"
+    assert result["primary_results"][0]["path"] == "wiki/systems/agent-onboarding.md"
+
+
+def test_search_tigermemory_auto_prefers_lessons_for_failure_queries(monkeypatch):
+    _stub_mem0_empty(monkeypatch)
+
+    result = tm_mcp.search_tigermemory("hook reject no-verify routed_by", top_k=3)
+
+    assert result["primary_scope"] == "lessons"
+    assert result["primary_results"][0]["path"].endswith("2026-04-22-no-verify-bypass.md")
+
+
+def test_search_tigermemory_wiki_scope_uses_canonical_search(monkeypatch):
+    _stub_mem0_empty(monkeypatch)
+
+    result = tm_mcp.search_tigermemory("agent write toolkit tm_io", scope="wiki", top_k=3)
+
+    assert result["primary_scope"] == "wiki"
+    assert set(result["groups"]) == {"wiki"}
+    assert result["primary_results"][0]["path"] == "wiki/systems/agent-write-toolkit.md"
+
+
+def test_search_tigermemory_invalid_scope_raises():
+    with pytest.raises(ValueError):
+        tm_mcp.search_tigermemory("anything", scope="fused")
+
+
+def test_search_tigermemory_mem0_failure_is_warning(monkeypatch):
+    monkeypatch.setattr(
+        tm_mcp.tm_core,
+        "mem0_search",
+        lambda _query, size=5: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+
+    result = tm_mcp.search_tigermemory("tigermemory onboarding", scope="mem0")
+
+    assert result["groups"]["mem0"] == []
+    assert result["warnings"]
+    assert "mem0 unavailable" in result["warnings"][0]
+
+
+def test_reader_role_allows_search_tigermemory(monkeypatch):
+    _stub_mem0_empty(monkeypatch)
+    old = tm_mcp._ROLE
+    try:
+        tm_mcp._ROLE = "reader"
+        result = tm_mcp.search_tigermemory("commit push same turn", scope="lessons")
+        assert result["primary_scope"] == "lessons"
+        assert result["primary_results"][0]["path"].endswith("2026-04-23-commit-push-same-turn.md")
     finally:
         tm_mcp._ROLE = old
