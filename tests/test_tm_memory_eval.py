@@ -15,6 +15,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import tm_memory_eval  # type: ignore[import-not-found]
+import tm_core  # type: ignore[import-not-found]
 
 
 def test_load_cases_parses_fixture():
@@ -133,3 +134,20 @@ def test_eval_report_shape_with_stubbed_search(monkeypatch):
     assert report["hit1"] == 1
     assert report["hit3"] == 1
     assert report["results"][0]["top_results"][0]["path"] == "wiki/systems/target.md"
+
+
+def test_wiki_search_prioritizes_slug_and_title_hits():
+    results = tm_core.search_wiki("agent write toolkit tm_io", size=3, include_sources=False)
+
+    assert results
+    assert results[0]["path"] == "wiki/systems/agent-write-toolkit.md"
+
+
+def test_wiki_search_demotes_aggregate_pages():
+    results = tm_core.search_wiki("OpenMemory CE search limits", size=3, include_sources=False)
+
+    paths = [r["path"] for r in results]
+    assert paths[0] == "wiki/systems/openmemory-ce-limits.md"
+    if "wiki/operations/backlinks-dashboard.md" in paths:
+        dashboard = results[paths.index("wiki/operations/backlinks-dashboard.md")]
+        assert results[0]["score"] > dashboard["score"]

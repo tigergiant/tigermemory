@@ -508,6 +508,32 @@ def _score_file_for_query(text_lower: str, tokens: list[str]) -> int:
     return total
 
 
+def _slug_search_text(rel: str) -> str:
+    """Expand path separators so slug words can satisfy token search."""
+    return re.sub(r"[^a-z0-9_]+", " ", rel.lower())
+
+
+def _rank_search_hit(raw_score: int, rel: str, title: str, tokens: list[str]) -> float:
+    """Rank exact pages above aggregate pages without changing the AND contract."""
+    score = float(raw_score)
+    title_lower = title.lower()
+    slug_words = set(_slug_search_text(rel).split())
+
+    # Slug/title hits are strong signals for canonical pages. Body-only counts
+    # otherwise let indexes and overview pages dominate because they repeat terms.
+    for token in tokens:
+        if token in slug_words:
+            score += 30
+        if token in title_lower:
+            score += 15
+
+    if rel.endswith("/index.md"):
+        score *= 0.2
+    if rel.startswith("wiki/operations/") and "dashboard" in rel:
+        score *= 0.2
+    return score
+
+
 def _best_snippet(text: str, tokens: list[str], width: int = 200) -> str:
     """Return a ~width-char window around the earliest token hit."""
     lower = text.lower()
@@ -563,12 +589,10 @@ def search_wiki(
         for p in root_path.rglob("*"):
             if not p.is_file() or p.suffix.lower() not in _SEARCH_EXTS:
                 continue
+            rel = p.relative_to(REPO_ROOT).as_posix()
             try:
                 text = p.read_text(encoding="utf-8", errors="replace")
             except OSError:
-                continue
-            score = _score_file_for_query(text.lower(), tokens)
-            if score == 0:
                 continue
             # Title: first markdown H1 or first non-empty line stripped.
             title = ""
@@ -580,7 +604,11 @@ def search_wiki(
                 if s and not s.startswith("---") and ":" not in s[:20]:
                     title = s[:80]
                     break
-            rel = p.relative_to(REPO_ROOT).as_posix()
+            searchable = f"{rel} {_slug_search_text(rel)} {title}\n{text}"
+            raw_score = _score_file_for_query(searchable.lower(), tokens)
+            if raw_score == 0:
+                continue
+            score = _rank_search_hit(raw_score, rel, title, tokens)
             results.append({
                 "path": rel,
                 "score": score,
