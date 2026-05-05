@@ -513,6 +513,29 @@ def _slug_search_text(rel: str) -> str:
     return re.sub(r"[^a-z0-9_]+", " ", rel.lower())
 
 
+def primary_search_scope(query: str) -> str:
+    """Return the primary grouped-search scope for a free-form query."""
+    q = query.lower()
+    onboarding_triggers = (
+        "git pull", "ff-only", "preflight", "tm_lessons.py", "top-3",
+        "selfevolution", "write_memory", "write_inbox", "routed_by",
+    )
+    lesson_triggers = (
+        "commit push", "worktree", "writefile", "no verify", "no-verify",
+        "powershell", "mojibake", "gbk", "hook reject", "llm gate", "bypass",
+    )
+    mem0_wiki_triggers = ("promotion", "lifecycle", "duplicate", "compilation", "wiki")
+    if any(trigger in q for trigger in lesson_triggers):
+        return "lessons"
+    if any(trigger in q for trigger in onboarding_triggers):
+        return "onboarding"
+    if "mem0" in q and any(trigger in q for trigger in mem0_wiki_triggers):
+        return "wiki"
+    if "mem0" in q:
+        return "mem0"
+    return "wiki"
+
+
 def _rank_search_hit(raw_score: int, rel: str, title: str, tokens: list[str]) -> float:
     """Rank exact pages above aggregate pages without changing the AND contract."""
     score = float(raw_score)

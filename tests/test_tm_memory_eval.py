@@ -136,6 +136,66 @@ def test_eval_report_shape_with_stubbed_search(monkeypatch):
     assert report["results"][0]["top_results"][0]["path"] == "wiki/systems/target.md"
 
 
+def test_grouped_search_uses_intent_primary_for_all_scope(monkeypatch):
+    def offline(_query: str, size: int = 5) -> str:
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr(tm_memory_eval.tm_core, "mem0_search", offline)
+    hits, errors = tm_memory_eval.run_search(
+        "all",
+        "Mem0 promotion lifecycle delete duplicate",
+        3,
+        grouped=True,
+    )
+
+    assert errors and "mem0 unavailable" in errors[0]
+    assert hits
+    assert hits[0].source == "wiki"
+    assert hits[0].path == "wiki/systems/mem0-wiki-compilation.md"
+
+
+def test_grouped_search_prefers_lessons_for_failure_queries(monkeypatch):
+    def offline(_query: str, size: int = 5) -> str:
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr(tm_memory_eval.tm_core, "mem0_search", offline)
+    hits, _errors = tm_memory_eval.run_search(
+        "all",
+        "hook reject no-verify routed_by",
+        3,
+        grouped=True,
+    )
+
+    assert hits
+    assert hits[0].source == "lessons"
+    assert hits[0].path == "wiki/self-evolution/lessons/2026-04-22-no-verify-bypass.md"
+
+
+def test_evaluate_reports_grouped_mode(monkeypatch):
+    case = tm_memory_eval.EvalCase(
+        id="ok",
+        query="query",
+        scope="wiki",
+        expected_paths=["wiki/systems/target.md"],
+        must_contain=[],
+        notes="",
+    )
+    hit = tm_memory_eval.SearchHit(
+        path="wiki/systems/target.md",
+        title="Target",
+        snippet="query",
+        score=1,
+        source="wiki",
+    )
+
+    monkeypatch.setattr(tm_memory_eval, "run_search", lambda _scope, _query, _top_k, **_kw: ([hit], []))
+    report = tm_memory_eval.evaluate([case], top_k=3, grouped=True)
+
+    assert report["grouped"] is True
+    assert report["fuse"] is False
+    assert report["hit3"] == 1
+
+
 def test_wiki_search_prioritizes_slug_and_title_hits():
     results = tm_core.search_wiki("agent write toolkit tm_io", size=3, include_sources=False)
 

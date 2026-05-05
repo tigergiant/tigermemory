@@ -601,28 +601,6 @@ def _search_mem0_group(query: str, top_k: int) -> tuple[list[dict[str, Any]], st
     return hits, None
 
 
-def _primary_scope_for_query(query: str) -> str:
-    q = query.lower()
-    onboarding_triggers = (
-        "git pull", "ff-only", "preflight", "tm_lessons.py", "top-3",
-        "selfevolution", "write_memory", "write_inbox", "routed_by",
-    )
-    lesson_triggers = (
-        "commit push", "worktree", "writefile", "no verify", "no-verify",
-        "powershell", "mojibake", "gbk", "hook reject", "llm gate", "bypass",
-    )
-    mem0_wiki_triggers = ("promotion", "lifecycle", "duplicate", "compilation", "wiki")
-    if any(trigger in q for trigger in lesson_triggers):
-        return "lessons"
-    if any(trigger in q for trigger in onboarding_triggers):
-        return "onboarding"
-    if "mem0" in q and any(trigger in q for trigger in mem0_wiki_triggers):
-        return "wiki"
-    if "mem0" in q:
-        return "mem0"
-    return "wiki"
-
-
 @mcp.tool()
 def search_tigermemory(query: str, scope: str = "auto", top_k: int = 5) -> dict[str, Any]:
     """Grouped search across tigermemory knowledge surfaces.
@@ -639,7 +617,7 @@ def search_tigermemory(query: str, scope: str = "auto", top_k: int = 5) -> dict[
         raise ValueError(f"invalid scope {scope!r}; expected one of {sorted(_SEARCH_SCOPES)}")
     limit = min(max(int(top_k), 1), 20)
 
-    primary_scope = _primary_scope_for_query(q) if selected_scope in ("auto", "all") else selected_scope
+    primary_scope = tm_core.primary_search_scope(q) if selected_scope in ("auto", "all") else selected_scope
     scopes = ["wiki", "lessons", "onboarding", "mem0"] if selected_scope in ("auto", "all") else [selected_scope]
     groups: dict[str, list[dict[str, Any]]] = {}
     warnings: list[str] = []

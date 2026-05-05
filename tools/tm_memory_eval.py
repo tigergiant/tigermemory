@@ -6,6 +6,8 @@ ranking, write Mem0, write Wiki, or add a new search API.
 
 Usage:
     py -3 tools/tm_memory_eval.py eval --cases tests/fixtures/memory_eval_cases.jsonl
+    py -3 tools/tm_memory_eval.py eval --cases tests/fixtures/memory_eval_cases.jsonl --grouped
+    py -3 tools/tm_memory_eval.py eval --cases tests/fixtures/memory_eval_cases.jsonl --fuse
 """
 from __future__ import annotations
 
@@ -198,12 +200,48 @@ def search_mem0_case(query: str, top_k: int) -> tuple[list[SearchHit], str | Non
     return hits, None
 
 
-def run_search(scope: str, query: str, top_k: int, *, fuse: bool = False) -> tuple[list[SearchHit], list[str]]:
+def run_search_grouped(scope: str, query: str, top_k: int) -> tuple[list[SearchHit], list[str]]:
+    """Evaluate the grouped search_tigermemory shape using primary results only.
+
+    For explicit case scopes, the primary group is that scope. For `all`, this
+    mirrors `search_tigermemory(scope="auto")`: gather every group, then score
+    the deterministic primary group instead of a fused single leaderboard.
+    """
+    errors: list[str] = []
+    primary_scope = tm_core.primary_search_scope(query) if scope == "all" else scope
+    requested_scopes = ["wiki", "lessons", "onboarding", "mem0"] if scope == "all" else [scope]
+    groups: dict[str, list[SearchHit]] = {}
+
+    if "wiki" in requested_scopes:
+        groups["wiki"] = search_wiki_case(query, top_k, include_sources=True)
+    if "lessons" in requested_scopes:
+        groups["lessons"] = search_lessons_case(query, top_k)
+    if "onboarding" in requested_scopes:
+        groups["onboarding"] = search_onboarding_case(query, top_k)
+    if "mem0" in requested_scopes:
+        mem_hits, mem_error = search_mem0_case(query, top_k)
+        groups["mem0"] = mem_hits
+        if mem_error:
+            errors.append(mem_error)
+
+    return groups.get(primary_scope, [])[:top_k], errors
+
+
+def run_search(
+    scope: str,
+    query: str,
+    top_k: int,
+    *,
+    fuse: bool = False,
+    grouped: bool = False,
+) -> tuple[list[SearchHit], list[str]]:
     errors: list[str] = []
 
     # Fuse mode: force-merge ALL sources regardless of case.scope, then normalize.
     if fuse:
         return run_search_fused(query, top_k)
+    if grouped:
+        return run_search_grouped(scope, query, top_k)
 
     hits: list[SearchHit] = []
     if scope in ("wiki", "all"):
@@ -286,13 +324,13 @@ def score_case(case: EvalCase, hits: list[SearchHit], k: int) -> bool:
     return _contains_all(hits, case.must_contain, k)
 
 
-def evaluate(cases: list[EvalCase], top_k: int, *, fuse: bool = False) -> dict[str, Any]:
+def evaluate(cases: list[EvalCase], top_k: int, *, fuse: bool = False, grouped: bool = False) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     hit1 = 0
     hit3 = 0
     for case in cases:
         start = time.perf_counter()
-        hits, errors = run_search(case.scope, case.query, top_k, fuse=fuse)
+        hits, errors = run_search(case.scope, case.query, top_k, fuse=fuse, grouped=grouped)
         latency_ms = round((time.perf_counter() - start) * 1000, 2)
         case_hit1 = score_case(case, hits, 1)
         case_hit3 = score_case(case, hits, min(3, top_k))
@@ -329,12 +367,18 @@ def evaluate(cases: list[EvalCase], top_k: int, *, fuse: bool = False) -> dict[s
         "hit3_rate": round(hit3 / total, 4),
         "top_k": top_k,
         "fuse": fuse,
+        "grouped": grouped,
         "results": rows,
     }
 
 
 def print_report(report: dict[str, Any]) -> None:
-    mode = "FUSED (all sources, normalized)" if report.get("fuse") else "baseline (per-case scope)"
+    if report.get("fuse"):
+        mode = "FUSED (all sources, normalized)"
+    elif report.get("grouped"):
+        mode = "GROUPED (primary group, no fused ranking)"
+    else:
+        mode = "baseline (per-case scope)"
     print(f"# tm_memory_eval {mode}")
     print(f"cases: {report['case_count']}")
     print(f"hit@1: {report['hit1']}/{report['case_count']} ({report['hit1_rate']:.0%})")
@@ -358,7 +402,7 @@ def print_report(report: dict[str, Any]) -> None:
 def cmd_eval(args: argparse.Namespace) -> int:
     try:
         cases = load_cases(REPO_ROOT / args.cases)
-        report = evaluate(cases, top_k=args.top_k, fuse=args.fuse)
+        report = evaluate(cases, top_k=args.top_k, fuse=args.fuse, grouped=args.grouped)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -378,9 +422,12 @@ def main() -> None:
     eval_p.add_argument("--cases", default="tests/fixtures/memory_eval_cases.jsonl")
     eval_p.add_argument("--top-k", type=int, default=5)
     eval_p.add_argument("--json", action="store_true", help="emit full JSON report")
-    eval_p.add_argument("--fuse", action="store_true",
-                        help="force-merge all sources with per-source score normalization "
-                             "(answers: does a unified search_tigermemory help or hurt hit@k?)")
+    mode = eval_p.add_mutually_exclusive_group()
+    mode.add_argument("--fuse", action="store_true",
+                      help="force-merge all sources with per-source score normalization "
+                           "(negative control: does fused ranking hurt hit@k?)")
+    mode.add_argument("--grouped", action="store_true",
+                      help="evaluate the grouped search_tigermemory shape using primary_results")
     eval_p.set_defaults(func=cmd_eval)
 
     args = parser.parse_args()
