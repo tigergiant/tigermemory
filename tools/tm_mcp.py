@@ -88,6 +88,7 @@ _allowed_hosts = (
 # Role-based access control (P2-11). Default 'writer' can call all tools;
 # 'reader' is blocked by _require_writer() on write tools.
 _ROLE: str = "writer"
+_SEARCH_DOGFOOD_LOG = tm_core.REPO_ROOT / ".tmp" / "search-tigermemory.jsonl"
 
 mcp = FastMCP(
     "tigermemory",
@@ -103,6 +104,16 @@ def _require_writer() -> None:
     """Raise PermissionError if current role is not 'writer'."""
     if _ROLE != "writer":
         raise PermissionError(f"write tool not allowed for role={_ROLE}")
+
+
+def _log_search_tigermemory(payload: dict[str, Any]) -> None:
+    """Best-effort dogfood log for grouped search usage."""
+    try:
+        _SEARCH_DOGFOOD_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with _SEARCH_DOGFOOD_LOG.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+    except Exception:
+        return
 
 
 def _review_for_memory(text: str) -> dict[str, Any]:
@@ -623,6 +634,7 @@ def search_tigermemory(query: str, scope: str = "auto", top_k: int = 5) -> dict[
     warnings: list[str] = []
 
     if "wiki" in scopes:
+        include_sources = selected_scope in ("auto", "all")
         groups["wiki"] = [
             _format_search_hit(
                 "wiki",
@@ -631,7 +643,7 @@ def search_tigermemory(query: str, scope: str = "auto", top_k: int = 5) -> dict[
                 str(hit.get("snippet", "")),
                 float(hit.get("score", 0.0)),
             )
-            for hit in tm_core.search_wiki(q, size=limit, include_sources=True, include_inbox=False)
+            for hit in tm_core.search_wiki(q, size=limit, include_sources=include_sources, include_inbox=False)
         ]
     if "lessons" in scopes:
         groups["lessons"] = _search_lessons_group(q, limit)
@@ -643,7 +655,7 @@ def search_tigermemory(query: str, scope: str = "auto", top_k: int = 5) -> dict[
         if mem_warning:
             warnings.append(mem_warning)
 
-    return {
+    result = {
         "query": q,
         "scope": selected_scope,
         "strategy": "grouped-intent-budget-v1",
@@ -652,6 +664,21 @@ def search_tigermemory(query: str, scope: str = "auto", top_k: int = 5) -> dict[
         "groups": groups,
         "warnings": warnings,
     }
+    primary_results = result["primary_results"]
+    _log_search_tigermemory({
+        "ts": datetime.datetime.now(tm_core.TZ_CN).isoformat(),
+        "role": _ROLE,
+        "query": q,
+        "scope": selected_scope,
+        "top_k": limit,
+        "strategy": result["strategy"],
+        "primary_scope": primary_scope,
+        "primary_top_path": primary_results[0].get("path") if primary_results else None,
+        "primary_count": len(primary_results),
+        "group_counts": {name: len(items) for name, items in groups.items()},
+        "warnings": warnings,
+    })
+    return result
 
 
 @mcp.tool()

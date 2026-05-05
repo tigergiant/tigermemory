@@ -213,7 +213,7 @@ def run_search_grouped(scope: str, query: str, top_k: int) -> tuple[list[SearchH
     groups: dict[str, list[SearchHit]] = {}
 
     if "wiki" in requested_scopes:
-        groups["wiki"] = search_wiki_case(query, top_k, include_sources=True)
+        groups["wiki"] = search_wiki_case(query, top_k, include_sources=(scope == "all"))
     if "lessons" in requested_scopes:
         groups["lessons"] = search_lessons_case(query, top_k)
     if "onboarding" in requested_scopes:

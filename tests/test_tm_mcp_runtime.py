@@ -189,6 +189,7 @@ def test_search_tigermemory_wiki_scope_uses_canonical_search(monkeypatch):
     assert result["primary_scope"] == "wiki"
     assert set(result["groups"]) == {"wiki"}
     assert result["primary_results"][0]["path"] == "wiki/systems/agent-write-toolkit.md"
+    assert all(hit["path"].startswith("wiki/") for hit in result["groups"]["wiki"])
 
 
 def test_search_tigermemory_invalid_scope_raises():
@@ -208,6 +209,22 @@ def test_search_tigermemory_mem0_failure_is_warning(monkeypatch):
     assert result["groups"]["mem0"] == []
     assert result["warnings"]
     assert "mem0 unavailable" in result["warnings"][0]
+
+
+def test_search_tigermemory_writes_dogfood_log(monkeypatch, tmp_path):
+    _stub_mem0_empty(monkeypatch)
+    log_path = tmp_path / "search-tigermemory.jsonl"
+    monkeypatch.setattr(tm_mcp, "_SEARCH_DOGFOOD_LOG", log_path)
+
+    result = tm_mcp.search_tigermemory("commit push same turn", scope="lessons", top_k=2)
+
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["query"] == "commit push same turn"
+    assert rows[0]["scope"] == "lessons"
+    assert rows[0]["primary_scope"] == "lessons"
+    assert rows[0]["primary_top_path"] == result["primary_results"][0]["path"]
+    assert rows[0]["group_counts"] == {"lessons": 2}
 
 
 def test_reader_role_allows_search_tigermemory(monkeypatch):

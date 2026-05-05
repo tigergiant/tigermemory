@@ -20,7 +20,7 @@ import tm_core  # type: ignore[import-not-found]
 
 def test_load_cases_parses_fixture():
     cases = tm_memory_eval.load_cases(REPO_ROOT / "tests" / "fixtures" / "memory_eval_cases.jsonl")
-    assert len(cases) == 25
+    assert len(cases) == 50
     assert {case.scope for case in cases} >= {"wiki", "lessons", "onboarding", "mem0", "all"}
     assert all(case.id and case.query for case in cases)
 
