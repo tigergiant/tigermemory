@@ -38,6 +38,15 @@ ALIASES_BLOCK_RE = re.compile(r"^aliases:\s*\n((?:\s*-\s*.+(?:\n|$))+)", re.MULT
 TITLE_RE = re.compile(r'^title:\s*"?([^"\n]+?)"?\s*$', re.MULTILINE)
 
 
+def _configure_stdio() -> None:
+    """Avoid crashing on Windows consoles that cannot encode every Unicode char."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except Exception:
+            continue
+
+
 def _parse_aliases(fm: str) -> List[str]:
     m = ALIASES_INLINE_RE.search(fm)
     if m:
@@ -184,6 +193,7 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
+    _configure_stdio()
     p = argparse.ArgumentParser(prog="tm_lessons.py", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
 
