@@ -320,14 +320,14 @@ class ListPartitionResponse(BaseModel):
 
 
 class WriteMemoryRequest(BaseModel):
-    agent: str = Field(..., pattern=r"^(claude-code|codex|openclaw|hermes|deerflow|human|linter|mem0|tigermemory-ce|kimi)$")
+    agent: str = Field(..., pattern=r"^(claude-code|codex|openclaw|hermes|deerflow|human|linter|mem0|tigermemory-ce|kimi|dsa-cron)$")
     topic: str = Field(..., pattern=r"^(brand|investment|operations|production|systems|person|cross)$")
     text: str = Field(..., min_length=1, max_length=10000)
     force_inbox: bool = False
 
 
 class WriteInboxRequest(BaseModel):
-    agent: str = Field(..., pattern=r"^(claude-code|codex|openclaw|hermes|deerflow|human|linter|mem0|tigermemory-ce|kimi)$")
+    agent: str = Field(..., pattern=r"^(claude-code|codex|openclaw|hermes|deerflow|human|linter|mem0|tigermemory-ce|kimi|dsa-cron)$")
     topic: str = Field(..., pattern=r"^(brand|investment|operations|production|systems|person|cross)$")
     title: str = Field(..., min_length=1, max_length=80)
     body: str = Field(..., min_length=1, max_length=50000)

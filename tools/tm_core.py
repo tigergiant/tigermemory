@@ -48,7 +48,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent  # tools/.. = repo ro
 
 # ---------- Enums (AGENTS.md §3, §4) ----------
 
-AGENTS = {"claude-code", "cascade", "codex", "openclaw", "hermes", "deerflow", "human", "mem0", "linter", "tigermemory-ce", "kimi"}
+AGENTS = {"claude-code", "cascade", "codex", "openclaw", "hermes", "deerflow", "human", "mem0", "linter", "tigermemory-ce", "kimi", "dsa-cron"}
 ACTIONS = {"create", "update", "archive", "lint", "ingest", "compile"}
 # Topic enum used by inbox filenames + Mem0 metadata.topic.
 # Note: file-name regex INBOX_NAME_RE allows only [a-z]+ (no hyphens), so the
