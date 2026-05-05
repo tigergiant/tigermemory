@@ -126,7 +126,7 @@ def test_eval_report_shape_with_stubbed_search(monkeypatch):
         source="wiki",
     )
 
-    monkeypatch.setattr(tm_memory_eval, "run_search", lambda _scope, _query, _top_k: ([hit], []))
+    monkeypatch.setattr(tm_memory_eval, "run_search", lambda _scope, _query, _top_k, **_kw: ([hit], []))
     report = tm_memory_eval.evaluate([case], top_k=3)
 
     assert report["case_count"] == 1

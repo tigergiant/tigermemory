@@ -198,10 +198,14 @@ def search_mem0_case(query: str, top_k: int) -> tuple[list[SearchHit], str | Non
     return hits, None
 
 
-def run_search(scope: str, query: str, top_k: int) -> tuple[list[SearchHit], list[str]]:
+def run_search(scope: str, query: str, top_k: int, *, fuse: bool = False) -> tuple[list[SearchHit], list[str]]:
     errors: list[str] = []
-    hits: list[SearchHit] = []
 
+    # Fuse mode: force-merge ALL sources regardless of case.scope, then normalize.
+    if fuse:
+        return run_search_fused(query, top_k)
+
+    hits: list[SearchHit] = []
     if scope in ("wiki", "all"):
         hits.extend(search_wiki_case(query, top_k, include_sources=(scope == "all")))
     if scope in ("lessons", "all"):
@@ -216,6 +220,49 @@ def run_search(scope: str, query: str, top_k: int) -> tuple[list[SearchHit], lis
 
     deduped: dict[tuple[str, str], SearchHit] = {}
     for hit in hits:
+        key = (hit.source, hit.path)
+        if key not in deduped or hit.score > deduped[key].score:
+            deduped[key] = hit
+    ordered = sorted(deduped.values(), key=lambda hit: (-hit.score, hit.source, hit.path))
+    return ordered[:top_k], errors
+
+
+def run_search_fused(query: str, top_k: int) -> tuple[list[SearchHit], list[str]]:
+    """Query all 4 sources, normalize each source's scores to [0, 1], then merge.
+
+    Per-source normalization (score / max_score_in_source) is the simplest fix
+    for "raw scores across sources are incommensurable" — wiki returns token
+    counts (10-30), mem0 returns embedding similarity (~0-5), lessons returns
+    weighted sums. Without this, mem0 hits get pushed out by wiki's larger
+    raw numbers (or vice versa depending on query).
+    """
+    errors: list[str] = []
+    grouped: dict[str, list[SearchHit]] = {
+        "wiki": search_wiki_case(query, top_k, include_sources=True),
+        "lessons": search_lessons_case(query, top_k),
+        "onboarding": search_onboarding_case(query, top_k),
+    }
+    mem_hits, mem_error = search_mem0_case(query, top_k)
+    grouped["mem0"] = mem_hits
+    if mem_error:
+        errors.append(mem_error)
+
+    normalized: list[SearchHit] = []
+    for hits in grouped.values():
+        if not hits:
+            continue
+        max_score = max((h.score for h in hits), default=0.0) or 1.0
+        for h in hits:
+            normalized.append(SearchHit(
+                path=h.path,
+                title=h.title,
+                snippet=h.snippet,
+                score=h.score / max_score,
+                source=h.source,
+            ))
+
+    deduped: dict[tuple[str, str], SearchHit] = {}
+    for hit in normalized:
         key = (hit.source, hit.path)
         if key not in deduped or hit.score > deduped[key].score:
             deduped[key] = hit
@@ -239,13 +286,13 @@ def score_case(case: EvalCase, hits: list[SearchHit], k: int) -> bool:
     return _contains_all(hits, case.must_contain, k)
 
 
-def evaluate(cases: list[EvalCase], top_k: int) -> dict[str, Any]:
+def evaluate(cases: list[EvalCase], top_k: int, *, fuse: bool = False) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     hit1 = 0
     hit3 = 0
     for case in cases:
         start = time.perf_counter()
-        hits, errors = run_search(case.scope, case.query, top_k)
+        hits, errors = run_search(case.scope, case.query, top_k, fuse=fuse)
         latency_ms = round((time.perf_counter() - start) * 1000, 2)
         case_hit1 = score_case(case, hits, 1)
         case_hit3 = score_case(case, hits, min(3, top_k))
@@ -281,12 +328,14 @@ def evaluate(cases: list[EvalCase], top_k: int) -> dict[str, Any]:
         "hit1_rate": round(hit1 / total, 4),
         "hit3_rate": round(hit3 / total, 4),
         "top_k": top_k,
+        "fuse": fuse,
         "results": rows,
     }
 
 
 def print_report(report: dict[str, Any]) -> None:
-    print("# tm_memory_eval baseline")
+    mode = "FUSED (all sources, normalized)" if report.get("fuse") else "baseline (per-case scope)"
+    print(f"# tm_memory_eval {mode}")
     print(f"cases: {report['case_count']}")
     print(f"hit@1: {report['hit1']}/{report['case_count']} ({report['hit1_rate']:.0%})")
     print(f"hit@3: {report['hit3']}/{report['case_count']} ({report['hit3_rate']:.0%})")
@@ -309,7 +358,7 @@ def print_report(report: dict[str, Any]) -> None:
 def cmd_eval(args: argparse.Namespace) -> int:
     try:
         cases = load_cases(REPO_ROOT / args.cases)
-        report = evaluate(cases, top_k=args.top_k)
+        report = evaluate(cases, top_k=args.top_k, fuse=args.fuse)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -329,6 +378,9 @@ def main() -> None:
     eval_p.add_argument("--cases", default="tests/fixtures/memory_eval_cases.jsonl")
     eval_p.add_argument("--top-k", type=int, default=5)
     eval_p.add_argument("--json", action="store_true", help="emit full JSON report")
+    eval_p.add_argument("--fuse", action="store_true",
+                        help="force-merge all sources with per-source score normalization "
+                             "(answers: does a unified search_tigermemory help or hurt hit@k?)")
     eval_p.set_defaults(func=cmd_eval)
 
     args = parser.parse_args()
