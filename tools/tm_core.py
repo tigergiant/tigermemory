@@ -409,8 +409,9 @@ def mem0_request(
     req = urllib.request.Request(
         url, data=data, headers=headers, method=("POST" if data else "GET")
     )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with opener.open(req, timeout=timeout) as resp:
             return resp.read().decode("utf-8")
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
