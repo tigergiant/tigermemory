@@ -488,6 +488,123 @@ def mem0_search(query: str, size: int = 5) -> str:
     )
 
 
+# ---------- Embedding client (OpenAI-compatible) ----------
+#
+# Used by tm_memory_eval rerank and any future LLM Wiki embedding integration.
+# Does NOT auto-fall-back on failure: callers must degrade (e.g. skip rerank,
+# fall back to lexical-only) explicitly. Hiding embedding failures behind a
+# silent lexical fallback would mask regressions that the eval harness exists
+# to catch.
+#
+# Env contract (read at call time so .env edits take effect without restart):
+#   EMBEDDING_BASE_URL   e.g. https://ark.cn-beijing.volces.com/api/coding/v3
+#                        or   http://localhost:19190/v1  (封存路径: 本地 Qwen)
+#   EMBEDDING_MODEL      e.g. doubao-embedding-vision  or  qwen3-embedding
+#   EMBEDDING_API_KEY    fallback to OPENAI_API_KEY (ARK key lives there)
+#   EMBEDDING_DIMENSIONS optional; pass-through if server supports (ARK: 2048)
+#   EMBEDDING_TIMEOUT    optional int seconds, default 30
+
+EMBEDDING_TIMEOUT = 30
+# ARK (Volcengine) /embeddings limits `input` to 10 entries per request. We
+# keep the cap configurable for self-hosted backends (e.g. local vLLM accepts
+# larger batches) but default to the tightest known limit so primary-path
+# callers succeed without feature-detection.
+EMBEDDING_BATCH_SIZE = 10
+
+
+def embedding_config() -> dict[str, Any]:
+    base = os.environ.get("EMBEDDING_BASE_URL", "").rstrip("/")
+    model = os.environ.get("EMBEDDING_MODEL", "")
+    api_key = os.environ.get("EMBEDDING_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
+    if not base or not model or not api_key:
+        raise RuntimeError(
+            "Embedding not configured: set EMBEDDING_BASE_URL, EMBEDDING_MODEL, "
+            "and EMBEDDING_API_KEY (or OPENAI_API_KEY). "
+            "Reference runtime/openmemory/.env for the live values."
+        )
+    dim_raw = os.environ.get("EMBEDDING_DIMENSIONS", "").strip()
+    dim = int(dim_raw) if dim_raw else None
+    return {"base": base, "model": model, "api_key": api_key, "dim": dim}
+
+
+def _embed_batch(
+    batch: list[str],
+    cfg: dict[str, Any],
+    effective_timeout: int,
+) -> list[list[float]]:
+    body: dict[str, Any] = {
+        "model": cfg["model"],
+        "input": batch,
+        "encoding_format": "float",
+    }
+    if cfg["dim"]:
+        body["dimensions"] = cfg["dim"]
+    payload = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        f"{cfg['base']}/embeddings",
+        data=payload,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {cfg['api_key']}",
+        },
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(req, timeout=effective_timeout) as resp:
+            raw = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        body_err = e.read().decode("utf-8", errors="replace")[:300]
+        raise RuntimeError(f"Embedding HTTP {e.code}: {body_err}")
+    except urllib.error.URLError as e:
+        reason = e.reason
+        if isinstance(reason, socket.timeout) or "timed out" in str(reason).lower():
+            raise RuntimeError(
+                f"Embedding timeout: {reason} (limit={effective_timeout}s)"
+            )
+        raise RuntimeError(f"Embedding unreachable: {reason}")
+    d = json.loads(raw)
+    data = d.get("data") or []
+    if len(data) != len(batch):
+        raise RuntimeError(
+            f"Embedding shape mismatch: expected {len(batch)} vectors, got {len(data)}"
+        )
+    return [item["embedding"] for item in data]
+
+
+def embed_texts(
+    texts: list[str],
+    *,
+    timeout: int | None = None,
+    batch_size: int | None = None,
+) -> list[list[float]]:
+    """POST /embeddings (OpenAI-compatible). Returns [vec, ...] aligned with input.
+
+    Splits into batches of `batch_size` (default EMBEDDING_BATCH_SIZE=10) because
+    ARK caps `input` to 10 per request. Local vLLM backends tolerate larger
+    batches; callers on those backends can pass a higher cap.
+
+    Raises RuntimeError on config error, HTTP error, timeout, or shape mismatch.
+    Callers must catch and degrade.
+    """
+    if not texts:
+        return []
+    cfg = embedding_config()
+    effective_timeout = timeout if timeout is not None else EMBEDDING_TIMEOUT
+    effective_batch = batch_size if batch_size is not None else EMBEDDING_BATCH_SIZE
+    vectors: list[list[float]] = []
+    for start in range(0, len(texts), effective_batch):
+        vectors.extend(
+            _embed_batch(texts[start:start + effective_batch], cfg, effective_timeout)
+        )
+    return vectors
+
+
+def embed_one(text: str, *, timeout: int | None = None) -> list[float]:
+    """Single-text convenience wrapper around `embed_texts`."""
+    return embed_texts([text], timeout=timeout)[0]
+
+
 # ---------- Wiki search (file-based) ----------
 
 _SEARCH_ROOTS = {

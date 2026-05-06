@@ -336,7 +336,76 @@ def _runtime_unavailable_case(case: EvalCase, errors: list[str], *, grouped: boo
     return grouped and case.scope == "all" and tm_core.primary_search_scope(case.query) == "mem0"
 
 
-def evaluate(cases: list[EvalCase], top_k: int, *, fuse: bool = False, grouped: bool = False) -> dict[str, Any]:
+def _hit_text_for_embed(hit: SearchHit) -> str:
+    """Compose a compact representation of a hit for embedding rerank.
+
+    Title + snippet (trimmed). Path slug adds recall signal for queries that
+    match only via file naming (e.g. `cross-worktree-pull-omission`).
+    """
+    slug = re.sub(r"[^a-z0-9]+", " ", hit.path.lower())
+    parts = [hit.title.strip(), slug, hit.snippet.strip()]
+    return " | ".join(p for p in parts if p)[:1200]
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(y * y for y in b) ** 0.5
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def rerank_by_embedding(
+    query: str,
+    hits: list[SearchHit],
+    top_k: int,
+) -> tuple[list[SearchHit], str | None]:
+    """Embed query + hit texts, cosine-rerank, return top_k.
+
+    Returns (reranked_hits, error). On embedding failure, returns the original
+    hits truncated to top_k plus an error string so the caller can record it
+    and fall back to lexical ranking (no silent substitution).
+    """
+    if not hits:
+        return [], None
+    texts = [_hit_text_for_embed(h) for h in hits]
+    try:
+        vectors = tm_core.embed_texts([query] + texts)
+    except Exception as exc:  # noqa: BLE001
+        return hits[:top_k], f"embedding unavailable: {exc}"
+    q_vec, hit_vecs = vectors[0], vectors[1:]
+    scored = sorted(
+        (
+            (idx, _cosine(q_vec, hv))
+            for idx, hv in enumerate(hit_vecs)
+        ),
+        key=lambda kv: -kv[1],
+    )
+    reranked: list[SearchHit] = []
+    for idx, sim in scored[:top_k]:
+        h = hits[idx]
+        reranked.append(SearchHit(
+            path=h.path,
+            title=h.title,
+            snippet=h.snippet,
+            score=float(sim),
+            source=h.source,
+        ))
+    return reranked, None
+
+
+def evaluate(
+    cases: list[EvalCase],
+    top_k: int,
+    *,
+    fuse: bool = False,
+    grouped: bool = False,
+    rerank: str = "off",
+    candidate_k: int | None = None,
+) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     hit1 = 0
     hit3 = 0
@@ -344,9 +413,18 @@ def evaluate(cases: list[EvalCase], top_k: int, *, fuse: bool = False, grouped: 
     quality_hit3 = 0
     quality_total = 0
     runtime_unavailable_count = 0
+    rerank_enabled = rerank == "embedding"
+    pool_k = candidate_k if candidate_k is not None else max(top_k * 3, 10)
+    if not rerank_enabled:
+        pool_k = top_k  # no rerank: don't pay for extra lexical scanning
     for case in cases:
         start = time.perf_counter()
-        hits, errors = run_search(case.scope, case.query, top_k, fuse=fuse, grouped=grouped)
+        hits, errors = run_search(case.scope, case.query, pool_k, fuse=fuse, grouped=grouped)
+        if rerank_enabled:
+            reranked, rerank_err = rerank_by_embedding(case.query, hits, top_k)
+            if rerank_err:
+                errors = list(errors) + [rerank_err]
+            hits = reranked
         latency_ms = round((time.perf_counter() - start) * 1000, 2)
         case_hit1 = score_case(case, hits, 1)
         case_hit3 = score_case(case, hits, min(3, top_k))
@@ -398,6 +476,8 @@ def evaluate(cases: list[EvalCase], top_k: int, *, fuse: bool = False, grouped: 
         "top_k": top_k,
         "fuse": fuse,
         "grouped": grouped,
+        "rerank": rerank,
+        "candidate_k": pool_k,
         "results": rows,
     }
 
@@ -409,6 +489,9 @@ def print_report(report: dict[str, Any]) -> None:
         mode = "GROUPED (primary group, no fused ranking)"
     else:
         mode = "baseline (per-case scope)"
+    rerank = report.get("rerank", "off")
+    if rerank != "off":
+        mode += f" + rerank={rerank} (candidate_k={report.get('candidate_k')})"
     print(f"# tm_memory_eval {mode}")
     print(f"cases: {report['case_count']}")
     print(f"hit@1: {report['hit1']}/{report['case_count']} ({report['hit1_rate']:.0%})")
@@ -446,7 +529,14 @@ def print_report(report: dict[str, Any]) -> None:
 def cmd_eval(args: argparse.Namespace) -> int:
     try:
         cases = load_cases(REPO_ROOT / args.cases)
-        report = evaluate(cases, top_k=args.top_k, fuse=args.fuse, grouped=args.grouped)
+        report = evaluate(
+            cases,
+            top_k=args.top_k,
+            fuse=args.fuse,
+            grouped=args.grouped,
+            rerank=args.rerank,
+            candidate_k=args.candidate_k,
+        )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -472,6 +562,13 @@ def main() -> None:
                            "(negative control: does fused ranking hurt hit@k?)")
     mode.add_argument("--grouped", action="store_true",
                       help="evaluate the grouped search_tigermemory shape using primary_results")
+    eval_p.add_argument("--rerank", choices=["off", "embedding"], default="off",
+                        help="post-lexical rerank stage. 'embedding' = cosine over the query "
+                             "and hit-text embeddings (EMBEDDING_BASE_URL/MODEL env). "
+                             "Lexical ranking is kept if the embedding call fails.")
+    eval_p.add_argument("--candidate-k", type=int, default=None,
+                        help="candidate pool size fed into rerank. Defaults to max(top_k*3, 10). "
+                             "Ignored when --rerank=off.")
     eval_p.set_defaults(func=cmd_eval)
 
     args = parser.parse_args()
