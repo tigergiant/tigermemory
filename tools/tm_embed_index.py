@@ -55,6 +55,10 @@ EMBED_TEXT_CHARS = 6000
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
 _TITLE_FM_RE = re.compile(r'^title:\s*"?(.+?)"?\s*$', re.MULTILINE)
 _H1_RE = re.compile(r"^#\s+(.+)$", re.MULTILINE)
+# Inline list form: aliases: ["a", "b"] — covers ~all current pages.
+# Multi-line YAML list (aliases:\n  - a\n  - b) is rare; skip for now.
+_ALIASES_INLINE_RE = re.compile(r'^aliases:\s*\[(.+?)\]\s*$', re.MULTILINE)
+_ALIAS_ITEM_RE = re.compile(r'"([^"]+)"|\'([^\']+)\'')
 
 
 def _extract_title(text: str, path: pathlib.Path) -> str:
@@ -75,11 +79,36 @@ def _slug_words(rel_path: str) -> str:
     return re.sub(r"[^a-z0-9_]+", " ", rel_path.lower()).strip()
 
 
+def _extract_aliases(text: str) -> list[str]:
+    """Pull frontmatter `aliases: ["a", "b"]` inline list. [] when absent.
+
+    OpenViking v0.3.13 `embedding.text_source` 借鉴：metadata 字段（标题、
+    aliases）作为 first-class embedding 输入，不依赖 body 顺带覆盖。
+    """
+    m = _FRONTMATTER_RE.match(text)
+    if not m:
+        return []
+    am = _ALIASES_INLINE_RE.search(m.group(1))
+    if not am:
+        return []
+    items: list[str] = []
+    for match in _ALIAS_ITEM_RE.finditer(am.group(1)):
+        items.append((match.group(1) or match.group(2)).strip())
+    return [a for a in items if a]
+
+
 def _embed_text(rel_path: str, title: str, body: str) -> str:
     """Compose the string handed to the embedding model.
 
     Order: title | slug | body. Title and slug are short, high-signal, and
     compensate for very short pages (e.g. index stubs).
+
+    Note (Phase 2h experiment, 2026-05-06): tried prepending frontmatter
+    `aliases` here à la OpenViking v0.3.13 `embedding.text_source`. Net 0
+    on 81-case fixture (1 fix via tie-break noise, 1 break via reorder
+    ripple). Reverted; `_extract_aliases` kept as a helper for future
+    chunk-level / alias-routing experiments. Don't re-add aliases here
+    without an eval that beats Phase 2f.
     """
     parts = [title.strip(), _slug_words(rel_path), body.strip()]
     composed = "\n\n".join(p for p in parts if p)
@@ -97,8 +126,8 @@ def _content_hash(rel_path: str, title: str, body: str) -> str:
     return h.hexdigest()
 
 
-def _iter_pages(scope: str) -> Iterable[tuple[pathlib.Path, str, str, str]]:
-    """Yield (abs_path, rel_path, title, body) for every .md under scope roots."""
+def _iter_pages(scope: str) -> Iterable[tuple[pathlib.Path, str, str, list[str], str]]:
+    """Yield (abs_path, rel_path, title, aliases, body) for every .md under scope roots."""
     if scope not in SCOPES:
         raise ValueError(f"unknown scope {scope!r}; valid: {sorted(SCOPES)}")
     for root in SCOPES[scope]:
@@ -112,7 +141,8 @@ def _iter_pages(scope: str) -> Iterable[tuple[pathlib.Path, str, str, str]]:
                 continue
             rel = p.relative_to(REPO_ROOT).as_posix()
             title = _extract_title(body, p)
-            yield p, rel, title, body
+            aliases = _extract_aliases(body)
+            yield p, rel, title, aliases, body
 
 
 # ---------- index file I/O ----------
@@ -165,7 +195,7 @@ def build(scope: str = "wiki", *, force: bool = False, batch_log: int = 50) -> d
     pending: list[tuple[str, str, str]] = []  # (rel, title, embed_text)
     seen_paths: set[str] = set()
 
-    for abs_path, rel, title, body in _iter_pages(scope):
+    for abs_path, rel, title, _aliases, body in _iter_pages(scope):
         seen_paths.add(rel)
         text_for_embed = _embed_text(rel, title, body)
         h = _content_hash(rel, title, body)
