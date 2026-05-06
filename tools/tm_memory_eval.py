@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import tm_core
+import tm_embed_index
 import tm_lessons
 import tm_persona
 
@@ -124,6 +125,32 @@ def search_wiki_case(query: str, top_k: int, *, include_sources: bool = False) -
     ]
 
 
+def search_wiki_case_embedding(query: str, top_k: int, *, include_sources: bool = False) -> list[SearchHit]:
+    """Embedding-based recall over the wiki/+sources/ index built by tm_embed_index.
+
+    `include_sources=False` filters the index hits down to wiki/ paths only;
+    the index itself always covers both roots so we only build / refresh once.
+    Snippet is left empty — `_best_snippet` rebuilds one from the file body if
+    the eval reporter wants it; the eval scorer only needs path + title.
+    """
+    raw = tm_embed_index.search(query, scope="wiki", k=max(top_k * 4, 12))
+    out: list[SearchHit] = []
+    for h in raw:
+        path = h["path"]
+        if not include_sources and path.startswith("sources/"):
+            continue
+        out.append(SearchHit(
+            path=path,
+            title=h.get("title", ""),
+            snippet="",
+            score=float(h["score"]),
+            source="wiki",
+        ))
+        if len(out) >= top_k:
+            break
+    return out
+
+
 def search_lessons_case(query: str, top_k: int) -> list[SearchHit]:
     tokens = _tokens(query)
     scored: list[tuple[int, pathlib.Path, str, str]] = []
@@ -200,7 +227,13 @@ def search_mem0_case(query: str, top_k: int) -> tuple[list[SearchHit], str | Non
     return hits, None
 
 
-def run_search_grouped(scope: str, query: str, top_k: int) -> tuple[list[SearchHit], list[str]]:
+def run_search_grouped(
+    scope: str,
+    query: str,
+    top_k: int,
+    *,
+    recall: str = "lexical",
+) -> tuple[list[SearchHit], list[str]]:
     """Evaluate the grouped search_tigermemory shape using primary results only.
 
     For explicit case scopes, the primary group is that scope. For `all`, this
@@ -213,7 +246,7 @@ def run_search_grouped(scope: str, query: str, top_k: int) -> tuple[list[SearchH
     groups: dict[str, list[SearchHit]] = {}
 
     if "wiki" in requested_scopes:
-        groups["wiki"] = search_wiki_case(query, top_k, include_sources=(scope == "all"))
+        groups["wiki"] = _wiki_recall(query, top_k, include_sources=(scope == "all"), recall=recall)
     if "lessons" in requested_scopes:
         groups["lessons"] = search_lessons_case(query, top_k)
     if "onboarding" in requested_scopes:
@@ -227,6 +260,63 @@ def run_search_grouped(scope: str, query: str, top_k: int) -> tuple[list[SearchH
     return groups.get(primary_scope, [])[:top_k], errors
 
 
+RRF_K = 60  # standard constant from the RRF paper; small k=10..100 all behave similarly.
+
+
+def search_wiki_case_hybrid(
+    query: str,
+    top_k: int,
+    *,
+    include_sources: bool = False,
+) -> list[SearchHit]:
+    """Reciprocal Rank Fusion of lexical + embedding wiki recall.
+
+    Both branches return ranked path lists. RRF score per path =
+    sum(1 / (RRF_K + rank_in_branch)), so ranks (not raw scores) drive fusion;
+    scores are no longer comparable across branches anyway. This preserves the
+    lexical strengths (exact-token English canonical hits) without sacrificing
+    embedding's semantic / cross-language recall.
+    """
+    pool_k = max(top_k * 4, 12)  # wider pool than top_k to give RRF room
+    lex = search_wiki_case(query, pool_k, include_sources=include_sources)
+    emb = search_wiki_case_embedding(query, pool_k, include_sources=include_sources)
+
+    fused: dict[str, dict[str, Any]] = {}
+    for rank, hit in enumerate(lex, 1):
+        fused.setdefault(hit.path, {"hit": hit, "score": 0.0, "lex_rank": None, "emb_rank": None})
+        fused[hit.path]["score"] += 1.0 / (RRF_K + rank)
+        fused[hit.path]["lex_rank"] = rank
+    for rank, hit in enumerate(emb, 1):
+        if hit.path not in fused:
+            fused[hit.path] = {"hit": hit, "score": 0.0, "lex_rank": None, "emb_rank": None}
+        fused[hit.path]["score"] += 1.0 / (RRF_K + rank)
+        fused[hit.path]["emb_rank"] = rank
+        # Prefer lex hit object if both branches found it (snippet richer).
+
+    ordered = sorted(fused.values(), key=lambda v: -v["score"])
+    out: list[SearchHit] = []
+    for entry in ordered[:top_k]:
+        h = entry["hit"]
+        # Re-stamp score with the fused RRF score so downstream sort is stable.
+        out.append(SearchHit(
+            path=h.path,
+            title=h.title,
+            snippet=h.snippet,
+            score=round(entry["score"], 6),
+            source="wiki",
+        ))
+    return out
+
+
+def _wiki_recall(query: str, top_k: int, *, include_sources: bool, recall: str) -> list[SearchHit]:
+    """Dispatch wiki recall to lexical / embedding / hybrid backend."""
+    if recall == "embedding":
+        return search_wiki_case_embedding(query, top_k, include_sources=include_sources)
+    if recall == "hybrid":
+        return search_wiki_case_hybrid(query, top_k, include_sources=include_sources)
+    return search_wiki_case(query, top_k, include_sources=include_sources)
+
+
 def run_search(
     scope: str,
     query: str,
@@ -234,18 +324,19 @@ def run_search(
     *,
     fuse: bool = False,
     grouped: bool = False,
+    recall: str = "lexical",
 ) -> tuple[list[SearchHit], list[str]]:
     errors: list[str] = []
 
     # Fuse mode: force-merge ALL sources regardless of case.scope, then normalize.
     if fuse:
-        return run_search_fused(query, top_k)
+        return run_search_fused(query, top_k, recall=recall)
     if grouped:
-        return run_search_grouped(scope, query, top_k)
+        return run_search_grouped(scope, query, top_k, recall=recall)
 
     hits: list[SearchHit] = []
     if scope in ("wiki", "all"):
-        hits.extend(search_wiki_case(query, top_k, include_sources=(scope == "all")))
+        hits.extend(_wiki_recall(query, top_k, include_sources=(scope == "all"), recall=recall))
     if scope in ("lessons", "all"):
         hits.extend(search_lessons_case(query, top_k))
     if scope in ("onboarding", "all"):
@@ -265,7 +356,12 @@ def run_search(
     return ordered[:top_k], errors
 
 
-def run_search_fused(query: str, top_k: int) -> tuple[list[SearchHit], list[str]]:
+def run_search_fused(
+    query: str,
+    top_k: int,
+    *,
+    recall: str = "lexical",
+) -> tuple[list[SearchHit], list[str]]:
     """Query all 4 sources, normalize each source's scores to [0, 1], then merge.
 
     Per-source normalization (score / max_score_in_source) is the simplest fix
@@ -276,7 +372,7 @@ def run_search_fused(query: str, top_k: int) -> tuple[list[SearchHit], list[str]
     """
     errors: list[str] = []
     grouped: dict[str, list[SearchHit]] = {
-        "wiki": search_wiki_case(query, top_k, include_sources=True),
+        "wiki": _wiki_recall(query, top_k, include_sources=True, recall=recall),
         "lessons": search_lessons_case(query, top_k),
         "onboarding": search_onboarding_case(query, top_k),
     }
@@ -405,6 +501,7 @@ def evaluate(
     grouped: bool = False,
     rerank: str = "off",
     candidate_k: int | None = None,
+    recall: str = "lexical",
 ) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     hit1 = 0
@@ -419,7 +516,10 @@ def evaluate(
         pool_k = top_k  # no rerank: don't pay for extra lexical scanning
     for case in cases:
         start = time.perf_counter()
-        hits, errors = run_search(case.scope, case.query, pool_k, fuse=fuse, grouped=grouped)
+        hits, errors = run_search(
+            case.scope, case.query, pool_k,
+            fuse=fuse, grouped=grouped, recall=recall,
+        )
         if rerank_enabled:
             reranked, rerank_err = rerank_by_embedding(case.query, hits, top_k)
             if rerank_err:
@@ -478,6 +578,7 @@ def evaluate(
         "grouped": grouped,
         "rerank": rerank,
         "candidate_k": pool_k,
+        "recall": recall,
         "results": rows,
     }
 
@@ -489,6 +590,9 @@ def print_report(report: dict[str, Any]) -> None:
         mode = "GROUPED (primary group, no fused ranking)"
     else:
         mode = "baseline (per-case scope)"
+    recall = report.get("recall", "lexical")
+    if recall != "lexical":
+        mode += f" + recall={recall}"
     rerank = report.get("rerank", "off")
     if rerank != "off":
         mode += f" + rerank={rerank} (candidate_k={report.get('candidate_k')})"
@@ -536,6 +640,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
             grouped=args.grouped,
             rerank=args.rerank,
             candidate_k=args.candidate_k,
+            recall=args.recall,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -562,6 +667,11 @@ def main() -> None:
                            "(negative control: does fused ranking hurt hit@k?)")
     mode.add_argument("--grouped", action="store_true",
                       help="evaluate the grouped search_tigermemory shape using primary_results")
+    eval_p.add_argument("--recall", choices=["lexical", "embedding", "hybrid"], default="lexical",
+                        help="wiki/sources recall backend. 'embedding' = cosine over "
+                             "tm_embed_index; 'hybrid' = RRF fusion of lexical + embedding; "
+                             "'lexical' = current token-AND search_wiki. Build the embed "
+                             "index first via `python tools/tm_embed_index.py build`.")
     eval_p.add_argument("--rerank", choices=["off", "embedding"], default="off",
                         help="post-lexical rerank stage. 'embedding' = cosine over the query "
                              "and hit-text embeddings (EMBEDDING_BASE_URL/MODEL env). "
