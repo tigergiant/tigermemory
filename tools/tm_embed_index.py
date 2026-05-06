@@ -25,6 +25,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import pathlib
 import re
 import sys
@@ -60,6 +61,29 @@ _H1_RE = re.compile(r"^#\s+(.+)$", re.MULTILINE)
 _ALIASES_INLINE_RE = re.compile(r'^aliases:\s*\[(.+?)\]\s*$', re.MULTILINE)
 _ALIAS_ITEM_RE = re.compile(r'"([^"]+)"|\'([^\']+)\'')
 
+# Frontmatter `summary: "..."` (single-line, single or double-quoted).
+_SUMMARY_FM_RE = re.compile(r'^summary:\s*(["\'])(.+?)\1\s*$', re.MULTILINE)
+
+# `## 摘要` / `## Summary` / `## 概述` / `## TL;DR` headings (case-insensitive).
+_SUMMARY_HEADING_RE = re.compile(
+    r'^##\s+(?:摘要|Summary|概述|TL;DR)\s*$',
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Summary character budget (~OpenViking L0 ~100 tokens ≈ 240 CJK chars).
+SUMMARY_MAX_CHARS = 240
+
+# Noise paragraph patterns to skip when extracting summary. Most external
+# sources (OpenClaw 104 pages all share this) have a "## Documentation
+# Index" boilerplate paragraph right after the H1 that drowns the real
+# content. Match case-insensitively against full paragraph text.
+_NOISE_PATTERNS = (
+    "fetch the complete documentation",
+    "use this file to discover all available pages",
+    "this page intentionally left blank",
+)
+_NOISE_RE = re.compile("|".join(re.escape(p) for p in _NOISE_PATTERNS), re.IGNORECASE)
+
 
 def _extract_title(text: str, path: pathlib.Path) -> str:
     """Title precedence: frontmatter `title:` > first H1 > filename stem."""
@@ -77,6 +101,104 @@ def _extract_title(text: str, path: pathlib.Path) -> str:
 def _slug_words(rel_path: str) -> str:
     """Expand path separators / hyphens to words so slug tokens count."""
     return re.sub(r"[^a-z0-9_]+", " ", rel_path.lower()).strip()
+
+
+def _extract_summary(text: str, max_chars: int = SUMMARY_MAX_CHARS) -> str:
+    """Extract a short L0-style summary from a markdown body.
+
+    Borrowed from OpenViking's L0 (Abstract) layer (see
+    `wiki/systems/memory-retrieval-eval.md` Phase 2j). OpenViking
+    asynchronously LLM-generates ~100-token abstracts; tigermemory exploits
+    its existing `## 摘要` writing convention (87/100 wiki pages already
+    have one) to do the same thing **rule-based, zero LLM cost**.
+
+    Priority:
+      1. Frontmatter `summary: "..."` field (explicit override).
+      2. `## 摘要` / `## Summary` / `## 概述` / `## TL;DR` heading first
+         non-empty paragraph (until next heading or blank line).
+      3. H1 followed by first non-empty paragraph.
+      4. Empty string (caller falls back to title-only embed).
+
+    Returns up to `max_chars` chars trimmed at safe boundaries.
+    """
+    # 1. frontmatter summary field
+    fm = _FRONTMATTER_RE.match(text)
+    if fm:
+        sm = _SUMMARY_FM_RE.search(fm.group(1))
+        if sm:
+            return sm.group(2).strip()[:max_chars]
+
+    # Strip frontmatter for body search
+    body = _FRONTMATTER_RE.sub('', text, count=1) if fm else text
+
+    def _first_signal_paragraph(after_idx: int) -> str:
+        """Walk text after `after_idx`, collect paragraphs, return first
+        non-noise paragraph (≥20 chars after trimming).
+
+        A paragraph is a run of non-empty, non-heading lines. Blockquote /
+        list markers are stripped. Code fences (``` lines) are skipped.
+        Noise paragraphs (matching `_NOISE_RE`, e.g. OpenClaw documentation
+        index boilerplate) are skipped, not returned.
+        """
+        rest = body[after_idx:]
+        paragraphs: list[str] = []
+        current: list[str] = []
+        in_code = False
+        for line in rest.splitlines():
+            stripped = line.strip()
+            if stripped.startswith('```'):
+                in_code = not in_code
+                if current:
+                    paragraphs.append(' '.join(current))
+                    current = []
+                continue
+            if in_code:
+                continue
+            if stripped.startswith('#'):
+                if current:
+                    paragraphs.append(' '.join(current))
+                    current = []
+                continue
+            if not stripped:
+                if current:
+                    paragraphs.append(' '.join(current))
+                    current = []
+                continue
+            cleaned = re.sub(r'^[>\-*+]\s*', '', stripped)
+            if cleaned:
+                current.append(cleaned)
+            # Hard ceiling so we don't scan whole files for the noise check
+            if sum(len(s) for s in current) >= max_chars * 4:
+                paragraphs.append(' '.join(current))
+                current = []
+                break
+        if current:
+            paragraphs.append(' '.join(current))
+
+        for para in paragraphs:
+            text_p = para.strip()
+            if len(text_p) < 20:
+                continue
+            if _NOISE_RE.search(text_p):
+                continue
+            return text_p[:max_chars]
+        return ''
+
+    # 2. `## 摘要` heading
+    m = _SUMMARY_HEADING_RE.search(body)
+    if m:
+        para = _first_signal_paragraph(m.end())
+        if para:
+            return para
+
+    # 3. H1 + first paragraph (skipping noise like docs index boilerplate)
+    h1 = _H1_RE.search(body)
+    if h1:
+        para = _first_signal_paragraph(h1.end())
+        if para:
+            return para
+
+    return ''
 
 
 def _extract_aliases(text: str) -> list[str]:
@@ -101,22 +223,37 @@ def _embed_text(rel_path: str, title: str, body: str) -> str:
     """Compose the string handed to the embedding model.
 
     Order: title | slug | body. Title and slug are short, high-signal, and
-    compensate for very short pages (e.g. index stubs).
+    compensate for very short pages.
 
-    Note (Phase 2h experiment, 2026-05-06): tried prepending frontmatter
-    `aliases` here à la OpenViking v0.3.13 `embedding.text_source`. Net 0
-    on 81-case fixture (1 fix via tie-break noise, 1 break via reorder
-    ripple). Reverted; `_extract_aliases` kept as a helper for future
-    chunk-level / alias-routing experiments. Don't re-add aliases here
-    without an eval that beats Phase 2f.
+    Phase 2j experiment (2026-05-06, reverted): tried prepending an
+    OpenViking-L0-style summary extracted from `## 摘要` / H1+first-para.
+    Result: -3 net hit@3 (3 broken edges, 0 fixed). Root cause: in our
+    single-vector setup, summary text overlaps the body[:6000] head that
+    already contains it (87/100 wiki pages have `## 摘要`); prepending it
+    just duplicates signal and reorders neighboring pages. OpenViking's L0
+    is a *separate* embedding vector (multi-vector retrieval), not a
+    prefix — we can't get the same lift in single-vector mode.
+
+    `_extract_summary` is kept for future use:
+      • LLM-generated `summary:` frontmatter on `sources/external/*` pages
+        that lack `## 摘要` (would actually add new signal there).
+      • Multi-vector retrieval where summary gets its own vector.
+    See wiki/systems/memory-retrieval-eval.md Phase 2j for full analysis.
     """
     parts = [title.strip(), _slug_words(rel_path), body.strip()]
     composed = "\n\n".join(p for p in parts if p)
     return composed[:EMBED_TEXT_CHARS]
 
 
+# Bump `_HASH_SCHEMA` whenever `_embed_text` composition changes; cached
+# vectors are then automatically invalidated on next refresh (no --force).
+_HASH_SCHEMA = b"v4-revert-summary-front"
+
+
 def _content_hash(rel_path: str, title: str, body: str) -> str:
     h = hashlib.md5()
+    h.update(_HASH_SCHEMA)
+    h.update(b"\n")
     h.update(rel_path.encode("utf-8"))
     h.update(b"\n")
     h.update(title.encode("utf-8"))
@@ -180,6 +317,119 @@ def _save_index(scope: str, entries: dict[str, dict[str, Any]]) -> None:
         for rel in sorted(entries):
             f.write(json.dumps(entries[rel], ensure_ascii=False) + "\n")
     tmp.replace(path)
+
+
+# ---------- partition centroids (Phase 2k: OpenViking score_propagation) ----------
+
+def _partition_of(rel_path: str) -> str:
+    """Return the partition key for a page path.
+
+    Phase 2k borrows OpenViking's hierarchical retrieval idea: pages share
+    a parent partition, and queries can be routed by partition centroid
+    similarity before page-level cosine.
+
+    Conventions (matching tigermemory layout):
+      - `wiki/<part>/...`              -> `wiki/<part>`
+        (e.g. `wiki/systems/foo.md` and `wiki/systems/lessons/x.md` share
+        the `wiki/systems` partition, even nested)
+      - `sources/<sub1>/<sub2>/...`    -> `sources/<sub1>/<sub2>`
+        (e.g. `sources/external/openclaw/x.md` -> `sources/external/openclaw`)
+      - `sources/<sub1>/...` (no sub2) -> `sources/<sub1>`
+        (e.g. `sources/huawei-celia/x.md` -> `sources/huawei-celia`)
+      - other (root files like `AGENTS.md`) -> `''` (no partition)
+    """
+    parts = rel_path.split("/")
+    if len(parts) < 2:
+        return ""
+    head = parts[0]
+    if head == "wiki" and len(parts) >= 2:
+        return f"wiki/{parts[1]}"
+    if head == "sources":
+        if len(parts) >= 3:
+            return f"sources/{parts[1]}/{parts[2]}"
+        return f"sources/{parts[1]}"
+    return head
+
+
+def _centroid_path(scope: str) -> pathlib.Path:
+    return INDEX_DIR / f"{scope}.centroids.json"
+
+
+def _vec_mean(vectors: list[list[float]]) -> list[float]:
+    """Return the per-dimension mean of `vectors`. Empty list if input empty."""
+    if not vectors:
+        return []
+    dim = len(vectors[0])
+    sums = [0.0] * dim
+    n = 0
+    for v in vectors:
+        if len(v) != dim:
+            continue
+        for i, x in enumerate(v):
+            sums[i] += x
+        n += 1
+    if n == 0:
+        return []
+    return [s / n for s in sums]
+
+
+def compute_centroids(scope: str) -> dict[str, list[float]]:
+    """Compute per-partition centroid vectors from the current index.
+
+    Returns {partition_key: mean_vector}. Empty partition key (root files)
+    is excluded — propagation has no meaning for a 1-page partition.
+    """
+    entries = _load_index(scope)
+    by_part: dict[str, list[list[float]]] = {}
+    for entry in entries.values():
+        vec = entry.get("vec")
+        if not isinstance(vec, list):
+            continue
+        part = _partition_of(entry["path"])
+        if not part:
+            continue
+        by_part.setdefault(part, []).append(vec)
+    centroids: dict[str, list[float]] = {}
+    for part, vecs in by_part.items():
+        if len(vecs) < 2:  # 1-page partition gives same vec as page itself
+            continue
+        c = _vec_mean(vecs)
+        if c:
+            centroids[part] = c
+    return centroids
+
+
+def _save_centroids(scope: str, centroids: dict[str, list[float]]) -> None:
+    INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    path = _centroid_path(scope)
+    tmp = path.with_suffix(".json.tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(centroids, f, ensure_ascii=False)
+    tmp.replace(path)
+
+
+def _load_centroids(scope: str) -> dict[str, list[float]]:
+    path = _centroid_path(scope)
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _propagation_alpha(explicit: float | None) -> float:
+    """Resolve effective alpha: explicit arg > env var > 0.0 (off)."""
+    if explicit is not None:
+        return max(0.0, min(1.0, explicit))
+    env = os.environ.get("TIGERMEMORY_PROPAGATION_ALPHA")
+    if env:
+        try:
+            return max(0.0, min(1.0, float(env)))
+        except ValueError:
+            return 0.0
+    return 0.0
 
 
 # ---------- build / refresh ----------
@@ -274,12 +524,24 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (math.sqrt(na) * math.sqrt(nb))
 
 
-def search(query: str, *, scope: str = "wiki", k: int = 5) -> list[dict[str, Any]]:
+def search(
+    query: str,
+    *,
+    scope: str = "wiki",
+    k: int = 5,
+    propagation_alpha: float | None = None,
+) -> list[dict[str, Any]]:
     """Embed `query`, cosine-rank against the index, return top-k entries.
 
     Each entry: {"path", "title", "score", "source": "embedding"}. Snippet is
     deferred to the caller because rebuilding it requires re-reading the file
     (the index intentionally does not cache full bodies).
+
+    Phase 2k: if `propagation_alpha` > 0 (or env
+    `TIGERMEMORY_PROPAGATION_ALPHA` set), final score is
+    `(1-α) * cosine(q, page) + α * cosine(q, partition_centroid)`,
+    borrowed from OpenViking `retrieval.score_propagation_alpha`. Default
+    α=0 preserves baseline pure-cosine behavior.
     """
     entries = _load_index(scope)
     if not entries:
@@ -287,13 +549,25 @@ def search(query: str, *, scope: str = "wiki", k: int = 5) -> list[dict[str, Any
             f"embed index empty for scope {scope!r}; "
             f"run `python tools/tm_embed_index.py build --scope {scope}` first"
         )
+    alpha = _propagation_alpha(propagation_alpha)
+    centroids = _load_centroids(scope) if alpha > 0 else {}
     q_vec = tm_core.embed_one(query)
+    # Pre-compute query × centroid cosine per partition (cheap, ~10 partitions).
+    part_score: dict[str, float] = {
+        part: _cosine(q_vec, c) for part, c in centroids.items()
+    } if alpha > 0 else {}
     scored: list[tuple[float, dict[str, Any]]] = []
     for entry in entries.values():
         vec = entry.get("vec")
         if not isinstance(vec, list):
             continue
-        score = _cosine(q_vec, vec)
+        page_score = _cosine(q_vec, vec)
+        if alpha > 0:
+            part = _partition_of(entry["path"])
+            p_s = part_score.get(part, 0.0)
+            score = (1.0 - alpha) * page_score + alpha * p_s
+        else:
+            score = page_score
         scored.append((score, entry))
     scored.sort(key=lambda kv: -kv[0])
     out: list[dict[str, Any]] = []
@@ -326,6 +600,10 @@ def stats(scope: str = "wiki") -> dict[str, Any]:
 def cmd_build(args: argparse.Namespace) -> int:
     t0 = time.perf_counter()
     result = build(scope=args.scope, force=args.force)
+    # Recompute partition centroids from the freshly-built index.
+    centroids = compute_centroids(args.scope)
+    _save_centroids(args.scope, centroids)
+    result["partitions"] = len(centroids)
     dt = (time.perf_counter() - t0) * 1000
     print(json.dumps(result, ensure_ascii=False, indent=2))
     print(f"build done in {dt:.0f} ms", file=sys.stderr)
