@@ -635,6 +635,10 @@ def search_tigermemory(query: str, scope: str = "auto", top_k: int = 5) -> dict[
 
     if "wiki" in scopes:
         include_sources = selected_scope in ("auto", "all")
+        # Use hybrid lexical+embedding recall (RRF). Phase 2f eval (2026-05-06)
+        # showed hit@3 71/81 vs lexical-only 50/81 on the canonical fixture.
+        # `search_wiki_hybrid` falls back to lexical-only if the embed index
+        # is missing or the embedding backend is unreachable.
         groups["wiki"] = [
             _format_search_hit(
                 "wiki",
@@ -643,7 +647,7 @@ def search_tigermemory(query: str, scope: str = "auto", top_k: int = 5) -> dict[
                 str(hit.get("snippet", "")),
                 float(hit.get("score", 0.0)),
             )
-            for hit in tm_core.search_wiki(q, size=limit, include_sources=include_sources, include_inbox=False)
+            for hit in tm_core.search_wiki_hybrid(q, size=limit, include_sources=include_sources, include_inbox=False)
         ]
     if "lessons" in scopes:
         groups["lessons"] = _search_lessons_group(q, limit)

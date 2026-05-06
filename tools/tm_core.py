@@ -761,6 +761,89 @@ def search_wiki(
     return results[:max(1, size)]
 
 
+# ---------- Hybrid lexical + embedding recall ----------
+
+# Standard RRF constant (Cormack et al., 2009). k=10..100 all behave similarly;
+# 60 is the canonical default and what most production hybrid retrievers use.
+_RRF_K = 60
+
+
+def search_wiki_hybrid(
+    query: str,
+    size: int = 5,
+    include_sources: bool = True,
+    include_inbox: bool = False,
+) -> list[dict[str, Any]]:
+    """Reciprocal-rank-fusion of `search_wiki` (lexical) and the embedding index.
+
+    Why this exists: Phase 2e (2026-05-06) showed lexical AND search returns
+    0 candidates for many CN / synonym / cross-lingual queries; Phase 2f
+    showed RRF-fusing lexical + embedding lifts hit@3 from 50/81 (61.7%) to
+    71/81 (87.6%) on the canonical eval set, while keeping lexical's strength
+    on exact-token English canonical hits.
+
+    Graceful degradation: if the embedding index is missing or the embedding
+    backend is unreachable, this falls back to lexical-only — callers never
+    see a hard failure from this path.
+
+    `include_inbox=True` only feeds inbox into the lexical branch; the
+    embedding index intentionally does not cover inbox/ (those are unreviewed
+    drafts).
+    """
+    pool_k = max(size * 4, 12)
+    lex_hits = search_wiki(query, size=pool_k, include_sources=include_sources, include_inbox=include_inbox)
+
+    emb_hits: list[dict[str, Any]] = []
+    try:
+        # Lazy import: tm_core is imported by lots of modules; tm_embed_index
+        # depends on tm_core, so importing at module top would create a cycle.
+        import tm_embed_index  # type: ignore[import-not-found]
+        emb_hits = tm_embed_index.search(query, scope="wiki", k=pool_k)
+    except RuntimeError:
+        # Index empty / not built / embedding service unreachable.
+        # Degrade silently to lexical-only — caller already gets useful results.
+        return lex_hits[:max(1, size)]
+    except Exception:
+        return lex_hits[:max(1, size)]
+
+    if not include_sources:
+        emb_hits = [h for h in emb_hits if not h["path"].startswith("sources/")]
+
+    fused: dict[str, dict[str, Any]] = {}
+    for rank, hit in enumerate(lex_hits, 1):
+        path = hit["path"]
+        fused.setdefault(path, {"hit": hit, "score": 0.0})
+        fused[path]["score"] += 1.0 / (_RRF_K + rank)
+    for rank, hit in enumerate(emb_hits, 1):
+        path = hit["path"]
+        if path not in fused:
+            # Emb-only hit: build the same shape lexical returns. Snippet is
+            # generated cheaply from the leading body so the agent has a
+            # preview without re-reading the file.
+            snippet = ""
+            try:
+                body = (REPO_ROOT / path).read_text(encoding="utf-8", errors="replace")
+                snippet = " ".join(body[:600].split())[:300]
+            except OSError:
+                pass
+            stub = {
+                "path": path,
+                "title": hit.get("title", ""),
+                "score": 0.0,
+                "snippet": snippet,
+            }
+            fused[path] = {"hit": stub, "score": 0.0}
+        fused[path]["score"] += 1.0 / (_RRF_K + rank)
+
+    ordered = sorted(fused.values(), key=lambda v: -v["score"])
+    out: list[dict[str, Any]] = []
+    for entry in ordered[:max(1, size)]:
+        merged = dict(entry["hit"])
+        merged["score"] = round(entry["score"], 6)
+        out.append(merged)
+    return out
+
+
 # ---------- Validators ----------
 
 def validate_agent(name: str) -> None:
