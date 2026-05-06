@@ -45,8 +45,12 @@ def test_compile_snapshot_5min():
     assert "## 1. 开工顺序" in out
     assert "## 2. 写入权限边界" in out
     assert "## 3. 工具入口" in out
-    assert "## 4. Live-state 优先原则" in out
-    assert "## 5. 必须避免的 lesson" in out
+    assert "## 4. Agent 生态地图（一句话定位）" in out
+    assert "## 5. Live-state 优先原则" in out
+    assert "## 6. 必须避免的 lesson" in out
+    # Agent ecosystem must mention the major systems by name
+    for token in ("OpenClaw", "Hermes", "DeerFlow", "Mem0", "OpenSpace", "search_tigermemory"):
+        assert token in out, f"agent ecosystem section missing {token!r}"
     # Must still mention core keywords
     assert "git pull --ff-only origin master" in out
     assert "tm_lessons.py search" in out
@@ -62,9 +66,9 @@ def test_compile_snapshot_full():
     assert isinstance(out, str)
     assert out.startswith("# tigermemory Agent Onboarding Snapshot (5min)")
     # full is 5min superset
-    assert "## 6. Agent 接入边界" in out
-    assert "## 7. 完整 lesson 清单" in out
-    assert "## 8. v0.2 范围" in out
+    assert "## 7. Agent 接入边界" in out
+    assert "## 8. 完整 lesson 清单" in out
+    assert "## 9. v0.2 范围" in out
     assert "## 来源" in out
     # Must contain source path list (the contract footer)
     assert "AGENTS.md" in out

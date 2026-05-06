@@ -153,6 +153,21 @@ def render_5min(lessons: list[Lesson]) -> str:
             "不要把单点失败说成已解决；必须有实际验证。",
         ]
     )
+    # Agent ecosystem one-liners. Goal: when a fresh agent first hits this
+    # snapshot it knows what each system does without doing N extra searches.
+    # Each line points at the canonical wiki page so the agent can deep-dive
+    # on demand instead of getting context bloat up front.
+    agent_ecosystem = _bullet_lines(
+        [
+            "**OpenClaw**：本地 agent runtime / MCP 客户端容器，笔记本端跑 agent 进程；tigermemory 通过 `tigermemory-ce` 插件接入。详见 `wiki/systems/openclaw-runtime.md`、`wiki/systems/openclaw-capabilities.md`。",
+            "**Hermes**：持续跟踪 / 分阶段推进 agent，适合多轮研究、长期跟踪、阶段性总结；不擅长一次性深度专题。详见 `wiki/systems/hermes-docs-index.md`。",
+            "**DeerFlow**：深度专题研究 agent，吃结构化任务（目标 / 范围 / 时间窗 / 输出格式），不要把模糊问题整包丢进去。详见 `wiki/systems/deerflow-research-engine.md`。",
+            "**Mem0 / OpenMemory**：对话级实时记忆层（atomic event-style，例如“X 部署了”“Y 工具不适合 Z”），HTTP `:8765` `user_id=tiger`；长文 / 规则 / 历史文案在 Wiki，不在 Mem0。详见 `wiki/systems/multi-endpoint-mem0.md`、`wiki/systems/openclaw-memory-stack-clarification.md`。",
+            "**Cascade / Codex / Claude Code / Kimi**：常驻 agent。写入主入口：D:\\tigermemory（人工 + Cascade / Codex / Obsidian）↔ WSL `~/tigermemory`（Claude Code / MCP / Hermes / DeerFlow），通过 GitHub origin 同步；开工先 `git pull --ff-only`。元规则修改权限只在 `claude-code` + `human`。完整 agent 枚举：`AGENTS.md §3`。",
+            "**OpenSpace**：登录态网页 / 浏览器自动化 / 桌面采集；目前主要通过技能 / 上游 agent 间接接入。",
+            "**search_tigermemory**（MCP）：检索的统一入口，分组返回 wiki / lessons / onboarding / mem0；wiki 召回已是 lexical + embedding 的 RRF 混合 (`tm_core.search_wiki_hybrid`)。详见 `wiki/systems/memory-retrieval-eval.md`。",
+        ]
+    )
     lesson_entries = _bullet_lines(lesson_lines)
     return f"""# tigermemory Agent Onboarding Snapshot (5min)
 
@@ -168,11 +183,15 @@ def render_5min(lessons: list[Lesson]) -> str:
 
 {tool_entries}
 
-## 4. Live-state 优先原则
+## 4. Agent 生态地图（一句话定位）
+
+{agent_ecosystem}
+
+## 5. Live-state 优先原则
 
 {live_state_rules}
 
-## 5. 必须避免的 lesson
+## 6. 必须避免的 lesson
 
 {lesson_entries}
 """
@@ -200,15 +219,15 @@ def render_full(lessons: list[Lesson]) -> str:
     source_lines = _bullet_lines(SOURCE_PATHS)
     return f"""{render_5min(lessons).rstrip()}
 
-## 6. Agent 接入边界
+## 7. Agent 接入边界
 
 {access_boundaries}
 
-## 7. 完整 lesson 清单
+## 8. 完整 lesson 清单
 
 {lesson_catalog}
 
-## 8. v0.2 范围
+## 9. v0.2 范围
 
 {v02_scope}
 
