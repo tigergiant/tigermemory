@@ -107,6 +107,35 @@ def test_check_query_compat_warns_on_missing_meta(isolated_index_dir, capsys):
     assert "no meta file" in captured.err
 
 
+def test_iter_pages_includes_extra_root_files_in_wiki_scope():
+    """FUTURE-INDEXER: root AGENTS.md must be yielded by `_iter_pages('wiki')`
+    so semantic queries like '变基出现冲突怎么办' can hit it. Before this
+    fix, _iter_pages only walked wiki/ + sources/ and AGENTS.md was
+    completely absent from the embed index — root cause of the
+    `semantic-cn-rebase-conflict` miss documented in Phase 2m."""
+    rels = [rel for _p, rel, _t, _a, _b in tm_embed_index._iter_pages("wiki")]
+    assert "AGENTS.md" in rels, (
+        "AGENTS.md must be indexed under the 'wiki' scope. "
+        "If you removed EXTRA_ROOT_FILES['wiki'], "
+        "update Phase 2m and `semantic-cn-rebase-conflict` may regress."
+    )
+
+
+def test_iter_pages_skips_extra_root_files_in_narrow_scopes():
+    """Narrow scopes (`wiki_only`, `sources_only`) must NOT pick up root
+    governance files — those scopes are intentionally focused subsets."""
+    wiki_only_rels = [rel for _p, rel, *_ in tm_embed_index._iter_pages("wiki_only")]
+    sources_only_rels = [rel for _p, rel, *_ in tm_embed_index._iter_pages("sources_only")]
+    assert "AGENTS.md" not in wiki_only_rels
+    assert "AGENTS.md" not in sources_only_rels
+
+
+def test_partition_of_root_file_is_empty():
+    """Root files must have empty partition so they're naturally excluded
+    from `compute_centroids` (no propagation pollution)."""
+    assert tm_embed_index._partition_of("AGENTS.md") == ""
+
+
 def test_stats_includes_meta(isolated_index_dir):
     """`stats()` must surface meta so `preflight` can show what model the
     index was built with."""

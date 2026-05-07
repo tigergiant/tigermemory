@@ -46,6 +46,16 @@ SCOPES: dict[str, tuple[str, ...]] = {
     "sources_only": ("sources",),
 }
 
+# Root-level governance files that are first-class agent knowledge but
+# don't live under wiki/ or sources/. Only added to the default `wiki`
+# scope (agent-facing) so narrower scopes stay focused. `log.md` is
+# explicitly excluded — it's a `git log` compilation that drifts on
+# every commit, has no frontmatter, and would just dilute partition
+# centroids with low-signal noise.
+EXTRA_ROOT_FILES: dict[str, tuple[str, ...]] = {
+    "wiki": ("AGENTS.md",),
+}
+
 # Embedding text budget. Qwen3-Embedding-0.6B accepts up to ~8K tokens; we
 # keep characters well under that to stay safe across CJK content. Title +
 # path slug are prepended so very short pages still get a usable signal.
@@ -265,7 +275,10 @@ def _content_hash(rel_path: str, title: str, body: str) -> str:
 
 
 def _iter_pages(scope: str) -> Iterable[tuple[pathlib.Path, str, str, list[str], str]]:
-    """Yield (abs_path, rel_path, title, aliases, body) for every .md under scope roots."""
+    """Yield (abs_path, rel_path, title, aliases, body) for every .md under
+    scope roots, plus any explicit `EXTRA_ROOT_FILES` for the scope (e.g.
+    root AGENTS.md). Root files have empty `_partition_of` and so are
+    excluded from centroid computation by design."""
     if scope not in SCOPES:
         raise ValueError(f"unknown scope {scope!r}; valid: {sorted(SCOPES)}")
     for root in SCOPES[scope]:
@@ -281,6 +294,19 @@ def _iter_pages(scope: str) -> Iterable[tuple[pathlib.Path, str, str, list[str],
             title = _extract_title(body, p)
             aliases = _extract_aliases(body)
             yield p, rel, title, aliases, body
+
+    for rel_name in EXTRA_ROOT_FILES.get(scope, ()):
+        p = REPO_ROOT / rel_name
+        if not p.exists():
+            continue
+        try:
+            body = p.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        rel = p.relative_to(REPO_ROOT).as_posix()
+        title = _extract_title(body, p)
+        aliases = _extract_aliases(body)
+        yield p, rel, title, aliases, body
 
 
 # ---------- index file I/O ----------
