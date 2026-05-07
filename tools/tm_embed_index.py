@@ -22,6 +22,7 @@ http://localhost:19190/v1 (free, no rate limit, dim=1024).
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import hashlib
 import json
 import math
@@ -419,6 +420,115 @@ def _load_centroids(scope: str) -> dict[str, list[float]]:
         return {}
 
 
+# ---------- index meta manifest (P0-1: env consistency guard) ----------
+#
+# Why this exists: `runtime/openmemory/.env` may point at a different
+# embedding model/dimension than what the cached `wiki.jsonl` was built
+# with (e.g. .env says ARK doubao-embedding-vision dim=2048, but the
+# index on disk is Qwen3-Embedding-0.6B dim=1024). Without a guard,
+# `search()` will silently cosine a 2048-dim query vec against 1024-dim
+# entry vecs (returning 0.0 every time after the early-return) and
+# poison every eval that follows. The meta file is the single source
+# of truth: built once when the index is built, validated on every
+# search() call.
+
+
+def _meta_path(scope: str) -> pathlib.Path:
+    return INDEX_DIR / f"{scope}.meta.json"
+
+
+def _build_meta(scope: str, entries: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Compose the meta dict written alongside the index.
+
+    `embedding_dimensions` comes from the *actual* vector length, not
+    from the env hint, because the env hint is optional and the server
+    may choose its own dim.
+    """
+    actual_dim = 0
+    for entry in entries.values():
+        vec = entry.get("vec")
+        if isinstance(vec, list) and vec:
+            actual_dim = len(vec)
+            break
+    try:
+        cfg = tm_core.embedding_config()
+        base = cfg["base"]
+        model = cfg["model"]
+        env_dim = cfg.get("dim")
+    except RuntimeError:
+        # Embedding not configured (e.g. eval-only env). Fall back to
+        # whatever the env says directly so the meta still records intent.
+        base = os.environ.get("EMBEDDING_BASE_URL", "").rstrip("/")
+        model = os.environ.get("EMBEDDING_MODEL", "")
+        env_dim_raw = os.environ.get("EMBEDDING_DIMENSIONS", "").strip()
+        env_dim = int(env_dim_raw) if env_dim_raw else None
+    built_at = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=8))).isoformat(timespec="seconds")
+    return {
+        "scope": scope,
+        "embedding_base_url": base,
+        "embedding_model": model,
+        "embedding_dimensions": actual_dim,
+        "embedding_dimensions_env_hint": env_dim,
+        "hash_schema": _HASH_SCHEMA.decode("utf-8", errors="replace"),
+        "entry_count": len(entries),
+        "built_at": built_at,
+    }
+
+
+def _save_meta(scope: str, meta: dict[str, Any]) -> None:
+    INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    path = _meta_path(scope)
+    tmp = path.with_suffix(".json.tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+    tmp.replace(path)
+
+
+def _load_meta(scope: str) -> dict[str, Any] | None:
+    path = _meta_path(scope)
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+class IndexConfigMismatch(RuntimeError):
+    """Raised when the live embedding env doesn't match what the index was built with."""
+
+
+def _check_query_compat(scope: str, query_dim: int) -> None:
+    """Reject queries whose embedding dim doesn't match the index meta.
+
+    No-op (with a stderr warning) when meta is missing — that case only
+    happens for legacy indexes built before P0-1; users will see the
+    warning and can `build` once to materialize the meta.
+    """
+    meta = _load_meta(scope)
+    if meta is None:
+        print(
+            f"[tm_embed_index] WARN: scope={scope!r} has no meta file; "
+            f"run `python tools/tm_embed_index.py build --scope {scope}` to materialize one.",
+            file=sys.stderr,
+        )
+        return
+    index_dim = int(meta.get("embedding_dimensions") or 0)
+    if index_dim and query_dim and index_dim != query_dim:
+        # Surface env vs index for fast diagnosis.
+        env_base = os.environ.get("EMBEDDING_BASE_URL", "")
+        env_model = os.environ.get("EMBEDDING_MODEL", "")
+        raise IndexConfigMismatch(
+            f"embedding dim mismatch for scope={scope!r}: "
+            f"index built with {meta.get('embedding_model')!r} dim={index_dim}, "
+            f"query was embedded with {env_model!r} dim={query_dim} "
+            f"(EMBEDDING_BASE_URL={env_base!r}). "
+            f"Either re-export env to match the index, or rebuild the index "
+            f"with the desired model."
+        )
+
+
 def _propagation_alpha(explicit: float | None) -> float:
     """Resolve effective alpha: explicit arg > env var > 0.0 (off)."""
     if explicit is not None:
@@ -498,12 +608,17 @@ def build(scope: str = "wiki", *, force: bool = False, batch_log: int = 50) -> d
                 embedded += 1
 
     _save_index(scope, keep)
+    # Persist meta manifest so `search()` can guard against
+    # model/dimension drift (P0-1).
+    meta = _build_meta(scope, keep)
+    _save_meta(scope, meta)
     return {
         "scope": scope,
         "total_pages": len(keep),
         "reused": len(keep) - embedded,
         "embedded": embedded,
         "dropped": dropped,
+        "meta": meta,
     }
 
 
@@ -552,6 +667,9 @@ def search(
     alpha = _propagation_alpha(propagation_alpha)
     centroids = _load_centroids(scope) if alpha > 0 else {}
     q_vec = tm_core.embed_one(query)
+    # P0-1 guard: refuse to cosine when query dim doesn't match index dim.
+    # Catches the .env-vs-index drift that otherwise produces silent zeros.
+    _check_query_compat(scope, len(q_vec))
     # Pre-compute query × centroid cosine per partition (cheap, ~10 partitions).
     part_score: dict[str, float] = {
         part: _cosine(q_vec, c) for part, c in centroids.items()
@@ -584,7 +702,7 @@ def search(
 def stats(scope: str = "wiki") -> dict[str, Any]:
     entries = _load_index(scope)
     if not entries:
-        return {"scope": scope, "total": 0, "exists": False}
+        return {"scope": scope, "total": 0, "exists": False, "meta": _load_meta(scope)}
     dims = {len(e.get("vec", [])) for e in entries.values()}
     return {
         "scope": scope,
@@ -592,6 +710,7 @@ def stats(scope: str = "wiki") -> dict[str, Any]:
         "total": len(entries),
         "dims": sorted(dims),
         "index_path": str(_index_path(scope).relative_to(REPO_ROOT)),
+        "meta": _load_meta(scope),
     }
 
 
@@ -604,6 +723,9 @@ def cmd_build(args: argparse.Namespace) -> int:
     centroids = compute_centroids(args.scope)
     _save_centroids(args.scope, centroids)
     result["partitions"] = len(centroids)
+    # Refresh meta now that centroids are also in place (entry_count
+    # already reflects index; but we re-materialize so partitions count
+    # would naturally appear if we ever add it to meta).
     dt = (time.perf_counter() - t0) * 1000
     print(json.dumps(result, ensure_ascii=False, indent=2))
     print(f"build done in {dt:.0f} ms", file=sys.stderr)
