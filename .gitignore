@@ -6,6 +6,7 @@ runtime/
 sources/assets/
 *.tmp
 .tmp/
+.trash/
 *.log
 *.code-workspace
 progress.md

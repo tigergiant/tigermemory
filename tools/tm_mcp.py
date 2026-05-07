@@ -1217,12 +1217,15 @@ def expense_record(
     Returns:
         {"ok": true, "id": <int>, "kind": "...", "amount": ..., "category": "..."}
     """
-    return tm_expense.expense_record(
-        kind=kind, amount=amount, category=category,
-        occurred_at=occurred_at, currency=currency,
-        merchant=merchant, note=note, payment_method=payment_method,
-        source_agent=source_agent, source_text=source_text,
-    )
+    try:
+        return tm_expense.expense_record(
+            kind=kind, amount=amount, category=category,
+            occurred_at=occurred_at, currency=currency,
+            merchant=merchant, note=note, payment_method=payment_method,
+            source_agent=source_agent, source_text=source_text,
+        )
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 @mcp.tool()
@@ -1250,11 +1253,14 @@ def expense_query(
     Returns:
         {"ok": true, "group_by": "...", "groups": [...], "grand_total": {...}}
     """
-    return tm_expense.expense_query(
-        start_date=start_date, end_date=end_date,
-        kind=kind, category=category,
-        group_by=group_by, limit=limit,
-    )
+    try:
+        return tm_expense.expense_query(
+            start_date=start_date, end_date=end_date,
+            kind=kind, category=category,
+            group_by=group_by, limit=limit,
+        )
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 # ---------- Entry point ----------

@@ -146,12 +146,18 @@ def expense_query(
         where: list[str] = []
         params: list[Any] = []
 
+        # Normalize dates to full ISO timestamps for consistent comparison
         if start_date:
             where.append("occurred_at >= ?")
+            # Handle both "2026-05-01" and "2026-05-01T00:00:00+08:00"
+            if "T" not in start_date:
+                start_date = start_date + "T00:00:00+08:00"
             params.append(start_date)
         if end_date:
             where.append("occurred_at <= ?")
-            params.append(end_date + "T23:59:59+08:00")
+            if "T" not in end_date:
+                end_date = end_date + "T23:59:59+08:00"
+            params.append(end_date)
         if kind:
             where.append("kind = ?")
             params.append(kind)
