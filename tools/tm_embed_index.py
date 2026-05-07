@@ -230,11 +230,20 @@ def _extract_aliases(text: str) -> list[str]:
     return [a for a in items if a]
 
 
-def _embed_text(rel_path: str, title: str, body: str) -> str:
+def _embed_text(rel_path: str, title: str, aliases: list[str], body: str) -> str:
     """Compose the string handed to the embedding model.
 
-    Order: title | slug | body. Title and slug are short, high-signal, and
-    compensate for very short pages.
+    Order: title | aliases | slug | body. Title, aliases and slug are short,
+    high-signal, and compensate for very short pages.
+
+    Phase 2p / P1.5 (2026-05-07): aliases promoted to first-class embedding
+    input, finally landing OpenViking v0.3.13 `embedding.text_source`
+    design (Phase 2h borrow). Before P1.5 `_iter_pages` parsed aliases but
+    `build()` dropped them as `_aliases`; alias effect only leaked via the
+    frontmatter sitting at body[:6000] head, which failed on very short
+    source pages where same-domain cosine siblings dominated. See
+    wiki/systems/memory-retrieval-eval.md Phase 2p for the failing case
+    (`all-openclaw-concepts-memory-search`) that motivated this change.
 
     Phase 2j experiment (2026-05-06, reverted): tried prepending an
     OpenViking-L0-style summary extracted from `## 摘要` / H1+first-para.
@@ -251,23 +260,27 @@ def _embed_text(rel_path: str, title: str, body: str) -> str:
       • Multi-vector retrieval where summary gets its own vector.
     See wiki/systems/memory-retrieval-eval.md Phase 2j for full analysis.
     """
-    parts = [title.strip(), _slug_words(rel_path), body.strip()]
+    alias_line = "; ".join(a.strip() for a in aliases if a.strip())
+    parts = [title.strip(), alias_line, _slug_words(rel_path), body.strip()]
     composed = "\n\n".join(p for p in parts if p)
     return composed[:EMBED_TEXT_CHARS]
 
 
 # Bump `_HASH_SCHEMA` whenever `_embed_text` composition changes; cached
 # vectors are then automatically invalidated on next refresh (no --force).
-_HASH_SCHEMA = b"v4-revert-summary-front"
+_HASH_SCHEMA = b"v5-aliases-first-class"
 
 
-def _content_hash(rel_path: str, title: str, body: str) -> str:
+def _content_hash(rel_path: str, title: str, aliases: list[str], body: str) -> str:
     h = hashlib.md5()
     h.update(_HASH_SCHEMA)
     h.update(b"\n")
     h.update(rel_path.encode("utf-8"))
     h.update(b"\n")
     h.update(title.encode("utf-8"))
+    h.update(b"\n")
+    # aliases participate in hash so alias edits trigger re-embed (P1.5).
+    h.update(("\n".join(aliases)).encode("utf-8"))
     h.update(b"\n")
     # only first EMBED_TEXT_CHARS matter — that's what gets embedded
     h.update(body[:EMBED_TEXT_CHARS].encode("utf-8"))
@@ -581,10 +594,10 @@ def build(scope: str = "wiki", *, force: bool = False, batch_log: int = 50) -> d
     pending: list[tuple[str, str, str]] = []  # (rel, title, embed_text)
     seen_paths: set[str] = set()
 
-    for abs_path, rel, title, _aliases, body in _iter_pages(scope):
+    for abs_path, rel, title, aliases, body in _iter_pages(scope):
         seen_paths.add(rel)
-        text_for_embed = _embed_text(rel, title, body)
-        h = _content_hash(rel, title, body)
+        text_for_embed = _embed_text(rel, title, aliases, body)
+        h = _content_hash(rel, title, aliases, body)
         prior = existing.get(rel)
         if prior and prior.get("hash") == h and isinstance(prior.get("vec"), list):
             keep[rel] = {
@@ -623,7 +636,8 @@ def build(scope: str = "wiki", *, force: bool = False, batch_log: int = 50) -> d
                     mtime = 0
                 # we know the hash from the first pass; recompute the same way
                 body_now = (REPO_ROOT / rel).read_text(encoding="utf-8", errors="replace")
-                h_now = _content_hash(rel, title, body_now)
+                aliases_now = _extract_aliases(body_now)
+                h_now = _content_hash(rel, title, aliases_now, body_now)
                 keep[rel] = {
                     "path": rel,
                     "title": title,
