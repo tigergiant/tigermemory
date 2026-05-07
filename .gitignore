@@ -18,3 +18,6 @@ __pycache__/
 deploy/openclaw-ce/node_modules/
 deploy/openclaw-ce/dist/
 deploy/openclaw-ce/*.tsbuildinfo
+
+# 敏感个人数据 - 记账记录
+data/expense_tracker/

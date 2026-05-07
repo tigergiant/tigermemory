@@ -2,7 +2,7 @@
 """
 tools/tm_mcp.py — tigermemory MCP server (thin adapter over tm_core).
 
-Exposes 22 tools for remote agents (laptop MCP clients):
+Exposes 24 tools for remote agents (laptop MCP clients):
 
 Read tools (callable in both writer and reader roles):
 - check_worktree            — git/worktree preflight snapshot
@@ -19,6 +19,8 @@ Read tools (callable in both writer and reader roles):
 - minimax_quota             — MiniMax token-plan quota query
 - minimax_vision            — image VLM understanding (external)
 - minimax_search            — web search (external)
+- expense_record            — record expense/income entry (private SQLite)
+- expense_query             — query/aggregate expense entries (private SQLite)
 
 Write tools (writer role only):
 - propose_wiki_page         — wiki page draft with L2 review + inbox fallback
@@ -61,6 +63,7 @@ import tm_lessons
 import tm_minimax
 import tm_persona
 import tm_review_tools
+import tm_expense
 
 
 # ---------- MCP Server ----------
@@ -1176,6 +1179,82 @@ def minimax_quota() -> dict[str, Any]:
         {"ok": true, "raw": "<quota table text>"}
     """
     return tm_minimax.quota_show()
+
+
+# ---------- Expense Tracker Tools ----------
+
+@mcp.tool()
+def expense_record(
+    kind: str,
+    amount: float,
+    category: str,
+    occurred_at: str | None = None,
+    currency: str = "CNY",
+    merchant: str | None = None,
+    note: str | None = None,
+    payment_method: str | None = None,
+    source_agent: str = "openclaw",
+    source_text: str | None = None,
+) -> dict[str, Any]:
+    _require_writer()
+    """Record an expense or income entry into the private SQLite ledger.
+
+    This is a private structured ledger, NOT part of Wiki / Mem0 / digest.
+    The ledger file is git-ignored and never committed.
+
+    Args:
+        kind: "expense" or "income"
+        amount: Positive number (e.g. 36.50)
+        category: Category label (e.g. 餐饮, 交通, 购物, 住房, 娱乐)
+        occurred_at: ISO8601 datetime string (optional, defaults to now). Asia/Shanghai.
+        currency: Default "CNY"
+        merchant: Optional merchant name
+        note: Optional free-text note
+        payment_method: Optional (e.g. 微信, 支付宝, 银行卡, 现金)
+        source_agent: Calling agent name (default "openclaw")
+        source_text: Original natural-language input that triggered this record
+
+    Returns:
+        {"ok": true, "id": <int>, "kind": "...", "amount": ..., "category": "..."}
+    """
+    return tm_expense.expense_record(
+        kind=kind, amount=amount, category=category,
+        occurred_at=occurred_at, currency=currency,
+        merchant=merchant, note=note, payment_method=payment_method,
+        source_agent=source_agent, source_text=source_text,
+    )
+
+
+@mcp.tool()
+def expense_query(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    kind: str | None = None,
+    category: str | None = None,
+    group_by: str = "category",
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Query and aggregate expense entries from the private SQLite ledger.
+
+    This reads from the private structured ledger, NOT from Wiki / Mem0.
+    Use this for questions like "本月餐饮花了多少" or "上月总支出".
+
+    Args:
+        start_date: Optional start date "YYYY-MM-DD"
+        end_date: Optional end date "YYYY-MM-DD"
+        kind: Optional filter: "expense" or "income"
+        category: Optional category filter
+        group_by: "category" (default), "month", "kind", or "none"
+        limit: Max result rows (default 50, max 200)
+
+    Returns:
+        {"ok": true, "group_by": "...", "groups": [...], "grand_total": {...}}
+    """
+    return tm_expense.expense_query(
+        start_date=start_date, end_date=end_date,
+        kind=kind, category=category,
+        group_by=group_by, limit=limit,
+    )
 
 
 # ---------- Entry point ----------
