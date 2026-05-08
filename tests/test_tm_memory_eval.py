@@ -23,6 +23,39 @@ def test_load_cases_parses_fixture():
     assert len(cases) >= 50
     assert {case.scope for case in cases} >= {"wiki", "lessons", "onboarding", "mem0", "all"}
     assert all(case.id and case.query for case in cases)
+    # Default kind is "retrieval" when the field is omitted; the probe split
+    # depends on at least one explicit runtime_probe case existing in fixture.
+    assert any(case.kind == "retrieval" for case in cases)
+
+
+def test_fixture_marks_mem0_diagnostic_as_runtime_probe():
+    cases = tm_memory_eval.load_cases(REPO_ROOT / "tests" / "fixtures" / "memory_eval_cases.jsonl")
+    by_id = {case.id: case for case in cases}
+    probe = by_id.get("mem0-diagnostic-search")
+    assert probe is not None, "mem0-diagnostic-search must stay in the fixture as a runtime probe"
+    assert probe.kind == "runtime_probe"
+
+
+def test_load_cases_rejects_unknown_kind(tmp_path):
+    path = tmp_path / "bad-kind.jsonl"
+    path.write_text(
+        json.dumps({
+            "id": "bad-kind",
+            "kind": "benchmark",
+            "query": "x",
+            "scope": "wiki",
+            "expected_paths": [],
+            "must_contain": [],
+            "notes": "",
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc:
+        tm_memory_eval.load_cases(path)
+
+    assert "invalid kind" in str(exc.value)
+    assert "benchmark" in str(exc.value)
 
 
 def test_load_cases_missing_field_reports_line_and_case(tmp_path):
@@ -136,6 +169,111 @@ def test_eval_report_shape_with_stubbed_search(monkeypatch):
     assert report["quality_case_count"] == 1
     assert report["runtime_unavailable_count"] == 0
     assert report["results"][0]["top_results"][0]["path"] == "wiki/systems/target.md"
+
+
+def test_evaluate_splits_runtime_probe_out_of_retrieval_denominator(monkeypatch):
+    retrieval = tm_memory_eval.EvalCase(
+        id="ok",
+        query="query",
+        scope="wiki",
+        expected_paths=["wiki/systems/target.md"],
+        must_contain=[],
+        notes="",
+        kind="retrieval",
+    )
+    probe = tm_memory_eval.EvalCase(
+        id="probe",
+        query="tigermemory onboarding",
+        scope="mem0",
+        expected_paths=[],
+        must_contain=["tigermemory"],
+        notes="",
+        kind="runtime_probe",
+    )
+    retrieval_hit = tm_memory_eval.SearchHit(
+        path="wiki/systems/target.md",
+        title="Target",
+        snippet="query",
+        score=1,
+        source="wiki",
+    )
+    probe_hit = tm_memory_eval.SearchHit(
+        path="mem0:1",
+        title="tigermemory onboarding note",
+        snippet="tigermemory",
+        score=1,
+        source="mem0",
+    )
+
+    def stub(scope, _query, _top_k, **_kw):
+        if scope == "mem0":
+            return [probe_hit], []
+        return [retrieval_hit], []
+
+    monkeypatch.setattr(tm_memory_eval, "run_search", stub)
+    report = tm_memory_eval.evaluate([retrieval, probe], top_k=3)
+
+    # Retrieval denominator excludes the probe.
+    assert report["case_count"] == 1
+    assert report["hit1"] == 1
+    assert report["hit3"] == 1
+    assert report["quality_case_count"] == 1
+    assert report["runtime_unavailable_count"] == 0
+    assert report["total_case_count"] == 2
+
+    # Probe layer is reported separately with its own counters and rows.
+    assert report["probe_case_count"] == 1
+    assert report["probe_hit1"] == 1
+    assert report["probe_hit3"] == 1
+    assert report["probe_runtime_unavailable_count"] == 0
+    assert len(report["probe_results"]) == 1
+    assert report["probe_results"][0]["id"] == "probe"
+    assert report["probe_results"][0]["kind"] == "runtime_probe"
+
+    # Retrieval results do not contain the probe row.
+    assert all(row["id"] != "probe" for row in report["results"])
+    assert report["results"][0]["kind"] == "retrieval"
+
+
+def test_evaluate_probe_miss_does_not_affect_retrieval_hits(monkeypatch):
+    """An empty-store Mem0 probe that misses must not reduce retrieval hit@k."""
+    retrieval = tm_memory_eval.EvalCase(
+        id="ok",
+        query="query",
+        scope="wiki",
+        expected_paths=["wiki/systems/target.md"],
+        must_contain=[],
+        notes="",
+    )
+    probe = tm_memory_eval.EvalCase(
+        id="probe",
+        query="tigermemory onboarding",
+        scope="mem0",
+        expected_paths=[],
+        must_contain=["tigermemory"],
+        notes="",
+        kind="runtime_probe",
+    )
+    retrieval_hit = tm_memory_eval.SearchHit(
+        path="wiki/systems/target.md",
+        title="Target",
+        snippet="query",
+        score=1,
+        source="wiki",
+    )
+
+    def stub(scope, _query, _top_k, **_kw):
+        if scope == "mem0":
+            return [], []  # empty store, but Mem0 is up (no unavailable error)
+        return [retrieval_hit], []
+
+    monkeypatch.setattr(tm_memory_eval, "run_search", stub)
+    report = tm_memory_eval.evaluate([retrieval, probe], top_k=3)
+
+    assert report["hit3"] == 1  # retrieval clean
+    assert report["hit3_rate"] == 1.0
+    assert report["probe_hit3"] == 0
+    assert report["probe_runtime_unavailable_count"] == 0  # Mem0 up, just empty
 
 
 def test_eval_excludes_runtime_unavailable_mem0_from_quality_denominator(monkeypatch):

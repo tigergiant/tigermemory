@@ -28,6 +28,15 @@ import tm_persona
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 VALID_SCOPES = {"wiki", "lessons", "onboarding", "mem0", "all"}
 
+# `kind` splits fixture cases into two evaluation layers:
+#   - "retrieval" (default): counts toward main hit@k quality baseline.
+#   - "runtime_probe": measured but reported separately; does NOT enter
+#     retrieval denominator. Used for Mem0 health probes whose outcome
+#     depends on Mem0 data state, not Wiki/sources retrieval quality.
+# Cases without an explicit `kind` field default to "retrieval" for
+# back-compat with the existing fixture schema.
+VALID_KINDS = {"retrieval", "runtime_probe"}
+
 
 @dataclass(frozen=True)
 class EvalCase:
@@ -37,6 +46,7 @@ class EvalCase:
     expected_paths: list[str]
     must_contain: list[str]
     notes: str
+    kind: str = "retrieval"
 
 
 @dataclass
@@ -78,6 +88,9 @@ def load_cases(path: pathlib.Path) -> list[EvalCase]:
             scope = str(data["scope"])
             if scope not in VALID_SCOPES:
                 raise ValueError(f"line {line_no} case {case_id}: invalid scope {scope!r}; expected {sorted(VALID_SCOPES)}")
+            kind = str(data.get("kind", "retrieval"))
+            if kind not in VALID_KINDS:
+                raise ValueError(f"line {line_no} case {case_id}: invalid kind {kind!r}; expected {sorted(VALID_KINDS)}")
             cases.append(EvalCase(
                 id=case_id,
                 query=str(data["query"]),
@@ -85,6 +98,7 @@ def load_cases(path: pathlib.Path) -> list[EvalCase]:
                 expected_paths=_ensure_list(data["expected_paths"], "expected_paths", line_no, case_id),
                 must_contain=_ensure_list(data["must_contain"], "must_contain", line_no, case_id),
                 notes=str(data["notes"]),
+                kind=kind,
             ))
     if not cases:
         raise ValueError(f"no cases found in {path}")
@@ -493,6 +507,62 @@ def rerank_by_embedding(
     return reranked, None
 
 
+def _run_case(
+    case: EvalCase,
+    *,
+    top_k: int,
+    pool_k: int,
+    rerank_enabled: bool,
+    fuse: bool,
+    grouped: bool,
+    recall: str,
+) -> tuple[dict[str, Any], bool, bool, bool]:
+    """Execute one case end-to-end and return (row, hit1, hit3, runtime_unavailable)."""
+    start = time.perf_counter()
+    hits, errors = run_search(
+        case.scope, case.query, pool_k,
+        fuse=fuse, grouped=grouped, recall=recall,
+    )
+    if rerank_enabled:
+        reranked, rerank_err = rerank_by_embedding(case.query, hits, top_k)
+        if rerank_err:
+            errors = list(errors) + [rerank_err]
+        hits = reranked
+    latency_ms = round((time.perf_counter() - start) * 1000, 2)
+    case_hit1 = score_case(case, hits, 1)
+    case_hit3 = score_case(case, hits, min(3, top_k))
+    runtime_unavailable = _runtime_unavailable_case(case, errors, grouped=grouped)
+    row = {
+        "id": case.id,
+        "kind": case.kind,
+        "query": case.query,
+        "scope": case.scope,
+        "hit1": case_hit1,
+        "hit3": case_hit3,
+        "runtime_unavailable": runtime_unavailable,
+        "latency_ms": latency_ms,
+        "expected_paths": case.expected_paths,
+        "must_contain": case.must_contain,
+        "errors": errors,
+        "top_results": [
+            {
+                "rank": i,
+                "source": h.source,
+                "path": h.path,
+                "score": h.score,
+                "title": h.title,
+                "snippet": h.snippet,
+            }
+            for i, h in enumerate(hits, 1)
+        ],
+    }
+    return row, case_hit1, case_hit3, runtime_unavailable
+
+
+def _rate(num: int, denom: int) -> float:
+    return round(num / denom, 4) if denom else 0.0
+
+
 def evaluate(
     cases: list[EvalCase],
     top_k: int,
@@ -503,83 +573,85 @@ def evaluate(
     candidate_k: int | None = None,
     recall: str = "lexical",
 ) -> dict[str, Any]:
-    rows: list[dict[str, Any]] = []
-    hit1 = 0
-    hit3 = 0
-    quality_hit1 = 0
-    quality_hit3 = 0
-    quality_total = 0
+    """Run eval split into retrieval-quality layer and runtime-probe layer.
+
+    The main `hit1 / hit3 / case_count` fields cover the retrieval-quality
+    layer only. Probe cases (Mem0 health / similar data-state-dependent
+    checks) are measured with the same `run_search` / `score_case` path but
+    reported under `probe_*` fields and `probe_results`. Layered denominators
+    prevent Mem0 data-state drift from showing up as retrieval regression.
+    """
+    retrieval_rows: list[dict[str, Any]] = []
+    probe_rows: list[dict[str, Any]] = []
+    hit1 = hit3 = 0
+    quality_hit1 = quality_hit3 = 0
     runtime_unavailable_count = 0
+    probe_hit1 = probe_hit3 = 0
+    probe_runtime_unavailable_count = 0
+
     rerank_enabled = rerank == "embedding"
     pool_k = candidate_k if candidate_k is not None else max(top_k * 3, 10)
     if not rerank_enabled:
         pool_k = top_k  # no rerank: don't pay for extra lexical scanning
+
     for case in cases:
-        start = time.perf_counter()
-        hits, errors = run_search(
-            case.scope, case.query, pool_k,
-            fuse=fuse, grouped=grouped, recall=recall,
+        row, case_hit1, case_hit3, runtime_unavailable = _run_case(
+            case,
+            top_k=top_k,
+            pool_k=pool_k,
+            rerank_enabled=rerank_enabled,
+            fuse=fuse,
+            grouped=grouped,
+            recall=recall,
         )
-        if rerank_enabled:
-            reranked, rerank_err = rerank_by_embedding(case.query, hits, top_k)
-            if rerank_err:
-                errors = list(errors) + [rerank_err]
-            hits = reranked
-        latency_ms = round((time.perf_counter() - start) * 1000, 2)
-        case_hit1 = score_case(case, hits, 1)
-        case_hit3 = score_case(case, hits, min(3, top_k))
-        runtime_unavailable = _runtime_unavailable_case(case, errors, grouped=grouped)
+        if case.kind == "runtime_probe":
+            probe_rows.append(row)
+            probe_hit1 += int(case_hit1)
+            probe_hit3 += int(case_hit3)
+            if runtime_unavailable:
+                probe_runtime_unavailable_count += 1
+            continue
+        # retrieval quality layer
+        retrieval_rows.append(row)
         hit1 += int(case_hit1)
         hit3 += int(case_hit3)
         if runtime_unavailable:
             runtime_unavailable_count += 1
         else:
-            quality_total += 1
             quality_hit1 += int(case_hit1)
             quality_hit3 += int(case_hit3)
-        rows.append({
-            "id": case.id,
-            "query": case.query,
-            "scope": case.scope,
-            "hit1": case_hit1,
-            "hit3": case_hit3,
-            "runtime_unavailable": runtime_unavailable,
-            "latency_ms": latency_ms,
-            "expected_paths": case.expected_paths,
-            "must_contain": case.must_contain,
-            "errors": errors,
-            "top_results": [
-                {
-                    "rank": i,
-                    "source": h.source,
-                    "path": h.path,
-                    "score": h.score,
-                    "title": h.title,
-                    "snippet": h.snippet,
-                }
-                for i, h in enumerate(hits, 1)
-            ],
-        })
-    total = len(cases)
+
+    retrieval_total = len(retrieval_rows)
+    quality_total = retrieval_total - runtime_unavailable_count
+    probe_total = len(probe_rows)
     return {
-        "case_count": total,
+        # Retrieval-quality baseline (primary): excludes runtime probes.
+        "case_count": retrieval_total,
         "hit1": hit1,
         "hit3": hit3,
-        "hit1_rate": round(hit1 / total, 4),
-        "hit3_rate": round(hit3 / total, 4),
+        "hit1_rate": _rate(hit1, retrieval_total),
+        "hit3_rate": _rate(hit3, retrieval_total),
         "quality_case_count": quality_total,
         "quality_hit1": quality_hit1,
         "quality_hit3": quality_hit3,
-        "quality_hit1_rate": round(quality_hit1 / quality_total, 4) if quality_total else 0.0,
-        "quality_hit3_rate": round(quality_hit3 / quality_total, 4) if quality_total else 0.0,
+        "quality_hit1_rate": _rate(quality_hit1, quality_total),
+        "quality_hit3_rate": _rate(quality_hit3, quality_total),
         "runtime_unavailable_count": runtime_unavailable_count,
+        # Runtime-probe layer (reported separately, does not enter retrieval denominator).
+        "probe_case_count": probe_total,
+        "probe_hit1": probe_hit1,
+        "probe_hit3": probe_hit3,
+        "probe_runtime_unavailable_count": probe_runtime_unavailable_count,
+        # Config / shared metadata.
+        "total_case_count": retrieval_total + probe_total,
         "top_k": top_k,
         "fuse": fuse,
         "grouped": grouped,
         "rerank": rerank,
         "candidate_k": pool_k,
         "recall": recall,
-        "results": rows,
+        "results": retrieval_rows,
+        "probe_results": probe_rows,
     }
 
 
@@ -597,37 +669,51 @@ def print_report(report: dict[str, Any]) -> None:
     if rerank != "off":
         mode += f" + rerank={rerank} (candidate_k={report.get('candidate_k')})"
     print(f"# tm_memory_eval {mode}")
-    print(f"cases: {report['case_count']}")
-    print(f"hit@1: {report['hit1']}/{report['case_count']} ({report['hit1_rate']:.0%})")
-    print(f"hit@3: {report['hit3']}/{report['case_count']} ({report['hit3_rate']:.0%})")
+    print(f"retrieval cases: {report['case_count']} "
+          f"(total including probes: {report.get('total_case_count', report['case_count'])})")
+    print(f"retrieval hit@1: {report['hit1']}/{report['case_count']} ({report['hit1_rate']:.0%})")
+    print(f"retrieval hit@3: {report['hit3']}/{report['case_count']} ({report['hit3_rate']:.0%})")
     if report["runtime_unavailable_count"]:
         print(
-            "quality cases: "
+            "retrieval quality cases: "
             f"{report['quality_case_count']} "
             f"(runtime-unavailable excluded: {report['runtime_unavailable_count']})"
         )
         print(
-            f"quality hit@1: {report['quality_hit1']}/{report['quality_case_count']} "
+            f"retrieval quality hit@1: {report['quality_hit1']}/{report['quality_case_count']} "
             f"({report['quality_hit1_rate']:.0%})"
         )
         print(
-            f"quality hit@3: {report['quality_hit3']}/{report['quality_case_count']} "
+            f"retrieval quality hit@3: {report['quality_hit3']}/{report['quality_case_count']} "
             f"({report['quality_hit3_rate']:.0%})"
         )
     print()
-    for row in report["results"]:
-        status = "RUNTIME" if row["runtime_unavailable"] else ("OK" if row["hit3"] else "MISS")
-        print(f"{status} {row['id']} [{row['scope']}] {row['query']} ({row['latency_ms']} ms)")
-        if row["errors"]:
-            for error in row["errors"]:
-                print(f"  error: {error}")
-        for result in row["top_results"][:3]:
-            print(f"  {result['rank']}. {result['source']} {result['path']} score={result['score']}")
-        if not row["hit3"]:
-            print(f"  expected_paths: {row['expected_paths']}")
-            print(f"  must_contain: {row['must_contain']}")
+
+    def _emit_rows(rows: list[dict[str, Any]]) -> None:
+        for row in rows:
+            status = "RUNTIME" if row["runtime_unavailable"] else ("OK" if row["hit3"] else "MISS")
+            print(f"{status} {row['id']} [{row['scope']}] {row['query']} ({row['latency_ms']} ms)")
+            if row["errors"]:
+                for error in row["errors"]:
+                    print(f"  error: {error}")
+            for result in row["top_results"][:3]:
+                print(f"  {result['rank']}. {result['source']} {result['path']} score={result['score']}")
+            if not row["hit3"]:
+                print(f"  expected_paths: {row['expected_paths']}")
+                print(f"  must_contain: {row['must_contain']}")
+
+    _emit_rows(report["results"])
+
+    probe_rows = report.get("probe_results") or []
+    if probe_rows:
+        print()
+        print(f"# runtime probes: {report.get('probe_case_count', len(probe_rows))} "
+              f"(hit@1={report.get('probe_hit1', 0)}, hit@3={report.get('probe_hit3', 0)}, "
+              f"runtime-unavailable={report.get('probe_runtime_unavailable_count', 0)})")
+        _emit_rows(probe_rows)
+
     print()
-    print("Note: quality hit@k excludes cases whose target runtime is unavailable; raw hit@k keeps the full case set.")
+    print("Note: retrieval hit@k covers kind=retrieval cases only. Runtime probes are reported separately and do not enter the retrieval denominator; quality hit@k further excludes retrieval cases whose target runtime is unavailable.")
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
