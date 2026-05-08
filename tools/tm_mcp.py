@@ -1282,6 +1282,27 @@ def expense_write(
     source_text: str | None = None,
     entries: list[dict] | None = None,
     confirm_new_category: bool = False,
+    # P1: manage_category
+    manage_category_action: str = "add",
+    manage_category_name: str | None = None,
+    manage_category_new_name: str | None = None,
+    manage_category_target_name: str | None = None,
+    manage_category_alias: str | None = None,
+    manage_category_kind: str = "expense",
+    # P1: manage_merchant
+    manage_merchant_action: str = "add",
+    manage_merchant_name: str | None = None,
+    manage_merchant_new_name: str | None = None,
+    manage_merchant_target_name: str | None = None,
+    manage_merchant_alias: str | None = None,
+    manage_merchant_default_category_id: int | None = None,
+    # P1: budget
+    budget_period: str = "month",
+    budget_period_key: str | None = None,
+    budget_category_id: int | None = None,
+    budget_amount: float | None = None,
+    budget_note: str | None = None,
+    budget_id: int | None = None,
 ) -> dict[str, Any]:
     _require_writer()
     """Unified write endpoint for the private expense tracker ledger.
@@ -1292,6 +1313,10 @@ def expense_write(
         delete:       Soft-delete an entry by id
         restore:      Restore a soft-deleted entry by id
         batch_record: Write multiple entries in one transaction
+        manage_category: add/rename/merge/archive/alias_add categories
+        manage_merchant: add/rename/merge/archive/alias_add merchants
+        set_budget:   Set a monthly/yearly budget for a category
+        delete_budget: Delete a budget by id
 
     Returns:
         {"ok": true, "action": "...", "id": N, "normalized": {...}}
@@ -1314,6 +1339,24 @@ def expense_write(
             source_text=source_text,
             entries=entries,
             confirm_new_category=confirm_new_category,
+            manage_category_action=manage_category_action,
+            manage_category_name=manage_category_name,
+            manage_category_new_name=manage_category_new_name,
+            manage_category_target_name=manage_category_target_name,
+            manage_category_alias=manage_category_alias,
+            manage_category_kind=manage_category_kind,
+            manage_merchant_action=manage_merchant_action,
+            manage_merchant_name=manage_merchant_name,
+            manage_merchant_new_name=manage_merchant_new_name,
+            manage_merchant_target_name=manage_merchant_target_name,
+            manage_merchant_alias=manage_merchant_alias,
+            manage_merchant_default_category_id=manage_merchant_default_category_id,
+            budget_period=budget_period,
+            budget_period_key=budget_period_key,
+            budget_category_id=budget_category_id,
+            budget_amount=budget_amount,
+            budget_note=budget_note,
+            budget_id=budget_id,
         )
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -1340,6 +1383,12 @@ def expense_read(
     bucket: str = "month",
     sql: str | None = None,
     sql_params: dict | None = None,
+    # P1
+    compare: str = "yoy",
+    compare_group_by: list[str] | None = None,
+    anomaly_window_days: int = 90,
+    anomaly_sigma: float = 2.0,
+    export_format: str = "markdown",
 ) -> dict[str, Any]:
     """Unified read endpoint for the private expense tracker ledger.
 
@@ -1347,6 +1396,12 @@ def expense_read(
         list:      Raw rows with filters and pagination
         aggregate: Multi-dimensional grouping (group_by=["category","month"], metric="sum")
         trend:     Time-bucketed analysis (bucket="month", group_by=["category"])
+        compare:   mom/yoy/qoq comparison with delta_pct
+        anomaly:   Entries exceeding mean ± sigma*std
+        budget_status: Current budget vs spent
+        categories: List all categories (with archived/aliases)
+        merchants:  List all merchants
+        export:     Export data as markdown/csv/json
         sql:       Free-form readonly SELECT against the ledger (validated, max 1000 rows)
 
     Returns:
@@ -1373,6 +1428,11 @@ def expense_read(
             bucket=bucket,
             sql=sql,
             sql_params=sql_params,
+            compare=compare,
+            compare_group_by=compare_group_by,
+            anomaly_window_days=anomaly_window_days,
+            anomaly_sigma=anomaly_sigma,
+            export_format=export_format,
         )
     except Exception as e:
         return {"ok": False, "error": str(e)}

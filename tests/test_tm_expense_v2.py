@@ -288,3 +288,203 @@ def test_payment_method_invalid(monkeypatch):
         assert False, "should raise"
     except ValueError as e:
         assert "unknown payment_method" in str(e)
+
+
+# ------------------------------------------------------------------
+# P1: manage_category
+# ------------------------------------------------------------------
+
+
+def test_manage_category_rename_updates_entries(monkeypatch):
+    db = _temp_db(monkeypatch)
+    r = tm_expense.expense_write(action="record", kind="expense", amount=10, category="餐饮")
+    assert r["ok"] is True
+    res = tm_expense.expense_write(
+        action="manage_category",
+        manage_category_action="rename",
+        manage_category_name="餐饮",
+        manage_category_new_name="饮食",
+    )
+    assert res["ok"] is True
+    # verify entry category updated
+    lst = tm_expense.expense_read(mode="list")
+    assert lst["rows"][0]["category"] == "饮食"
+
+
+def test_manage_category_merge_archives_old(monkeypatch):
+    db = _temp_db(monkeypatch)
+    # add a new category "饭"
+    tm_expense.expense_write(action="manage_category", manage_category_action="add", manage_category_name="饭", manage_category_kind="expense")
+    # record with "饭"
+    r = tm_expense.expense_write(action="record", kind="expense", amount=15, category="饭")
+    assert r["ok"] is True
+    # merge "饭" into "餐饮"
+    res = tm_expense.expense_write(
+        action="manage_category",
+        manage_category_action="merge",
+        manage_category_name="饭",
+        manage_category_target_name="餐饮",
+    )
+    assert res["ok"] is True
+    # "饭" should be archived
+    cats = tm_expense.expense_read(mode="categories")
+    cat_map = {c["name"]: c for c in cats["categories"]}
+    assert cat_map["饭"]["archived"] == 1
+    # entry should now point to "餐饮"
+    lst = tm_expense.expense_read(mode="list")
+    assert lst["rows"][0]["category"] == "餐饮"
+
+
+# ------------------------------------------------------------------
+# P1: manage_merchant
+# ------------------------------------------------------------------
+
+
+def test_manage_merchant_rename_updates_entries(monkeypatch):
+    db = _temp_db(monkeypatch)
+    tm_expense.expense_write(action="manage_merchant", manage_merchant_action="add", manage_merchant_name="KFC")
+    r = tm_expense.expense_write(action="record", kind="expense", amount=30, category="餐饮", merchant="KFC")
+    assert r["ok"] is True
+    res = tm_expense.expense_write(
+        action="manage_merchant",
+        manage_merchant_action="rename",
+        manage_merchant_name="KFC",
+        manage_merchant_new_name="肯德基",
+    )
+    assert res["ok"] is True
+    lst = tm_expense.expense_read(mode="list")
+    assert lst["rows"][0]["merchant"] == "肯德基"
+
+
+def test_manage_merchant_merge(monkeypatch):
+    db = _temp_db(monkeypatch)
+    tm_expense.expense_write(action="manage_merchant", manage_merchant_action="add", manage_merchant_name="KFC")
+    tm_expense.expense_write(action="manage_merchant", manage_merchant_action="add", manage_merchant_name="肯德基")
+    r = tm_expense.expense_write(action="record", kind="expense", amount=30, category="餐饮", merchant="KFC")
+    assert r["ok"] is True
+    res = tm_expense.expense_write(
+        action="manage_merchant",
+        manage_merchant_action="merge",
+        manage_merchant_name="KFC",
+        manage_merchant_target_name="肯德基",
+    )
+    assert res["ok"] is True
+    lst = tm_expense.expense_read(mode="list")
+    assert lst["rows"][0]["merchant"] == "肯德基"
+    mers = tm_expense.expense_read(mode="merchants")
+    names = {m["name"] for m in mers["merchants"]}
+    assert "KFC" not in names
+
+
+# ------------------------------------------------------------------
+# P1: budget
+# ------------------------------------------------------------------
+
+
+def test_set_budget_and_budget_status(monkeypatch):
+    db = _temp_db(monkeypatch)
+    # seed some spending
+    tm_expense.expense_write(action="record", kind="expense", amount=50, category="餐饮", occurred_at="2026-05-01T12:00:00+08:00")
+    tm_expense.expense_write(action="record", kind="expense", amount=30, category="餐饮", occurred_at="2026-05-02T12:00:00+08:00")
+    # set budget for May 2026, category "餐饮"
+    cats = tm_expense.expense_read(mode="categories")["categories"]
+    cat_id = next(c["id"] for c in cats if c["name"] == "餐饮")
+    b = tm_expense.expense_write(
+        action="set_budget",
+        budget_period="month",
+        budget_period_key="2026-05",
+        budget_category_id=cat_id,
+        budget_amount=1500,
+    )
+    assert b["ok"] is True
+    # check budget_status
+    bs = tm_expense.expense_read(mode="budget_status", start_date="2026-05-01", end_date="2026-05-31")
+    assert bs["ok"] is True
+    assert len(bs["budgets"]) == 1
+    assert bs["budgets"][0]["budget"] == 1500.0
+    assert bs["budgets"][0]["spent"] == 80.0
+    assert bs["budgets"][0]["remaining"] == 1420.0
+    pct = bs["budgets"][0]["pct_used"]
+    assert abs(pct - 5.3) < 0.1
+
+
+# ------------------------------------------------------------------
+# P1: read compare / anomaly / export
+# ------------------------------------------------------------------
+
+
+def test_read_compare_yoy(monkeypatch):
+    db = _temp_db(monkeypatch)
+    # 2025 data
+    tm_expense.expense_write(action="record", kind="expense", amount=100, category="餐饮", occurred_at="2025-05-01T12:00:00+08:00")
+    # 2026 data
+    tm_expense.expense_write(action="record", kind="expense", amount=150, category="餐饮", occurred_at="2026-05-01T12:00:00+08:00")
+    res = tm_expense.expense_read(
+        mode="compare",
+        compare="yoy",
+        start_date="2026-05-01",
+        end_date="2026-05-31",
+        compare_group_by=["category"],
+    )
+    assert res["ok"] is True
+    grp = {g["category"]: g for g in res["groups"]}
+    assert grp["餐饮"]["current"] == 150.0
+    assert grp["餐饮"]["previous"] == 100.0
+    assert grp["餐饮"]["delta"] == 50.0
+    assert grp["餐饮"]["delta_pct"] == 50.0
+
+
+def test_read_anomaly_detects_outlier(monkeypatch):
+    db = _temp_db(monkeypatch)
+    # seed 10 normal entries around 100
+    for i in range(10):
+        tm_expense.expense_write(action="record", kind="expense", amount=100 + i, category="餐饮", occurred_at=f"2026-01-{i+1:02d}T12:00:00+08:00")
+    # one outlier at 5000
+    tm_expense.expense_write(action="record", kind="expense", amount=5000, category="餐饮", occurred_at="2026-01-20T12:00:00+08:00")
+    res = tm_expense.expense_read(
+        mode="anomaly",
+        start_date="2026-01-01",
+        end_date="2026-01-31",
+        anomaly_window_days=30,
+        anomaly_sigma=2.0,
+    )
+    assert res["ok"] is True
+    assert len(res["anomalies"]) >= 1
+    ids = {a["id"] for a in res["anomalies"]}
+    # the outlier should be detected
+    assert any(a["amount"] == 5000.0 for a in res["anomalies"])
+
+
+def test_read_export_markdown(monkeypatch):
+    db = _temp_db(monkeypatch)
+    tm_expense.expense_write(action="record", kind="expense", amount=36.5, category="餐饮", note="汉堡")
+    res = tm_expense.expense_read(mode="export", export_format="markdown")
+    assert res["ok"] is True
+    assert "| id |" in res["content"]
+    assert "汉堡" in res["content"]
+
+
+def test_read_export_csv(monkeypatch):
+    db = _temp_db(monkeypatch)
+    tm_expense.expense_write(action="record", kind="expense", amount=20, category="交通")
+    res = tm_expense.expense_read(mode="export", export_format="csv")
+    assert res["ok"] is True
+    assert "id,kind,amount" in res["content"]
+
+
+def test_read_export_json(monkeypatch):
+    db = _temp_db(monkeypatch)
+    tm_expense.expense_write(action="record", kind="income", amount=5000, category="工资")
+    res = tm_expense.expense_read(mode="export", export_format="json")
+    assert res["ok"] is True
+    assert '"kind": "income"' in res["content"]
+
+
+def test_read_categories_and_merchants(monkeypatch):
+    db = _temp_db(monkeypatch)
+    cats = tm_expense.expense_read(mode="categories")
+    assert cats["ok"] is True
+    assert any(c["name"] == "餐饮" for c in cats["categories"])
+    mers = tm_expense.expense_read(mode="merchants")
+    assert mers["ok"] is True
+    assert mers["merchants"] == []  # empty initially

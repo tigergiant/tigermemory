@@ -330,10 +330,33 @@ def expense_write(
     source_text: str | None = None,
     entries: list[dict] | None = None,
     confirm_new_category: bool = False,
+    # ---- action=manage_category ----
+    manage_category_action: str = "add",
+    manage_category_name: str | None = None,
+    manage_category_new_name: str | None = None,
+    manage_category_target_name: str | None = None,
+    manage_category_alias: str | None = None,
+    manage_category_kind: str = "expense",
+    # ---- action=manage_merchant ----
+    manage_merchant_action: str = "add",
+    manage_merchant_name: str | None = None,
+    manage_merchant_new_name: str | None = None,
+    manage_merchant_target_name: str | None = None,
+    manage_merchant_alias: str | None = None,
+    manage_merchant_default_category_id: int | None = None,
+    # ---- action=set_budget ----
+    budget_period: str = "month",
+    budget_period_key: str | None = None,
+    budget_category_id: int | None = None,
+    budget_amount: float | None = None,
+    budget_note: str | None = None,
+    # ---- action=delete_budget ----
+    budget_id: int | None = None,
 ) -> dict[str, Any]:
     """Unified write endpoint for expense tracker v2.
 
-    Actions: record, update, delete, restore, batch_record.
+    Actions: record, update, delete, restore, batch_record,
+             manage_category, manage_merchant, set_budget, delete_budget.
     """
     conn = _get_conn()
     try:
@@ -358,6 +381,25 @@ def expense_write(
             return _action_restore(conn, id)
         if action == "batch_record":
             return _action_batch_record(conn, entries or [], confirm_new_category)
+        if action == "manage_category":
+            return _action_manage_category(
+                conn, manage_category_action, manage_category_name,
+                manage_category_new_name, manage_category_target_name,
+                manage_category_alias, manage_category_kind,
+            )
+        if action == "manage_merchant":
+            return _action_manage_merchant(
+                conn, manage_merchant_action, manage_merchant_name,
+                manage_merchant_new_name, manage_merchant_target_name,
+                manage_merchant_alias, manage_merchant_default_category_id,
+            )
+        if action == "set_budget":
+            return _action_set_budget(
+                conn, budget_period, budget_period_key, budget_category_id,
+                budget_amount, budget_note,
+            )
+        if action == "delete_budget":
+            return _action_delete_budget(conn, budget_id)
         raise ValueError(f"unknown action: {action!r}")
     finally:
         conn.close()
@@ -592,6 +634,181 @@ def _action_batch_record(conn, entries, confirm_new_category):
     return {"ok": True, "action": "batch_record", "count": len(results), "results": results}
 
 
+def _action_manage_category(
+    conn, sub_action, name, new_name, target_name, alias, kind,
+):
+    now = _now_iso()
+    if sub_action == "add":
+        if not name or not name.strip():
+            raise ValueError("name is required for add")
+        try:
+            conn.execute(
+                """INSERT INTO categories (name, kind, aliases, archived, sort_order, created_at, updated_at)
+                   VALUES (?, ?, ?, 0, 0, ?, ?)""",
+                (name.strip(), kind, json.dumps([alias] if alias else []), now, now),
+            )
+            conn.commit()
+            return {"ok": True, "action": "manage_category", "sub_action": "add", "name": name.strip()}
+        except sqlite3.IntegrityError:
+            return {"ok": False, "error": f"category '{name}' already exists"}
+
+    if sub_action == "rename":
+        if not name or not new_name:
+            raise ValueError("name and new_name are required for rename")
+        row = conn.execute("SELECT id FROM categories WHERE name = ? AND archived = 0", (name,)).fetchone()
+        if not row:
+            return {"ok": False, "error": f"category '{name}' not found"}
+        cat_id = row["id"]
+        conn.execute("UPDATE categories SET name = ?, updated_at = ? WHERE id = ?", (new_name.strip(), now, cat_id))
+        conn.execute("UPDATE expense_entries SET category = ?, updated_at = ? WHERE category_id = ?", (new_name.strip(), now, cat_id))
+        conn.commit()
+        return {"ok": True, "action": "manage_category", "sub_action": "rename", "old": name, "new": new_name.strip()}
+
+    if sub_action == "merge":
+        if not name or not target_name:
+            raise ValueError("name and target_name are required for merge")
+        src = conn.execute("SELECT id FROM categories WHERE name = ? AND archived = 0", (name,)).fetchone()
+        dst = conn.execute("SELECT id, name FROM categories WHERE name = ? AND archived = 0", (target_name,)).fetchone()
+        if not src:
+            return {"ok": False, "error": f"source category '{name}' not found"}
+        if not dst:
+            return {"ok": False, "error": f"target category '{target_name}' not found"}
+        src_id, dst_id, dst_name = src["id"], dst["id"], dst["name"]
+        conn.execute("UPDATE expense_entries SET category_id = ?, category = ?, updated_at = ? WHERE category_id = ?", (dst_id, dst_name, now, src_id))
+        conn.execute("UPDATE categories SET archived = 1, updated_at = ? WHERE id = ?", (now, src_id))
+        conn.commit()
+        return {"ok": True, "action": "manage_category", "sub_action": "merge", "from": name, "to": target_name}
+
+    if sub_action == "archive":
+        if not name:
+            raise ValueError("name is required for archive")
+        cur = conn.execute("UPDATE categories SET archived = 1, updated_at = ? WHERE name = ? AND archived = 0", (now, name))
+        conn.commit()
+        if cur.rowcount == 0:
+            return {"ok": False, "error": f"category '{name}' not found or already archived"}
+        return {"ok": True, "action": "manage_category", "sub_action": "archive", "name": name}
+
+    if sub_action == "alias_add":
+        if not name or not alias:
+            raise ValueError("name and alias are required for alias_add")
+        row = conn.execute("SELECT id, aliases FROM categories WHERE name = ? AND archived = 0", (name,)).fetchone()
+        if not row:
+            return {"ok": False, "error": f"category '{name}' not found"}
+        aliases = json.loads(row["aliases"] or "[]")
+        if alias.strip() not in aliases:
+            aliases.append(alias.strip())
+        conn.execute("UPDATE categories SET aliases = ?, updated_at = ? WHERE id = ?", (json.dumps(aliases), now, row["id"]))
+        conn.commit()
+        return {"ok": True, "action": "manage_category", "sub_action": "alias_add", "name": name, "aliases": aliases}
+
+    raise ValueError(f"unknown manage_category sub_action: {sub_action!r}")
+
+
+def _action_manage_merchant(
+    conn, sub_action, name, new_name, target_name, alias, default_category_id,
+):
+    now = _now_iso()
+    if sub_action == "add":
+        if not name or not name.strip():
+            raise ValueError("name is required for add")
+        try:
+            conn.execute(
+                """INSERT INTO merchants (name, aliases, default_category_id, notes, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (name.strip(), json.dumps([alias] if alias else []), default_category_id, None, now, now),
+            )
+            conn.commit()
+            return {"ok": True, "action": "manage_merchant", "sub_action": "add", "name": name.strip()}
+        except sqlite3.IntegrityError:
+            return {"ok": False, "error": f"merchant '{name}' already exists"}
+
+    if sub_action == "rename":
+        if not name or not new_name:
+            raise ValueError("name and new_name are required for rename")
+        row = conn.execute("SELECT id FROM merchants WHERE name = ?", (name,)).fetchone()
+        if not row:
+            return {"ok": False, "error": f"merchant '{name}' not found"}
+        m_id = row["id"]
+        conn.execute("UPDATE merchants SET name = ?, updated_at = ? WHERE id = ?", (new_name.strip(), now, m_id))
+        conn.execute("UPDATE expense_entries SET merchant = ?, updated_at = ? WHERE merchant = ?", (new_name.strip(), now, name))
+        conn.commit()
+        return {"ok": True, "action": "manage_merchant", "sub_action": "rename", "old": name, "new": new_name.strip()}
+
+    if sub_action == "merge":
+        if not name or not target_name:
+            raise ValueError("name and target_name are required for merge")
+        src = conn.execute("SELECT id FROM merchants WHERE name = ?", (name,)).fetchone()
+        dst = conn.execute("SELECT id, name FROM merchants WHERE name = ?", (target_name,)).fetchone()
+        if not src:
+            return {"ok": False, "error": f"source merchant '{name}' not found"}
+        if not dst:
+            return {"ok": False, "error": f"target merchant '{target_name}' not found"}
+        src_id, dst_id, dst_name = src["id"], dst["id"], dst["name"]
+        conn.execute("UPDATE expense_entries SET merchant = ?, updated_at = ? WHERE merchant = ?", (dst_name, now, name))
+        conn.execute("DELETE FROM merchants WHERE id = ?", (src_id,))
+        conn.commit()
+        return {"ok": True, "action": "manage_merchant", "sub_action": "merge", "from": name, "to": target_name}
+
+    if sub_action == "archive":
+        # merchants has no archived column; just delete
+        if not name:
+            raise ValueError("name is required for archive")
+        cur = conn.execute("DELETE FROM merchants WHERE name = ?", (name,))
+        conn.commit()
+        if cur.rowcount == 0:
+            return {"ok": False, "error": f"merchant '{name}' not found"}
+        return {"ok": True, "action": "manage_merchant", "sub_action": "archive", "name": name}
+
+    if sub_action == "alias_add":
+        if not name or not alias:
+            raise ValueError("name and alias are required for alias_add")
+        row = conn.execute("SELECT id, aliases FROM merchants WHERE name = ?", (name,)).fetchone()
+        if not row:
+            return {"ok": False, "error": f"merchant '{name}' not found"}
+        aliases = json.loads(row["aliases"] or "[]")
+        if alias.strip() not in aliases:
+            aliases.append(alias.strip())
+        conn.execute("UPDATE merchants SET aliases = ?, updated_at = ? WHERE id = ?", (json.dumps(aliases), now, row["id"]))
+        conn.commit()
+        return {"ok": True, "action": "manage_merchant", "sub_action": "alias_add", "name": name, "aliases": aliases}
+
+    raise ValueError(f"unknown manage_merchant sub_action: {sub_action!r}")
+
+
+def _action_set_budget(
+    conn, period, period_key, category_id, amount, note,
+):
+    if period not in {"month", "year"}:
+        raise ValueError(f"budget_period must be month/year, got {period!r}")
+    if period_key is None:
+        raise ValueError("budget_period_key is required")
+    if amount is None or amount <= 0:
+        raise ValueError("budget_amount must be > 0")
+    now = _now_iso()
+    try:
+        conn.execute(
+            """INSERT INTO budgets (period, period_key, category_id, amount, currency, note, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(period, period_key, category_id) DO UPDATE SET
+                   amount=excluded.amount, note=excluded.note, updated_at=excluded.updated_at""",
+            (period, period_key, category_id, float(amount), "CNY", note, now, now),
+        )
+        conn.commit()
+        return {"ok": True, "action": "set_budget", "period": period, "period_key": period_key, "category_id": category_id, "amount": float(amount)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _action_delete_budget(conn, budget_id):
+    if budget_id is None:
+        raise ValueError("budget_id is required for delete_budget")
+    cur = conn.execute("DELETE FROM budgets WHERE id = ?", (budget_id,))
+    conn.commit()
+    if cur.rowcount == 0:
+        return {"ok": False, "error": f"budget id={budget_id} not found"}
+    return {"ok": True, "action": "delete_budget", "id": budget_id}
+
+
 # ---------------------------------------------------------------------------
 # Read API
 # ---------------------------------------------------------------------------
@@ -617,10 +834,19 @@ def expense_read(
     bucket: str = "month",
     sql: str | None = None,
     sql_params: dict | None = None,
+    # ---- mode=compare ----
+    compare: str = "yoy",
+    compare_group_by: list[str] | None = None,
+    # ---- mode=anomaly ----
+    anomaly_window_days: int = 90,
+    anomaly_sigma: float = 2.0,
+    # ---- mode=export ----
+    export_format: str = "markdown",
 ) -> dict[str, Any]:
     """Unified read endpoint for expense tracker v2.
 
-    Modes: list, aggregate, trend, sql.
+    Modes: list, aggregate, trend, compare, anomaly, budget_status,
+           categories, merchants, export, sql.
     """
     if kind is not None and kind not in VALID_KINDS:
         raise ValueError(f"kind must be one of {sorted(VALID_KINDS)}, got {kind!r}")
@@ -639,6 +865,30 @@ def expense_read(
         return _read_trend(
             start_date, end_date, kind, category, merchant, payment_method,
             tags, min_amount, max_amount, include_deleted, bucket, group_by, metric,
+        )
+    if mode == "compare":
+        return _read_compare(
+            start_date, end_date, kind, category, merchant, payment_method,
+            tags, min_amount, max_amount, include_deleted, compare, compare_group_by, metric,
+        )
+    if mode == "anomaly":
+        return _read_anomaly(
+            start_date, end_date, kind, category, merchant, payment_method,
+            tags, min_amount, max_amount, include_deleted, anomaly_window_days, anomaly_sigma,
+        )
+    if mode == "budget_status":
+        return _read_budget_status(
+            start_date, end_date, kind, category, merchant, payment_method,
+            tags, min_amount, max_amount,
+        )
+    if mode == "categories":
+        return _read_categories()
+    if mode == "merchants":
+        return _read_merchants()
+    if mode == "export":
+        return _read_export(
+            start_date, end_date, kind, category, merchant, payment_method,
+            tags, min_amount, max_amount, include_deleted, export_format, limit,
         )
     if mode == "sql":
         return _read_sql(sql, sql_params)
@@ -877,6 +1127,324 @@ def _read_trend(
             "group_by": group_by,
             "metric": metric,
             "buckets": [dict(r) for r in rows],
+        }
+    finally:
+        conn.close()
+
+
+def _read_compare(
+    start_date, end_date, kind, category, merchant, payment_method,
+    tags, min_amount, max_amount, include_deleted, compare, compare_group_by, metric,
+):
+    if compare not in {"mom", "yoy", "qoq"}:
+        raise ValueError(f"compare must be mom/yoy/qoq, got {compare!r}")
+    if metric not in {"sum", "count", "avg", "min", "max"}:
+        raise ValueError(f"metric must be sum/count/avg/min/max, got {metric!r}")
+    if compare_group_by is None:
+        compare_group_by = ["category"]
+
+    where_clause, params = _build_where(
+        start_date, end_date, kind, category, merchant, payment_method,
+        tags, min_amount, max_amount, include_deleted,
+    )
+
+    metric_expr = {
+        "sum": "SUM(amount)",
+        "count": "COUNT(*)",
+        "avg": "AVG(amount)",
+        "min": "MIN(amount)",
+        "max": "MAX(amount)",
+    }[metric]
+
+    group_cols = []
+    select_cols = []
+    for g in compare_group_by:
+        if g == "month":
+            select_cols.append("strftime('%Y-%m', occurred_at) AS month")
+            group_cols.append("strftime('%Y-%m', occurred_at)")
+        elif g == "year":
+            select_cols.append("strftime('%Y', occurred_at) AS year")
+            group_cols.append("strftime('%Y', occurred_at)")
+        else:
+            select_cols.append(g)
+            group_cols.append(g)
+
+    select_cols.append(f"{metric_expr} AS metric_value")
+    select_cols.append("COUNT(*) AS n")
+
+    group_by_sql = ", ".join(group_cols) if group_cols else "1"
+    base_sql = f"SELECT {', '.join(select_cols)} FROM expense_entries WHERE {where_clause}"
+    period_sql = f"{base_sql} GROUP BY {group_by_sql}"
+
+    conn = _get_conn()
+    try:
+        _ensure_schema(conn)
+        rows = conn.execute(period_sql, params).fetchall()
+        # Determine current/previous periods from start_date/end_date
+        current_period = None
+        previous_period = None
+        if start_date and end_date:
+            if compare == "yoy":
+                current_period = (start_date[:4], end_date[:4])
+                prev_start = str(int(start_date[:4]) - 1) + start_date[4:]
+                prev_end = str(int(end_date[:4]) - 1) + end_date[4:]
+            elif compare == "mom":
+                # simplistic: previous month
+                current_period = (start_date[:7], end_date[:7])
+                # compute previous month
+                dt = datetime.datetime.strptime(start_date[:7], "%Y-%m")
+                prev = dt - datetime.timedelta(days=1)
+                prev_start = prev.strftime("%Y-%m") + "-01"
+                prev_end = prev.strftime("%Y-%m") + "-31"
+            else:  # qoq
+                current_period = (start_date[:4], end_date[:4])
+                prev_start = None
+                prev_end = None
+        else:
+            prev_start = prev_end = None
+
+        prev_where, prev_params = _build_where(
+            prev_start, prev_end, kind, category, merchant, payment_method,
+            tags, min_amount, max_amount, include_deleted,
+        )
+        prev_sql = f"SELECT {', '.join(select_cols)} FROM expense_entries WHERE {prev_where} GROUP BY {group_by_sql}"
+        prev_rows = conn.execute(prev_sql, prev_params).fetchall() if prev_start else []
+
+        # Build comparison map
+        prev_map: dict[str, float] = {}
+        key_cols = compare_group_by
+        def _row_key(row, cols):
+            return "|".join(str(row[c]) if c in row.keys() else "" for c in cols)
+
+        for r in prev_rows:
+            key = _row_key(r, key_cols)
+            prev_map[key] = float(r["metric_value"] or 0)
+
+        results = []
+        for r in rows:
+            key = _row_key(r, key_cols)
+            cur_val = float(r["metric_value"] or 0)
+            prev_val = prev_map.get(key, 0)
+            delta = cur_val - prev_val
+            delta_pct = round(delta / prev_val * 100, 2) if prev_val else None
+            results.append({
+                **dict(r),
+                "current": cur_val,
+                "previous": prev_val,
+                "delta": round(delta, 2),
+                "delta_pct": delta_pct,
+            })
+
+        return {
+            "ok": True,
+            "mode": "compare",
+            "compare": compare,
+            "group_by": compare_group_by,
+            "metric": metric,
+            "groups": results,
+        }
+    finally:
+        conn.close()
+
+
+def _read_anomaly(
+    start_date, end_date, kind, category, merchant, payment_method,
+    tags, min_amount, max_amount, include_deleted, anomaly_window_days, anomaly_sigma,
+):
+    # Compute historical mean/std from window before end_date
+    conn = _get_conn()
+    try:
+        _ensure_schema(conn)
+        if end_date is None:
+            end_date = datetime.datetime.now(_TZ_CN).strftime("%Y-%m-%d")
+        if start_date is None:
+            start_date = (datetime.datetime.now(_TZ_CN) - datetime.timedelta(days=anomaly_window_days)).strftime("%Y-%m-%d")
+
+        # historical stats from window
+        hist_end = end_date
+        hist_start = (datetime.datetime.strptime(hist_end, "%Y-%m-%d") - datetime.timedelta(days=anomaly_window_days)).strftime("%Y-%m-%d")
+        hist_where, hist_params = _build_where(
+            hist_start, hist_end, kind, category, merchant, payment_method,
+            tags, min_amount, max_amount, include_deleted,
+        )
+        stats = conn.execute(
+            f"SELECT AVG(amount) AS mean, (AVG(amount*amount) - AVG(amount)*AVG(amount)) AS var FROM expense_entries WHERE {hist_where}",
+            hist_params,
+        ).fetchone()
+        mean = float(stats["mean"] or 0)
+        var = float(stats["var"] or 0)
+        std = var ** 0.5 if var > 0 else 0
+        upper = mean + anomaly_sigma * std
+        lower = mean - anomaly_sigma * std if mean - anomaly_sigma * std > 0 else 0
+
+        # Find anomalies in current period
+        curr_where, curr_params = _build_where(
+            start_date, end_date, kind, category, merchant, payment_method,
+            tags, min_amount, max_amount, include_deleted,
+        )
+        rows = conn.execute(
+            f"SELECT * FROM expense_entries WHERE {curr_where} AND (amount > ? OR amount < ?) ORDER BY amount DESC",
+            curr_params + [upper, lower],
+        ).fetchall()
+
+        anomalies = []
+        for r in rows:
+            amt = float(r["amount"])
+            z = (amt - mean) / std if std > 0 else 0
+            anomalies.append({
+                "id": r["id"],
+                "amount": amt,
+                "z_score": round(z, 2),
+                "category": r["category"],
+                "occurred_at": r["occurred_at"],
+            })
+
+        return {
+            "ok": True,
+            "mode": "anomaly",
+            "mean": round(mean, 2),
+            "std": round(std, 2),
+            "sigma": anomaly_sigma,
+            "threshold_upper": round(upper, 2),
+            "threshold_lower": round(lower, 2),
+            "anomalies": anomalies,
+        }
+    finally:
+        conn.close()
+
+
+def _read_budget_status(
+    start_date, end_date, kind, category, merchant, payment_method,
+    tags, min_amount, max_amount,
+):
+    conn = _get_conn()
+    try:
+        _ensure_schema(conn)
+        # Default to current month
+        if start_date is None or end_date is None:
+            now = datetime.datetime.now(_TZ_CN)
+            start_date = now.strftime("%Y-%m-01")
+            end_date = now.strftime("%Y-%m-%d")
+        period_key = start_date[:7]
+
+        # Get all budgets for this period
+        budgets = conn.execute(
+            "SELECT * FROM budgets WHERE period_key = ?",
+            (period_key,),
+        ).fetchall()
+
+        # Get spending per category in period
+        where_clause, params = _build_where(
+            start_date, end_date, "expense", category, merchant, payment_method,
+            tags, min_amount, max_amount, False,
+        )
+        rows = conn.execute(
+            f"SELECT category_id, category, SUM(amount) AS spent FROM expense_entries WHERE {where_clause} AND deleted_at IS NULL GROUP BY category_id, category",
+            params,
+        ).fetchall()
+        spent_map: dict[int | None, float] = {}
+        for r in rows:
+            spent_map[r["category_id"]] = float(r["spent"] or 0)
+            spent_map[None] = spent_map.get(None, 0) + float(r["spent"] or 0)
+
+        results = []
+        for b in budgets:
+            cat_id = b["category_id"]
+            spent = spent_map.get(cat_id, 0)
+            budget_amt = float(b["amount"])
+            remaining = budget_amt - spent
+            pct_used = round(spent / budget_amt * 100, 1) if budget_amt else 0
+            results.append({
+                "category_id": cat_id,
+                "budget": budget_amt,
+                "spent": round(spent, 2),
+                "remaining": round(remaining, 2),
+                "pct_used": pct_used,
+            })
+
+        return {
+            "ok": True,
+            "mode": "budget_status",
+            "period_key": period_key,
+            "budgets": results,
+        }
+    finally:
+        conn.close()
+
+
+def _read_categories():
+    conn = _get_conn()
+    try:
+        _ensure_schema(conn)
+        _seed_categories(conn)
+        rows = conn.execute("SELECT * FROM categories ORDER BY sort_order, name").fetchall()
+        return {
+            "ok": True,
+            "mode": "categories",
+            "categories": [dict(r) for r in rows],
+        }
+    finally:
+        conn.close()
+
+
+def _read_merchants():
+    conn = _get_conn()
+    try:
+        _ensure_schema(conn)
+        rows = conn.execute("SELECT * FROM merchants ORDER BY name").fetchall()
+        return {
+            "ok": True,
+            "mode": "merchants",
+            "merchants": [dict(r) for r in rows],
+        }
+    finally:
+        conn.close()
+
+
+def _read_export(
+    start_date, end_date, kind, category, merchant, payment_method,
+    tags, min_amount, max_amount, include_deleted, export_format, limit,
+):
+    if export_format not in {"markdown", "csv", "json"}:
+        raise ValueError(f"export_format must be markdown/csv/json, got {export_format!r}")
+
+    where_clause, params = _build_where(
+        start_date, end_date, kind, category, merchant, payment_method,
+        tags, min_amount, max_amount, include_deleted,
+    )
+    limit = min(max(int(limit), 1), 5000)
+
+    conn = _get_conn()
+    try:
+        _ensure_schema(conn)
+        rows = conn.execute(
+            f"SELECT * FROM expense_entries WHERE {where_clause} ORDER BY occurred_at DESC LIMIT ?",
+            params + [limit],
+        ).fetchall()
+        data = [dict(r) for r in rows]
+
+        if export_format == "json":
+            content = json.dumps(data, ensure_ascii=False, indent=2)
+        elif export_format == "csv":
+            import io, csv as csv_mod
+            buf = io.StringIO()
+            if data:
+                writer = csv_mod.DictWriter(buf, fieldnames=data[0].keys())
+                writer.writeheader()
+                writer.writerows(data)
+            content = buf.getvalue()
+        else:  # markdown
+            lines = ["| id | kind | amount | currency | category | occurred_at | note |", "|---|---|---|---|---|---|---|"]
+            for r in data:
+                lines.append(f"| {r.get('id','')} | {r.get('kind','')} | {r.get('amount','')} | {r.get('currency','')} | {r.get('category','')} | {r.get('occurred_at','')} | {r.get('note','') or ''} |")
+            content = "\n".join(lines)
+
+        return {
+            "ok": True,
+            "mode": "export",
+            "format": export_format,
+            "row_count": len(data),
+            "content": content,
         }
     finally:
         conn.close()
