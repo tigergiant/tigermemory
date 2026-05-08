@@ -2,7 +2,7 @@
 """
 tools/tm_mcp.py — tigermemory MCP server (thin adapter over tm_core).
 
-Exposes 24 tools for remote agents (laptop MCP clients):
+Exposes 26 tools for remote agents (laptop MCP clients):
 
 Read tools (callable in both writer and reader roles):
 - check_worktree            — git/worktree preflight snapshot
@@ -19,8 +19,10 @@ Read tools (callable in both writer and reader roles):
 - minimax_quota             — MiniMax token-plan quota query
 - minimax_vision            — image VLM understanding (external)
 - minimax_search            — web search (external)
-- expense_record            — record expense/income entry (private SQLite)
-- expense_query             — query/aggregate expense entries (private SQLite)
+- expense_record            — record expense/income entry (private SQLite) [v1 alias]
+- expense_query             — query/aggregate expense entries (private SQLite) [v1 alias]
+- expense_write             — unified write: record/update/delete/batch_record (private SQLite)
+- expense_read              — unified read: list/aggregate/trend/sql (private SQLite)
 
 Write tools (writer role only):
 - propose_wiki_page         — wiki page draft with L2 review + inbox fallback
@@ -1237,7 +1239,7 @@ def expense_query(
     group_by: str = "category",
     limit: int = 50,
 ) -> dict[str, Any]:
-    """Query and aggregate expense entries from the private SQLite ledger.
+    """Query and aggregate expense entries from the private SQLite ledger (v1 alias).
 
     This reads from the private structured ledger, NOT from Wiki / Mem0.
     Use this for questions like "本月餐饮花了多少" or "上月总支出".
@@ -1258,6 +1260,119 @@ def expense_query(
             start_date=start_date, end_date=end_date,
             kind=kind, category=category,
             group_by=group_by, limit=limit,
+        )
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@mcp.tool()
+def expense_write(
+    action: str = "record",
+    id: int | None = None,
+    kind: str | None = None,
+    amount: float | None = None,
+    category: str | None = None,
+    occurred_at: str | None = None,
+    currency: str | None = None,
+    merchant: str | None = None,
+    note: str | None = None,
+    payment_method: str | None = None,
+    tags: list[str] | None = None,
+    source_agent: str = "openclaw",
+    source_text: str | None = None,
+    entries: list[dict] | None = None,
+    confirm_new_category: bool = False,
+) -> dict[str, Any]:
+    _require_writer()
+    """Unified write endpoint for the private expense tracker ledger.
+
+    Actions:
+        record:       Write a single entry (requires kind, amount, category)
+        update:       Modify an existing entry by id
+        delete:       Soft-delete an entry by id
+        restore:      Restore a soft-deleted entry by id
+        batch_record: Write multiple entries in one transaction
+
+    Returns:
+        {"ok": true, "action": "...", "id": N, "normalized": {...}}
+        or {"ok": false, "needs_confirmation": true, ...} for unknown categories.
+    """
+    try:
+        return tm_expense.expense_write(
+            action=action,
+            id=id,
+            kind=kind,
+            amount=amount,
+            category=category,
+            occurred_at=occurred_at,
+            currency=currency,
+            merchant=merchant,
+            note=note,
+            payment_method=payment_method,
+            tags=tags,
+            source_agent=source_agent,
+            source_text=source_text,
+            entries=entries,
+            confirm_new_category=confirm_new_category,
+        )
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@mcp.tool()
+def expense_read(
+    mode: str = "aggregate",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    kind: str | None = None,
+    category: str | list[str] | None = None,
+    merchant: str | list[str] | None = None,
+    payment_method: str | None = None,
+    tags: list[str] | None = None,
+    min_amount: float | None = None,
+    max_amount: float | None = None,
+    include_deleted: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+    order_by: str = "occurred_at desc",
+    group_by: list[str] | None = None,
+    metric: str = "sum",
+    bucket: str = "month",
+    sql: str | None = None,
+    sql_params: dict | None = None,
+) -> dict[str, Any]:
+    """Unified read endpoint for the private expense tracker ledger.
+
+    Modes:
+        list:      Raw rows with filters and pagination
+        aggregate: Multi-dimensional grouping (group_by=["category","month"], metric="sum")
+        trend:     Time-bucketed analysis (bucket="month", group_by=["category"])
+        sql:       Free-form readonly SELECT against the ledger (validated, max 1000 rows)
+
+    Returns:
+        {"ok": true, "mode": "...", "rows": [...]} or similar shape per mode.
+    """
+    try:
+        return tm_expense.expense_read(
+            mode=mode,
+            start_date=start_date,
+            end_date=end_date,
+            kind=kind,
+            category=category,
+            merchant=merchant,
+            payment_method=payment_method,
+            tags=tags,
+            min_amount=min_amount,
+            max_amount=max_amount,
+            include_deleted=include_deleted,
+            limit=limit,
+            offset=offset,
+            order_by=order_by,
+            group_by=group_by,
+            metric=metric,
+            bucket=bucket,
+            sql=sql,
+            sql_params=sql_params,
         )
     except Exception as e:
         return {"ok": False, "error": str(e)}
