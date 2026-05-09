@@ -90,7 +90,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS expense_entries (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             kind TEXT NOT NULL CHECK(kind IN ('expense', 'income')),
-            amount REAL NOT NULL CHECK(amount > 0),
+            amount REAL NOT NULL CHECK(amount >= 0),
             currency TEXT NOT NULL DEFAULT 'CNY',
             occurred_at TEXT NOT NULL,
             category TEXT NOT NULL DEFAULT '',
@@ -135,6 +135,14 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         ON expense_entries(dedup_hash)
         WHERE source_external_id IS NULL AND dedup_hash IS NOT NULL AND deleted_at IS NULL
     """)
+    # v5 column (P5: transaction status)
+    try:
+        conn.execute(
+            """ALTER TABLE expense_entries ADD COLUMN status TEXT NOT NULL DEFAULT 'success'
+               CHECK(status IN ('success','refunded','closed','internal_transfer'))"""
+        )
+    except sqlite3.OperationalError:
+        pass
     # v2 tables
     conn.execute("""
         CREATE TABLE IF NOT EXISTS categories (
@@ -167,7 +175,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             period TEXT NOT NULL CHECK(period IN ('month','year')),
             period_key TEXT NOT NULL,
             category_id INTEGER REFERENCES categories(id),
-            amount REAL NOT NULL CHECK(amount > 0),
+            amount REAL NOT NULL CHECK(amount >= 0),
             currency TEXT NOT NULL DEFAULT 'CNY',
             note TEXT,
             created_at TEXT NOT NULL,
@@ -306,6 +314,19 @@ def _migrate_v4(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _migrate_v5(conn: sqlite3.Connection) -> None:
+    """Idempotent v5 migration: ensure all existing rows have status='success'.
+
+    Before v5, all rows were implicitly success (refunds/internal_transfers
+    were skipped by importers). This migration is a no-op for most rows but
+    guarantees the invariant.
+    """
+    conn.execute(
+        "UPDATE expense_entries SET status = 'success' WHERE status IS NULL OR status = ''"
+    )
+    conn.commit()
+
+
 # ---------------------------------------------------------------------------
 # Normalization
 # ---------------------------------------------------------------------------
@@ -323,7 +344,8 @@ def _normalize_payment_method(pm: str | None) -> str | None:
     # exact canonical match
     if pm.strip().lower() in {k.lower() for k in _PAYMENT_ALIASES}:
         return pm.strip().lower()
-    raise ValueError(f"unknown payment_method: {pm!r}. Valid: {sorted(_PAYMENT_ALIASES.keys())}")
+    # P5: accept any payment method string (unified importer passes raw values)
+    return pm.strip()
 
 
 def _resolve_category(conn: sqlite3.Connection, category: str, kind: str | None) -> tuple[int | None, str]:
@@ -443,6 +465,7 @@ def expense_write(
         _ensure_schema(conn)
         _seed_categories(conn)
         _migrate_v4(conn)
+        _migrate_v5(conn)
 
         if action == "record":
             return _action_record(
@@ -729,11 +752,16 @@ def _action_batch_record(conn, entries, confirm_new_category):
             kind = entry.get("kind")
             amount = entry.get("amount")
             category = entry.get("category")
+            status = entry.get("status", "success")
             if kind not in VALID_KINDS:
                 errors.append({"index": i, "error": f"invalid kind: {kind}"})
                 continue
-            if not isinstance(amount, (int, float)) or amount <= 0:
-                errors.append({"index": i, "error": f"amount must be > 0, got {amount}"})
+            # P5: allow amount=0 for closed/internal_transfer
+            if not isinstance(amount, (int, float)) or (amount < 0):
+                errors.append({"index": i, "error": f"amount must be >= 0, got {amount}"})
+                continue
+            if amount == 0 and status not in ("closed", "internal_transfer"):
+                errors.append({"index": i, "error": "amount=0 only allowed with status=closed or internal_transfer"})
                 continue
             if not category or not category.strip():
                 errors.append({"index": i, "error": "category is required"})
@@ -753,7 +781,6 @@ def _action_batch_record(conn, entries, confirm_new_category):
                     category_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
                     canonical_name = category.strip()
                 except sqlite3.IntegrityError:
-                    # Race: another entry already created this category
                     category_id, canonical_name = _resolve_category(conn, category, kind)
                     if category_id is None:
                         errors.append({"index": i, "error": f"failed to create category '{category}'"})
@@ -787,14 +814,14 @@ def _action_batch_record(conn, entries, confirm_new_category):
                 """INSERT OR IGNORE INTO expense_entries
                    (kind, amount, currency, occurred_at, category, category_id, merchant,
                     note, payment_method, tags, source_agent, source_text,
-                    created_at, updated_at, amount_cents, source_external_id, dedup_hash)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    created_at, updated_at, amount_cents, source_external_id, dedup_hash, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     kind, float(amount), currency, occurred_at,
                     canonical_name, category_id, entry.get("merchant"),
                     entry.get("note"), pm, tags_str,
                     entry.get("source_agent", "openclaw"), entry.get("source_text"),
-                    now, now, amount_cents, source_external_id, dedup_hash,
+                    now, now, amount_cents, source_external_id, dedup_hash, status,
                 ),
             )
             if cur.rowcount > 0:
@@ -1085,12 +1112,17 @@ def expense_read(
 def _build_where(
     start_date, end_date, kind, category, merchant, payment_method,
     tags, min_amount, max_amount, include_deleted,
+    stats_only: bool = False,
 ) -> tuple[str, list[Any]]:
     where: list[str] = []
     params: list[Any] = []
 
     if not include_deleted:
         where.append("deleted_at IS NULL")
+
+    # P5: statistical queries (aggregate/trend/compare/anomaly/budget) exclude non-success
+    if stats_only:
+        where.append("status = 'success'")
 
     if start_date:
         where.append("occurred_at >= ?")
@@ -1197,6 +1229,7 @@ def _read_aggregate(
     where_clause, params = _build_where(
         start_date, end_date, kind, category, merchant, payment_method,
         tags, min_amount, max_amount, include_deleted,
+        stats_only=True,
     )
 
     # Build SELECT / GROUP BY
@@ -1269,6 +1302,7 @@ def _read_trend(
     where_clause, params = _build_where(
         start_date, end_date, kind, category, merchant, payment_method,
         tags, min_amount, max_amount, include_deleted,
+        stats_only=True,
     )
 
     bucket_fmt = {
@@ -1333,6 +1367,7 @@ def _read_compare(
     where_clause, params = _build_where(
         start_date, end_date, kind, category, merchant, payment_method,
         tags, min_amount, max_amount, include_deleted,
+        stats_only=True,
     )
 
     metric_expr = {
@@ -1428,6 +1463,7 @@ def _read_compare(
         prev_where, prev_params = _build_where(
             prev_start, prev_end, kind, category, merchant, payment_method,
             tags, min_amount, max_amount, include_deleted,
+            stats_only=True,
         )
         prev_sql = f"SELECT {', '.join(select_cols)} FROM expense_entries WHERE {prev_where} GROUP BY {group_by_sql}"
         prev_rows = conn.execute(prev_sql, prev_params).fetchall() if prev_start else []
@@ -1497,6 +1533,7 @@ def _read_anomaly(
         hist_where, hist_params = _build_where(
             hist_start, hist_end, kind, category, merchant, payment_method,
             tags, min_amount, max_amount, include_deleted,
+            stats_only=True,
         )
         # Get sample size and compute sample variance
         count_stats = conn.execute(
@@ -1528,6 +1565,7 @@ def _read_anomaly(
         curr_where, curr_params = _build_where(
             start_date, end_date, kind, category, merchant, payment_method,
             tags, min_amount, max_amount, include_deleted,
+            stats_only=True,
         )
         rows = conn.execute(
             f"SELECT * FROM expense_entries WHERE {curr_where} AND (amount > ? OR amount < ?) ORDER BY amount DESC",
@@ -1584,6 +1622,7 @@ def _read_budget_status(
         where_clause, params = _build_where(
             start_date, end_date, "expense", category, merchant, payment_method,
             tags, min_amount, max_amount, False,
+            stats_only=True,
         )
         rows = conn.execute(
             f"SELECT category_id, category, SUM(amount) AS spent FROM expense_entries WHERE {where_clause} AND deleted_at IS NULL GROUP BY category_id, category",
@@ -1625,6 +1664,7 @@ def _read_categories():
         _ensure_schema(conn)
         _seed_categories(conn)
         _migrate_v4(conn)
+        _migrate_v5(conn)
         rows = conn.execute("SELECT * FROM categories ORDER BY sort_order, name").fetchall()
         return {
             "ok": True,
