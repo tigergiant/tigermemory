@@ -22,3 +22,6 @@ deploy/openclaw-ce/*.tsbuildinfo
 
 # 敏感个人数据 - 记账记录
 data/expense_tracker/
+
+# Top-level catch-all for any local npm experiments
+node_modules/
