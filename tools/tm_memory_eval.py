@@ -22,6 +22,7 @@ from typing import Any
 
 import tm_core
 import tm_embed_index
+import tm_hier_index
 import tm_lessons
 import tm_persona
 
@@ -322,12 +323,57 @@ def search_wiki_case_hybrid(
     return out
 
 
+def search_wiki_case_hierarchical(
+    query: str,
+    top_k: int,
+    *,
+    include_sources: bool = False,
+) -> list[SearchHit]:
+    """Hierarchical L0/L1/L2 recall with full per-page layer aggregation.
+
+    Uses `tm_hier_index.search_pages` which scores EVERY layer entry in
+    the index and aggregates by path with the fixed formula:
+      page_score = 0.45 * max_L0 + 0.35 * max_L1 + 0.20 * max_L2
+    Missing layers score 0.
+
+    Implementation note (2026-05-09 bugfix): the first version of this
+    function called `tm_hier_index.search(k=20)` which returned only the
+    top-20 *layer* entries — a page whose L2 ranked top-5 might still be
+    missing its L0/L1 from the truncated pool, causing those layers to
+    contribute 0 in the aggregate even when their actual cosine was
+    decent. That collapsed scores to ~0.20 * L2 for many pages and broke
+    eval (-24/-25 vs hybrid baseline). The fix scores all 1164 entries
+    so every candidate page gets all three layer signals.
+    """
+    # Pool wider than top_k so source-filter doesn't starve final ranking.
+    pool_k = max(top_k * 4, 20)
+    page_results = tm_hier_index.search_pages(query, k=max(pool_k * 2, 50))
+
+    out: list[SearchHit] = []
+    for entry in page_results:
+        path = entry["path"]
+        if not include_sources and path.startswith("sources/"):
+            continue
+        out.append(SearchHit(
+            path=path,
+            title=entry["title"],
+            snippet="",
+            score=round(entry["score"], 6),
+            source="wiki",
+        ))
+        if len(out) >= top_k:
+            break
+    return out
+
+
 def _wiki_recall(query: str, top_k: int, *, include_sources: bool, recall: str) -> list[SearchHit]:
-    """Dispatch wiki recall to lexical / embedding / hybrid backend."""
+    """Dispatch wiki recall to lexical / embedding / hybrid / hierarchical backend."""
     if recall == "embedding":
         return search_wiki_case_embedding(query, top_k, include_sources=include_sources)
     if recall == "hybrid":
         return search_wiki_case_hybrid(query, top_k, include_sources=include_sources)
+    if recall == "hierarchical":
+        return search_wiki_case_hierarchical(query, top_k, include_sources=include_sources)
     return search_wiki_case(query, top_k, include_sources=include_sources)
 
 
@@ -733,7 +779,10 @@ def cmd_eval(args: argparse.Namespace) -> int:
         return 2
 
     if args.json:
-        print(json.dumps(report, ensure_ascii=False, indent=2))
+        # Write UTF-8 directly to stdout buffer to avoid GBK encoding errors in PowerShell
+        json_str = json.dumps(report, ensure_ascii=False, indent=2)
+        sys.stdout.buffer.write(json_str.encode("utf-8"))
+        sys.stdout.buffer.write(b"\n")
     else:
         print_report(report)
     return 0
@@ -753,11 +802,13 @@ def main() -> None:
                            "(negative control: does fused ranking hurt hit@k?)")
     mode.add_argument("--grouped", action="store_true",
                       help="evaluate the grouped search_tigermemory shape using primary_results")
-    eval_p.add_argument("--recall", choices=["lexical", "embedding", "hybrid"], default="lexical",
+    eval_p.add_argument("--recall", choices=["lexical", "embedding", "hybrid", "hierarchical"], default="lexical",
                         help="wiki/sources recall backend. 'embedding' = cosine over "
                              "tm_embed_index; 'hybrid' = RRF fusion of lexical + embedding; "
+                             "'hierarchical' = L0/L1/L2 multi-layer aggregation (experimental); "
                              "'lexical' = current token-AND search_wiki. Build the embed "
-                             "index first via `python tools/tm_embed_index.py build`.")
+                             "index first via `python tools/tm_embed_index.py build` or "
+                             "`python tools/tm_hier_index.py build` for hierarchical.")
     eval_p.add_argument("--rerank", choices=["off", "embedding"], default="off",
                         help="post-lexical rerank stage. 'embedding' = cosine over the query "
                              "and hit-text embeddings (EMBEDDING_BASE_URL/MODEL env). "
