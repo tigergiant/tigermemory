@@ -9,6 +9,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tm_expense
+import tm_llm
 
 
 def import_csv(csv_path: str, dry_run: bool = False) -> dict[str, Any]:
@@ -52,6 +53,9 @@ def import_csv(csv_path: str, dry_run: bool = False) -> dict[str, Any]:
         "expense_success": 0.0, "income_success": 0.0,
         "refunded_total": 0.0, "internal_transfer_total": 0.0,
     }
+    llm_fallback_count = 0
+    llm_fallback_failed_count = 0
+    llm_fallback_rows: list[dict] = []
 
     for row_idx, row in enumerate(reader):
         if not any(v.strip() for v in row.values() if v):
@@ -76,8 +80,52 @@ def import_csv(csv_path: str, dry_run: bool = False) -> dict[str, Any]:
             note_parts = [p for p in (product, remark) if p]
             note = " | ".join(note_parts) if note_parts else None
 
+            # --- 交易类型 ---
+            trans_type = (row.get("交易类型") or "").strip()
+
+            # --- 来源 ---
+            source = (row.get("来源") or "").strip()
+
+            # --- 支付方式 ---
+            payment_method = (row.get("支付方式") or "").strip() or None
+
             # --- Status inference ---
-            status = _infer_status(direction, amount, product, remark)
+            status = _infer_status(direction, amount, product, remark, trans_type)
+
+            # --- LLM fallback for unknown ---
+            if status == "unknown":
+                llm_res = tm_llm.classify_status(
+                    direction=direction, amount=amount, product=product, remark=remark,
+                    trans_type=trans_type, payment_method=payment_method or "", source=source,
+                )
+                if llm_res.get("ok"):
+                    status = llm_res["status"]
+                    llm_fallback_count += 1
+                    note = (note or "") + f" [LLM_STATUS:{status}@{llm_res['confidence']:.2f}]"
+                    llm_fallback_rows.append({
+                        "row": row_idx + 2,
+                        "merchant": (row.get("交易对方") or "").strip(),
+                        "product": product,
+                        "direction": direction,
+                        "amount": amount,
+                        "trans_type": trans_type,
+                        "llm_status": status,
+                        "llm_confidence": llm_res["confidence"],
+                    })
+                else:
+                    status = "closed"
+                    llm_fallback_failed_count += 1
+                    note = (note or "") + f" [LLM_STATUS_FAILED:{llm_res.get('reasoning','')[:50]}]"
+                    llm_fallback_rows.append({
+                        "row": row_idx + 2,
+                        "merchant": (row.get("交易对方") or "").strip(),
+                        "product": product,
+                        "direction": direction,
+                        "amount": amount,
+                        "trans_type": trans_type,
+                        "llm_failed": True,
+                        "llm_reason": llm_res.get("reasoning", "")[:50],
+                    })
 
             # --- kind ---
             if status == "refunded":
@@ -101,9 +149,6 @@ def import_csv(csv_path: str, dry_run: bool = False) -> dict[str, Any]:
 
             # --- 交易对方 ---
             merchant = (row.get("交易对方") or "").strip() or None
-
-            # --- 支付方式 ---
-            payment_method = (row.get("支付方式") or "").strip() or None
 
             # Track status counts
             status_counts[status] = status_counts.get(status, 0) + 1
@@ -164,6 +209,9 @@ def import_csv(csv_path: str, dry_run: bool = False) -> dict[str, Any]:
             "samples": samples,
             "status_counts": status_counts,
             "amount_summary": amount_summary,
+            "llm_fallback_count": llm_fallback_count,
+            "llm_fallback_failed_count": llm_fallback_failed_count,
+            "llm_fallback_rows": llm_fallback_rows,
         }
 
     if not entries:
@@ -177,6 +225,9 @@ def import_csv(csv_path: str, dry_run: bool = False) -> dict[str, Any]:
             "samples": [],
             "status_counts": status_counts,
             "amount_summary": amount_summary,
+            "llm_fallback_count": llm_fallback_count,
+            "llm_fallback_failed_count": llm_fallback_failed_count,
+            "llm_fallback_rows": llm_fallback_rows,
         }
 
     result = tm_expense.expense_write(
@@ -194,29 +245,51 @@ def import_csv(csv_path: str, dry_run: bool = False) -> dict[str, Any]:
         "samples": samples,
         "status_counts": status_counts,
         "amount_summary": amount_summary,
+        "llm_fallback_count": llm_fallback_count,
+        "llm_fallback_failed_count": llm_fallback_failed_count,
+        "llm_fallback_rows": llm_fallback_rows,
     }
 
 
-def _infer_status(direction: str, amount: float, product: str, remark: str) -> str:
-    """Infer transaction status from direction, amount, and description."""
-    product_lower = product.lower()
-    remark_lower = remark.lower()
+def _infer_status(direction: str, amount: float, product: str, remark: str,
+                  trans_type: str = "") -> str:
+    """
+    Infer transaction status. Returns one of:
+    'success' | 'refunded' | 'closed' | 'internal_transfer' | 'unknown'
 
-    # Refund detection
-    refund_keywords = ["退款", "退货", "退"]
-    for kw in refund_keywords:
-        if kw in product_lower or kw in remark_lower:
-            return "refunded"
+    'unknown' triggers LLM fallback in caller.
+    """
+    direction = direction.strip()
+    trans_type = trans_type.strip()
 
-    # Zero amount → closed (authorization hold, etc.)
+    # 1. 交易类型列优先（明确语义）
+    if trans_type in ("退款", "退货", "已退款"):
+        return "refunded"
+    if trans_type in ("信用卡还款", "余额宝转入", "余额宝转出", "余利宝转入",
+                       "余利宝转出", "理财申购", "理财赎回", "转账给自己",
+                       "零钱通转入", "零钱通转出"):
+        return "internal_transfer"
+
+    # 2. 金额 0 → 授权解冻等
     if amount == 0.0:
         return "closed"
 
-    # 不计收支 → internal transfer
+    # 3. 商品说明/备注明确退款关键字（双字以上，避免单字误伤）
+    refund_keywords = ["退款", "退货", "已退", "退还款", "原路退回"]
+    if any(kw in product for kw in refund_keywords) or \
+       any(kw in remark for kw in refund_keywords):
+        return "refunded"
+
+    # 4. 收/支列
+    if direction == "支出":
+        return "success"
+    if direction == "收入":
+        return "success"
     if direction == "不计收支":
         return "internal_transfer"
 
-    return "success"
+    # 5. 兜底失败 → 让 caller 走 LLM 兜底
+    return "unknown"
 
 
 def _parse_datetime(s: str) -> str | None:
