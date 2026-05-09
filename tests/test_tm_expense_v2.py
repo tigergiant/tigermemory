@@ -527,3 +527,96 @@ def test_read_export_markdown_full_fields(monkeypatch):
     assert "| payment_method |" in content
     assert "出差" in content
     assert "wechat" in content
+
+
+def test_fts_search_basic(monkeypatch):
+    db = _temp_db(monkeypatch)
+    # Insert entries with different notes
+    tm_expense.expense_write(action="record", kind="expense", amount=35, category="餐饮", note="星巴克咖啡")
+    tm_expense.expense_write(action="record", kind="expense", amount=45, category="餐饮", note="麦当劳午餐")
+    res = tm_expense.expense_read(mode="search", query="咖啡")
+    assert res["ok"] is True
+    assert res["row_count"] == 1
+    assert "星巴克" in res["rows"][0]["note"]
+    assert "麦当劳" not in res["rows"][0]["note"]
+
+
+def test_fts_search_tags(monkeypatch):
+    db = _temp_db(monkeypatch)
+    # Insert entries with different tags
+    tm_expense.expense_write(action="record", kind="expense", amount=100, category="交通", tags=["出差"])
+    tm_expense.expense_write(action="record", kind="expense", amount=50, category="交通", tags=["日常"])
+    res = tm_expense.expense_read(mode="search", query="出差")
+    assert res["ok"] is True
+    assert res["row_count"] == 1
+    assert "出差" in res["rows"][0]["tags"]
+
+
+def test_migrate_v3_idempotent(monkeypatch):
+    db = _temp_db(monkeypatch)
+    # Run migrate_v3 twice
+    from tm_expense_migrate_v3 import migrate as migrate_v3
+    result1 = migrate_v3(dry_run=False, ledger_path=db)
+    assert result1["ok"] is True
+    result2 = migrate_v3(dry_run=False, ledger_path=db)
+    assert result2["ok"] is True
+    assert result2["note"] == "already at v3, nothing to do"
+
+
+def test_backup_basic(monkeypatch):
+    db = _temp_db(monkeypatch)
+    # Insert a test entry
+    tm_expense.expense_write(action="record", kind="expense", amount=100, category="餐饮")
+    # Run backup
+    from tm_expense_backup import backup
+    result = backup(ledger_path=db, keep=30)
+    assert result["ok"] is True
+    assert result["retained"] == 1
+    assert result["deleted"] == 0
+    # Verify backup file exists
+    backup_path = Path(result["backup_path"])
+    assert backup_path.exists()
+    # Verify backup is valid SQLite
+    conn = sqlite3.connect(str(backup_path))
+    count = conn.execute("SELECT COUNT(*) FROM expense_entries").fetchone()[0]
+    conn.close()
+    assert count == 1
+
+
+def test_backup_retention(monkeypatch):
+    db = _temp_db(monkeypatch)
+    from tm_expense_backup import backup
+    # Run backup 32 times
+    for i in range(32):
+        result = backup(ledger_path=db, keep=30)
+        assert result["ok"] is True
+    # Check that only 30 backups remain
+    backup_dir = db.parent / "backups"
+    backups = list(backup_dir.glob("ledger-*.db"))
+    assert len(backups) == 30
+
+
+def test_digest_basic(monkeypatch):
+    db = _temp_db(monkeypatch)
+    # Insert test data for May 2026
+    tm_expense.expense_write(action="record", kind="expense", amount=100, category="餐饮", occurred_at="2026-05-15T12:00:00+08:00")
+    tm_expense.expense_write(action="record", kind="income", amount=5000, category="工资", occurred_at="2026-05-01T09:00:00+08:00")
+    # Generate digest
+    from tm_expense_digest import digest
+    result = digest(month="2026-05")
+    assert result["ok"] is True
+    assert result["expense_total"] == 100.0
+    assert result["income_total"] == 5000.0
+    assert result["net_flow"] == 4900.0
+    # Verify output file contains all section headers
+    output_path = Path(result["output_path"])
+    content = output_path.read_text(encoding="utf-8")
+    assert "# 月度账单摘要" in content
+    assert "## 本月概览" in content
+    assert "## 分类 Top 10" in content
+    assert "## 商家 Top 10" in content
+    assert "## 异常笔列表" in content
+    assert "## 与上月环比" in content
+    assert "## 预算执行情况" in content
+
+

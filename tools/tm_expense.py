@@ -176,6 +176,28 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_entries_tags
         ON expense_entries(tags)
     """)
+    # v3 FTS5 full-text search table (if migration hasn't run)
+    conn.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS expense_entries_fts
+        USING fts5(note, tags, content='expense_entries', content_rowid='id')
+    """)
+    # FTS5 triggers for auto-sync
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS fts_entries_insert AFTER INSERT ON expense_entries BEGIN
+            INSERT INTO expense_entries_fts(rowid, note, tags)
+            VALUES (NEW.id, NEW.note, NEW.tags);
+        END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS fts_entries_update AFTER UPDATE ON expense_entries BEGIN
+            UPDATE expense_entries_fts SET note = NEW.note, tags = NEW.tags WHERE rowid = NEW.id;
+        END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS fts_entries_delete AFTER DELETE ON expense_entries BEGIN
+            DELETE FROM expense_entries_fts WHERE rowid = OLD.id;
+        END
+    """)
     # views
     conn.execute("""
         CREATE VIEW IF NOT EXISTS v_active_entries AS
@@ -842,11 +864,13 @@ def expense_read(
     anomaly_sigma: float = 2.0,
     # ---- mode=export ----
     export_format: str = "markdown",
+    # ---- mode=search ----
+    query: str | None = None,
 ) -> dict[str, Any]:
     """Unified read endpoint for expense tracker v2.
 
     Modes: list, aggregate, trend, compare, anomaly, budget_status,
-           categories, merchants, export, sql.
+           categories, merchants, export, sql, search.
     """
     if kind is not None and kind not in VALID_KINDS:
         raise ValueError(f"kind must be one of {sorted(VALID_KINDS)}, got {kind!r}")
@@ -892,6 +916,11 @@ def expense_read(
         )
     if mode == "sql":
         return _read_sql(sql, sql_params)
+    if mode == "search":
+        return _read_search(
+            query, start_date, end_date, kind, category, merchant, payment_method,
+            tags, min_amount, max_amount, include_deleted, limit, offset,
+        )
     raise ValueError(f"unknown mode: {mode!r}")
 
 
@@ -1538,31 +1567,76 @@ def _read_sql(sql: str | None, sql_params: dict | None):
         return {"ok": False, "reason": "sql validation failed", "detail": "SQL exceeds 4096 bytes limit"}
     if ";" in sql:
         return {"ok": False, "reason": "sql validation failed", "detail": "semicolons not allowed (multi-statement guard)"}
-    if not _SQL_ALLOWED_START_RE.match(sql):
-        return {"ok": False, "reason": "sql validation failed", "detail": "SQL must start with SELECT, WITH, or PRAGMA table_info/index_info"}
     if _SQL_FORBIDDEN_RE.search(sql):
         return {"ok": False, "reason": "sql validation failed", "detail": "forbidden keyword detected"}
+    if not _SQL_ALLOWED_START_RE.match(sql):
+        return {"ok": False, "reason": "sql validation failed", "detail": "SQL must start with SELECT, WITH, or PRAGMA table_info/index_info"}
 
-    conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
+    conn = _get_conn()
     try:
-        conn.execute("PRAGMA query_only=ON")
-        cur = conn.execute(sql, sql_params or {})
-        cols = [d[0] for d in cur.description] if cur.description else []
-        rows = cur.fetchmany(1001)
-        truncated = len(rows) > 1000
-        if truncated:
-            rows = rows[:1000]
+        _ensure_schema(conn)
+        try:
+            rows = conn.execute(sql, (sql_params or {})).fetchall()
+        except Exception as e:
+            return {"ok": False, "reason": "sql execution failed", "detail": str(e)}
         return {
             "ok": True,
             "mode": "sql",
-            "columns": cols,
-            "rows": [list(r) for r in rows],
-            "truncated": truncated,
+            "rows": [dict(r) for r in rows],
             "row_count": len(rows),
         }
-    except sqlite3.Error as e:
-        return {"ok": False, "reason": "sql execution failed", "detail": str(e)}
+    finally:
+        conn.close()
+
+
+def _read_search(
+    query, start_date, end_date, kind, category, merchant, payment_method,
+    tags, min_amount, max_amount, include_deleted, limit, offset,
+):
+    if not query or not query.strip():
+        return {"ok": False, "reason": "query is required for mode=search"}
+    
+    conn = _get_conn()
+    try:
+        _ensure_schema(conn)
+        
+        # Build FTS5 MATCH query
+        fts_query = query.strip()
+        # Build base WHERE clause for regular filters
+        where, params = _build_where(
+            start_date, end_date, kind, category, merchant, payment_method,
+            tags, min_amount, max_amount, include_deleted,
+        )
+        
+        # Combine FTS search with regular filters
+        # Use expense_entries_fts for search, then join with expense_entries for full data
+        if where:
+            sql = f"""
+                SELECT e.* FROM expense_entries e
+                INNER JOIN expense_entries_fts fts ON e.id = fts.rowid
+                WHERE expense_entries_fts MATCH ? AND {where}
+                ORDER BY e.occurred_at DESC
+                LIMIT ? OFFSET ?
+            """
+            rows = conn.execute(sql, [fts_query] + params + [limit, offset]).fetchall()
+        else:
+            sql = f"""
+                SELECT e.* FROM expense_entries e
+                INNER JOIN expense_entries_fts fts ON e.id = fts.rowid
+                WHERE expense_entries_fts MATCH ?
+                ORDER BY e.occurred_at DESC
+                LIMIT ? OFFSET ?
+            """
+            rows = conn.execute(sql, [fts_query, limit, offset]).fetchall()
+        
+        data = [dict(r) for r in rows]
+        return {
+            "ok": True,
+            "mode": "search",
+            "query": query,
+            "row_count": len(data),
+            "rows": data,
+        }
     finally:
         conn.close()
 
