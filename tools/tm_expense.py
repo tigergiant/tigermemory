@@ -1324,6 +1324,15 @@ def _read_anomaly(
         if start_date is None:
             start_date = (datetime.datetime.now(_TZ_CN) - datetime.timedelta(days=anomaly_window_days)).strftime("%Y-%m-%d")
 
+        # Normalize dates to YYYY-MM-DD format (strip timezone info if present)
+        def _normalize_date(d):
+            if d and "T" in d:
+                return d.split("T")[0]
+            return d
+
+        end_date = _normalize_date(end_date)
+        start_date = _normalize_date(start_date)
+
         # historical stats from window
         hist_end = end_date
         hist_start = (datetime.datetime.strptime(hist_end, "%Y-%m-%d") - datetime.timedelta(days=anomaly_window_days)).strftime("%Y-%m-%d")
