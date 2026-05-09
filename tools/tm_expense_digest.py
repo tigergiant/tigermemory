@@ -130,7 +130,8 @@ def digest(month: str, output_path: Path | None = None) -> dict:
         lines.append("| 分类 | 金额 | 占比 |")
         lines.append("|------|------|------|")
         for g in cat_agg["groups"]:
-            lines.append(f"| {g['category']} | ¥{g['total']:.2f} | {g['pct']:.1f}% |")
+            total = g.get("total", 0)
+            lines.append(f"| {g['category']} | ¥{total:.2f} | {g.get('pct', 0):.1f}% |")
     else:
         lines.append("(无数据)")
 
@@ -139,12 +140,13 @@ def digest(month: str, output_path: Path | None = None) -> dict:
         "## 商家 Top 10",
         ""
     ])
-    if merch_agg["ok"] and merch_agg["groups"]:
+    if merch_agg["ok"] and merch_agg.get("groups"):
         lines.append("| 商家 | 金额 | 占比 |")
         lines.append("|------|------|------|")
         for g in merch_agg["groups"]:
-            merch_name = g["merchant"] or "(未分类)"
-            lines.append(f"| {merch_name} | ¥{g['total']:.2f} | {g['pct']:.1f}% |")
+            total = g.get("total", 0)
+            merch_name = g.get("merchant") or "(未分类)"
+            lines.append(f"| {merch_name} | ¥{total:.2f} | {g.get('pct', 0):.1f}% |")
     else:
         lines.append("(无数据)")
 
