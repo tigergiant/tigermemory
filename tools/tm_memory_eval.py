@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import re
 import sys
@@ -458,6 +459,131 @@ def search_wiki_case_doubao_hybrid(
     return out
 
 
+def search_wiki_case_qwen_v4_dense(
+    query: str,
+    top_k: int,
+    *,
+    include_sources: bool = False,
+) -> list[SearchHit]:
+    """Phase 6 eval-only: Aliyun DashScope text-embedding-v4 dense-only recall.
+
+    Uses `tools/tm_qwen_v4_index.search_dense` against the separate
+    `runtime/embed_index/wiki_qwen_v4_dense.jsonl` index. Query side uses
+    text_type=query + instruct (DEFAULT_INSTRUCT) per Qwen3-Embedding family
+    asymmetric retrieval guidance. Cosine over 1024-dim dense vectors.
+    """
+    import tm_qwen_v4_index  # type: ignore[import-not-found]
+    pool_k = max(top_k * 4, 12)
+    raw = tm_qwen_v4_index.search_dense(query, k=pool_k)
+    out: list[SearchHit] = []
+    for h in raw:
+        path = h["path"]
+        if not include_sources and path.startswith("sources/"):
+            continue
+        out.append(SearchHit(
+            path=path,
+            title=h.get("title", ""),
+            snippet="",
+            score=float(h["score"]),
+            source="wiki",
+        ))
+        if len(out) >= top_k:
+            break
+    return out
+
+
+def search_wiki_case_qwen_v4_hybrid(
+    query: str,
+    top_k: int,
+    *,
+    include_sources: bool = False,
+) -> list[SearchHit]:
+    """Phase 6 eval-only: text-embedding-v4 dense+sparse hybrid recall.
+
+    Score = w_d * cosine_dense + w_s * cosine_sparse, where w_d defaults to
+    0.5 and is overridable via env TM_QWENV4_DENSE_W (for grid search:
+    0.3 / 0.5 / 0.7). w_s = 1 - w_d.
+    """
+    import tm_qwen_v4_index  # type: ignore[import-not-found]
+    try:
+        w_d = float(os.environ.get("TM_QWENV4_DENSE_W", "0.5"))
+    except ValueError:
+        w_d = 0.5
+    w_d = max(0.0, min(1.0, w_d))
+    pool_k = max(top_k * 4, 12)
+    raw = tm_qwen_v4_index.search_hybrid(query, k=pool_k, dense_weight=w_d)
+    out: list[SearchHit] = []
+    for h in raw:
+        path = h["path"]
+        if not include_sources and path.startswith("sources/"):
+            continue
+        out.append(SearchHit(
+            path=path,
+            title=h.get("title", ""),
+            snippet="",
+            score=float(h["score"]),
+            source="wiki",
+        ))
+        if len(out) >= top_k:
+            break
+    return out
+
+
+def _rrf_fuse_lex_emb(
+    query: str,
+    top_k: int,
+    include_sources: bool,
+    emb_branch: list[SearchHit],
+) -> list[SearchHit]:
+    """Helper: RRF fuse the lexical branch with a precomputed embedding branch."""
+    pool_k = max(top_k * 4, 12)
+    lex = search_wiki_case(query, pool_k, include_sources=include_sources)
+    fused: dict[str, dict[str, Any]] = {}
+    for rank, hit in enumerate(lex, 1):
+        fused.setdefault(hit.path, {"hit": hit, "score": 0.0})
+        fused[hit.path]["score"] += 1.0 / (RRF_K + rank)
+    for rank, hit in enumerate(emb_branch, 1):
+        if hit.path not in fused:
+            fused[hit.path] = {"hit": hit, "score": 0.0}
+        fused[hit.path]["score"] += 1.0 / (RRF_K + rank)
+    ordered = sorted(fused.values(), key=lambda v: -v["score"])
+    out: list[SearchHit] = []
+    for entry in ordered[:top_k]:
+        h = entry["hit"]
+        out.append(SearchHit(
+            path=h.path,
+            title=h.title,
+            snippet=h.snippet,
+            score=round(entry["score"], 6),
+            source="wiki",
+        ))
+    return out
+
+
+def search_wiki_case_qwen_v4_dense_rrf(
+    query: str,
+    top_k: int,
+    *,
+    include_sources: bool = False,
+) -> list[SearchHit]:
+    """Phase 6: lexical + qwen-v4 dense RRF fusion."""
+    pool_k = max(top_k * 4, 12)
+    emb = search_wiki_case_qwen_v4_dense(query, pool_k, include_sources=include_sources)
+    return _rrf_fuse_lex_emb(query, top_k, include_sources, emb)
+
+
+def search_wiki_case_qwen_v4_hybrid_rrf(
+    query: str,
+    top_k: int,
+    *,
+    include_sources: bool = False,
+) -> list[SearchHit]:
+    """Phase 6: lexical + qwen-v4 (dense+sparse) RRF fusion."""
+    pool_k = max(top_k * 4, 12)
+    emb = search_wiki_case_qwen_v4_hybrid(query, pool_k, include_sources=include_sources)
+    return _rrf_fuse_lex_emb(query, top_k, include_sources, emb)
+
+
 def _wiki_recall(query: str, top_k: int, *, include_sources: bool, recall: str) -> list[SearchHit]:
     """Dispatch wiki recall to lexical / embedding / hybrid / hierarchical backend."""
     if recall == "embedding":
@@ -470,6 +596,14 @@ def _wiki_recall(query: str, top_k: int, *, include_sources: bool, recall: str) 
         return search_wiki_case_hier_hybrid(query, top_k, include_sources=include_sources)
     if recall == "doubao-hybrid":
         return search_wiki_case_doubao_hybrid(query, top_k, include_sources=include_sources)
+    if recall == "qwen-v4-dense":
+        return search_wiki_case_qwen_v4_dense(query, top_k, include_sources=include_sources)
+    if recall == "qwen-v4-hybrid":
+        return search_wiki_case_qwen_v4_hybrid(query, top_k, include_sources=include_sources)
+    if recall == "qwen-v4-dense-rrf":
+        return search_wiki_case_qwen_v4_dense_rrf(query, top_k, include_sources=include_sources)
+    if recall == "qwen-v4-hybrid-rrf":
+        return search_wiki_case_qwen_v4_hybrid_rrf(query, top_k, include_sources=include_sources)
     return search_wiki_case(query, top_k, include_sources=include_sources)
 
 
@@ -898,7 +1032,7 @@ def main() -> None:
                            "(negative control: does fused ranking hurt hit@k?)")
     mode.add_argument("--grouped", action="store_true",
                       help="evaluate the grouped search_tigermemory shape using primary_results")
-    eval_p.add_argument("--recall", choices=["lexical", "embedding", "hybrid", "hierarchical", "hier-hybrid", "doubao-hybrid"], default="lexical",
+    eval_p.add_argument("--recall", choices=["lexical", "embedding", "hybrid", "hierarchical", "hier-hybrid", "doubao-hybrid", "qwen-v4-dense", "qwen-v4-hybrid", "qwen-v4-dense-rrf", "qwen-v4-hybrid-rrf"], default="lexical",
                         help="wiki/sources recall backend. 'embedding' = cosine over "
                              "tm_embed_index; 'hybrid' = RRF fusion of lexical + embedding; "
                              "'hierarchical' = L0/L1/L2 multi-layer aggregation (experimental); "
