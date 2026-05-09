@@ -54,7 +54,8 @@ ENDPOINT = (
     "text-embedding/text-embedding"
 )
 MODEL = "text-embedding-v4"
-DIMENSION = 1024
+DIMENSION = 1024  # default; --dim overrides for Phase 6b 2048 ablation
+ALLOWED_DIMS = {64, 128, 256, 512, 768, 1024, 1536, 2048}
 PREVIEW_CHARS = 200
 SCHEMA_VERSION = "phase6-v1"
 
@@ -73,16 +74,23 @@ BATCH_SIZE = 10  # DashScope native accepts up to 25; we stay conservative.
 
 # ---------- mode helpers ----------
 
-def _paths(mode: str) -> tuple[Path, Path]:
+def _paths(mode: str, dim: int = DIMENSION) -> tuple[Path, Path]:
+    """Return (jsonl, meta) paths. Dim != 1024 gets a suffix to avoid
+    overwriting Phase 6 indices. Dim 1024 keeps the legacy unsuffixed name
+    for backward compat with the Phase 6 recall code paths.
+    """
+    if dim not in ALLOWED_DIMS:
+        raise ValueError(f"dim must be one of {sorted(ALLOWED_DIMS)}, got {dim}")
+    suffix = "" if dim == 1024 else f"_{dim}"
     if mode == "dense":
         return (
-            INDEX_DIR / "wiki_qwen_v4_dense.jsonl",
-            INDEX_DIR / "wiki_qwen_v4_dense.meta.json",
+            INDEX_DIR / f"wiki_qwen_v4_dense{suffix}.jsonl",
+            INDEX_DIR / f"wiki_qwen_v4_dense{suffix}.meta.json",
         )
     if mode == "hybrid":
         return (
-            INDEX_DIR / "wiki_qwen_v4_hybrid.jsonl",
-            INDEX_DIR / "wiki_qwen_v4_hybrid.meta.json",
+            INDEX_DIR / f"wiki_qwen_v4_hybrid{suffix}.jsonl",
+            INDEX_DIR / f"wiki_qwen_v4_hybrid{suffix}.meta.json",
         )
     raise ValueError(f"unknown mode: {mode}")
 
@@ -184,10 +192,11 @@ def _embed_with_retry(body: dict, api_key: str, stats: _Stats) -> dict:
             attempt += 1
 
 
-def _request_body(texts: list[str], *, mode: str, side: str, instruct: str | None) -> dict:
+def _request_body(texts: list[str], *, mode: str, side: str, instruct: str | None,
+                  dim: int = DIMENSION) -> dict:
     """side ∈ {document, query}. mode ∈ {dense, hybrid}."""
     params: dict[str, Any] = {
-        "dimension": DIMENSION,
+        "dimension": dim,
         "text_type": side,
         "output_type": _output_type(mode),
     }
@@ -285,11 +294,13 @@ def _preview(body: str, n: int = PREVIEW_CHARS) -> str:
 
 # ---------- build ----------
 
-def build(*, mode: str, force: bool = False, limit: int | None = None) -> dict:
+def build(*, mode: str, dim: int = DIMENSION, force: bool = False, limit: int | None = None) -> dict:
     if mode not in ("dense", "hybrid"):
         raise ValueError(f"mode must be dense|hybrid, got {mode}")
+    if dim not in ALLOWED_DIMS:
+        raise ValueError(f"dim must be one of {sorted(ALLOWED_DIMS)}, got {dim}")
     api_key = _api_key()
-    index_path, meta_path = _paths(mode)
+    index_path, meta_path = _paths(mode, dim)
     existing = {} if force else _load_index(index_path)
     keep: dict[str, dict[str, Any]] = {}
     pending: list[tuple[str, str, list[str], str, str, str]] = []
@@ -324,7 +335,7 @@ def build(*, mode: str, force: bool = False, limit: int | None = None) -> dict:
     for batch_start in range(0, len(pending), BATCH_SIZE):
         batch = pending[batch_start: batch_start + BATCH_SIZE]
         texts = [t[5] for t in batch]
-        body_req = _request_body(texts, mode=mode, side="document", instruct=None)
+        body_req = _request_body(texts, mode=mode, side="document", instruct=None, dim=dim)
         try:
             d = _embed_with_retry(body_req, api_key, stats)
             results = _parse_embeddings(d, mode)
@@ -374,7 +385,7 @@ def build(*, mode: str, force: bool = False, limit: int | None = None) -> dict:
         "schema": SCHEMA_VERSION,
         "endpoint": ENDPOINT,
         "model": MODEL,
-        "dimension": DIMENSION,
+        "dimension": dim,
         "mode": mode,
         "output_type": _output_type(mode),
         "instruct_default": DEFAULT_INSTRUCT,
@@ -449,34 +460,38 @@ def _cosine_sparse(a: dict[int, float], b: dict[int, float]) -> float:
     return dot / (na * nb)
 
 
-_DENSE_CACHE: list[dict[str, Any]] | None = None
-_HYBRID_CACHE: list[dict[str, Any]] | None = None
+_ENTRY_CACHE: dict[tuple[str, int], list[dict[str, Any]]] = {}
 
 
-def _entries(mode: str) -> list[dict[str, Any]]:
-    global _DENSE_CACHE, _HYBRID_CACHE
-    if mode == "dense":
-        if _DENSE_CACHE is None:
-            _DENSE_CACHE = list(_load_index(_paths("dense")[0]).values())
-        return _DENSE_CACHE
-    if mode == "hybrid":
-        if _HYBRID_CACHE is None:
-            _HYBRID_CACHE = list(_load_index(_paths("hybrid")[0]).values())
-        return _HYBRID_CACHE
-    raise ValueError(mode)
+def _entries(mode: str, dim: int = DIMENSION) -> list[dict[str, Any]]:
+    key = (mode, dim)
+    if key not in _ENTRY_CACHE:
+        _ENTRY_CACHE[key] = list(_load_index(_paths(mode, dim)[0]).values())
+    return _ENTRY_CACHE[key]
 
 
-_QUERY_CACHE: dict[tuple[str, str, str], tuple[list[float], dict[int, float]]] = {}
+_QUERY_CACHE: dict[tuple[str, int, str, str], tuple[list[float], dict[int, float]]] = {}
 
 
-def _embed_query(query: str, *, mode: str, instruct: str | None = None) -> tuple[list[float], dict[int, float]]:
-    eff_instruct = instruct or DEFAULT_INSTRUCT
-    cache_key = (mode, eff_instruct, query)
+def _effective_instruct(instruct: str | None) -> str:
+    """Resolve instruct from explicit arg → env TM_QWENV4_INSTRUCT_TEXT → DEFAULT.
+    Env override exists for Phase 6b prompt ablation without code edits.
+    """
+    if instruct is not None:
+        return instruct
+    env_text = os.environ.get("TM_QWENV4_INSTRUCT_TEXT", "").strip()
+    return env_text or DEFAULT_INSTRUCT
+
+
+def _embed_query(query: str, *, mode: str, dim: int = DIMENSION,
+                 instruct: str | None = None) -> tuple[list[float], dict[int, float]]:
+    eff_instruct = _effective_instruct(instruct)
+    cache_key = (mode, dim, eff_instruct, query)
     if cache_key in _QUERY_CACHE:
         return _QUERY_CACHE[cache_key]
     api_key = _api_key()
     stats = _Stats()
-    body = _request_body([query], mode=mode, side="query", instruct=eff_instruct)
+    body = _request_body([query], mode=mode, side="query", instruct=eff_instruct, dim=dim)
     d = _embed_with_retry(body, api_key, stats)
     parsed = _parse_embeddings(d, mode)
     dense, pairs = parsed[0]
@@ -485,9 +500,10 @@ def _embed_query(query: str, *, mode: str, instruct: str | None = None) -> tuple
     return result
 
 
-def search_dense(query: str, *, k: int = 10) -> list[dict[str, Any]]:
-    q_dense, _ = _embed_query(query, mode="dense")
-    entries = _entries("dense")
+def search_dense(query: str, *, k: int = 10, dim: int = DIMENSION,
+                 instruct: str | None = None) -> list[dict[str, Any]]:
+    q_dense, _ = _embed_query(query, mode="dense", dim=dim, instruct=instruct)
+    entries = _entries("dense", dim)
     scored: list[tuple[float, dict[str, Any]]] = []
     for e in entries:
         score = _cosine_dense(q_dense, e.get("dense") or [])
@@ -500,18 +516,20 @@ def search_dense(query: str, *, k: int = 10) -> list[dict[str, Any]]:
             "score": round(s, 6),
             "score_dense": round(s, 6),
             "score_sparse": 0.0,
-            "source": "qwen-v4-dense",
+            "source": f"qwen-v4-dense-{dim}",
         }
         for s, e in scored[:k]
     ]
 
 
 def search_hybrid(query: str, *, k: int = 10, dense_weight: float = 0.5,
-                  sparse_weight: float | None = None) -> list[dict[str, Any]]:
+                  sparse_weight: float | None = None,
+                  dim: int = DIMENSION,
+                  instruct: str | None = None) -> list[dict[str, Any]]:
     if sparse_weight is None:
         sparse_weight = 1.0 - dense_weight
-    q_dense, q_sparse = _embed_query(query, mode="hybrid")
-    entries = _entries("hybrid")
+    q_dense, q_sparse = _embed_query(query, mode="hybrid", dim=dim, instruct=instruct)
+    entries = _entries("hybrid", dim)
     scored: list[tuple[float, float, float, dict[str, Any]]] = []
     for e in entries:
         ds = _cosine_dense(q_dense, e.get("dense") or [])
@@ -532,16 +550,48 @@ def search_hybrid(query: str, *, k: int = 10, dense_weight: float = 0.5,
     ]
 
 
+def search_hybrid_branches(query: str, *, k: int = 10, dim: int = DIMENSION,
+                           instruct: str | None = None) -> dict[str, list[dict[str, Any]]]:
+    """Phase 6b: return separately ranked dense and sparse top-K from the hybrid
+    index, NOT a fused score. Caller (e.g. triple-RRF) RRF-merges externally.
+    """
+    q_dense, q_sparse = _embed_query(query, mode="hybrid", dim=dim, instruct=instruct)
+    entries = _entries("hybrid", dim)
+    dense_scored: list[tuple[float, dict[str, Any]]] = []
+    sparse_scored: list[tuple[float, dict[str, Any]]] = []
+    for e in entries:
+        ds = _cosine_dense(q_dense, e.get("dense") or [])
+        ss = _cosine_sparse(q_sparse, _to_sparse_dict(e.get("sparse") or []))
+        dense_scored.append((ds, e))
+        sparse_scored.append((ss, e))
+    dense_scored.sort(key=lambda t: -t[0])
+    sparse_scored.sort(key=lambda t: -t[0])
+    def fmt(label: str, scored: list[tuple[float, dict[str, Any]]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "path": e["path"],
+                "title": e.get("title", ""),
+                "score": round(s, 6),
+                "source": label,
+            }
+            for s, e in scored[:k]
+        ]
+    return {
+        "dense": fmt("qwen-v4-dense", dense_scored),
+        "sparse": fmt("qwen-v4-sparse", sparse_scored),
+    }
+
+
 # ---------- CLI ----------
 
 def cmd_build(args: argparse.Namespace) -> int:
-    meta = build(mode=args.mode, force=args.force, limit=args.limit)
+    meta = build(mode=args.mode, dim=args.dim, force=args.force, limit=args.limit)
     print(json.dumps(meta, ensure_ascii=False, indent=2))
     return 0
 
 
 def cmd_stats(args: argparse.Namespace) -> int:
-    index_path, meta_path = _paths(args.mode)
+    index_path, meta_path = _paths(args.mode, args.dim)
     entries = _load_index(index_path)
     meta = _load_meta(meta_path)
     out = {
@@ -562,9 +612,9 @@ def cmd_stats(args: argparse.Namespace) -> int:
 
 def cmd_search(args: argparse.Namespace) -> int:
     if args.mode == "dense":
-        hits = search_dense(args.query, k=args.k)
+        hits = search_dense(args.query, k=args.k, dim=args.dim)
     else:
-        hits = search_hybrid(args.query, k=args.k,
+        hits = search_hybrid(args.query, k=args.k, dim=args.dim,
                              dense_weight=args.dense_weight)
     print(json.dumps(hits, ensure_ascii=False, indent=2))
     return 0
@@ -576,16 +626,20 @@ def main() -> None:
 
     b = sub.add_parser("build", help="build / refresh a qwen-v4 index")
     b.add_argument("--mode", choices=["dense", "hybrid"], required=True)
+    b.add_argument("--dim", type=int, default=DIMENSION,
+                   help=f"embedding dimension; one of {sorted(ALLOWED_DIMS)} (default 1024)")
     b.add_argument("--force", action="store_true")
     b.add_argument("--limit", type=int, default=None)
     b.set_defaults(func=cmd_build)
 
     s = sub.add_parser("stats", help="print index size + meta")
     s.add_argument("--mode", choices=["dense", "hybrid"], required=True)
+    s.add_argument("--dim", type=int, default=DIMENSION)
     s.set_defaults(func=cmd_stats)
 
     q = sub.add_parser("search", help="ad-hoc query (debug)")
     q.add_argument("--mode", choices=["dense", "hybrid"], required=True)
+    q.add_argument("--dim", type=int, default=DIMENSION)
     q.add_argument("query")
     q.add_argument("-k", type=int, default=10)
     q.add_argument("--dense-weight", type=float, default=0.5)
