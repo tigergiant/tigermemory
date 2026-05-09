@@ -189,7 +189,7 @@ def test_batch_record_rollback_on_failure(monkeypatch):
     assert result["ok"] is True
     assert result["inserted"] == 1
     assert len(result["errors"]) == 1
-    assert "amount must be > 0" in result["errors"][0]["error"]
+    assert "amount must be >= 0" in result["errors"][0]["error"]
 
     # Verify only valid entry was written
     lst = tm_expense.expense_read(mode="list")
@@ -282,13 +282,11 @@ def test_payment_method_normalization(monkeypatch):
     assert r["normalized"]["payment_method"] == "wechat"
 
 
-def test_payment_method_invalid(monkeypatch):
+def test_payment_method_accepts_any(monkeypatch):
     db = _temp_db(monkeypatch)
-    try:
-        tm_expense.expense_write(action="record", kind="expense", amount=10, category="餐饮", payment_method="Bitcoin")
-        assert False, "should raise"
-    except ValueError as e:
-        assert "unknown payment_method" in str(e)
+    r = tm_expense.expense_write(action="record", kind="expense", amount=10, category="餐饮", payment_method="Bitcoin")
+    assert r["ok"] is True
+    assert r["normalized"]["payment_method"] == "Bitcoin"
 
 
 # ------------------------------------------------------------------

@@ -161,19 +161,19 @@ def test_alipay_importer_basic(monkeypatch):
     ])
     r = tm_expense_import_alipay.import_csv(str(csv_path))
     assert r["ok"] is True
-    assert r["parsed"] == 2  # 不计收支 skipped
-    assert r["inserted"] == 2
-    assert r["skipped_invalid"] == 1
+    assert r["parsed"] == 3  # all 3 rows parsed (including 不计收支)
+    assert r["inserted"] == 3
+    assert r["skipped_invalid"] == 0
 
     # Verify DB
     rows = tm_expense.expense_read(mode="list").get("rows", [])
-    assert len(rows) == 2
-    kinds = {row["kind"] for row in rows}
-    assert kinds == {"expense", "income"}
+    assert len(rows) == 3
+    statuses = {row["status"] for row in rows}
+    assert "internal_transfer" in statuses
 
 
 def test_alipay_importer_skip_failed_status(monkeypatch):
-    """Transaction with 交易状态 != 交易成功 is skipped."""
+    """Transaction with 交易状态=交易关闭 is written as status=closed."""
     db = _temp_db(monkeypatch)
     csv_path = db.parent / "alipay_failed.csv"
     _write_alipay_csv(csv_path, [
@@ -183,9 +183,16 @@ def test_alipay_importer_skip_failed_status(monkeypatch):
          "金额": "50.00", "收/支": "支出", "交易状态": "交易成功", "交易订单号": "TXN_OK"},
     ])
     r = tm_expense_import_alipay.import_csv(str(csv_path))
-    assert r["parsed"] == 1
-    assert r["inserted"] == 1
-    assert r["skipped_invalid"] == 1
+    assert r["parsed"] == 2
+    assert r["inserted"] == 2
+    assert r["skipped_invalid"] == 0
+
+    # Verify: closed row is in DB
+    rows = tm_expense.expense_read(mode="list").get("rows", [])
+    assert len(rows) == 2
+    statuses = {row["status"] for row in rows}
+    assert "closed" in statuses
+    assert "success" in statuses
 
 
 def test_alipay_importer_dry_run(monkeypatch):
