@@ -1189,17 +1189,52 @@ def _read_compare(
                 prev_start = str(int(start_date[:4]) - 1) + start_date[4:]
                 prev_end = str(int(end_date[:4]) - 1) + end_date[4:]
             elif compare == "mom":
-                # simplistic: previous month
+                # Use month arithmetic for precise cross-year handling
                 current_period = (start_date[:7], end_date[:7])
-                # compute previous month
-                dt = datetime.datetime.strptime(start_date[:7], "%Y-%m")
-                prev = dt - datetime.timedelta(days=1)
-                prev_start = prev.strftime("%Y-%m") + "-01"
-                prev_end = prev.strftime("%Y-%m") + "-31"
+                # Compute previous month by shifting year/month
+                year = int(start_date[:4])
+                month = int(start_date[5:7])
+                if month == 1:
+                    prev_year = year - 1
+                    prev_month = 12
+                else:
+                    prev_year = year
+                    prev_month = month - 1
+                prev_start = f"{prev_year:04d}-{prev_month:02d}-01"
+                # Last day of previous month
+                if prev_month == 12:
+                    prev_end = f"{prev_year:04d}-12-31"
+                else:
+                    # First day of next month minus 1 day
+                    next_month = prev_month + 1
+                    next_month_dt = datetime.datetime(prev_year, next_month, 1)
+                    last_day = (next_month_dt - datetime.timedelta(days=1)).day
+                    prev_end = f"{prev_year:04d}-{prev_month:02d}-{last_day:02d}"
             else:  # qoq
+                # Use quarter arithmetic (shift by 3 months)
                 current_period = (start_date[:4], end_date[:4])
-                prev_start = None
-                prev_end = None
+                year = int(start_date[:4])
+                month = int(start_date[5:7])
+                # Shift back 3 months
+                if month <= 3:
+                    prev_year = year - 1
+                    prev_month = month + 9
+                else:
+                    prev_year = year
+                    prev_month = month - 3
+                prev_start = f"{prev_year:04d}-{prev_month:02d}-01"
+                # Last day of previous quarter's last month
+                if prev_month in [3, 6, 9, 12]:
+                    quarter_end_month = prev_month
+                else:
+                    # Find end of quarter (3, 6, 9, 12)
+                    quarter_end_month = ((prev_month + 2) // 3) * 3
+                if quarter_end_month == 12:
+                    prev_end = f"{prev_year:04d}-12-31"
+                else:
+                    next_month_dt = datetime.datetime(prev_year, quarter_end_month + 1, 1)
+                    last_day = (next_month_dt - datetime.timedelta(days=1)).day
+                    prev_end = f"{prev_year:04d}-{quarter_end_month:02d}-{last_day:02d}"
         else:
             prev_start = prev_end = None
 
@@ -1267,12 +1302,28 @@ def _read_anomaly(
             hist_start, hist_end, kind, category, merchant, payment_method,
             tags, min_amount, max_amount, include_deleted,
         )
+        # Get sample size and compute sample variance
+        count_stats = conn.execute(
+            f"SELECT COUNT(*) AS n FROM expense_entries WHERE {hist_where}",
+            hist_params,
+        ).fetchone()
+        n = int(count_stats["n"] or 0)
+        if n < 2:
+            return {
+                "ok": False,
+                "reason": "insufficient sample",
+                "n": n,
+                "mode": "anomaly",
+            }
         stats = conn.execute(
-            f"SELECT AVG(amount) AS mean, (AVG(amount*amount) - AVG(amount)*AVG(amount)) AS var FROM expense_entries WHERE {hist_where}",
+            f"SELECT AVG(amount) AS mean, SUM(amount*amount) AS sum_sq, SUM(amount) AS sum_amt FROM expense_entries WHERE {hist_where}",
             hist_params,
         ).fetchone()
         mean = float(stats["mean"] or 0)
-        var = float(stats["var"] or 0)
+        sum_sq = float(stats["sum_sq"] or 0)
+        sum_amt = float(stats["sum_amt"] or 0)
+        # Sample variance: var = (SUM(x^2) - n * mean^2) / (n - 1)
+        var = (sum_sq - n * mean * mean) / (n - 1) if n > 1 else 0
         std = var ** 0.5 if var > 0 else 0
         upper = mean + anomaly_sigma * std
         lower = mean - anomaly_sigma * std if mean - anomaly_sigma * std > 0 else 0
@@ -1434,9 +1485,18 @@ def _read_export(
                 writer.writerows(data)
             content = buf.getvalue()
         else:  # markdown
-            lines = ["| id | kind | amount | currency | category | occurred_at | note |", "|---|---|---|---|---|---|---|"]
-            for r in data:
-                lines.append(f"| {r.get('id','')} | {r.get('kind','')} | {r.get('amount','')} | {r.get('currency','')} | {r.get('category','')} | {r.get('occurred_at','')} | {r.get('note','') or ''} |")
+            # Dynamic full fields with fixed column order
+            column_order = ["id", "kind", "amount", "currency", "category", "merchant", "payment_method", "occurred_at", "note", "tags", "deleted_at", "created_at"]
+            if data:
+                available_columns = [col for col in column_order if col in data[0].keys()]
+                header = "| " + " | ".join(available_columns) + " |"
+                separator = "| " + " | ".join("---" for _ in available_columns) + " |"
+                lines = [header, separator]
+                for r in data:
+                    row_values = [str(r.get(col, "")) for col in available_columns]
+                    lines.append("| " + " | ".join(row_values) + " |")
+            else:
+                lines = ["| id |", "|---|"]
             content = "\n".join(lines)
 
         return {

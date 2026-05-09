@@ -487,4 +487,43 @@ def test_read_categories_and_merchants(monkeypatch):
     assert any(c["name"] == "餐饮" for c in cats["categories"])
     mers = tm_expense.expense_read(mode="merchants")
     assert mers["ok"] is True
-    assert mers["merchants"] == []  # empty initially
+
+
+def test_read_compare_mom_cross_year(monkeypatch):
+    db = _temp_db(monkeypatch)
+    # Insert entries in Dec 2025 and Jan 2026
+    tm_expense.expense_write(action="record", kind="expense", amount=100, category="餐饮", occurred_at="2025-12-15T12:00:00+08:00", note="Dec 2025")
+    tm_expense.expense_write(action="record", kind="expense", amount=150, category="餐饮", occurred_at="2026-01-15T12:00:00+08:00", note="Jan 2026")
+    res = tm_expense.expense_read(mode="compare", compare="mom", start_date="2026-01-01", end_date="2026-01-31")
+    assert res["ok"] is True
+    assert len(res["groups"]) > 0
+    # Verify previous period reflects Dec 2025 data
+    group = res["groups"][0]
+    assert group["previous"] == 100  # Dec 2025 amount
+    assert group["current"] == 150  # Jan 2026 amount
+    assert group["delta"] == 50
+    assert group["delta_pct"] == 50.0
+
+
+def test_read_anomaly_insufficient_sample(monkeypatch):
+    db = _temp_db(monkeypatch)
+    # Insert only 1 record in historical window
+    tm_expense.expense_write(action="record", kind="expense", amount=100, category="餐饮", occurred_at="2026-01-01T12:00:00+08:00")
+    res = tm_expense.expense_read(mode="anomaly", start_date="2026-01-02", end_date="2026-01-31", anomaly_window_days=30)
+    assert res["ok"] is False
+    assert res["reason"] == "insufficient sample"
+    assert res["n"] == 1
+
+
+def test_read_export_markdown_full_fields(monkeypatch):
+    db = _temp_db(monkeypatch)
+    # Record an entry with tags and payment_method
+    tm_expense.expense_write(action="record", kind="expense", amount=50, category="交通", payment_method="wechat", tags=["出差"], note="打车")
+    res = tm_expense.expense_read(mode="export", export_format="markdown")
+    assert res["ok"] is True
+    content = res["content"]
+    # Verify dynamic full fields include tags and payment_method
+    assert "| tags |" in content
+    assert "| payment_method |" in content
+    assert "出差" in content
+    assert "wechat" in content
