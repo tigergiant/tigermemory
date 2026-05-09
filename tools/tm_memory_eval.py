@@ -366,6 +366,65 @@ def search_wiki_case_hierarchical(
     return out
 
 
+def search_wiki_case_hier_hybrid(
+    query: str,
+    top_k: int,
+    *,
+    include_sources: bool = False,
+    weights: tuple[float, float, float] = (0.2, 0.6, 0.2),
+) -> list[SearchHit]:
+    """Phase 4b: RRF fusion of lexical + hierarchical (LLM L0/L1/L2) embedding.
+
+    Unlike Phase 4's `hierarchical` mode (which replaced hybrid entirely),
+    this preserves the lexical branch and only replaces the embedding branch
+    with hierarchical page scoring. The two branches are then RRF-fused.
+    """
+    pool_k = max(top_k * 4, 12)
+    lex = search_wiki_case(query, pool_k, include_sources=include_sources)
+
+    # Hierarchical embedding branch: use search_pages with given weights
+    page_results = tm_hier_index.search_pages(query, k=pool_k, weights=weights)
+
+    # Build ranked list from hierarchical results
+    hier_hits: list[SearchHit] = []
+    for entry in page_results:
+        path = entry["path"]
+        if not include_sources and path.startswith("sources/"):
+            continue
+        hier_hits.append(SearchHit(
+            path=path,
+            title=entry["title"],
+            snippet="",
+            score=round(entry["score"], 6),
+            source="wiki",
+        ))
+
+    # RRF fusion: lexical + hierarchical embedding
+    fused: dict[str, dict[str, Any]] = {}
+    for rank, hit in enumerate(lex, 1):
+        fused.setdefault(hit.path, {"hit": hit, "score": 0.0, "lex_rank": None, "emb_rank": None})
+        fused[hit.path]["score"] += 1.0 / (RRF_K + rank)
+        fused[hit.path]["lex_rank"] = rank
+    for rank, hit in enumerate(hier_hits, 1):
+        if hit.path not in fused:
+            fused[hit.path] = {"hit": hit, "score": 0.0, "lex_rank": None, "emb_rank": None}
+        fused[hit.path]["score"] += 1.0 / (RRF_K + rank)
+        fused[hit.path]["emb_rank"] = rank
+
+    ordered = sorted(fused.values(), key=lambda v: -v["score"])
+    out: list[SearchHit] = []
+    for entry in ordered[:top_k]:
+        h = entry["hit"]
+        out.append(SearchHit(
+            path=h.path,
+            title=h.title,
+            snippet=h.snippet,
+            score=round(entry["score"], 6),
+            source="wiki",
+        ))
+    return out
+
+
 def _wiki_recall(query: str, top_k: int, *, include_sources: bool, recall: str) -> list[SearchHit]:
     """Dispatch wiki recall to lexical / embedding / hybrid / hierarchical backend."""
     if recall == "embedding":
@@ -374,6 +433,8 @@ def _wiki_recall(query: str, top_k: int, *, include_sources: bool, recall: str) 
         return search_wiki_case_hybrid(query, top_k, include_sources=include_sources)
     if recall == "hierarchical":
         return search_wiki_case_hierarchical(query, top_k, include_sources=include_sources)
+    if recall == "hier-hybrid":
+        return search_wiki_case_hier_hybrid(query, top_k, include_sources=include_sources)
     return search_wiki_case(query, top_k, include_sources=include_sources)
 
 
@@ -802,7 +863,7 @@ def main() -> None:
                            "(negative control: does fused ranking hurt hit@k?)")
     mode.add_argument("--grouped", action="store_true",
                       help="evaluate the grouped search_tigermemory shape using primary_results")
-    eval_p.add_argument("--recall", choices=["lexical", "embedding", "hybrid", "hierarchical"], default="lexical",
+    eval_p.add_argument("--recall", choices=["lexical", "embedding", "hybrid", "hierarchical", "hier-hybrid"], default="lexical",
                         help="wiki/sources recall backend. 'embedding' = cosine over "
                              "tm_embed_index; 'hybrid' = RRF fusion of lexical + embedding; "
                              "'hierarchical' = L0/L1/L2 multi-layer aggregation (experimental); "
