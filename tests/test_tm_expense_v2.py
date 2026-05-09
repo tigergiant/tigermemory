@@ -173,26 +173,27 @@ def test_batch_record_success(monkeypatch):
         ],
     )
     assert result["ok"] is True
-    assert result["count"] == 2
+    assert result["inserted"] == 2
+    assert result["skipped_duplicate"] == 0
 
 
 def test_batch_record_rollback_on_failure(monkeypatch):
     db = _temp_db(monkeypatch)
-    try:
-        tm_expense.expense_write(
-            action="batch_record",
-            entries=[
-                {"kind": "expense", "amount": 10, "category": "餐饮"},
-                {"kind": "expense", "amount": -1, "category": "交通"},
-            ],
-        )
-        assert False, "should raise"
-    except ValueError as e:
-        assert "amount must be > 0" in str(e)
+    result = tm_expense.expense_write(
+        action="batch_record",
+        entries=[
+            {"kind": "expense", "amount": 10, "category": "餐饮"},
+            {"kind": "expense", "amount": -1, "category": "交通"},
+        ],
+    )
+    assert result["ok"] is True
+    assert result["inserted"] == 1
+    assert len(result["errors"]) == 1
+    assert "amount must be > 0" in result["errors"][0]["error"]
 
-    # Verify nothing was written
+    # Verify only valid entry was written
     lst = tm_expense.expense_read(mode="list")
-    assert lst["total_count"] == 0
+    assert lst["total_count"] == 1
 
 
 # ------------------------------------------------------------------
