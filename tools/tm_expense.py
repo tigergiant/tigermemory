@@ -1605,40 +1605,41 @@ def _read_search(
 ):
     if not query or not query.strip():
         return {"ok": False, "reason": "query is required for mode=search"}
-    
+
     conn = _get_conn()
     try:
         _ensure_schema(conn)
-        
-        # Build FTS5 MATCH query
-        fts_query = query.strip()
-        # Build base WHERE clause for regular filters
+
+        q = query.strip()
+        # Substring search on note + tags (LIKE handles CJK natively;
+        # FTS5 default tokenizer can't tokenize 2-char CJK substrings).
+        like_pat = f"%{q}%"
+
         where, params = _build_where(
             start_date, end_date, kind, category, merchant, payment_method,
             tags, min_amount, max_amount, include_deleted,
         )
-        
-        # Combine FTS search with regular filters
-        # Use expense_entries_fts for search, then join with expense_entries for full data
+
+        search_clause = "(e.note LIKE ? OR e.tags LIKE ?)"
+        search_params = [like_pat, like_pat]
+
         if where:
             sql = f"""
                 SELECT e.* FROM expense_entries e
-                INNER JOIN expense_entries_fts fts ON e.id = fts.rowid
-                WHERE expense_entries_fts MATCH ? AND {where}
+                WHERE {search_clause} AND {where}
                 ORDER BY e.occurred_at DESC
                 LIMIT ? OFFSET ?
             """
-            rows = conn.execute(sql, [fts_query] + params + [limit, offset]).fetchall()
+            rows = conn.execute(sql, search_params + params + [limit, offset]).fetchall()
         else:
             sql = f"""
                 SELECT e.* FROM expense_entries e
-                INNER JOIN expense_entries_fts fts ON e.id = fts.rowid
-                WHERE expense_entries_fts MATCH ?
+                WHERE {search_clause}
                 ORDER BY e.occurred_at DESC
                 LIMIT ? OFFSET ?
             """
-            rows = conn.execute(sql, [fts_query, limit, offset]).fetchall()
-        
+            rows = conn.execute(sql, search_params + [limit, offset]).fetchall()
+
         data = [dict(r) for r in rows]
         return {
             "ok": True,
