@@ -253,6 +253,7 @@ def _seed_categories(conn: sqlite3.Connection) -> None:
                VALUES (?, ?, ?, 0, 0, ?, ?)""",
             (name, kind, aliases, now, now),
         )
+    conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -440,18 +441,20 @@ def _action_record(
         raise ValueError(f"kind must be one of {sorted(VALID_KINDS)}, got {kind!r}")
     if not isinstance(amount, (int, float)) or amount <= 0:
         raise ValueError(f"amount must be > 0, got {amount!r}")
-    if not category or not category.strip():
-        raise ValueError("category is required (non-empty)")
+    if (not category or not category.strip()):
+        if not auto_classify:
+            raise ValueError("category is required (non-empty) when auto_classify=False")
+        category = None
 
     auto_classified = False
     llm_category = None
     llm_confidence = None
     llm_reasoning = None
 
-    category_id, canonical_name = _resolve_category(conn, category, kind)
+    category_id, canonical_name = _resolve_category(conn, category or "", kind)
     if category_id is None:
         if not confirm_new_category:
-            candidates = _category_candidates(conn, category)
+            candidates = _category_candidates(conn, category or "")
             # P3: auto_classify routing
             if auto_classify:
                 llm_result = tm_llm.classify_expense(
@@ -479,40 +482,47 @@ def _action_record(
                             "ok": False,
                             "needs_confirmation": True,
                             "reason": "unknown category",
-                            "input": category.strip(),
+                            "input": (category or "").strip(),
                             "candidates": candidates or [{"name": "其他", "score": 0.1, "reason": "fallback"}],
                             "llm_attempted": True,
                             "llm_reason": f"LLM returned invalid category: {llm_category}",
                         }
-                # LLM failed or low confidence: silent fallback to needs_confirmation
+                else:
+                    # LLM failed or low confidence: silent fallback to needs_confirmation
+                    llm_reason = llm_result.get("reason") or (
+                        f"confidence {llm_result.get('confidence', 0):.2f} below threshold"
+                        if llm_result.get("ok") else "LLM classification failed"
+                    )
+                    return {
+                        "ok": False,
+                        "needs_confirmation": True,
+                        "reason": "unknown category",
+                        "input": (category or "").strip(),
+                        "candidates": candidates or [{"name": "其他", "score": 0.1, "reason": "fallback"}],
+                        "hint": "Re-call with category='<canonical>' to use existing, or confirm_new_category=True to create.",
+                        "llm_attempted": True,
+                        "llm_reason": llm_reason,
+                    }
+            else:
+                # P3: auto_classify=False, maintain status quo
                 return {
                     "ok": False,
                     "needs_confirmation": True,
                     "reason": "unknown category",
-                    "input": category.strip(),
+                    "input": (category or "").strip(),
                     "candidates": candidates or [{"name": "其他", "score": 0.1, "reason": "fallback"}],
                     "hint": "Re-call with category='<canonical>' to use existing, or confirm_new_category=True to create.",
-                    "llm_attempted": True,
-                    "llm_reason": llm_result.get("reason", "LLM classification failed"),
                 }
-            # P3: auto_classify=False, maintain status quo
-            return {
-                "ok": False,
-                "needs_confirmation": True,
-                "reason": "unknown category",
-                "input": category.strip(),
-                "candidates": candidates or [{"name": "其他", "score": 0.1, "reason": "fallback"}],
-                "hint": "Re-call with category='<canonical>' to use existing, or confirm_new_category=True to create.",
-            }
-        # create new category on the fly
-        now = _now_iso()
-        conn.execute(
-            """INSERT INTO categories (name, kind, aliases, archived, sort_order, created_at, updated_at)
-               VALUES (?, ?, ?, 0, 0, ?, ?)""",
-            (category.strip(), kind, "[]", now, now),
-        )
-        category_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        canonical_name = category.strip()
+        if category_id is None:
+            # create new category on the fly (only when confirm_new_category=True and LLM didn't resolve)
+            now = _now_iso()
+            conn.execute(
+                """INSERT INTO categories (name, kind, aliases, archived, sort_order, created_at, updated_at)
+                   VALUES (?, ?, ?, 0, 0, ?, ?)""",
+                ((category or "").strip(), kind, "[]", now, now),
+            )
+            category_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            canonical_name = (category or "").strip()
 
     occurred_at = _normalize_occurred_at(occurred_at)
     now = _now_iso()

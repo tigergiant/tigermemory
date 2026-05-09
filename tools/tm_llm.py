@@ -32,7 +32,7 @@ def classify_expense(
     note: str | None = None,
     tags: list[str] | None = None,
     occurred_at: str | None = None,
-    timeout: float = 1.5,
+    timeout: float = 30.0,
 ) -> dict:
     api_key = _get_minimax_key()
     if not api_key:
@@ -65,7 +65,7 @@ Return JSON: {{"category": str, "confidence": float(0-1), "reasoning": str}}"""
         resp = httpx.post(
             "https://api.minimaxi.com/anthropic/v1/messages",
             headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={"model": "MiniMax-M2.7", "max_tokens": 200, "temperature": 0.1, "system": system_prompt, "messages": [{"role": "user", "content": "\n".join(parts)}]},
+            json={"model": "MiniMax-M2.7", "max_tokens": 1024, "temperature": 0.1, "system": system_prompt, "messages": [{"role": "user", "content": "\n".join(parts)}]},
             timeout=timeout,
         )
         resp.raise_for_status()
@@ -75,8 +75,18 @@ Return JSON: {{"category": str, "confidence": float(0-1), "reasoning": str}}"""
         return {"ok": False, "reason": f"LLM request failed: {e}"}
 
     try:
-        text = resp.json().get("content", [{}])[0].get("text", "")
-        m = re.search(r"\{[^{}]+\}", text)
+        # Bug 2 fix: iterate content blocks to find type="text" (reasoning models put thinking first)
+        text = ""
+        for block in resp.json().get("content", []):
+            if block.get("type") == "text":
+                text = block.get("text", "")
+                break
+        if not text:
+            return {"ok": False, "reason": "LLM response has no text block"}
+        # Bug 3 fix: strip markdown code fence before JSON extraction
+        text = re.sub(r"```(?:json)?\s*", "", text)
+        text = re.sub(r"```", "", text)
+        m = re.search(r"\{.*\}", text, re.DOTALL)
         if not m:
             return {"ok": False, "reason": "LLM response missing JSON"}
         result = json.loads(m.group(0))
