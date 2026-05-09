@@ -68,10 +68,10 @@ def digest(month: str, output_path: Path | None = None) -> dict:
         limit=10,
         order_by="total DESC",
     )
-    if cat_agg["ok"] and cat_agg["groups"]:
-        cat_total = sum(g["total"] for g in cat_agg["groups"])
+    if cat_agg["ok"] and cat_agg.get("groups"):
+        cat_total = sum(g.get("total", 0) for g in cat_agg["groups"])
         for g in cat_agg["groups"]:
-            g["pct"] = (g["total"] / cat_total * 100) if cat_total > 0 else 0
+            g["pct"] = (g.get("total", 0) / cat_total * 100) if cat_total > 0 else 0
 
     # 3. Get merchant top 10
     merch_agg = expense_read(
@@ -84,10 +84,10 @@ def digest(month: str, output_path: Path | None = None) -> dict:
         limit=10,
         order_by="total DESC",
     )
-    if merch_agg["ok"] and merch_agg["groups"]:
-        merch_total = sum(g["total"] for g in merch_agg["groups"])
+    if merch_agg["ok"] and merch_agg.get("groups"):
+        merch_total = sum(g.get("total", 0) for g in merch_agg["groups"])
         for g in merch_agg["groups"]:
-            g["pct"] = (g["total"] / merch_total * 100) if merch_total > 0 else 0
+            g["pct"] = (g.get("total", 0) / merch_total * 100) if merch_total > 0 else 0
 
     # 4. Get anomalies
     anomaly = expense_read(
