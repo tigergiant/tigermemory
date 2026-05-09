@@ -66,22 +66,22 @@ def import_csv(csv_path: str, dry_run: bool = False) -> dict[str, Any]:
             direction = (row.get("收/支") or "").strip()
             if direction == "支出":
                 kind = "expense"
+                entry_status = "success"
             elif direction == "收入":
                 kind = "income"
+                entry_status = "success"
             else:
                 skipped_invalid += 1
                 errors.append({"row": header_idx + row_idx + 2, "error": f"unknown 收/支: {direction}"})
                 continue
 
             # --- 当前状态 ---
-            status = (row.get("当前状态") or "").strip()
-            if status in ("已退款", "已全额退款"):
-                skipped_invalid += 1
-                continue
-            # Also skip failed/closed
-            if "失败" in status or "关闭" in status:
-                skipped_invalid += 1
-                continue
+            txn_status = (row.get("当前状态") or "").strip()
+            if txn_status in ("已退款", "已全额退款") or "退款" in txn_status:
+                entry_status = "refunded"
+                kind = "income"
+            elif "失败" in txn_status or "关闭" in txn_status:
+                entry_status = "closed"
 
             # --- 金额(元) ---
             amount_str = (row.get("金额(元)") or "0").strip().lstrip("¥").strip()
@@ -92,8 +92,7 @@ def import_csv(csv_path: str, dry_run: bool = False) -> dict[str, Any]:
                 errors.append({"row": header_idx + row_idx + 2, "error": f"invalid amount: {amount_str}"})
                 continue
             if amount == 0:
-                skipped_invalid += 1
-                continue
+                entry_status = "closed"
 
             # --- 交易时间 ---
             time_str = (row.get("交易时间") or "").strip()
@@ -135,6 +134,7 @@ def import_csv(csv_path: str, dry_run: bool = False) -> dict[str, Any]:
                 "source_external_id": source_external_id,
                 "source_agent": "cascade",
                 "source_text": f"wechat import: {csv_path}",
+                "status": entry_status,
             }
             entries.append(entry)
 
