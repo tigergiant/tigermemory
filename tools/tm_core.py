@@ -511,6 +511,197 @@ EMBEDDING_TIMEOUT = 30
 # callers succeed without feature-detection.
 EMBEDDING_BATCH_SIZE = 10
 
+# ---- Stability layer (OpenViking-inspired retry + circuit breaker) ----
+#
+# Phase 5b-0 audit (`wiki/systems/openviking-upstream-grounding.md` §6, §9.1)
+# identified that tm_core embed had no transient/permanent classification, no
+# backoff, and no circuit breaker — Phase 5 first-run 50% HTTP 500 was the
+# symptom. This block is the minimum-viable port of that engineering baseline.
+# It does NOT change retrieval ranking, model, or index dimension. It does NOT
+# add sparse / hybrid (Coding Plan endpoint lacks /multimodal_embeddings).
+
+# Patterns adapted from openviking/utils/model_retry.py.
+_EMBED_TRANSIENT_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
+_EMBED_PERMANENT_HTTP_STATUSES = {400, 401, 403, 404, 422}
+_EMBED_TRANSIENT_TEXT_PATTERNS = (
+    "timeout", "timed out", "rate limit", "ratelimit", "toomanyrequests",
+    "requestbursttoofast", "connection refused", "connection reset",
+    "connectionerror", "temporarily unavailable", "server overloaded",
+)
+_EMBED_PERMANENT_TEXT_PATTERNS = (
+    "accountoverdue", "invalidendpointormodel", "model or endpoint",
+    "does not exist", "do not have access", "unauthorized", "forbidden",
+    "shape mismatch", "dimension mismatch",
+)
+
+
+class EmbeddingError(RuntimeError):
+    """Embedding failure with transient/permanent classification.
+
+    Subclass of RuntimeError so existing `except RuntimeError` / `except Exception`
+    callers keep working unchanged. Adds `.kind` ('permanent'|'transient'|'unknown')
+    and `.status` (HTTP status int or None) for retry/breaker logic.
+    """
+
+    def __init__(self, message: str, *, kind: str = "unknown", status: int | None = None):
+        super().__init__(message)
+        self.kind = kind
+        self.status = status
+
+
+def _classify_embedding_failure(status: int | None, body: str) -> str:
+    """Return 'permanent' | 'transient' | 'unknown' based on status + body text.
+
+    Status code wins if it is in either list. Otherwise scan body text. Default
+    is 'unknown' which is treated as non-retryable (fail-fast, like OpenViking).
+    """
+    if status is not None:
+        if status in _EMBED_PERMANENT_HTTP_STATUSES:
+            return "permanent"
+        if status in _EMBED_TRANSIENT_HTTP_STATUSES:
+            return "transient"
+    text = (body or "").lower()
+    for pat in _EMBED_PERMANENT_TEXT_PATTERNS:
+        if pat in text:
+            return "permanent"
+    for pat in _EMBED_TRANSIENT_TEXT_PATTERNS:
+        if pat in text:
+            return "transient"
+    return "unknown"
+
+
+def _embed_retry_config() -> dict[str, Any]:
+    """Read retry / breaker tunables from env at call time (so .env edits stick).
+
+    All envs optional. Defaults are conservative per OpenViking baseline.
+    """
+    def _f(name: str, default: float) -> float:
+        v = os.environ.get(name, "").strip()
+        if not v:
+            return default
+        try:
+            return float(v)
+        except ValueError:
+            return default
+
+    def _i(name: str, default: int) -> int:
+        v = os.environ.get(name, "").strip()
+        if not v:
+            return default
+        try:
+            return int(v)
+        except ValueError:
+            return default
+
+    jitter_raw = os.environ.get("EMBEDDING_RETRY_JITTER", "1").strip().lower()
+    jitter = jitter_raw not in {"0", "false", "no", "off"}
+
+    return {
+        "max_retries": max(0, _i("EMBEDDING_MAX_RETRIES", 3)),
+        "base_delay": max(0.0, _f("EMBEDDING_BASE_DELAY", 0.5)),
+        "max_delay": max(0.0, _f("EMBEDDING_MAX_DELAY", 8.0)),
+        "jitter": jitter,
+        "breaker_threshold": max(1, _i("EMBEDDING_BREAKER_THRESHOLD", 5)),
+        "breaker_reset": max(0.0, _f("EMBEDDING_BREAKER_RESET", 60.0)),
+    }
+
+
+class _EmbeddingBreaker:
+    """Single-process circuit breaker for embed_texts.
+
+    State machine adapted from openviking/utils/circuit_breaker.py, simplified
+    (no half-open exponential backoff cascade — tigermemory builds are short).
+
+    - CLOSED: allow all calls.
+    - OPEN: fast-fail with EmbeddingError(kind='transient') until reset_timeout
+      elapses, then transition to HALF_OPEN on next check.
+    - HALF_OPEN: allow exactly one probe call. Success -> CLOSED. Failure -> OPEN.
+    """
+
+    CLOSED = "closed"
+    OPEN = "open"
+    HALF_OPEN = "half_open"
+
+    def __init__(self) -> None:
+        self.state = self.CLOSED
+        self.failure_count = 0
+        self.opened_at: float | None = None
+
+    def reset(self) -> None:
+        self.state = self.CLOSED
+        self.failure_count = 0
+        self.opened_at = None
+
+    def check(self, *, threshold: int, reset_timeout: float) -> None:
+        """Raise if breaker is OPEN and reset window has not elapsed."""
+        if self.state == self.OPEN:
+            assert self.opened_at is not None
+            elapsed = time.monotonic() - self.opened_at
+            if elapsed >= reset_timeout:
+                self.state = self.HALF_OPEN
+                _embed_log(
+                    f"[embed-breaker] OPEN -> HALF_OPEN (reset={reset_timeout:.0f}s elapsed); allowing one probe"
+                )
+                return
+            raise EmbeddingError(
+                f"Embedding circuit breaker OPEN ({self.failure_count} consecutive transient failures); "
+                f"retry in {reset_timeout - elapsed:.0f}s",
+                kind="transient",
+            )
+
+    def record_success(self) -> None:
+        if self.state == self.HALF_OPEN:
+            _embed_log("[embed-breaker] HALF_OPEN -> CLOSED (probe succeeded)")
+        self.state = self.CLOSED
+        self.failure_count = 0
+        self.opened_at = None
+
+    def record_failure(self, err: EmbeddingError, *, threshold: int) -> None:
+        if err.kind != "transient":
+            # Permanent / unknown failures don't trip the breaker — they fail
+            # fast on the caller side and won't repeat from a network blip.
+            return
+        if self.state == self.HALF_OPEN:
+            self.state = self.OPEN
+            self.opened_at = time.monotonic()
+            _embed_log("[embed-breaker] HALF_OPEN -> OPEN (probe failed)")
+            return
+        self.failure_count += 1
+        if self.failure_count >= threshold and self.state != self.OPEN:
+            self.state = self.OPEN
+            self.opened_at = time.monotonic()
+            _embed_log(
+                f"[embed-breaker] CLOSED -> OPEN ({self.failure_count} consecutive transient failures)"
+            )
+
+
+# Single in-process breaker. Tests can call _EMBED_BREAKER.reset().
+_EMBED_BREAKER = _EmbeddingBreaker()
+
+
+def _embed_log(msg: str) -> None:
+    """stderr log helper, never logs api_key (callers must not pass it in)."""
+    try:
+        sys.stderr.write(msg.rstrip() + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+
+def _embed_sleep(seconds: float) -> None:
+    """Indirection so tests can monkey-patch this to a no-op."""
+    if seconds > 0:
+        time.sleep(seconds)
+
+
+def _embed_backoff_delay(attempt: int, *, base_delay: float, max_delay: float, jitter: bool) -> float:
+    """Exponential backoff with optional jitter (OpenViking compute_delay)."""
+    import random
+    delay = min(base_delay * (2 ** attempt), max_delay)
+    if jitter:
+        delay += random.uniform(0.0, min(base_delay, delay))
+    return delay
+
 
 def embedding_config() -> dict[str, Any]:
     base = os.environ.get("EMBEDDING_BASE_URL", "").rstrip("/")
@@ -527,11 +718,16 @@ def embedding_config() -> dict[str, Any]:
     return {"base": base, "model": model, "api_key": api_key, "dim": dim}
 
 
-def _embed_batch(
+def _embed_batch_once(
     batch: list[str],
     cfg: dict[str, Any],
     effective_timeout: int,
 ) -> list[list[float]]:
+    """Single embedding HTTP call. Raises EmbeddingError on any failure.
+
+    Caller (`_embed_batch`) is responsible for retry / breaker / classification
+    re-routing. This function does no retry of its own.
+    """
     body: dict[str, Any] = {
         "model": cfg["model"],
         "input": batch,
@@ -555,21 +751,100 @@ def _embed_batch(
             raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as e:
         body_err = e.read().decode("utf-8", errors="replace")[:300]
-        raise RuntimeError(f"Embedding HTTP {e.code}: {body_err}")
+        kind = _classify_embedding_failure(e.code, body_err)
+        raise EmbeddingError(
+            f"Embedding HTTP {e.code}: {body_err}",
+            kind=kind,
+            status=e.code,
+        )
     except urllib.error.URLError as e:
         reason = e.reason
-        if isinstance(reason, socket.timeout) or "timed out" in str(reason).lower():
-            raise RuntimeError(
-                f"Embedding timeout: {reason} (limit={effective_timeout}s)"
+        msg = str(reason)
+        if isinstance(reason, socket.timeout) or "timed out" in msg.lower():
+            raise EmbeddingError(
+                f"Embedding timeout: {reason} (limit={effective_timeout}s)",
+                kind="transient",
             )
-        raise RuntimeError(f"Embedding unreachable: {reason}")
-    d = json.loads(raw)
+        kind = _classify_embedding_failure(None, msg)
+        # URLError without explicit timeout but with "connection reset/refused"
+        # falls through classify; default unknown -> treat as transient because
+        # network-layer URLError is almost always a retryable blip.
+        if kind == "unknown":
+            kind = "transient"
+        raise EmbeddingError(f"Embedding unreachable: {reason}", kind=kind)
+    try:
+        d = json.loads(raw)
+    except ValueError as e:
+        raise EmbeddingError(f"Embedding response not JSON: {e}", kind="unknown")
     data = d.get("data") or []
     if len(data) != len(batch):
-        raise RuntimeError(
-            f"Embedding shape mismatch: expected {len(batch)} vectors, got {len(data)}"
+        # Shape mismatch is a server-side or model-side problem, not a network
+        # blip. Mark permanent so retry doesn't loop on the same broken call.
+        raise EmbeddingError(
+            f"Embedding shape mismatch: expected {len(batch)} vectors, got {len(data)}",
+            kind="permanent",
         )
     return [item["embedding"] for item in data]
+
+
+def _embed_batch(
+    batch: list[str],
+    cfg: dict[str, Any],
+    effective_timeout: int,
+) -> list[list[float]]:
+    """Wrap `_embed_batch_once` with retry + circuit breaker.
+
+    Behavior:
+    - Permanent errors (400/401/403/404/422, "model not found", shape mismatch)
+      raise immediately without retry.
+    - Transient errors (408/429/5xx, timeout, connection reset) retry with
+      exponential backoff + jitter, up to `EMBEDDING_MAX_RETRIES` times.
+    - Unknown errors raise immediately (fail-fast, matches OpenViking default).
+    - Consecutive transient failures (across calls) trip a circuit breaker that
+      fast-fails subsequent calls until `EMBEDDING_BREAKER_RESET` elapses.
+
+    Tunables: EMBEDDING_MAX_RETRIES, EMBEDDING_BASE_DELAY, EMBEDDING_MAX_DELAY,
+    EMBEDDING_RETRY_JITTER, EMBEDDING_BREAKER_THRESHOLD, EMBEDDING_BREAKER_RESET.
+    Local Qwen path (no transient errors) is unaffected: first attempt succeeds,
+    no sleep, no breaker.
+    """
+    rcfg = _embed_retry_config()
+    _EMBED_BREAKER.check(
+        threshold=rcfg["breaker_threshold"],
+        reset_timeout=rcfg["breaker_reset"],
+    )
+
+    attempt = 0
+    while True:
+        try:
+            result = _embed_batch_once(batch, cfg, effective_timeout)
+        except EmbeddingError as err:
+            if err.kind != "transient":
+                # Permanent / unknown — record breaker (no-op for non-transient)
+                # and re-raise immediately.
+                _EMBED_BREAKER.record_failure(err, threshold=rcfg["breaker_threshold"])
+                raise
+            # Transient: maybe retry.
+            if attempt >= rcfg["max_retries"]:
+                _EMBED_BREAKER.record_failure(err, threshold=rcfg["breaker_threshold"])
+                raise
+            delay = _embed_backoff_delay(
+                attempt,
+                base_delay=rcfg["base_delay"],
+                max_delay=rcfg["max_delay"],
+                jitter=rcfg["jitter"],
+            )
+            status_str = f"status={err.status}" if err.status else "status=-"
+            _embed_log(
+                f"[embed-retry] transient {status_str} attempt {attempt + 1}/{rcfg['max_retries']}; "
+                f"sleeping {delay:.2f}s"
+            )
+            _embed_sleep(delay)
+            attempt += 1
+            continue
+        # Success path.
+        _EMBED_BREAKER.record_success()
+        return result
 
 
 def embed_texts(
