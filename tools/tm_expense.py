@@ -1579,6 +1579,7 @@ def _read_sql(sql: str | None, sql_params: dict | None):
             rows = conn.execute(sql, (sql_params or {})).fetchall()
         except Exception as e:
             return {"ok": False, "reason": "sql execution failed", "detail": str(e)}
+        # Return rows as list of dicts for consistency with other modes
         return {
             "ok": True,
             "mode": "sql",

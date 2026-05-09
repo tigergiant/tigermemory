@@ -46,11 +46,15 @@ def digest(month: str, output_path: Path | None = None) -> dict:
 
     expense_total = 0.0
     income_total = 0.0
-    for g in agg["groups"]:
-        if g["kind"] == "expense":
-            expense_total = g["total"]
-        elif g["kind"] == "income":
-            income_total = g["total"]
+    for g in agg.get("groups", []):
+        kind = g.get("kind")
+        total = g.get("total")
+        if total is None:
+            continue
+        if kind == "expense":
+            expense_total = float(total)
+        elif kind == "income":
+            income_total = float(total)
     net_flow = income_total - expense_total
 
     # 2. Get category top 10
@@ -106,8 +110,8 @@ def digest(month: str, output_path: Path | None = None) -> dict:
     # 6. Get budget status
     budget = expense_read(
         mode="budget_status",
-        period="month",
-        period_key=month,
+        start_date=start_date,
+        end_date=end_date,
     )
 
     # Build markdown report

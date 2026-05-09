@@ -242,7 +242,7 @@ def test_sql_select_allowed(monkeypatch):
     tm_expense.expense_write(action="record", kind="expense", amount=10, category="餐饮")
     res = tm_expense.expense_read(mode="sql", sql="SELECT 1 as n")
     assert res["ok"] is True
-    assert res["rows"] == [[1]]
+    assert res["rows"] == [{"n": 1}]
 
 
 def test_sql_drop_rejected(monkeypatch):
@@ -531,9 +531,16 @@ def test_read_export_markdown_full_fields(monkeypatch):
 
 def test_fts_search_basic(monkeypatch):
     db = _temp_db(monkeypatch)
+    # Ensure schema with FTS is created
+    conn = sqlite3.connect(str(db))
+    tm_expense._ensure_schema(conn)
+    conn.close()
     # Insert entries with different notes
     tm_expense.expense_write(action="record", kind="expense", amount=35, category="餐饮", note="星巴克咖啡")
     tm_expense.expense_write(action="record", kind="expense", amount=45, category="餐饮", note="麦当劳午餐")
+    # Run migrate_v3 to backfill existing entries to FTS table
+    from tm_expense_migrate_v3 import migrate as migrate_v3
+    migrate_v3(dry_run=False, ledger_path=db)
     res = tm_expense.expense_read(mode="search", query="咖啡")
     assert res["ok"] is True
     assert res["row_count"] == 1
@@ -554,6 +561,8 @@ def test_fts_search_tags(monkeypatch):
 
 def test_migrate_v3_idempotent(monkeypatch):
     db = _temp_db(monkeypatch)
+    # Insert an entry first to ensure schema exists
+    tm_expense.expense_write(action="record", kind="expense", amount=100, category="餐饮")
     # Run migrate_v3 twice
     from tm_expense_migrate_v3 import migrate as migrate_v3
     result1 = migrate_v3(dry_run=False, ledger_path=db)
@@ -565,6 +574,11 @@ def test_migrate_v3_idempotent(monkeypatch):
 
 def test_backup_basic(monkeypatch):
     db = _temp_db(monkeypatch)
+    # Clean backup directory first
+    backup_dir = db.parent / "backups"
+    if backup_dir.exists():
+        for f in backup_dir.glob("ledger-*.db"):
+            f.unlink()
     # Insert a test entry
     tm_expense.expense_write(action="record", kind="expense", amount=100, category="餐饮")
     # Run backup
@@ -585,13 +599,17 @@ def test_backup_basic(monkeypatch):
 
 def test_backup_retention(monkeypatch):
     db = _temp_db(monkeypatch)
+    # Clean backup directory first
+    backup_dir = db.parent / "backups"
+    if backup_dir.exists():
+        for f in backup_dir.glob("ledger-*.db"):
+            f.unlink()
     from tm_expense_backup import backup
     # Run backup 32 times
     for i in range(32):
         result = backup(ledger_path=db, keep=30)
         assert result["ok"] is True
     # Check that only 30 backups remain
-    backup_dir = db.parent / "backups"
     backups = list(backup_dir.glob("ledger-*.db"))
     assert len(backups) == 30
 
