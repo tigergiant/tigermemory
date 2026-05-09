@@ -1282,6 +1282,7 @@ def expense_write(
     source_text: str | None = None,
     entries: list[dict] | None = None,
     confirm_new_category: bool = False,
+    auto_classify: bool = False,
     # P1: manage_category
     manage_category_action: str = "add",
     manage_category_name: str | None = None,
@@ -1339,6 +1340,7 @@ def expense_write(
             source_text=source_text,
             entries=entries,
             confirm_new_category=confirm_new_category,
+            auto_classify=auto_classify,
             manage_category_action=manage_category_action,
             manage_category_name=manage_category_name,
             manage_category_new_name=manage_category_new_name,

@@ -26,6 +26,9 @@ try:
 except Exception:
     _TZ_CN = datetime.timezone(datetime.timedelta(hours=8), name="Asia/Shanghai")
 
+# P3: Import tm_llm at module level for testability
+import tm_llm
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "data" / "expense_tracker"
 DB_PATH = DATA_DIR / "ledger.sqlite"
@@ -352,6 +355,7 @@ def expense_write(
     source_text: str | None = None,
     entries: list[dict] | None = None,
     confirm_new_category: bool = False,
+    auto_classify: bool = False,
     # ---- action=manage_category ----
     manage_category_action: str = "add",
     manage_category_name: str | None = None,
@@ -389,7 +393,7 @@ def expense_write(
             return _action_record(
                 conn, kind, amount, category, occurred_at, currency,
                 merchant, note, payment_method, tags, source_agent, source_text,
-                confirm_new_category,
+                confirm_new_category, auto_classify,
             )
         if action == "update":
             return _action_update(
@@ -430,7 +434,7 @@ def expense_write(
 def _action_record(
     conn, kind, amount, category, occurred_at, currency,
     merchant, note, payment_method, tags, source_agent, source_text,
-    confirm_new_category,
+    confirm_new_category, auto_classify,
 ):
     if kind not in VALID_KINDS:
         raise ValueError(f"kind must be one of {sorted(VALID_KINDS)}, got {kind!r}")
@@ -439,10 +443,59 @@ def _action_record(
     if not category or not category.strip():
         raise ValueError("category is required (non-empty)")
 
+    auto_classified = False
+    llm_category = None
+    llm_confidence = None
+    llm_reasoning = None
+
     category_id, canonical_name = _resolve_category(conn, category, kind)
     if category_id is None:
         if not confirm_new_category:
             candidates = _category_candidates(conn, category)
+            # P3: auto_classify routing
+            if auto_classify:
+                llm_result = tm_llm.classify_expense(
+                    kind=kind,
+                    amount=amount,
+                    merchant=merchant,
+                    note=note,
+                    tags=tags,
+                    occurred_at=occurred_at,
+                )
+                if llm_result.get("ok") and llm_result.get("confidence", 0) >= 0.85:
+                    # Use LLM-inferred category
+                    llm_category = llm_result["category"]
+                    llm_confidence = llm_result["confidence"]
+                    llm_reasoning = llm_result.get("reasoning", "")
+                    category_id, canonical_name = _resolve_category(conn, llm_category, kind)
+                    if category_id is not None:
+                        # Continue with record logic using LLM category
+                        category = llm_category
+                        auto_classified = True
+                        # Fall through to insert below
+                    else:
+                        # LLM returned invalid category (shouldn't happen with validation)
+                        return {
+                            "ok": False,
+                            "needs_confirmation": True,
+                            "reason": "unknown category",
+                            "input": category.strip(),
+                            "candidates": candidates or [{"name": "其他", "score": 0.1, "reason": "fallback"}],
+                            "llm_attempted": True,
+                            "llm_reason": f"LLM returned invalid category: {llm_category}",
+                        }
+                # LLM failed or low confidence: silent fallback to needs_confirmation
+                return {
+                    "ok": False,
+                    "needs_confirmation": True,
+                    "reason": "unknown category",
+                    "input": category.strip(),
+                    "candidates": candidates or [{"name": "其他", "score": 0.1, "reason": "fallback"}],
+                    "hint": "Re-call with category='<canonical>' to use existing, or confirm_new_category=True to create.",
+                    "llm_attempted": True,
+                    "llm_reason": llm_result.get("reason", "LLM classification failed"),
+                }
+            # P3: auto_classify=False, maintain status quo
             return {
                 "ok": False,
                 "needs_confirmation": True,
@@ -483,7 +536,7 @@ def _action_record(
         ),
     )
     conn.commit()
-    return {
+    result = {
         "ok": True,
         "action": "record",
         "id": cur.lastrowid,
@@ -494,6 +547,12 @@ def _action_record(
             "occurred_at": occurred_at,
         },
     }
+    if auto_classified:
+        result["auto_classified"] = True
+        result["llm_category"] = llm_category
+        result["llm_confidence"] = llm_confidence
+        result["llm_reasoning"] = llm_reasoning
+    return result
 
 
 def _action_update(
