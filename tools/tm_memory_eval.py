@@ -425,6 +425,39 @@ def search_wiki_case_hier_hybrid(
     return out
 
 
+def search_wiki_case_doubao_hybrid(
+    query: str,
+    top_k: int,
+    *,
+    include_sources: bool = False,
+) -> list[SearchHit]:
+    """Phase 5d eval-only Doubao multimodal dense+sparse hybrid recall.
+
+    Uses `tm_doubao_hybrid_index.search` (separate index file
+    `runtime/embed_index/wiki_doubao_hybrid.jsonl`, never overlaps with the
+    Qwen v5 production index). Score = 0.55 * cosine_dense + 0.45 *
+    cosine_sparse — the fixed initial formula from the Phase 5d brief.
+    """
+    import tm_doubao_hybrid_index  # type: ignore[import-not-found]
+    pool_k = max(top_k * 4, 12)
+    raw = tm_doubao_hybrid_index.search(query, k=pool_k)
+    out: list[SearchHit] = []
+    for h in raw:
+        path = h["path"]
+        if not include_sources and path.startswith("sources/"):
+            continue
+        out.append(SearchHit(
+            path=path,
+            title=h.get("title", ""),
+            snippet="",
+            score=float(h["score"]),
+            source="wiki",
+        ))
+        if len(out) >= top_k:
+            break
+    return out
+
+
 def _wiki_recall(query: str, top_k: int, *, include_sources: bool, recall: str) -> list[SearchHit]:
     """Dispatch wiki recall to lexical / embedding / hybrid / hierarchical backend."""
     if recall == "embedding":
@@ -435,6 +468,8 @@ def _wiki_recall(query: str, top_k: int, *, include_sources: bool, recall: str) 
         return search_wiki_case_hierarchical(query, top_k, include_sources=include_sources)
     if recall == "hier-hybrid":
         return search_wiki_case_hier_hybrid(query, top_k, include_sources=include_sources)
+    if recall == "doubao-hybrid":
+        return search_wiki_case_doubao_hybrid(query, top_k, include_sources=include_sources)
     return search_wiki_case(query, top_k, include_sources=include_sources)
 
 
@@ -863,7 +898,7 @@ def main() -> None:
                            "(negative control: does fused ranking hurt hit@k?)")
     mode.add_argument("--grouped", action="store_true",
                       help="evaluate the grouped search_tigermemory shape using primary_results")
-    eval_p.add_argument("--recall", choices=["lexical", "embedding", "hybrid", "hierarchical", "hier-hybrid"], default="lexical",
+    eval_p.add_argument("--recall", choices=["lexical", "embedding", "hybrid", "hierarchical", "hier-hybrid", "doubao-hybrid"], default="lexical",
                         help="wiki/sources recall backend. 'embedding' = cosine over "
                              "tm_embed_index; 'hybrid' = RRF fusion of lexical + embedding; "
                              "'hierarchical' = L0/L1/L2 multi-layer aggregation (experimental); "
