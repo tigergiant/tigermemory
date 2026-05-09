@@ -14,6 +14,7 @@ P0 v2 adds:
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import pathlib
 import re
@@ -114,6 +115,26 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE expense_entries ADD COLUMN {col} {dtype}")
         except sqlite3.OperationalError:
             pass
+    # v4 columns (P4: dedup support)
+    for col, dtype in (
+        ("source_external_id", "TEXT"),
+        ("dedup_hash", "TEXT"),
+    ):
+        try:
+            conn.execute(f"ALTER TABLE expense_entries ADD COLUMN {col} {dtype}")
+        except sqlite3.OperationalError:
+            pass
+    # v4 unique indexes (partial: only active rows)
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_entries_external_id
+        ON expense_entries(source_external_id)
+        WHERE source_external_id IS NOT NULL AND deleted_at IS NULL
+    """)
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_entries_dedup_hash
+        ON expense_entries(dedup_hash)
+        WHERE source_external_id IS NULL AND dedup_hash IS NOT NULL AND deleted_at IS NULL
+    """)
     # v2 tables
     conn.execute("""
         CREATE TABLE IF NOT EXISTS categories (
@@ -256,6 +277,35 @@ def _seed_categories(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _migrate_v4(conn: sqlite3.Connection) -> None:
+    """Idempotent v4 migration: backfill dedup_hash for rows without it.
+
+    dedup_hash = sha1(occurred_at[:16] | amount_cents | payment_method | merchant)[:16]
+    Only backfills rows where dedup_hash IS NULL and deleted_at IS NULL.
+    """
+    rows = conn.execute(
+        """SELECT id, occurred_at, amount_cents, payment_method, merchant
+           FROM expense_entries
+           WHERE dedup_hash IS NULL AND deleted_at IS NULL"""
+    ).fetchall()
+    if not rows:
+        return
+    for r in rows:
+        occurred_minute = (r["occurred_at"] or "")[:16]
+        fingerprint = "|".join([
+            occurred_minute,
+            str(r["amount_cents"] or 0),
+            r["payment_method"] or "",
+            r["merchant"] or "",
+        ])
+        h = hashlib.sha1(fingerprint.encode()).hexdigest()[:16]
+        conn.execute(
+            "UPDATE expense_entries SET dedup_hash = ? WHERE id = ?",
+            (h, r["id"]),
+        )
+    conn.commit()
+
+
 # ---------------------------------------------------------------------------
 # Normalization
 # ---------------------------------------------------------------------------
@@ -264,6 +314,9 @@ def _seed_categories(conn: sqlite3.Connection) -> None:
 def _normalize_payment_method(pm: str | None) -> str | None:
     if pm is None:
         return None
+    # P4: accept wechat:subtype format from wechat importer
+    if pm.strip().lower().startswith("wechat:"):
+        return pm.strip()
     canonical = _PAYMENT_CANONICAL.get(pm.strip().lower())
     if canonical:
         return canonical
@@ -389,6 +442,7 @@ def expense_write(
     try:
         _ensure_schema(conn)
         _seed_categories(conn)
+        _migrate_v4(conn)
 
         if action == "record":
             return _action_record(
@@ -667,62 +721,97 @@ def _action_batch_record(conn, entries, confirm_new_category):
     if not entries:
         raise ValueError("entries list is required for batch_record")
     now = _now_iso()
-    results = []
+    inserted = 0
+    skipped_duplicate = 0
+    errors: list[dict] = []
     try:
         for i, entry in enumerate(entries):
             kind = entry.get("kind")
             amount = entry.get("amount")
             category = entry.get("category")
             if kind not in VALID_KINDS:
-                raise ValueError(f"entry[{i}] kind must be one of {sorted(VALID_KINDS)}")
+                errors.append({"index": i, "error": f"invalid kind: {kind}"})
+                continue
             if not isinstance(amount, (int, float)) or amount <= 0:
-                raise ValueError(f"entry[{i}] amount must be > 0")
+                errors.append({"index": i, "error": f"amount must be > 0, got {amount}"})
+                continue
             if not category or not category.strip():
-                raise ValueError(f"entry[{i}] category is required")
+                errors.append({"index": i, "error": "category is required"})
+                continue
 
             category_id, canonical_name = _resolve_category(conn, category, kind)
             if category_id is None and not confirm_new_category:
-                raise ValueError(
-                    f"entry[{i}] unknown category '{category}'. Use confirm_new_category=True to create."
-                )
+                errors.append({"index": i, "error": f"unknown category '{category}'"})
+                continue
             if category_id is None and confirm_new_category:
-                # create new category on the fly
-                conn.execute(
-                    """INSERT INTO categories (name, kind, aliases, archived, sort_order, created_at, updated_at)
-                       VALUES (?, ?, ?, 0, 0, ?, ?)""",
-                    (category.strip(), kind, "[]", now, now),
-                )
-                category_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-                canonical_name = category.strip()
+                try:
+                    conn.execute(
+                        """INSERT INTO categories (name, kind, aliases, archived, sort_order, created_at, updated_at)
+                           VALUES (?, ?, ?, 0, 0, ?, ?)""",
+                        (category.strip(), kind, "[]", now, now),
+                    )
+                    category_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                    canonical_name = category.strip()
+                except sqlite3.IntegrityError:
+                    # Race: another entry already created this category
+                    category_id, canonical_name = _resolve_category(conn, category, kind)
+                    if category_id is None:
+                        errors.append({"index": i, "error": f"failed to create category '{category}'"})
+                        continue
 
             occurred_at = _normalize_occurred_at(entry.get("occurred_at"))
             currency = (entry.get("currency") or DEFAULT_CURRENCY).upper()
             if currency not in VALID_CURRENCIES:
-                raise ValueError(f"entry[{i}] invalid currency: {currency}")
+                errors.append({"index": i, "error": f"invalid currency: {currency}"})
+                continue
             pm = _normalize_payment_method(entry.get("payment_method"))
             tags = entry.get("tags")
             tags_str = "," + ",".join(t.strip() for t in tags if t.strip()) + "," if tags else None
+            amount_cents = round(float(amount) * 100)
+
+            source_external_id = (entry.get("source_external_id") or "").strip() or None
+
+            # Compute dedup_hash for entries without external_id
+            dedup_hash = None
+            if not source_external_id:
+                occurred_minute = (occurred_at or "")[:16]
+                fingerprint = "|".join([
+                    occurred_minute,
+                    str(amount_cents),
+                    pm or "",
+                    (entry.get("merchant") or ""),
+                ])
+                dedup_hash = hashlib.sha1(fingerprint.encode()).hexdigest()[:16]
 
             cur = conn.execute(
-                """INSERT INTO expense_entries
+                """INSERT OR IGNORE INTO expense_entries
                    (kind, amount, currency, occurred_at, category, category_id, merchant,
                     note, payment_method, tags, source_agent, source_text,
-                    created_at, updated_at, amount_cents)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    created_at, updated_at, amount_cents, source_external_id, dedup_hash)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     kind, float(amount), currency, occurred_at,
                     canonical_name, category_id, entry.get("merchant"),
                     entry.get("note"), pm, tags_str,
                     entry.get("source_agent", "openclaw"), entry.get("source_text"),
-                    now, now, round(float(amount) * 100),
+                    now, now, amount_cents, source_external_id, dedup_hash,
                 ),
             )
-            results.append({"id": cur.lastrowid, "category": canonical_name})
+            if cur.rowcount > 0:
+                inserted += 1
+            else:
+                skipped_duplicate += 1
         conn.commit()
     except Exception:
         conn.rollback()
         raise
-    return {"ok": True, "action": "batch_record", "count": len(results), "results": results}
+    return {
+        "ok": True,
+        "action": "batch_record",
+        "inserted": inserted,
+        "skipped_duplicate": skipped_duplicate,
+        "errors": errors,
+    }
 
 
 def _action_manage_category(
@@ -1535,6 +1624,7 @@ def _read_categories():
     try:
         _ensure_schema(conn)
         _seed_categories(conn)
+        _migrate_v4(conn)
         rows = conn.execute("SELECT * FROM categories ORDER BY sort_order, name").fetchall()
         return {
             "ok": True,
