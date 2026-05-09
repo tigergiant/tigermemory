@@ -27,14 +27,9 @@ def backup(ledger_path: Path | None = None, keep: int = 30) -> dict:
     backup_dir = db.parent / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate backup filename with unique timestamp
-    ts = datetime.datetime.now(_TZ_CN).strftime("%Y%m%d-%H%M%S")
+    # Generate backup filename with microsecond for uniqueness
+    ts = datetime.datetime.now(_TZ_CN).strftime("%Y%m%d-%H%M%S-%f")
     backup_path = backup_dir / f"ledger-{ts}.db"
-    
-    # If backup file already exists (rare), add microseconds
-    if backup_path.exists():
-        ts = datetime.datetime.now(_TZ_CN).strftime("%Y%m%d-%H%M%S-%f")
-        backup_path = backup_dir / f"ledger-{ts}.db"
 
     # Perform VACUUM INTO backup
     conn = sqlite3.connect(str(db))

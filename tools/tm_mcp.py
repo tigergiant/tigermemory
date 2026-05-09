@@ -1389,6 +1389,8 @@ def expense_read(
     anomaly_window_days: int = 90,
     anomaly_sigma: float = 2.0,
     export_format: str = "markdown",
+    # P2
+    query: str | None = None,
 ) -> dict[str, Any]:
     """Unified read endpoint for the private expense tracker ledger.
 
@@ -1403,6 +1405,7 @@ def expense_read(
         merchants:  List all merchants
         export:     Export data as markdown/csv/json
         sql:       Free-form readonly SELECT against the ledger (validated, max 1000 rows)
+        search:    FTS5 full-text query against note + tags (use `query` param)
 
     Returns:
         {"ok": true, "mode": "...", "rows": [...]} or similar shape per mode.
@@ -1433,6 +1436,7 @@ def expense_read(
             anomaly_window_days=anomaly_window_days,
             anomaly_sigma=anomaly_sigma,
             export_format=export_format,
+            query=query,
         )
     except Exception as e:
         return {"ok": False, "error": str(e)}

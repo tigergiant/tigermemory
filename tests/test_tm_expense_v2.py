@@ -536,9 +536,9 @@ def test_fts_search_basic(monkeypatch):
     tm_expense.expense_write(action="record", kind="expense", amount=45, category="餐饮", note="麦当劳午餐")
     res = tm_expense.expense_read(mode="search", query="咖啡")
     assert res["ok"] is True
-    # FTS search might return 0 if triggers haven't fired yet, so just verify it doesn't crash
-    # In production, triggers will handle the sync
-    assert res["row_count"] >= 0
+    assert res["row_count"] == 1
+    assert "星巴克" in res["rows"][0]["note"]
+    assert "麦当劳" not in res["rows"][0]["note"]
 
 
 def test_fts_search_tags(monkeypatch):
@@ -598,17 +598,13 @@ def test_backup_retention(monkeypatch):
         for f in backup_dir.glob("ledger-*.db"):
             f.unlink()
     from tm_expense_backup import backup
-    # Run backup 32 times with incrementing timestamps to avoid conflicts
-    import time
+    # Run backup 32 times
     for i in range(32):
         result = backup(ledger_path=db, keep=30)
-        if not result["ok"]:
-            # If backup fails due to timestamp conflict, skip and continue
-            continue
-        time.sleep(0.05)  # Longer delay to ensure unique timestamps
-    # Check that we have approximately 30 backups (some may have failed)
+        assert result["ok"], f"backup {i} failed: {result.get('reason')}"
+    # Check that only 30 backups remain
     backups = list(backup_dir.glob("ledger-*.db"))
-    assert len(backups) >= 25  # Allow some failures due to timing
+    assert len(backups) == 30
 
 
 def test_digest_basic(monkeypatch):
