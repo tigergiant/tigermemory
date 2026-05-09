@@ -288,23 +288,39 @@ def _seed_categories(conn: sqlite3.Connection) -> None:
 def _migrate_v4(conn: sqlite3.Connection) -> None:
     """Idempotent v4 migration: backfill dedup_hash for rows without it.
 
-    dedup_hash = sha1(occurred_at[:16] | amount_cents | payment_method | merchant)[:16]
+    dedup_hash = sha1(occurred_at[:19] | amount_cents | payment_method | merchant | status | note_md5[:8])[:16]
     Only backfills rows where dedup_hash IS NULL and deleted_at IS NULL.
+    Existing dedup_hash values are never recomputed (backward compat).
     """
-    rows = conn.execute(
-        """SELECT id, occurred_at, amount_cents, payment_method, merchant
-           FROM expense_entries
-           WHERE dedup_hash IS NULL AND deleted_at IS NULL"""
-    ).fetchall()
+    # Try to include status and note if they exist (v5+), fall back for pre-v5 DBs
+    try:
+        rows = conn.execute(
+            """SELECT id, occurred_at, amount_cents, payment_method, merchant, status, note
+               FROM expense_entries
+               WHERE dedup_hash IS NULL AND deleted_at IS NULL"""
+        ).fetchall()
+        has_status_note = True
+    except sqlite3.OperationalError:
+        rows = conn.execute(
+            """SELECT id, occurred_at, amount_cents, payment_method, merchant
+               FROM expense_entries
+               WHERE dedup_hash IS NULL AND deleted_at IS NULL"""
+        ).fetchall()
+        has_status_note = False
     if not rows:
         return
     for r in rows:
-        occurred_minute = (r["occurred_at"] or "")[:16]
+        occurred_second = (r["occurred_at"] or "")[:19]
+        status = (r["status"] if has_status_note else None) or "success"
+        note = (r["note"] if has_status_note else None) or ""
+        note_hash = hashlib.md5(note.encode()).hexdigest()[:8]
         fingerprint = "|".join([
-            occurred_minute,
+            occurred_second,
             str(r["amount_cents"] or 0),
             r["payment_method"] or "",
             r["merchant"] or "",
+            status,
+            note_hash,
         ])
         h = hashlib.sha1(fingerprint.encode()).hexdigest()[:16]
         conn.execute(
@@ -325,6 +341,105 @@ def _migrate_v5(conn: sqlite3.Connection) -> None:
         "UPDATE expense_entries SET status = 'success' WHERE status IS NULL OR status = ''"
     )
     conn.commit()
+
+
+def _migrate_v6(conn: sqlite3.Connection) -> None:
+    """Idempotent v6 migration: fix CHECK(amount > 0) → CHECK(amount >= 0).
+
+    Older DBs created before the P4 fix have CHECK(amount > 0) which blocks
+    amount=0 rows (closed/internal_transfer). This migration recreates the
+    table with the corrected constraint.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='expense_entries'"
+    ).fetchone()
+    if row and "CHECK(amount >= 0)" in row["sql"]:
+        return  # already fixed
+
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("BEGIN")
+    try:
+        # Drop dependent views first
+        conn.execute("DROP VIEW IF EXISTS v_yearly_by_category")
+        conn.execute("DROP VIEW IF EXISTS v_monthly_by_category")
+        conn.execute("DROP VIEW IF EXISTS v_active_entries")
+        conn.execute("""
+            CREATE TABLE expense_entries_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL CHECK(kind IN ('expense', 'income')),
+                amount REAL NOT NULL CHECK(amount >= 0),
+                currency TEXT NOT NULL DEFAULT 'CNY',
+                occurred_at TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT '',
+                merchant TEXT,
+                note TEXT,
+                payment_method TEXT,
+                source_agent TEXT NOT NULL DEFAULT 'openclaw',
+                source_text TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                category_id INTEGER,
+                merchant_id INTEGER,
+                tags TEXT,
+                deleted_at TEXT,
+                amount_cents INTEGER,
+                source_external_id TEXT,
+                dedup_hash TEXT,
+                status TEXT NOT NULL DEFAULT 'success'
+                    CHECK(status IN ('success','refunded','closed','internal_transfer'))
+            )
+        """)
+        conn.execute(
+            "INSERT INTO expense_entries_new SELECT * FROM expense_entries"
+        )
+        conn.execute("DROP TABLE expense_entries")
+        conn.execute("ALTER TABLE expense_entries_new RENAME TO expense_entries")
+        # Recreate indexes
+        conn.execute("CREATE INDEX idx_expense_occurred ON expense_entries(occurred_at)")
+        conn.execute("CREATE INDEX idx_expense_kind ON expense_entries(kind)")
+        conn.execute("CREATE INDEX idx_expense_category ON expense_entries(category)")
+        conn.execute("CREATE INDEX idx_entries_deleted ON expense_entries(deleted_at)")
+        conn.execute("CREATE INDEX idx_entries_kind_cat_t ON expense_entries(kind, category, occurred_at)")
+        conn.execute("CREATE INDEX idx_entries_tags ON expense_entries(tags)")
+        conn.execute("""
+            CREATE UNIQUE INDEX idx_entries_external_id
+            ON expense_entries(source_external_id)
+            WHERE source_external_id IS NOT NULL AND deleted_at IS NULL
+        """)
+        conn.execute("""
+            CREATE UNIQUE INDEX idx_entries_dedup_hash
+            ON expense_entries(dedup_hash)
+            WHERE source_external_id IS NULL AND dedup_hash IS NOT NULL AND deleted_at IS NULL
+        """)
+        # Recreate views
+        conn.execute("""
+            CREATE VIEW v_active_entries AS
+            SELECT * FROM expense_entries WHERE deleted_at IS NULL
+        """)
+        conn.execute("""
+            CREATE VIEW v_monthly_by_category AS
+            SELECT strftime('%Y-%m', occurred_at) AS month,
+                   kind, category,
+                   COUNT(*) AS n,
+                   SUM(amount) AS total
+            FROM v_active_entries
+            GROUP BY 1, 2, 3
+        """)
+        conn.execute("""
+            CREATE VIEW v_yearly_by_category AS
+            SELECT strftime('%Y', occurred_at) AS year,
+                   kind, category,
+                   COUNT(*) AS n,
+                   SUM(amount) AS total
+            FROM v_active_entries
+            GROUP BY 1, 2, 3
+        """)
+        conn.commit()
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
 
 
 # ---------------------------------------------------------------------------
@@ -466,6 +581,7 @@ def expense_write(
         _seed_categories(conn)
         _migrate_v4(conn)
         _migrate_v5(conn)
+        _migrate_v6(conn)
 
         if action == "record":
             return _action_record(
@@ -801,12 +917,15 @@ def _action_batch_record(conn, entries, confirm_new_category):
             # Compute dedup_hash for entries without external_id
             dedup_hash = None
             if not source_external_id:
-                occurred_minute = (occurred_at or "")[:16]
+                occurred_second = (occurred_at or "")[:19]
+                note_hash = hashlib.md5((entry.get("note") or "").encode()).hexdigest()[:8]
                 fingerprint = "|".join([
-                    occurred_minute,
+                    occurred_second,
                     str(amount_cents),
                     pm or "",
                     (entry.get("merchant") or ""),
+                    status or "success",
+                    note_hash,
                 ])
                 dedup_hash = hashlib.sha1(fingerprint.encode()).hexdigest()[:16]
 
@@ -1665,6 +1784,7 @@ def _read_categories():
         _seed_categories(conn)
         _migrate_v4(conn)
         _migrate_v5(conn)
+        _migrate_v6(conn)
         rows = conn.execute("SELECT * FROM categories ORDER BY sort_order, name").fetchall()
         return {
             "ok": True,
