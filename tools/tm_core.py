@@ -480,7 +480,10 @@ def mem0_write(
 def mem0_search(query: str, size: int = 5) -> str:
     """GET memories by query. Returns raw response body."""
     params = urllib.parse.urlencode(
-        {"user_id": "tiger", "query": query, "page": 1, "size": size}
+        # OpenMemory's patched GET /api/v1/memories/ filters on search_query.
+        # Older tigermemory docs and clients used query=; the router keeps that
+        # as a compatibility alias, but tm_core should call the canonical param.
+        {"user_id": "tiger", "search_query": query, "page": 1, "size": size}
     )
     return mem0_request(
         f"{mem0_base()}/api/v1/memories/?{params}",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pathlib
 import sys
+from urllib.parse import parse_qs, urlparse
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
@@ -46,3 +47,24 @@ def test_mem0_request_bypasses_default_proxy_opener(monkeypatch):
     request, timeout = fake_opener.open_calls[0]
     assert request.get_header("Authorization") == "Bearer test-key"
     assert timeout == tm_core.MEM0_READ_TIMEOUT
+
+
+def test_mem0_search_uses_openmemory_search_query_param(monkeypatch):
+    captured = {}
+
+    def fake_request(url, *, timeout):
+        captured["url"] = url
+        captured["timeout"] = timeout
+        return '{"items": []}'
+
+    monkeypatch.setattr(tm_core, "mem0_base", lambda: "http://localhost:8765")
+    monkeypatch.setattr(tm_core, "mem0_request", fake_request)
+
+    raw = tm_core.mem0_search("Inbox routing", size=7)
+
+    assert raw == '{"items": []}'
+    qs = parse_qs(urlparse(captured["url"]).query)
+    assert qs["search_query"] == ["Inbox routing"]
+    assert "query" not in qs
+    assert qs["size"] == ["7"]
+    assert captured["timeout"] == tm_core.MEM0_READ_TIMEOUT
