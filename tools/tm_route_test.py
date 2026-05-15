@@ -55,6 +55,40 @@ class TestRouteMemory(unittest.TestCase):
             assert d.is_transient is True
             assert "transient content" in d.reasons
 
+    def test_daily_health_index_summary_mem0_even_if_marked_transient(self):
+        text = (
+            "2026-05-15 每日巡检总清单已更新：结论黄，"
+            "详情见 wiki/operations/daily-health/2026-05-15.md"
+        )
+        with patch("tm_core._call_deepseek_json", return_value=_make_ds_result(is_transient=True, score=85)):
+            d = tm_route.route_memory(text, "operations", "codex")
+            assert d.route == "mem0"
+            assert d.is_transient is False
+            assert "daily health index summary" in d.reasons
+
+    def test_daily_health_index_summary_still_respects_sensitive_routing(self):
+        text = (
+            "2026-05-15 每日巡检总清单已更新：结论黄，"
+            "详情见 wiki/operations/daily-health/2026-05-15.md"
+        )
+        with patch(
+            "tm_core._call_deepseek_json",
+            return_value=_make_ds_result(is_transient=True, is_sensitive=True, score=85),
+        ):
+            d = tm_route.route_memory(text, "operations", "codex")
+            assert d.route == "inbox"
+            assert d.is_sensitive is True
+
+    def test_daily_health_index_summary_medium_score_inbox(self):
+        text = (
+            "2026-05-15 每日巡检总清单已更新：结论黄，"
+            "详情见 wiki/operations/daily-health/2026-05-15.md"
+        )
+        with patch("tm_core._call_deepseek_json", return_value=_make_ds_result(is_transient=True, score=50)):
+            d = tm_route.route_memory(text, "operations", "codex")
+            assert d.route == "inbox"
+            assert d.is_transient is False
+
     def test_sensitive_inbox(self):
         with patch("tm_core._call_deepseek_json", return_value=_make_ds_result(is_sensitive=True, score=85)):
             d = tm_route.route_memory("Phone 13800138000.", "systems", "kimi")
