@@ -2,13 +2,14 @@
 """
 OpenAI / ChatGPT-facing MCP facade for tigermemory.
 
-This server intentionally exposes a narrow first-step surface:
+This server intentionally exposes a narrow ChatGPT-facing surface:
 
 - search(query) -> OpenAI company-knowledge compatible result list
 - fetch(id) -> OpenAI company-knowledge compatible full document fetch
 - get_agent_onboarding(depth) -> read-only tigermemory operating context
+- write_memory(topic, text) -> LLM-routed memory write as agent "chatgpt"
 
-It does not register the full tigermemory writer/admin/media/expense toolset.
+It does not register the full tigermemory wiki/source/admin/media/expense toolset.
 The existing tools/tm_mcp.py endpoint remains unchanged for current MCP clients.
 """
 from __future__ import annotations
@@ -44,13 +45,17 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 import tm_core
+import tm_memory_ops
 import tm_persona
 
 
 READ_SCOPE = "tm:read"
+WRITE_MEMORY_SCOPE = "tm:write_memory"
+WRITE_AGENT = "chatgpt"
 DEFAULT_PUBLIC_BASE = "https://tm-openai.doodiu.cloud"
 DEFAULT_STORE_PATH = tm_core.REPO_ROOT / "runtime" / "openmemory" / "openai-mcp-oauth.json"
 DEFAULT_MAX_FETCH_CHARS = 80_000
+MAX_WRITE_MEMORY_CHARS = 4_000
 EXTRA_READONLY_DOCS = ("AGENTS.md",)
 
 _DEFAULT_ALLOWED_HOSTS = [
@@ -89,6 +94,18 @@ class OnboardingResponse(BaseModel):
     depth: str
     content: str
     sources: list[str]
+
+
+class WriteMemoryResponse(BaseModel):
+    route: str
+    score: int | None = None
+    topic_inferred: str | None = None
+    id: str | None = None
+    path: str | None = None
+    commit_sha: str | None = None
+    reasons: str | None = None
+    verified: dict[str, Any] | None = None
+    raw: dict[str, Any] = Field(default_factory=dict)
 
 
 class _JsonStore:
@@ -276,16 +293,18 @@ class TigermemoryOAuthProvider(
         return access, refresh
 
 
-def _tool_meta() -> dict[str, Any]:
-    return {"securitySchemes": [{"type": "oauth2", "scopes": [READ_SCOPE]}]}
+def _tool_meta(scopes: list[str] | None = None) -> dict[str, Any]:
+    return {"securitySchemes": [{"type": "oauth2", "scopes": scopes or [READ_SCOPE]}]}
 
 
 def _build_mcp(auth_mode: str, public_base: str, link_secret: str | None, store_path: pathlib.Path) -> FastMCP:
     kwargs: dict[str, Any] = {
         "name": "tigermemory-openai",
         "instructions": (
-            "Read-only connector for tigermemory. Use search first, then fetch by id. "
-            "This facade intentionally does not expose write/admin/media/expense tools."
+            "Narrow connector for tigermemory. Use search first, then fetch by id. "
+            "For durable notes, use write_memory; the tigermemory service routes it "
+            "to mem0, inbox, or discard. This facade intentionally does not expose "
+            "wiki/source/admin/media/expense tools."
         ),
         "transport_security": TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
@@ -303,11 +322,11 @@ def _build_mcp(auth_mode: str, public_base: str, link_secret: str | None, store_
             service_documentation_url=f"{public_base}/healthz",
             client_registration_options=ClientRegistrationOptions(
                 enabled=True,
-                valid_scopes=[READ_SCOPE],
-                default_scopes=[READ_SCOPE],
+                valid_scopes=[READ_SCOPE, WRITE_MEMORY_SCOPE],
+                default_scopes=[READ_SCOPE, WRITE_MEMORY_SCOPE],
             ),
             revocation_options=RevocationOptions(enabled=True),
-            required_scopes=[READ_SCOPE],
+            required_scopes=[READ_SCOPE, WRITE_MEMORY_SCOPE],
             resource_server_url=public_base,
         )
 
@@ -371,6 +390,35 @@ def _page_url(path: str) -> str:
 
 def _mem0_url(mem_id: str) -> str:
     return f"tigermemory://mem0/{mem_id}"
+
+
+def _write_memory_via_router(topic: str, text: str) -> WriteMemoryResponse:
+    clean_topic = (topic or "").strip()
+    clean_text = (text or "").strip()
+    tm_core.validate_topic(clean_topic)
+    if not clean_text:
+        raise ValueError("text must be non-empty")
+    if len(clean_text) > MAX_WRITE_MEMORY_CHARS:
+        raise ValueError(f"text must be <= {MAX_WRITE_MEMORY_CHARS} characters")
+    data = tm_memory_ops.write_memory_with_review(
+        WRITE_AGENT,
+        clean_topic,
+        clean_text,
+        force_inbox=False,
+        total_budget_s=25,
+        include_readback=True,
+    )
+    return WriteMemoryResponse(
+        route=str(data.get("route") or ""),
+        score=data.get("score") if isinstance(data.get("score"), int) else None,
+        topic_inferred=data.get("topic_inferred") if isinstance(data.get("topic_inferred"), str) else None,
+        id=data.get("id") if isinstance(data.get("id"), str) else None,
+        path=data.get("path") if isinstance(data.get("path"), str) else None,
+        commit_sha=data.get("commit_sha") if isinstance(data.get("commit_sha"), str) else None,
+        reasons=data.get("reasons") if isinstance(data.get("reasons"), str) else None,
+        verified=data.get("verified") if isinstance(data.get("verified"), dict) else None,
+        raw=data,
+    )
 
 
 def _safe_text_file(path: str) -> pathlib.Path:
@@ -585,6 +633,32 @@ def register_tools(server: FastMCP, *, max_fetch_chars: int) -> None:
     def get_agent_onboarding(depth: Literal["30s", "5min", "full"] = "30s") -> OnboardingResponse:
         content = tm_persona.compile_snapshot(depth)
         return OnboardingResponse(depth=depth, content=content, sources=list(tm_persona.SOURCE_PATHS))
+
+    @server.tool(
+        name="write_memory",
+        title="Write tigermemory memory",
+        description=(
+            "Write a durable note through tigermemory's server-side router. "
+            "The service may store it in Mem0, route it to inbox for review, or discard it. "
+            "This does not grant direct wiki, source, admin, media, expense, or filesystem writes."
+        ),
+        meta=_tool_meta([WRITE_MEMORY_SCOPE]),
+        structured_output=True,
+    )
+    def write_memory(
+        topic: Literal[
+            "brand",
+            "investment",
+            "operations",
+            "production",
+            "systems",
+            "person",
+            "selfevolution",
+            "cross",
+        ],
+        text: str,
+    ) -> WriteMemoryResponse:
+        return _write_memory_via_router(topic, text)
 
 
 def main() -> int:
