@@ -1,0 +1,152 @@
+import sqlite3
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+
+import tm_expense
+
+
+def make_conn():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    tm_expense._ensure_schema(conn)
+    conn.execute("DROP TRIGGER IF EXISTS fts_entries_insert")
+    conn.execute("DROP TRIGGER IF EXISTS fts_entries_update")
+    conn.execute("DROP TRIGGER IF EXISTS fts_entries_delete")
+    return conn
+
+
+def insert_entry(
+    conn,
+    *,
+    row_id,
+    amount_cents,
+    occurred_at="2026-05-01T12:00:00+08:00",
+    merchant="测试商户",
+    payment_method="alipay",
+    source_text="alipay",
+    tags=None,
+    kind="expense",
+    status="success",
+    note=None,
+    deleted_at=None,
+):
+    conn.execute(
+        """INSERT INTO expense_entries
+           (id, kind, amount, currency, occurred_at, category, merchant, note,
+            payment_method, source_agent, source_text, created_at, updated_at,
+            tags, deleted_at, amount_cents, status)
+           VALUES (?, ?, ?, 'CNY', ?, '其他', ?, ?, ?, 'test', ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            row_id,
+            kind,
+            amount_cents / 100,
+            occurred_at,
+            merchant,
+            note,
+            payment_method,
+            source_text,
+            "2026-05-01T00:00:00+08:00",
+            "2026-05-01T00:00:00+08:00",
+            tags,
+            deleted_at,
+            amount_cents,
+            status,
+        ),
+    )
+
+
+def decision_for(conn, row_id, *, is_refund=False):
+    row = conn.execute("SELECT * FROM expense_entries WHERE id = ?", (row_id,)).fetchone()
+    channel = tm_expense._infer_source_channel(row["payment_method"], row["source_text"], row["tags"])
+    return tm_expense._find_cross_source_candidates(
+        conn,
+        new_row_id=row["id"],
+        occurred_at=row["occurred_at"],
+        amount_cents=row["amount_cents"],
+        kind=row["kind"],
+        payment_method=row["payment_method"],
+        merchant=row["merchant"],
+        new_channel=channel,
+        is_refund=is_refund,
+    )
+
+
+def test_infer_source_channel_current_forms():
+    assert tm_expense._infer_source_channel("alipay", "alipay import: x", None) == "alipay"
+    assert tm_expense._infer_source_channel("wechat:零钱", "wechat import: x", None) == "wechat"
+    assert tm_expense._infer_source_channel("招商银行信用卡(3958)", "unified import: x", None) == "card"
+    assert tm_expense._infer_source_channel(None, None, ",credit_card_cmb,") == "card"
+
+
+def test_semantic_match_accepts_real_and_rejects_coincidental():
+    assert tm_expense._semantic_match("支付宝-盒马", ["盒马"])[0] is True
+    assert tm_expense._semantic_match("支付宝-上海拉扎斯信息科技有限公司", ["淘宝闪购", "淘宝闪购"])[0] is True
+    assert tm_expense._semantic_match("便利店A", ["完全不同商户"])[0] is False
+
+
+def test_one_to_one_card_after_tp_is_shadow():
+    conn = make_conn()
+    insert_entry(conn, row_id=1, amount_cents=990, merchant="盒马", payment_method="alipay", source_text="alipay")
+    insert_entry(conn, row_id=2, amount_cents=990, merchant="支付宝-盒马", payment_method="招商银行信用卡(3958)", source_text="credit_card")
+
+    decision = decision_for(conn, 2)
+
+    assert decision["outcome"] == "shadow_1to1"
+    assert decision["new_role"] == "shadow"
+    assert decision["twin_ids"] == [1]
+
+
+def test_one_to_one_tp_after_card_is_canonical_and_apply_is_idempotent():
+    conn = make_conn()
+    insert_entry(conn, row_id=1, amount_cents=990, merchant="支付宝-盒马", payment_method="招商银行信用卡(3958)", source_text="credit_card")
+    insert_entry(conn, row_id=2, amount_cents=990, merchant="盒马", payment_method="alipay", source_text="alipay")
+
+    decision = decision_for(conn, 2)
+    assert decision["outcome"] == "shadow_1to1"
+    assert decision["new_role"] == "canonical"
+
+    tm_expense._apply_cross_source_resolution(conn, new_row_id=2, decision=decision, now="2026-05-16T10:00:00+08:00")
+    tm_expense._apply_cross_source_resolution(conn, new_row_id=2, decision=decision, now="2026-05-16T11:00:00+08:00")
+
+    card = conn.execute("SELECT deleted_at FROM expense_entries WHERE id = 1").fetchone()
+    tp = conn.execute("SELECT tags FROM expense_entries WHERE id = 2").fetchone()
+    assert card["deleted_at"] == "2026-05-16T10:00:00+08:00"
+    assert (tp["tags"] or "").count("shadow_card:1") == 1
+    assert (tp["tags"] or "").count("dedup_merged:") == 1
+
+
+def test_many_to_one_valid_aggregate():
+    conn = make_conn()
+    insert_entry(conn, row_id=1, amount_cents=1, merchant="淘宝闪购", payment_method="alipay", source_text="alipay")
+    insert_entry(conn, row_id=2, amount_cents=2731, merchant="淘宝闪购", payment_method="alipay", source_text="alipay")
+    insert_entry(conn, row_id=3, amount_cents=2732, merchant="支付宝-上海拉扎斯信息科技有限公司", payment_method="招商银行信用卡(3958)", source_text="credit_card")
+
+    decision = decision_for(conn, 3)
+
+    assert decision["outcome"] == "shadow_Nto1"
+    assert decision["new_role"] == "shadow"
+    assert decision["twin_ids"] == [1, 2]
+
+
+def test_many_to_one_coincidental_subset_rejected():
+    conn = make_conn()
+    insert_entry(conn, row_id=1, amount_cents=100, merchant="早餐店", payment_method="alipay", source_text="alipay")
+    insert_entry(conn, row_id=2, amount_cents=200, merchant="文具店", payment_method="alipay", source_text="alipay")
+    insert_entry(conn, row_id=3, amount_cents=300, merchant="招商银行账单", payment_method="招商银行信用卡(3958)", source_text="credit_card")
+
+    decision = decision_for(conn, 3)
+
+    assert decision["outcome"] == "clean"
+
+
+def test_refund_card_after_tp_is_not_auto_deleted_in_phase4():
+    conn = make_conn()
+    insert_entry(conn, row_id=1, amount_cents=500, merchant="盒马退款", payment_method="alipay", source_text="alipay", kind="income", status="refunded")
+    insert_entry(conn, row_id=2, amount_cents=500, merchant="支付宝-盒马退款", payment_method="招商银行信用卡(3958)", source_text="credit_card", kind="income", status="refunded")
+
+    decision = decision_for(conn, 2, is_refund=True)
+
+    assert decision["outcome"] == "clean"
+    assert decision["reason"] == "refund_auto_resolution_disabled"

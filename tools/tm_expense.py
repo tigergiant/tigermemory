@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import itertools
 import json
 import pathlib
 import re
@@ -461,6 +462,321 @@ def _normalize_payment_method(pm: str | None) -> str | None:
         return pm.strip().lower()
     # P5: accept any payment method string (unified importer passes raw values)
     return pm.strip()
+
+
+_TP_CHANNELS = {"alipay", "wechat", "meituan", "douyin_pay"}
+
+
+def _infer_source_channel(payment_method: str | None, source_text: str | None, tags: str | None) -> str:
+    """Infer the import channel used for cross-source dedup."""
+    source = (source_text or "").strip().lower()
+    if source.startswith("alipay") or "alipay import:" in source:
+        return "alipay"
+    if source.startswith("wechat") or "wechat import:" in source:
+        return "wechat"
+    if source.startswith("meituan") or "meituan" in source:
+        return "meituan"
+    if source.startswith("douyin") or "douyin" in source:
+        return "douyin_pay"
+    if source.startswith(("credit_card", "debit_card")):
+        return "card"
+
+    pm = (payment_method or "").strip().lower()
+    if pm == "alipay" or "支付宝" in pm:
+        return "alipay"
+    if pm == "wechat" or pm.startswith("wechat:") or "微信" in pm:
+        return "wechat"
+    if any(token in pm for token in ("信用卡", "储蓄卡", "借记卡", "银行卡", "bank.", "cmb", "credit_card", "debit_card")):
+        return "card"
+
+    tag_text = (tags or "").strip().lower()
+    if "alipay" in tag_text:
+        return "alipay"
+    if "wechat" in tag_text:
+        return "wechat"
+    if any(token in tag_text for token in ("credit_card", "debit_card", "credit_card_cmb")):
+        return "card"
+
+    return "unknown"
+
+
+def _semantic_match(card_merchant: str | None, tp_merchants: list[str]) -> tuple[bool, str]:
+    """Return whether card and third-party merchant labels describe the same business."""
+    card = (card_merchant or "").strip().lower()
+    tps = [(m or "").strip().lower() for m in tp_merchants if (m or "").strip()]
+    if not card or not tps:
+        return False, "missing_merchant"
+
+    for prefix in ("支付宝-", "财付通-", "微信支付-", "美团支付-", "alipay-", "wechat-"):
+        if card.startswith(prefix):
+            card = card[len(prefix):].strip()
+            break
+
+    if card and any(card == tp or card in tp or tp in card for tp in tps):
+        return True, "merchant_substring"
+
+    platform_tokens = ("淘宝", "天猫", "1688", "美团", "京东", "拼多多", "抖音", "盒马", "饿了么", "星巴克", "肯德基", "大润发", "永辉", "山姆", "costco", "航旅纵横")
+    for token in platform_tokens:
+        if token in card:
+            tp_hits = sum(1 for tp in tps if token in tp)
+            if tp_hits * 2 >= len(tps):
+                return True, f"platform_{token}"
+
+    if len(tps) > 1 and len(set(tps)) == 1:
+        return True, "all_tp_same_merchant"
+
+    token_sets = [set(re.split(r"\s+", tp)) for tp in tps]
+    if len(token_sets) > 1:
+        common = set.intersection(*token_sets)
+        common = {token for token in common if len(token) >= 2}
+        if common:
+            return True, f"tp_share_token_{sorted(common)[0][:20]}"
+
+    return False, "semantic_mismatch"
+
+
+def _is_tp_channel(channel: str) -> bool:
+    return channel in _TP_CHANNELS
+
+
+def _looks_like_refund(status: str | None, kind: str | None, note: str | None, merchant: str | None) -> bool:
+    text = f"{note or ''} {merchant or ''}".lower()
+    return status == "refunded" or (kind == "income" and ("退款" in text or "refund" in text))
+
+
+def _card_tail_from_text(*values: str | None) -> str | None:
+    text = " ".join(v or "" for v in values)
+    for pattern in (
+        r"card_tail:(\d{4})",
+        r"linked:credit_card:(\d{4})",
+        r"account:(\d{4})",
+        r"counter_tail:(\d{4})",
+        r"(?:卡尾|尾号)\s*(\d{4})",
+        r"[（(](\d{4})[）)]",
+    ):
+        m = re.search(pattern, text)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _shared_card_tail(new_row: sqlite3.Row | None, existing_row: sqlite3.Row) -> bool:
+    if new_row is None:
+        return False
+    new_tail = _card_tail_from_text(new_row["payment_method"], new_row["tags"], new_row["note"])
+    existing_tail = _card_tail_from_text(existing_row["payment_method"], existing_row["tags"], existing_row["note"])
+    return bool(new_tail and existing_tail and new_tail == existing_tail)
+
+
+def _semantic_match_aggregate(card_merchant: str | None, tp_merchants: list[str]) -> tuple[bool, str]:
+    tps = [(m or "").strip().lower() for m in tp_merchants if (m or "").strip()]
+    if len(tps) > 1 and len(set(tps)) == 1:
+        return True, "all_tp_same_merchant"
+    return False, "aggregate_requires_single_tp_merchant"
+
+
+def _merge_tags(existing: str | None, to_add: list[str]) -> str:
+    parts = [part for part in (existing or "").split(",") if part]
+    for tag in to_add:
+        if tag and tag not in parts:
+            parts.append(tag)
+    return "," + ",".join(parts) + "," if parts else ""
+
+
+def _append_note_once(existing: str | None, suffix: str) -> str:
+    if not suffix:
+        return existing or ""
+    if suffix in (existing or ""):
+        return existing or suffix
+    if not existing:
+        return suffix
+    return f"{existing} || {suffix}"
+
+
+def _row_channel(row: sqlite3.Row) -> str:
+    return _infer_source_channel(row["payment_method"], row["source_text"], row["tags"])
+
+
+def _find_cross_source_candidates(
+    conn,
+    *,
+    new_row_id: int,
+    occurred_at: str,
+    amount_cents: int,
+    kind: str,
+    payment_method: str | None,
+    merchant: str | None,
+    new_channel: str,
+    is_refund: bool,
+) -> dict:
+    """Return a read-only cross-source dedup decision for a newly inserted row."""
+    clean = {"outcome": "clean", "twin_ids": [], "reason": "no_cross_source_match", "new_role": "none"}
+    day = (occurred_at or "")[:10]
+    if not day or amount_cents is None:
+        return clean
+
+    new_row = conn.execute(
+        """SELECT id, kind, amount_cents, occurred_at, merchant, note, payment_method,
+                  tags, source_text, status, deleted_at
+           FROM expense_entries WHERE id = ?""",
+        (new_row_id,),
+    ).fetchone()
+    new_status = new_row["status"] if new_row else "success"
+    new_note = new_row["note"] if new_row else None
+    if new_row is not None:
+        is_refund = is_refund or _looks_like_refund(new_status, kind, new_note, merchant)
+
+    if is_refund:
+        return {"outcome": "clean", "twin_ids": [], "reason": "refund_auto_resolution_disabled", "new_role": "none"}
+
+    if new_status != "success" or kind != "expense":
+        return clean
+
+    same_amount_rows = conn.execute(
+        """SELECT id, kind, amount_cents, occurred_at, merchant, note, payment_method,
+                  tags, source_text, status
+           FROM expense_entries
+           WHERE deleted_at IS NULL
+             AND id != ?
+             AND substr(occurred_at, 1, 10) = ?
+             AND amount_cents = ?
+             AND kind = ?
+             AND status = 'success'""",
+        (new_row_id, day, amount_cents, kind),
+    ).fetchall()
+
+    if _is_tp_channel(new_channel):
+        tp_twins = [r for r in same_amount_rows if _is_tp_channel(_row_channel(r))]
+        if tp_twins:
+            return {"outcome": "cross_tp_collision", "twin_ids": [int(r["id"]) for r in tp_twins], "reason": "same_day_amount_tp_collision", "new_role": "none"}
+        card_twins = [r for r in same_amount_rows if _row_channel(r) == "card"]
+        valid = []
+        for row in card_twins:
+            ok, reason = _semantic_match(row["merchant"], [merchant or ""])
+            if not ok and _shared_card_tail(new_row, row):
+                ok, reason = True, "shared_card_tail"
+            if ok:
+                valid.append((row, reason))
+        if len(valid) == 1:
+            return {"outcome": "shadow_1to1", "twin_ids": [int(valid[0][0]["id"])], "reason": valid[0][1], "new_role": "canonical"}
+        if len(valid) > 1:
+            return {"outcome": "ambiguous", "twin_ids": [int(r["id"]) for r, _ in valid], "reason": "multiple_card_twins", "new_role": "none"}
+        return clean
+
+    if new_channel == "card":
+        tp_twins = [r for r in same_amount_rows if _is_tp_channel(_row_channel(r))]
+        valid = []
+        for row in tp_twins:
+            ok, reason = _semantic_match(merchant, [row["merchant"] or ""])
+            if not ok and _shared_card_tail(new_row, row):
+                ok, reason = True, "shared_card_tail"
+            if ok:
+                valid.append((row, reason))
+        if len(valid) == 1:
+            return {"outcome": "shadow_1to1", "twin_ids": [int(valid[0][0]["id"])], "reason": valid[0][1], "new_role": "shadow"}
+        if len(valid) > 1:
+            return {"outcome": "ambiguous", "twin_ids": [int(r["id"]) for r, _ in valid], "reason": "multiple_tp_twins", "new_role": "none"}
+
+        tp_rows = conn.execute(
+            """SELECT id, amount_cents, merchant, payment_method, tags, source_text
+               FROM expense_entries
+               WHERE deleted_at IS NULL
+                 AND id != ?
+                 AND substr(occurred_at, 1, 10) = ?
+                 AND kind = 'expense'
+                 AND status = 'success'
+                 AND amount_cents > 0
+                 AND amount_cents <= ?""",
+            (new_row_id, day, amount_cents),
+        ).fetchall()
+        tp_rows = [r for r in tp_rows if _is_tp_channel(_row_channel(r))]
+        matches = []
+        for size in range(2, min(5, len(tp_rows)) + 1):
+            for subset in itertools.combinations(tp_rows, size):
+                if sum(int(r["amount_cents"] or 0) for r in subset) != amount_cents:
+                    continue
+                ok, reason = _semantic_match_aggregate(merchant, [r["merchant"] or "" for r in subset])
+                if ok:
+                    matches.append((subset, reason))
+            if matches:
+                break
+        if len(matches) == 1:
+            subset, reason = matches[0]
+            return {"outcome": "shadow_Nto1", "twin_ids": [int(r["id"]) for r in subset], "reason": reason, "new_role": "shadow"}
+        if len(matches) > 1:
+            return {
+                "outcome": "ambiguous",
+                "twin_ids": sorted({int(r["id"]) for subset, _ in matches for r in subset}),
+                "reason": "multiple_aggregate_subsets",
+                "new_role": "none",
+            }
+
+    return clean
+
+
+def _add_tags_and_note(conn, row_id: int, tags_to_add: list[str], note_suffix: str | None, now: str) -> None:
+    row = conn.execute("SELECT tags, note FROM expense_entries WHERE id = ?", (row_id,)).fetchone()
+    if not row:
+        return
+    tags = _merge_tags(row["tags"], tags_to_add)
+    note = _append_note_once(row["note"], note_suffix or "")
+    conn.execute(
+        "UPDATE expense_entries SET tags = ?, note = ?, updated_at = ? WHERE id = ?",
+        (tags or None, note or None, now, row_id),
+    )
+
+
+def _soft_delete_row(conn, row_id: int, now: str) -> None:
+    conn.execute(
+        "UPDATE expense_entries SET deleted_at = COALESCE(deleted_at, ?), updated_at = ? WHERE id = ?",
+        (now, now, row_id),
+    )
+
+
+def _apply_cross_source_resolution(
+    conn,
+    *,
+    new_row_id: int,
+    decision: dict,
+    now: str,
+) -> None:
+    """Apply a cross-source dedup decision using only soft-delete and tag/note enrichment."""
+    outcome = decision.get("outcome")
+    twin_ids = [int(i) for i in decision.get("twin_ids", [])]
+    new_role = decision.get("new_role")
+
+    if outcome == "shadow_1to1" and twin_ids:
+        if new_role == "canonical":
+            card_id = twin_ids[0]
+            tp_id = new_row_id
+        elif new_role == "shadow":
+            card_id = new_row_id
+            tp_id = twin_ids[0]
+        else:
+            return
+        _soft_delete_row(conn, card_id, now)
+        tp_row = conn.execute("SELECT tags FROM expense_entries WHERE id = ?", (tp_id,)).fetchone()
+        if tp_row and f",shadow_card:{card_id}," not in (tp_row["tags"] or ""):
+            _add_tags_and_note(conn, tp_id, [f"shadow_card:{card_id}", f"dedup_merged:{now}"], None, now)
+        return
+
+    if outcome == "shadow_Nto1" and twin_ids and new_role == "shadow":
+        card_id = new_row_id
+        _soft_delete_row(conn, card_id, now)
+        _add_tags_and_note(conn, card_id, ["aggregate_card"], f"aggregated_to_tp:{','.join(str(i) for i in twin_ids)}", now)
+        for tp_id in twin_ids:
+            _add_tags_and_note(conn, tp_id, [f"aggregate_part:{card_id}"], f"aggregate_card_id:{card_id}", now)
+        return
+
+    if outcome == "refund_shadow" and twin_ids:
+        if new_role == "shadow":
+            shadow_id = new_row_id
+        elif new_role == "canonical":
+            shadow_id = twin_ids[0]
+        else:
+            return
+        _soft_delete_row(conn, shadow_id, now)
+        _add_tags_and_note(conn, shadow_id, ["refund_shadow"], None, now)
 
 
 def _resolve_category(conn: sqlite3.Connection, category: str, kind: str | None) -> tuple[int | None, str]:
