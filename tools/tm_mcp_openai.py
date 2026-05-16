@@ -36,6 +36,7 @@ from mcp.server.auth.provider import (
     TokenError,
     construct_redirect_uri,
 )
+from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -326,7 +327,7 @@ def _build_mcp(auth_mode: str, public_base: str, link_secret: str | None, store_
                 default_scopes=[READ_SCOPE, WRITE_MEMORY_SCOPE],
             ),
             revocation_options=RevocationOptions(enabled=True),
-            required_scopes=[READ_SCOPE, WRITE_MEMORY_SCOPE],
+            required_scopes=[READ_SCOPE],
             resource_server_url=public_base,
         )
 
@@ -419,6 +420,14 @@ def _write_memory_via_router(topic: str, text: str) -> WriteMemoryResponse:
         verified=data.get("verified") if isinstance(data.get("verified"), dict) else None,
         raw=data,
     )
+
+
+def _require_write_memory_scope() -> None:
+    access = get_access_token()
+    if access is None:
+        return
+    if WRITE_MEMORY_SCOPE not in access.scopes:
+        raise PermissionError(f"missing required scope: {WRITE_MEMORY_SCOPE}")
 
 
 def _safe_text_file(path: str) -> pathlib.Path:
@@ -658,6 +667,7 @@ def register_tools(server: FastMCP, *, max_fetch_chars: int) -> None:
         ],
         text: str,
     ) -> WriteMemoryResponse:
+        _require_write_memory_scope()
         return _write_memory_via_router(topic, text)
 
 

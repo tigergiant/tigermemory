@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pathlib
 import sys
+from types import SimpleNamespace
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
@@ -93,6 +94,22 @@ def test_write_memory_via_router_rejects_invalid_inputs(monkeypatch):
         tm_mcp_openai._write_memory_via_router("systems", " ")
     with pytest.raises(ValueError):
         tm_mcp_openai._write_memory_via_router("systems", "x" * 4001)
+
+
+def test_write_memory_scope_guard(monkeypatch):
+    monkeypatch.setattr(tm_mcp_openai, "get_access_token", lambda: None)
+    tm_mcp_openai._require_write_memory_scope()
+
+    monkeypatch.setattr(tm_mcp_openai, "get_access_token", lambda: SimpleNamespace(scopes=["tm:read"]))
+    with pytest.raises(PermissionError):
+        tm_mcp_openai._require_write_memory_scope()
+
+    monkeypatch.setattr(
+        tm_mcp_openai,
+        "get_access_token",
+        lambda: SimpleNamespace(scopes=["tm:read", "tm:write_memory"]),
+    )
+    tm_mcp_openai._require_write_memory_scope()
 
 
 def test_openai_facade_exposes_second_step_tools_only():
