@@ -162,10 +162,22 @@ def cmd_mem0_write(args: argparse.Namespace) -> None:
 
 def cmd_mem0_search(args: argparse.Namespace) -> None:
     try:
-        resp = tm_core.mem0_search(args.query, args.size)
+        resp = tm_core.mem0_search(args.query, args.size, match_mode=args.match_mode)
     except RuntimeError as e:
         _die(str(e), code=4)
+    except ValueError as e:
+        _die(str(e), code=2)
     print(resp)
+
+
+def cmd_mem0_verify(args: argparse.Namespace) -> None:
+    try:
+        result = tm_core.verify_memory_id(args.id, key_terms=args.terms, digest_date=args.digest_date)
+    except RuntimeError as e:
+        _die(str(e), code=4)
+    except ValueError as e:
+        _die(str(e), code=2)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 # ---------- lint-page ----------
@@ -290,7 +302,14 @@ def main() -> None:
     ms = sub.add_parser("mem0-search", help="GET memories by query")
     ms.add_argument("--query", required=True)
     ms.add_argument("--size", type=int, default=5)
+    ms.add_argument("--match-mode", choices=["id_first", "token_and", "substring"], default="id_first")
     ms.set_defaults(func=cmd_mem0_search)
+
+    mv = sub.add_parser("mem0-verify", help="verify a Mem0 memory id via direct readback/search/digest")
+    mv.add_argument("--id", required=True)
+    mv.add_argument("--terms")
+    mv.add_argument("--digest-date")
+    mv.set_defaults(func=cmd_mem0_verify)
 
     lp = sub.add_parser("lint-page", help="validate a Wiki page against PAGE_FORMATS.md")
     lp.add_argument("path")

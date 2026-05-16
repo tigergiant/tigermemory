@@ -121,6 +121,30 @@ def test_reader_role_blocks_write_memory():
         tm_mcp._ROLE = old
 
 
+def test_write_memory_uses_shared_memory_ops(monkeypatch):
+    captured = {}
+
+    def fake_write_memory_with_review(agent, topic, text, **kwargs):
+        captured.update({"agent": agent, "topic": topic, "text": text, "kwargs": kwargs})
+        return {"route": "mem0", "id": "fd65b298-05bd-493c-83ce-e37d84447362"}
+
+    monkeypatch.setattr(tm_mcp.tm_memory_ops, "write_memory_with_review", fake_write_memory_with_review)
+    old = tm_mcp._ROLE
+    try:
+        tm_mcp._ROLE = "writer"
+        result = tm_mcp.write_memory("codex", "systems", "body", force_inbox=True)
+    finally:
+        tm_mcp._ROLE = old
+
+    assert result["route"] == "mem0"
+    assert captured["agent"] == "codex"
+    assert captured["topic"] == "systems"
+    assert captured["text"] == "body"
+    assert captured["kwargs"]["force_inbox"] is True
+    assert captured["kwargs"]["total_budget_s"] is None
+    assert captured["kwargs"]["include_readback"] is True
+
+
 def test_reader_role_allows_read_tools():
     """Reader role must NOT block read-only tools (get_agent_onboarding)."""
     old = tm_mcp._ROLE
@@ -128,6 +152,30 @@ def test_reader_role_allows_read_tools():
         tm_mcp._ROLE = "reader"
         result = tm_mcp.get_agent_onboarding("30s")
         assert result["depth"] == "30s"
+    finally:
+        tm_mcp._ROLE = old
+
+
+def test_reader_role_allows_verify_memory_id(monkeypatch):
+    mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"
+    monkeypatch.setattr(
+        tm_mcp.tm_core,
+        "verify_memory_id",
+        lambda memory_id, key_terms=None, digest_date=None: {
+            "id": memory_id,
+            "status": "exists_active",
+            "key_terms": key_terms,
+            "digest_date": digest_date,
+        },
+    )
+    old = tm_mcp._ROLE
+    try:
+        tm_mcp._ROLE = "reader"
+        result = tm_mcp.verify_memory_id(mem_id, key_terms="T-X3.5", digest_date="2026-05-16")
+        assert result["id"] == mem_id
+        assert result["status"] == "exists_active"
+        assert result["key_terms"] == "T-X3.5"
+        assert result["digest_date"] == "2026-05-16"
     finally:
         tm_mcp._ROLE = old
 

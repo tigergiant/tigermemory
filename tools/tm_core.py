@@ -22,6 +22,7 @@ translate to exit codes (CLI) or JSON-RPC errors (MCP).
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import os
 import pathlib
@@ -389,6 +390,9 @@ def mem0_base() -> str:
 # fall back to inbox without holding the request open.
 MEM0_READ_TIMEOUT = 10   # search / list
 MEM0_WRITE_TIMEOUT = 15  # POST /memories — slowest path (Mem0 internal LLM)
+MEM0_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 
 def mem0_request(
@@ -396,6 +400,7 @@ def mem0_request(
     data: bytes | None = None,
     *,
     timeout: int = MEM0_READ_TIMEOUT,
+    method: str | None = None,
 ) -> str:
     """GET (data=None) or POST to Mem0. Raises RuntimeError with HTTP code / reason on failure.
 
@@ -407,7 +412,7 @@ def mem0_request(
     if data is not None:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(
-        url, data=data, headers=headers, method=("POST" if data else "GET")
+        url, data=data, headers=headers, method=(method or ("POST" if data else "GET"))
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
@@ -477,18 +482,232 @@ def mem0_write(
     )
 
 
-def mem0_search(query: str, size: int = 5) -> str:
+def mem0_get(memory_id: str) -> str:
+    """GET a Mem0 memory by exact UUID. Returns raw response body."""
+    if not MEM0_UUID_RE.fullmatch(memory_id.strip()):
+        raise ValueError("memory_id must be a full UUID")
+    mem_id = urllib.parse.quote(memory_id.strip())
+    return mem0_request(
+        f"{mem0_base().rstrip('/')}/api/v1/memories/{mem_id}",
+        timeout=MEM0_READ_TIMEOUT,
+    )
+
+
+def mem0_delete(memory_ids: list[str]) -> str:
+    """DELETE Mem0 memories by UUID via OpenMemory's collection endpoint."""
+    ids = [mid.strip() for mid in memory_ids if mid and mid.strip()]
+    if not ids:
+        raise ValueError("memory_ids required")
+    bad = [mid for mid in ids if not MEM0_UUID_RE.fullmatch(mid)]
+    if bad:
+        raise ValueError(f"invalid memory UUID(s): {', '.join(bad)}")
+    payload = json.dumps({"user_id": "tiger", "memory_ids": ids}).encode("utf-8")
+    return mem0_request(
+        f"{mem0_base().rstrip('/')}/api/v1/memories/",
+        data=payload,
+        timeout=MEM0_READ_TIMEOUT,
+        method="DELETE",
+    )
+
+
+def mem0_search(query: str, size: int = 5, match_mode: str = "id_first") -> str:
     """GET memories by query. Returns raw response body."""
+    if match_mode not in {"id_first", "token_and", "substring"}:
+        raise ValueError("match_mode must be one of: id_first, token_and, substring")
     params = urllib.parse.urlencode(
         # OpenMemory's patched GET /api/v1/memories/ filters on search_query.
         # Older tigermemory docs and clients used query=; the router keeps that
         # as a compatibility alias, but tm_core should call the canonical param.
-        {"user_id": "tiger", "search_query": query, "page": 1, "size": size}
+        {
+            "user_id": "tiger",
+            "search_query": query,
+            "page": 1,
+            "size": size,
+            "match_mode": match_mode,
+        }
     )
     return mem0_request(
         f"{mem0_base()}/api/v1/memories/?{params}",
         timeout=MEM0_READ_TIMEOUT,
     )
+
+
+def _mem0_item_text(item: dict[str, Any]) -> str:
+    return str(item.get("text") or item.get("content") or item.get("memory") or "")
+
+
+def _mem0_item_metadata(item: dict[str, Any]) -> dict[str, Any]:
+    meta = item.get("metadata_") or item.get("metadata") or {}
+    return meta if isinstance(meta, dict) else {}
+
+
+def _mem0_item_ids(raw: str) -> list[str]:
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    items = data.get("items") or data.get("results") or []
+    if not isinstance(items, list):
+        return []
+    return [str(item.get("id")) for item in items if isinstance(item, dict) and item.get("id")]
+
+
+def _mem0_created_at_local(created_at: Any) -> tuple[datetime.datetime | None, str | None]:
+    if isinstance(created_at, (int, float)):
+        dt = datetime.datetime.fromtimestamp(created_at, TZ_CN)
+        return dt, dt.isoformat()
+    if isinstance(created_at, str) and created_at.strip():
+        raw = created_at.strip()
+        try:
+            normalized = raw.replace("Z", "+00:00")
+            dt = datetime.datetime.fromisoformat(normalized)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=datetime.timezone.utc)
+            dt = dt.astimezone(TZ_CN)
+            return dt, dt.isoformat()
+        except ValueError:
+            return None, raw
+    return None, None
+
+
+def _digest_window(date_str: str) -> tuple[datetime.datetime, datetime.datetime]:
+    day = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+    start = datetime.datetime.combine(day, datetime.time.min, tzinfo=TZ_CN)
+    end = datetime.datetime.combine(day, datetime.time.max, tzinfo=TZ_CN)
+    return start, end
+
+
+def _digest_status_for_memory(memory_id: str, created_dt: datetime.datetime | None, digest_date: str | None) -> dict[str, Any]:
+    if not digest_date:
+        return {
+            "digest_date": None,
+            "digest_path": None,
+            "digest_contains": None,
+            "digest_inclusion_reason": "no digest date available",
+        }
+    rel = f"inbox/daily/{digest_date}.md"
+    path = REPO_ROOT / rel
+    start, end = _digest_window(digest_date)
+    if created_dt is not None and not (start <= created_dt <= end):
+        return {
+            "digest_date": digest_date,
+            "digest_path": rel,
+            "digest_contains": False,
+            "digest_inclusion_reason": (
+                f"created_at_local={created_dt.isoformat()} outside digest window {digest_date}"
+            ),
+        }
+    if not path.exists():
+        return {
+            "digest_date": digest_date,
+            "digest_path": rel,
+            "digest_contains": False,
+            "digest_inclusion_reason": "digest file missing",
+        }
+    text = path.read_text(encoding="utf-8", errors="replace")
+    contains = memory_id in text
+    return {
+        "digest_date": digest_date,
+        "digest_path": rel,
+        "digest_contains": contains,
+        "digest_inclusion_reason": "included in digest" if contains else "inside digest window but id not found in digest",
+    }
+
+
+def verify_memory_id(
+    memory_id: str,
+    key_terms: str | None = None,
+    digest_date: str | None = None,
+) -> dict[str, Any]:
+    """Verify a Mem0 id against direct storage, search, and daily digest visibility."""
+    mem_id = memory_id.strip()
+    if not MEM0_UUID_RE.fullmatch(mem_id):
+        raise ValueError("memory_id must be a full UUID")
+
+    result: dict[str, Any] = {
+        "id": mem_id,
+        "status": "unknown",
+        "exists": False,
+        "direct_readback_ok": False,
+        "state": None,
+        "metadata": {},
+        "created_at": None,
+        "created_at_local": None,
+        "text_len": 0,
+        "text_sha256_12": None,
+        "text_preview": "",
+        "search_by_id_self_hit": None,
+        "search_by_id_count": None,
+        "search_by_id_ids": [],
+        "search_by_terms_self_hit": None,
+        "search_by_terms_count": None,
+        "search_by_terms_ids": [],
+        "warnings": [],
+    }
+
+    try:
+        direct_raw = mem0_get(mem_id)
+    except RuntimeError as exc:
+        err = str(exc)
+        if err.startswith("Mem0 HTTP 404:"):
+            result["status"] = "not_found"
+            result["error"] = err
+            return result
+        result["status"] = "mem0_unreachable"
+        result["error"] = err
+        return result
+
+    try:
+        data = json.loads(direct_raw)
+    except json.JSONDecodeError as exc:
+        result["status"] = "mem0_unreachable"
+        result["error"] = f"Mem0 returned invalid JSON: {exc}"
+        return result
+    if not isinstance(data, dict):
+        result["status"] = "mem0_unreachable"
+        result["error"] = "Mem0 returned a non-object response"
+        return result
+    text = _mem0_item_text(data)
+    meta = _mem0_item_metadata(data)
+    state = str(data.get("state") or "")
+    created_dt, created_local = _mem0_created_at_local(data.get("created_at"))
+    effective_digest_date = digest_date or (created_dt.strftime("%Y-%m-%d") if created_dt else None)
+
+    result.update({
+        "status": "exists_active" if state == "active" else "exists_inactive",
+        "exists": True,
+        "direct_readback_ok": True,
+        "state": state or None,
+        "metadata": meta,
+        "created_at": data.get("created_at"),
+        "created_at_local": created_local,
+        "text_len": len(text),
+        "text_sha256_12": hashlib.sha256(text.encode("utf-8")).hexdigest()[:12],
+        "text_preview": text[:300],
+    })
+
+    try:
+        ids = _mem0_item_ids(mem0_search(mem_id, size=20, match_mode="id_first"))
+        result["search_by_id_ids"] = ids
+        result["search_by_id_count"] = len(ids)
+        result["search_by_id_self_hit"] = mem_id in ids
+    except Exception as exc:
+        result["search_by_id_self_hit"] = False
+        result["warnings"].append(f"search_by_id failed: {exc}")
+
+    terms = (key_terms or "").strip()
+    if terms:
+        try:
+            ids = _mem0_item_ids(mem0_search(terms, size=20, match_mode="id_first"))
+            result["search_by_terms_ids"] = ids
+            result["search_by_terms_count"] = len(ids)
+            result["search_by_terms_self_hit"] = mem_id in ids
+        except Exception as exc:
+            result["search_by_terms_self_hit"] = False
+            result["warnings"].append(f"search_by_terms failed: {exc}")
+
+    result.update(_digest_status_for_memory(mem_id, created_dt, effective_digest_date))
+    return result
 
 
 # ---------- Embedding client (OpenAI-compatible) ----------

@@ -122,6 +122,7 @@ def generate_daily_digest(target_date: str | None = None, dry_run: bool = False)
     
     try:
         # 2. Fetch data
+        window_start, window_end = _date_window(target_date)
         memories = _fetch_memories_for_date(target_date)
         inbox_files = _list_inbox_for_date(target_date)
         
@@ -136,6 +137,9 @@ def generate_daily_digest(target_date: str | None = None, dry_run: bool = False)
                 "ok": True,
                 "skipped": True,
                 "reason": "no_activity",
+                "window_start_local": window_start.isoformat(),
+                "window_end_local": window_end.isoformat(),
+                "memory_ids": [],
             })
             print(f"[digest] Skipped: no activity for {target_date}", file=sys.stderr)
             return result_base
@@ -164,6 +168,9 @@ def generate_daily_digest(target_date: str | None = None, dry_run: bool = False)
                 "fact_count": mem_count + inbox_count,
                 "skipped": False,
                 "reason": "dry_run",
+                "window_start_local": window_start.isoformat(),
+                "window_end_local": window_end.isoformat(),
+                "memory_ids": [str(m.get("id", "")) for m in memories if m.get("id")],
             })
         else:
             _write_digest_file(full_path, digest_md)
@@ -173,6 +180,9 @@ def generate_daily_digest(target_date: str | None = None, dry_run: bool = False)
                 "fact_count": mem_count + inbox_count,
                 "skipped": False,
                 "reason": "written",
+                "window_start_local": window_start.isoformat(),
+                "window_end_local": window_end.isoformat(),
+                "memory_ids": [str(m.get("id", "")) for m in memories if m.get("id")],
             })
             print(f"[digest] Written: {full_path}", file=sys.stderr)
         
@@ -196,6 +206,28 @@ def generate_daily_digest(target_date: str | None = None, dry_run: bool = False)
 # ---------- Data Fetching ----------
 
 
+def _date_window(date_str: str) -> tuple[datetime.datetime, datetime.datetime]:
+    """Return inclusive Asia/Shanghai day window for YYYY-MM-DD."""
+    target_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+    start_dt = datetime.datetime.combine(target_date, datetime.time.min, tzinfo=TZ_CN)
+    end_dt = datetime.datetime.combine(target_date, datetime.time.max, tzinfo=TZ_CN)
+    return start_dt, end_dt
+
+
+def _created_at_local(created_at: Any) -> datetime.datetime | None:
+    if isinstance(created_at, (int, float)):
+        return datetime.datetime.fromtimestamp(created_at, TZ_CN)
+    if isinstance(created_at, str) and created_at.strip():
+        try:
+            dt = datetime.datetime.fromisoformat(created_at.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt.astimezone(TZ_CN)
+    return None
+
+
 def _fetch_memories_for_date(date_str: str) -> list[dict[str, Any]]:
     """Fetch Mem0 memories and filter by created_at date (client-side).
     
@@ -203,17 +235,9 @@ def _fetch_memories_for_date(date_str: str) -> list[dict[str, Any]]:
     and filter client-side. Returns list of memory dicts with keys:
     - id, content, created_at, metadata_
     """
-    # Parse target date boundaries in Asia/Shanghai
-    date_fmt = "%Y-%m-%d"
-    target_date = datetime.datetime.strptime(date_str, date_fmt).date()
-    
-    # Get range: start of target day to end of target day (in TZ_CN)
-    start_dt = datetime.datetime.combine(target_date, datetime.time.min)
-    end_dt = datetime.datetime.combine(target_date, datetime.time.max)
-    
-    # Convert to timestamps for comparison (Mem0 created_at is unix timestamp)
-    start_ts = int(start_dt.replace(tzinfo=TZ_CN).timestamp())
-    end_ts = int(end_dt.replace(tzinfo=TZ_CN).timestamp())
+    start_dt, end_dt = _date_window(date_str)
+    start_ts = int(start_dt.timestamp())
+    end_ts = int(end_dt.timestamp())
     
     # Fetch all memories (Mem0 API returns up to 100 by default, paginated)
     all_memories: list[dict] = []
@@ -223,24 +247,15 @@ def _fetch_memories_for_date(date_str: str) -> list[dict[str, Any]]:
     
     while page <= max_pages:
         try:
-            # Mem0 API: GET /api/v1/memories/?user_id=tiger&page_size=N
-            url = f"{tm_core.mem0_base()}/api/v1/memories/?user_id=tiger&page_size={page_size}"
-            if page > 1:
-                url += f"&page={page}"
+            params = tm_core.urllib.parse.urlencode({
+                "user_id": "tiger",
+                "page": page,
+                "size": page_size,
+            })
+            url = f"{tm_core.mem0_base().rstrip('/')}/api/v1/memories/?{params}"
+            data = json.loads(tm_core.mem0_request(url, timeout=15))
             
-            headers = {
-                "Authorization": f"Token {tm_core._env_value('MEM0_API_KEY')}",
-                "Accept": "application/json",
-            }
-            
-            import urllib.request
-            req = urllib.request.Request(url, headers=headers, method="GET")
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-            
-            with opener.open(req, timeout=15) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            
-            results = data.get("items", [])
+            results = data.get("items") or data.get("results") or []
             if not results:
                 break
                 
@@ -256,13 +271,16 @@ def _fetch_memories_for_date(date_str: str) -> list[dict[str, Any]]:
             print(f"[digest] Warning: Mem0 fetch failed on page {page}: {e}", file=sys.stderr)
             break
     
-    # Client-side filter by created_at timestamp
+    # Client-side filter by created_at. OpenMemory direct GET and list
+    # responses have differed across versions (Unix timestamp vs ISO string).
     filtered = []
     for m in all_memories:
-        created_at = m.get("created_at")
-        if created_at and isinstance(created_at, (int, float)):
-            if start_ts <= created_at <= end_ts:
-                filtered.append(m)
+        created_dt = _created_at_local(m.get("created_at"))
+        if created_dt is None:
+            continue
+        created_ts = int(created_dt.timestamp())
+        if start_ts <= created_ts <= end_ts:
+            filtered.append(m)
     
     return filtered
 
@@ -438,6 +456,7 @@ def _render_digest_markdown(
     # Build source lists
     mem_ids = [m.get("id", "unknown") for m in memories]
     inbox_names = [f["filename"] for f in inbox_files]
+    window_start, window_end = _date_window(date_str)
     
     # Topic list (used for ordering)
     valid_topics = ["systems", "brand", "operations", "investment", "person", "production"]
@@ -489,10 +508,17 @@ def _render_digest_markdown(
         f'date: {date_str}',
         f'generated_at: {datetime.datetime.now(TZ_CN).isoformat()}',
         f'status: pending',
+        f'window_start_local: {window_start.isoformat()}',
+        f'window_end_local: {window_end.isoformat()}',
         f'mem0_count: {len(memories)}',
         f'inbox_count: {len(inbox_files)}',
         f'fact_count: {len(structured_facts)}',
+        "memory_ids:",
     ]
+    if mem_ids:
+        lines.extend(f"  - {mem_id}" for mem_id in mem_ids)
+    else:
+        lines.append("  []")
     lines.extend(facts_yaml_lines)
     lines.append("---")
     lines.append("")
@@ -518,15 +544,26 @@ def _render_digest_markdown(
                 continue
             fact_id = fact.get("fact_id", f"fact-{fact_counter:03d}")
             text = fact.get("text", "")
-            source = fact.get("source", "unknown")
+            source = fact.get("source_id", fact.get("source", "unknown"))
             lines.append(f"- [{fact_id}] {text} (source: {source})")
         lines.append("")
     
     # Source references
     lines.append("## 原始来源")
     lines.append("")
-    lines.append(f"- Mem0 IDs: {', '.join(mem_ids[:10])}{'...' if len(mem_ids) > 10 else ''}")
-    lines.append(f"- Inbox files: {', '.join(inbox_names[:5])}{'...' if len(inbox_names) > 5 else ''}")
+    lines.append(f"- Digest window: {window_start.isoformat()} -> {window_end.isoformat()}")
+    lines.append("- Mem0 IDs:")
+    if mem_ids:
+        for mem_id in mem_ids:
+            lines.append(f"  - {mem_id}")
+    else:
+        lines.append("  - (none)")
+    lines.append("- Inbox files:")
+    if inbox_names:
+        for name in inbox_names:
+            lines.append(f"  - {name}")
+    else:
+        lines.append("  - (none)")
     lines.append("")
     
     # Audit suggestions

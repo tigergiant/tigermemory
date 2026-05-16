@@ -62,6 +62,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 import tm_core
 import tm_lessons
+import tm_memory_ops
 import tm_minimax
 import tm_persona
 import tm_review_tools
@@ -501,6 +502,27 @@ def search_memories(query: str, size: int = 5) -> dict[str, Any]:
 
 
 @mcp.tool()
+def verify_memory_id(
+    memory_id: str,
+    key_terms: str | None = None,
+    digest_date: str | None = None,
+) -> dict[str, Any]:
+    """[审计 Mem0 ID] Verify a write_memory-returned Mem0 id by direct readback, search, and digest visibility.
+
+    Args:
+        memory_id: Full Mem0 UUID returned by write_memory.
+        key_terms: Optional exact terms expected in the memory text, used for a search self-hit check.
+        digest_date: Optional YYYY-MM-DD digest date to check. Defaults to the memory's Asia/Shanghai created_at date.
+
+    Returns:
+        Status and evidence fields such as status, direct_readback_ok, state,
+        created_at_local, text_sha256_12, search_by_id_self_hit,
+        search_by_terms_self_hit, and digest_inclusion_reason.
+    """
+    return tm_core.verify_memory_id(memory_id, key_terms=key_terms, digest_date=digest_date)
+
+
+@mcp.tool()
 def search_wiki(
     query: str,
     size: int = 5,
@@ -705,58 +727,14 @@ def write_memory(agent: str, topic: str, text: str, force_inbox: bool = False) -
         {"route": "mem0", "id": "..."} or {"route": "inbox", "path": "...", "commit_sha": "..."}
         or {"route": "discard", "score": int, "issues": [...]}
     """
-    import tm_route
-    decision = tm_route.route_memory(text, topic, agent)
-    if force_inbox:
-        decision = tm_route.RouteDecision(
-            route="inbox", score=decision.score, topic_inferred=decision.topic_inferred,
-            issues=decision.issues, reasons=f"force_inbox override: {decision.reasons}",
-            is_transient=decision.is_transient, is_sensitive=decision.is_sensitive,
-            needs_human_review=decision.needs_human_review, unreviewed=decision.unreviewed,
-        )
-
-    if decision.route == "discard":
-        return {
-            "route": "discard",
-            "score": decision.score,
-            "issues": decision.issues,
-            "reasons": decision.reasons,
-        }
-
-    if decision.route == "mem0":
-        data = json.loads(tm_core.mem0_write(
-            agent,
-            decision.topic_inferred,
-            text,
-            metadata_extra=decision.as_metadata(),
-        ))
-        data["route"] = "mem0"
-        data["score"] = decision.score
-        data["topic_inferred"] = decision.topic_inferred
-        data["reasons"] = decision.reasons
-        return data
-
-    # route == "inbox"
-    fm_extra = decision.as_metadata()
-    fm_extra["routed_by"] = "tigermemory"
-    fm_extra["route_decision_reason"] = decision.reasons
-    rel, sha = tm_core.write_and_commit_inbox(
+    return tm_memory_ops.write_memory_with_review(
         agent,
-        decision.topic_inferred,
-        f"Routed memory {decision.score}",
+        topic,
         text,
-        frontmatter_extra=fm_extra,
+        force_inbox=force_inbox,
+        total_budget_s=None,
+        include_readback=True,
     )
-    return {
-        "route": "inbox",
-        "path": rel,
-        "commit_sha": sha,
-        "url": tm_core.git_remote_blob_url(rel),
-        "score": decision.score,
-        "topic_inferred": decision.topic_inferred,
-        "reasons": decision.reasons,
-        "unreviewed": decision.unreviewed,
-    }
 
 
 @mcp.tool()
