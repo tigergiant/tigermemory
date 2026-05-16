@@ -41,7 +41,7 @@ def _token_scopes(raw: dict[str, Any]) -> list[str]:
     return []
 
 
-def _pick_access_token(store_path: pathlib.Path, required_scope: str) -> str | None:
+def _pick_access_token(store_path: pathlib.Path, required_scopes: set[str]) -> str | None:
     if not store_path.exists():
         return None
     data = json.loads(store_path.read_text(encoding="utf-8"))
@@ -49,12 +49,12 @@ def _pick_access_token(store_path: pathlib.Path, required_scope: str) -> str | N
     for token, raw in data.get("access_tokens", {}).items():
         if raw.get("expires_at") is not None and raw["expires_at"] < now:
             continue
-        if required_scope in _token_scopes(raw):
+        if required_scopes.issubset(set(_token_scopes(raw))):
             return str(token)
     return None
 
 
-async def _mcp_smoke(base_url: str, token: str, *, timeout: float) -> dict[str, Any]:
+async def _mcp_smoke(base_url: str, token: str, *, timeout: float, write_smoke: bool) -> dict[str, Any]:
     from mcp import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
 
@@ -76,24 +76,28 @@ async def _mcp_smoke(base_url: str, token: str, *, timeout: float) -> dict[str, 
             if first_id:
                 fetch_result = await asyncio.wait_for(session.call_tool("fetch", {"id": first_id}), timeout=timeout)
                 fetched = not bool(fetch_result.isError)
-            write_result = await asyncio.wait_for(
-                session.call_tool(
-                    "write_memory",
-                    {
-                        "topic": "systems",
-                        "text": "2026-05-17 read-only token scope smoke; this should fail without tm:write_memory.",
-                    },
-                ),
-                timeout=timeout,
-            )
+            write_result = None
+            if write_smoke:
+                write_result = await asyncio.wait_for(
+                    session.call_tool(
+                        "write_memory",
+                        {
+                            "topic": "systems",
+                            "text": "2026-05-17 public ChatGPT MCP write_memory smoke.",
+                        },
+                    ),
+                    timeout=timeout,
+                )
+            write_ok = True if write_result is None else not bool(write_result.isError)
     return {
-        "ok": all(name in tool_names for name in EXPECTED_TOOLS) and fetched and bool(write_result.isError),
+        "ok": all(name in tool_names for name in EXPECTED_TOOLS) and fetched and write_ok,
         "latency_ms": round((time.monotonic() - started) * 1000),
         "tools": tool_names,
         "first_search_id": first_id,
         "fetch_ok": fetched,
-        "write_with_read_token_is_error": bool(write_result.isError),
-        "write_error_excerpt": (write_result.content[0].text if write_result.content else "")[:240],
+        "write_smoke": write_smoke,
+        "write_is_error": bool(write_result.isError) if write_result is not None else None,
+        "write_error_excerpt": (write_result.content[0].text if write_result and write_result.content else "")[:240],
     }
 
 
@@ -102,6 +106,7 @@ def main() -> int:
     ap.add_argument("--public-base", default=DEFAULT_PUBLIC_BASE)
     ap.add_argument("--oauth-store", default=str(DEFAULT_STORE_PATH))
     ap.add_argument("--timeout", type=float, default=20.0)
+    ap.add_argument("--write-smoke", action="store_true", help="Actually call write_memory when a write-scoped token exists")
     args = ap.parse_args()
 
     base = args.public_base.rstrip("/")
@@ -125,14 +130,23 @@ def main() -> int:
         print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
         return 1
 
-    read_token = _pick_access_token(store_path, "tm:read")
-    if read_token:
+    full_token = _pick_access_token(store_path, {"tm:read", "tm:write_memory"})
+    read_token = _pick_access_token(store_path, {"tm:read"})
+    if full_token:
         try:
-            report["checks"]["mcp_read_token"] = asyncio.run(_mcp_smoke(base, read_token, timeout=args.timeout))
+            report["checks"]["mcp_token"] = asyncio.run(
+                _mcp_smoke(base, full_token, timeout=args.timeout, write_smoke=args.write_smoke)
+            )
         except Exception as exc:
-            report["checks"]["mcp_read_token"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            report["checks"]["mcp_token"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    elif read_token:
+        report["checks"]["mcp_token"] = {
+            "ok": True,
+            "skipped": True,
+            "reason": "only tm:read token is available; reconnect ChatGPT to obtain tm:write_memory before full MCP smoke",
+        }
     else:
-        report["checks"]["mcp_read_token"] = {"ok": True, "skipped": True, "reason": "no valid tm:read token"}
+        report["checks"]["mcp_token"] = {"ok": True, "skipped": True, "reason": "no valid OAuth token"}
 
     metadata_scopes = report["checks"]["protected_resource"]["json"].get("scopes_supported") or []
     auth_scopes = report["checks"]["authorization_server"]["json"].get("scopes_supported") or []
@@ -143,7 +157,7 @@ def main() -> int:
         and "tm:write_memory" in metadata_scopes
         and "tm:read" in auth_scopes
         and "tm:write_memory" in auth_scopes
-        and bool(report["checks"]["mcp_read_token"].get("ok"))
+        and bool(report["checks"]["mcp_token"].get("ok"))
     )
     print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     return 0 if report["ok"] else 1

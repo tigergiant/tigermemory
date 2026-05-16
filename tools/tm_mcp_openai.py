@@ -411,7 +411,7 @@ def _build_mcp(auth_mode: str, public_base: str, link_secret: str | None, store_
                 default_scopes=[READ_SCOPE, WRITE_MEMORY_SCOPE],
             ),
             revocation_options=RevocationOptions(enabled=True),
-            required_scopes=[READ_SCOPE],
+            required_scopes=[READ_SCOPE, WRITE_MEMORY_SCOPE],
             resource_server_url=public_base,
         )
 
