@@ -191,3 +191,83 @@ def test_batch_record_cross_source_import_twice_keeps_active_count():
     assert [a["outcome"] for a in second["cross_source_actions"]] == ["shadow_1to1"]
     active_total = conn.execute("SELECT COUNT(*) FROM expense_entries WHERE deleted_at IS NULL").fetchone()[0]
     assert active_total == 1
+
+
+def test_tp_collision_far_apart_returns_clean():
+    conn = make_conn()
+    insert_entry(conn, row_id=1, amount_cents=1000, occurred_at="2026-06-01T10:00:00+08:00", merchant="merchant-a", payment_method="alipay", source_text="alipay")
+
+    decision = tm_expense._find_cross_source_candidates(
+        conn,
+        new_row_id=99,
+        occurred_at="2026-06-01T10:00:30+08:00",
+        amount_cents=1000,
+        kind="expense",
+        payment_method="alipay",
+        merchant="merchant-a",
+        new_channel="alipay",
+        is_refund=False,
+    )
+
+    assert decision["outcome"] == "clean"
+
+
+def test_tp_collision_within_threshold_returns_collision():
+    conn = make_conn()
+    insert_entry(conn, row_id=1, amount_cents=2000, occurred_at="2026-06-02T15:00:00+08:00", merchant="merchant-b", payment_method="wechat", source_text="wechat")
+
+    decision = tm_expense._find_cross_source_candidates(
+        conn,
+        new_row_id=99,
+        occurred_at="2026-06-02T15:00:03+08:00",
+        amount_cents=2000,
+        kind="expense",
+        payment_method="wechat",
+        merchant="merchant-b",
+        new_channel="wechat",
+        is_refund=False,
+    )
+
+    assert decision["outcome"] == "cross_tp_collision"
+    assert decision["twin_ids"] == [1]
+    assert decision["reason"].endswith("_within_5s")
+
+
+def test_tp_collision_far_falls_through_to_card():
+    conn = make_conn()
+    insert_entry(conn, row_id=1, amount_cents=3000, occurred_at="2026-06-03T08:00:00+08:00", merchant="meituan Wang San Hotpot", payment_method="alipay", source_text="alipay")
+    insert_entry(conn, row_id=2, amount_cents=3000, occurred_at="2026-06-03T00:00:00+08:00", merchant="Wang San Hotpot", payment_method="CMB credit card 3958", source_text="credit_card")
+
+    decision = tm_expense._find_cross_source_candidates(
+        conn,
+        new_row_id=99,
+        occurred_at="2026-06-03T20:00:00+08:00",
+        amount_cents=3000,
+        kind="expense",
+        payment_method="alipay",
+        merchant="meituan Wang San Hotpot",
+        new_channel="alipay",
+        is_refund=False,
+    )
+
+    assert decision["outcome"] == "shadow_1to1"
+    assert decision["twin_ids"] == [2]
+
+
+def test_tp_collision_unparseable_timestamp_does_not_crash():
+    conn = make_conn()
+    insert_entry(conn, row_id=1, amount_cents=4000, occurred_at="notadate01", merchant="merchant-c", payment_method="alipay", source_text="alipay")
+
+    decision = tm_expense._find_cross_source_candidates(
+        conn,
+        new_row_id=99,
+        occurred_at="notadate01",
+        amount_cents=4000,
+        kind="expense",
+        payment_method="alipay",
+        merchant="merchant-c",
+        new_channel="alipay",
+        is_refund=False,
+    )
+
+    assert decision["outcome"] == "clean"

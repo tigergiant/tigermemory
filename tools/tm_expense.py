@@ -465,6 +465,7 @@ def _normalize_payment_method(pm: str | None) -> str | None:
 
 
 _TP_CHANNELS = {"alipay", "wechat", "meituan", "douyin_pay"}
+TP_COLLISION_TIME_THRESHOLD_SECONDS = 5
 
 
 def _infer_source_channel(payment_method: str | None, source_text: str | None, tags: str | None) -> str:
@@ -537,6 +538,20 @@ def _semantic_match(card_merchant: str | None, tp_merchants: list[str]) -> tuple
 
 def _is_tp_channel(channel: str) -> bool:
     return channel in _TP_CHANNELS
+
+
+def _abs_delta_seconds(ts_a: str | None, ts_b: str | None) -> int | None:
+    """Return absolute seconds between two ISO-8601 timestamps, or None."""
+    if not ts_a or not ts_b:
+        return None
+    try:
+        from datetime import datetime
+
+        a = datetime.fromisoformat(ts_a)
+        b = datetime.fromisoformat(ts_b)
+        return abs(int((a - b).total_seconds()))
+    except (ValueError, TypeError):
+        return None
 
 
 def _looks_like_refund(status: str | None, kind: str | None, note: str | None, merchant: str | None) -> bool:
@@ -648,7 +663,18 @@ def _find_cross_source_candidates(
     if _is_tp_channel(new_channel):
         tp_twins = [r for r in same_amount_rows if _is_tp_channel(_row_channel(r))]
         if tp_twins:
-            return {"outcome": "cross_tp_collision", "twin_ids": [int(r["id"]) for r in tp_twins], "reason": "same_day_amount_tp_collision", "new_role": "none"}
+            close_twins = []
+            for row in tp_twins:
+                delta = _abs_delta_seconds(occurred_at, row["occurred_at"])
+                if delta is not None and delta <= TP_COLLISION_TIME_THRESHOLD_SECONDS:
+                    close_twins.append(row)
+            if close_twins:
+                return {
+                    "outcome": "cross_tp_collision",
+                    "twin_ids": [int(r["id"]) for r in close_twins],
+                    "reason": f"same_day_amount_tp_within_{TP_COLLISION_TIME_THRESHOLD_SECONDS}s",
+                    "new_role": "none",
+                }
         card_twins = [r for r in same_amount_rows if _row_channel(r) == "card"]
         valid = []
         for row in card_twins:
