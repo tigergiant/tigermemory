@@ -108,7 +108,7 @@ def test_write_memory_scope_guard(monkeypatch):
     tm_mcp_openai._require_write_memory_scope()
 
     monkeypatch.setattr(tm_mcp_openai, "get_access_token", lambda: SimpleNamespace(scopes=["tm:read"]))
-    with pytest.raises(PermissionError):
+    with pytest.raises(PermissionError, match="reconnect"):
         tm_mcp_openai._require_write_memory_scope()
 
     monkeypatch.setattr(
@@ -139,10 +139,35 @@ def test_write_memory_scope_guard_uses_oauth_store_fallback(tmp_path, monkeypatc
     monkeypatch.setattr(tm_mcp_openai, "get_access_token", lambda: None)
     monkeypatch.setattr(tm_mcp_openai, "_oauth_store_path", lambda: store)
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(PermissionError, match="reconnect"):
         tm_mcp_openai._require_write_memory_scope(SimpleNamespace(client_id="read-client"))
 
     tm_mcp_openai._require_write_memory_scope(SimpleNamespace(client_id="write-client"))
+
+
+def test_readyz_payload_reports_dependency_state(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_probe(name, url, **_kwargs):
+        calls.append((name, url))
+        return {"ok": name != "mem0", "name": name}
+
+    monkeypatch.setattr(tm_mcp_openai.tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_mcp_openai, "_oauth_store_path", lambda: tmp_path / "oauth.json")
+    monkeypatch.setattr(tm_mcp_openai.tm_core, "mem0_base", lambda: "http://127.0.0.1:8765")
+    monkeypatch.setattr(tm_mcp_openai, "_probe_url", fake_probe)
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "http://127.0.0.1:19190/v1")
+
+    status, payload = tm_mcp_openai._readyz_payload()
+
+    assert status == 503
+    assert payload["ok"] is False
+    assert payload["checks"]["repo"]["ok"] is True
+    assert payload["checks"]["mem0"]["ok"] is False
+    assert calls == [
+        ("mem0", "http://127.0.0.1:8765/api/v1/memories/?user_id=tiger&page=1&size=1"),
+        ("embedding", "http://127.0.0.1:19190/v1/models"),
+    ]
 
 
 def test_openai_facade_exposes_second_step_tools_only():
@@ -163,3 +188,10 @@ def test_openai_facade_exposes_second_step_tools_only():
     assert "propose_wiki_page" not in names
     assert "write_sources" not in names
     assert "expense_write" not in names
+    by_name = {tool.name: tool for tool in tools}
+    assert by_name["search"].annotations.readOnlyHint is True
+    assert by_name["fetch"].annotations.readOnlyHint is True
+    assert by_name["get_agent_onboarding"].annotations.readOnlyHint is True
+    assert by_name["write_memory"].annotations.readOnlyHint is False
+    assert by_name["write_memory"].annotations.destructiveHint is False
+    assert by_name["write_memory"].annotations.openWorldHint is False

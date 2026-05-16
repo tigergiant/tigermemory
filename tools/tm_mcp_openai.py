@@ -23,7 +23,9 @@ import re
 import secrets
 import sys
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 import uuid
 from typing import Any, Literal
 
@@ -41,6 +43,7 @@ from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, Re
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
+from mcp.types import ToolAnnotations
 from pydantic import AnyUrl, BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -58,6 +61,7 @@ DEFAULT_STORE_PATH = tm_core.REPO_ROOT / "runtime" / "openmemory" / "openai-mcp-
 DEFAULT_MAX_FETCH_CHARS = 80_000
 MAX_WRITE_MEMORY_CHARS = 4_000
 EXTRA_READONLY_DOCS = ("AGENTS.md",)
+READYZ_TIMEOUT_SECONDS = float(os.environ.get("TM_OPENAI_MCP_READYZ_TIMEOUT", "2.5"))
 
 _DEFAULT_ALLOWED_HOSTS = [
     "localhost", "localhost:*",
@@ -298,6 +302,86 @@ def _tool_meta(scopes: list[str] | None = None) -> dict[str, Any]:
     return {"securitySchemes": [{"type": "oauth2", "scopes": scopes or [READ_SCOPE]}]}
 
 
+READ_ONLY_TOOL = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
+WRITE_MEMORY_TOOL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=False,
+)
+
+
+def _probe_url(
+    name: str,
+    url: str,
+    *,
+    timeout: float = READYZ_TIMEOUT_SECONDS,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "tigermemory-openai-readyz/1.0",
+            **(headers or {}),
+        },
+    )
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            resp.read(1024)
+            status = getattr(resp, "status", 200)
+    except (OSError, urllib.error.URLError, TimeoutError) as exc:
+        return {
+            "ok": False,
+            "name": name,
+            "latency_ms": round((time.monotonic() - started) * 1000),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    return {
+        "ok": 200 <= int(status) < 300,
+        "name": name,
+        "status": int(status),
+        "latency_ms": round((time.monotonic() - started) * 1000),
+    }
+
+
+def _readyz_payload() -> tuple[int, dict[str, Any]]:
+    checks: dict[str, dict[str, Any]] = {
+        "repo": {
+            "ok": tm_core.REPO_ROOT.exists(),
+        },
+        "oauth_store": {
+            "ok": _oauth_store_path().parent.exists() and os.access(_oauth_store_path().parent, os.W_OK),
+        },
+    }
+
+    mem0_url = f"{tm_core.mem0_base().rstrip('/')}/api/v1/memories/?user_id=tiger&page=1&size=1"
+    checks["mem0"] = _probe_url("mem0", mem0_url)
+
+    embedding_base = os.environ.get("EMBEDDING_BASE_URL", "").rstrip("/")
+    if embedding_base:
+        headers = {}
+        api_key = os.environ.get("EMBEDDING_API_KEY", "")
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        checks["embedding"] = _probe_url("embedding", f"{embedding_base}/models", headers=headers)
+    else:
+        checks["embedding"] = {
+            "ok": True,
+            "skipped": True,
+            "reason": "EMBEDDING_BASE_URL is not configured; search will degrade to lexical where possible",
+        }
+
+    ok = all(bool(check.get("ok")) for check in checks.values())
+    return (200 if ok else 503), {
+        "ok": ok,
+        "server": "tigermemory-openai",
+        "checks": checks,
+    }
+
+
 def _build_mcp(auth_mode: str, public_base: str, link_secret: str | None, store_path: pathlib.Path) -> FastMCP:
     kwargs: dict[str, Any] = {
         "name": "tigermemory-openai",
@@ -336,6 +420,11 @@ def _build_mcp(auth_mode: str, public_base: str, link_secret: str | None, store_
     @server.custom_route("/healthz", methods=["GET"], include_in_schema=False)
     async def healthz(_request: Request) -> Response:
         return JSONResponse({"ok": True, "server": "tigermemory-openai", "auth": auth_mode})
+
+    @server.custom_route("/readyz", methods=["GET"], include_in_schema=False)
+    async def readyz(_request: Request) -> Response:
+        status, payload = _readyz_payload()
+        return JSONResponse(payload, status_code=status)
 
     if provider is not None:
 
@@ -452,12 +541,18 @@ def _require_write_memory_scope(ctx: Context | None = None) -> None:
     if access is not None:
         if WRITE_MEMORY_SCOPE in access.scopes:
             return
-        raise PermissionError(f"missing required scope: {WRITE_MEMORY_SCOPE}")
+        raise PermissionError(
+            f"missing required scope: {WRITE_MEMORY_SCOPE}; reconnect the tigermemory ChatGPT connector "
+            "to approve write_memory access"
+        )
     if ctx is None:
         return
     client_id = ctx.client_id
     if not client_id or not _stored_client_has_write_scope(client_id):
-        raise PermissionError(f"missing required scope: {WRITE_MEMORY_SCOPE}")
+        raise PermissionError(
+            f"missing required scope: {WRITE_MEMORY_SCOPE}; reconnect the tigermemory ChatGPT connector "
+            "to approve write_memory access"
+        )
 
 
 def _safe_text_file(path: str) -> pathlib.Path:
@@ -639,6 +734,7 @@ def register_tools(server: FastMCP, *, max_fetch_chars: int) -> None:
             "Search tigermemory wiki/sources plus recent Mem0 memories. "
             "Use fetch with a returned id before citing or relying on a result."
         ),
+        annotations=READ_ONLY_TOOL,
         meta=_tool_meta(),
         structured_output=True,
     )
@@ -659,6 +755,7 @@ def register_tools(server: FastMCP, *, max_fetch_chars: int) -> None:
         name="fetch",
         title="Fetch tigermemory document",
         description="Fetch a full tigermemory document or memory by id returned from search.",
+        annotations=READ_ONLY_TOOL,
         meta=_tool_meta(),
         structured_output=True,
     )
@@ -697,6 +794,7 @@ def register_tools(server: FastMCP, *, max_fetch_chars: int) -> None:
         name="get_agent_onboarding",
         title="Get tigermemory onboarding",
         description="Return the read-only tigermemory operating snapshot for agents using this memory system.",
+        annotations=READ_ONLY_TOOL,
         meta=_tool_meta(),
         structured_output=True,
     )
@@ -712,6 +810,7 @@ def register_tools(server: FastMCP, *, max_fetch_chars: int) -> None:
             "The service may store it in Mem0, route it to inbox for review, or discard it. "
             "This does not grant direct wiki, source, admin, media, expense, or filesystem writes."
         ),
+        annotations=WRITE_MEMORY_TOOL,
         meta=_tool_meta([WRITE_MEMORY_SCOPE]),
         structured_output=True,
     )
