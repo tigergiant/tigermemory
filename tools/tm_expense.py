@@ -1178,6 +1178,7 @@ def _action_batch_record(conn, entries, confirm_new_category):
     now = _now_iso()
     inserted = 0
     skipped_duplicate = 0
+    cross_source_actions: list[dict] = []
     errors: list[dict] = []
     try:
         for i, entry in enumerate(entries):
@@ -1261,6 +1262,31 @@ def _action_batch_record(conn, entries, confirm_new_category):
             )
             if cur.rowcount > 0:
                 inserted += 1
+                new_row_id = int(cur.lastrowid)
+                new_channel = _infer_source_channel(pm, entry.get("source_text"), tags_str)
+                is_refund = _looks_like_refund(status, kind, entry.get("note"), entry.get("merchant"))
+                decision = _find_cross_source_candidates(
+                    conn,
+                    new_row_id=new_row_id,
+                    occurred_at=occurred_at,
+                    amount_cents=amount_cents,
+                    kind=kind,
+                    payment_method=pm,
+                    merchant=entry.get("merchant"),
+                    new_channel=new_channel,
+                    is_refund=is_refund,
+                )
+                if decision["outcome"] != "clean":
+                    if decision["outcome"] not in {"ambiguous", "cross_tp_collision"}:
+                        _apply_cross_source_resolution(conn, new_row_id=new_row_id, decision=decision, now=now)
+                    cross_source_actions.append({
+                        "index": i,
+                        "new_id": new_row_id,
+                        "outcome": decision["outcome"],
+                        "new_role": decision["new_role"],
+                        "twin_ids": decision["twin_ids"],
+                        "reason": decision["reason"],
+                    })
             else:
                 skipped_duplicate += 1
         conn.commit()
@@ -1272,6 +1298,7 @@ def _action_batch_record(conn, entries, confirm_new_category):
         "action": "batch_record",
         "inserted": inserted,
         "skipped_duplicate": skipped_duplicate,
+        "cross_source_actions": cross_source_actions,
         "errors": errors,
     }
 

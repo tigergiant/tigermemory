@@ -150,3 +150,44 @@ def test_refund_card_after_tp_is_not_auto_deleted_in_phase4():
 
     assert decision["outcome"] == "clean"
     assert decision["reason"] == "refund_auto_resolution_disabled"
+
+
+def test_batch_record_cross_source_import_twice_keeps_active_count():
+    conn = make_conn()
+    entries = [
+        {
+            "kind": "expense",
+            "amount": 9.90,
+            "category": "test-food",
+            "occurred_at": "2026-05-01T12:00:00+08:00",
+            "merchant": "alipay hema",
+            "note": "card tail 3958 | bill 2026-05",
+            "payment_method": "CMB credit card 3958",
+            "tags": ["credit_card_cmb", "card_tail:3958"],
+            "source_text": "credit_card",
+        },
+        {
+            "kind": "expense",
+            "amount": 9.90,
+            "category": "test-food",
+            "occurred_at": "2026-05-01T12:00:00+08:00",
+            "merchant": "hema",
+            "note": "order payment",
+            "payment_method": "CMB credit card 3958 & coupon",
+            "tags": ["alipay"],
+            "source_text": "alipay",
+        },
+    ]
+
+    first = tm_expense._action_batch_record(conn, entries, confirm_new_category=True)
+    assert first["inserted"] == 2
+    assert [a["outcome"] for a in first["cross_source_actions"]] == ["shadow_1to1"]
+    active_total = conn.execute("SELECT COUNT(*) FROM expense_entries WHERE deleted_at IS NULL").fetchone()[0]
+    assert active_total == 1
+
+    second = tm_expense._action_batch_record(conn, entries, confirm_new_category=True)
+    assert second["inserted"] == 1
+    assert second["skipped_duplicate"] == 1
+    assert [a["outcome"] for a in second["cross_source_actions"]] == ["shadow_1to1"]
+    active_total = conn.execute("SELECT COUNT(*) FROM expense_entries WHERE deleted_at IS NULL").fetchone()[0]
+    assert active_total == 1
