@@ -112,6 +112,32 @@ def test_write_memory_scope_guard(monkeypatch):
     tm_mcp_openai._require_write_memory_scope()
 
 
+def test_write_memory_scope_guard_uses_oauth_store_fallback(tmp_path, monkeypatch):
+    store = tmp_path / "oauth.json"
+    store.write_text(
+        """
+{
+  "clients": {
+    "read-client": {"scope": "tm:read"},
+    "write-client": {"scope": "tm:read tm:write_memory"}
+  },
+  "access_tokens": {},
+  "refresh_tokens": {},
+  "pending": {},
+  "codes": {}
+}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tm_mcp_openai, "get_access_token", lambda: None)
+    monkeypatch.setattr(tm_mcp_openai, "_oauth_store_path", lambda: store)
+
+    with pytest.raises(PermissionError):
+        tm_mcp_openai._require_write_memory_scope(SimpleNamespace(client_id="read-client"))
+
+    tm_mcp_openai._require_write_memory_scope(SimpleNamespace(client_id="write-client"))
+
+
 def test_openai_facade_exposes_second_step_tools_only():
     async def _list_names():
         server = tm_mcp_openai._build_mcp(

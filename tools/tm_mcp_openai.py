@@ -38,7 +38,7 @@ from mcp.server.auth.provider import (
 )
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from pydantic import AnyUrl, BaseModel, Field
@@ -422,11 +422,41 @@ def _write_memory_via_router(topic: str, text: str) -> WriteMemoryResponse:
     )
 
 
-def _require_write_memory_scope() -> None:
+def _oauth_store_path() -> pathlib.Path:
+    return pathlib.Path(os.environ.get("TM_OPENAI_MCP_OAUTH_STORE", str(DEFAULT_STORE_PATH)))
+
+
+def _stored_client_has_write_scope(client_id: str) -> bool:
+    path = _oauth_store_path()
+    if not path.exists():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    now = int(time.time())
+    for section in ("access_tokens", "refresh_tokens"):
+        for token in data.get(section, {}).values():
+            if token.get("client_id") != client_id:
+                continue
+            if token.get("expires_at") is not None and token["expires_at"] < now:
+                continue
+            if WRITE_MEMORY_SCOPE in (token.get("scopes") or []):
+                return True
+    client = data.get("clients", {}).get(client_id) or {}
+    return WRITE_MEMORY_SCOPE in str(client.get("scope") or "").split()
+
+
+def _require_write_memory_scope(ctx: Context | None = None) -> None:
     access = get_access_token()
-    if access is None:
+    if access is not None:
+        if WRITE_MEMORY_SCOPE in access.scopes:
+            return
+        raise PermissionError(f"missing required scope: {WRITE_MEMORY_SCOPE}")
+    if ctx is None:
         return
-    if WRITE_MEMORY_SCOPE not in access.scopes:
+    client_id = ctx.client_id
+    if not client_id or not _stored_client_has_write_scope(client_id):
         raise PermissionError(f"missing required scope: {WRITE_MEMORY_SCOPE}")
 
 
@@ -666,8 +696,9 @@ def register_tools(server: FastMCP, *, max_fetch_chars: int) -> None:
             "cross",
         ],
         text: str,
+        ctx: Context,
     ) -> WriteMemoryResponse:
-        _require_write_memory_scope()
+        _require_write_memory_scope(ctx)
         return _write_memory_via_router(topic, text)
 
 
