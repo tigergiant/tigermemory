@@ -187,3 +187,55 @@ def test_mem0_update_content_rejects_invalid_uuid_and_empty_content():
         tm_core.mem0_update_content("fd65", "replacement content")
     with pytest.raises(ValueError):
         tm_core.mem0_update_content("fd65b298-05bd-493c-83ce-e37d84447362", "   ")
+
+
+def test_search_wiki_ranks_alias_match_above_repeated_body_terms(monkeypatch, tmp_path):
+    wiki = tmp_path / "wiki"
+    (wiki / "investment").mkdir(parents=True)
+    (wiki / "systems").mkdir(parents=True)
+    (wiki / "investment" / "portfolio-overview.md").write_text(
+        """---
+owner: codex
+status: active
+updated: 2026-05-16
+aliases: ["portfolio holdings", "family investment"]
+title: "投资组合总览"
+---
+# 投资组合总览
+
+## 摘要
+
+组合入口页。
+
+## 来源
+
+- local
+""",
+        encoding="utf-8",
+    )
+    (wiki / "systems" / "investment-ai-hub-upgrade-plan.md").write_text(
+        """---
+owner: codex
+status: active
+updated: 2026-05-16
+aliases: ["投资 AI 中枢升级计划"]
+title: "投资 AI 中枢升级计划"
+---
+# 投资 AI 中枢升级计划
+
+## 摘要
+
+investment portfolio family holdings investment portfolio family holdings investment portfolio family holdings
+
+## 来源
+
+- local
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+
+    results = tm_core.search_wiki("portfolio holdings family investment", size=2, include_sources=False)
+
+    assert results[0]["path"] == "wiki/investment/portfolio-overview.md"

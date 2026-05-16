@@ -1133,6 +1133,9 @@ _SEARCH_ROOTS = {
     "inbox": ("inbox",),
 }
 _SEARCH_EXTS = {".md", ".txt"}
+_SEARCH_FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
+_SEARCH_ALIASES_INLINE_RE = re.compile(r'^aliases:\s*\[(.+?)\]\s*$', re.MULTILINE)
+_SEARCH_ALIAS_ITEM_RE = re.compile(r'"([^"]*)"|\'([^\']*)\'')
 
 
 def _score_file_for_query(text_lower: str, tokens: list[str]) -> int:
@@ -1149,6 +1152,22 @@ def _score_file_for_query(text_lower: str, tokens: list[str]) -> int:
 def _slug_search_text(rel: str) -> str:
     """Expand path separators so slug words can satisfy token search."""
     return re.sub(r"[^a-z0-9_]+", " ", rel.lower())
+
+
+def _extract_search_aliases(text: str) -> list[str]:
+    """Extract inline frontmatter aliases for lexical ranking."""
+    fm = _SEARCH_FRONTMATTER_RE.match(text)
+    if not fm:
+        return []
+    aliases = _SEARCH_ALIASES_INLINE_RE.search(fm.group(1))
+    if not aliases:
+        return []
+    items: list[str] = []
+    for match in _SEARCH_ALIAS_ITEM_RE.finditer(aliases.group(1)):
+        value = (match.group(1) or match.group(2) or "").strip()
+        if value:
+            items.append(value)
+    return items
 
 
 def primary_search_scope(query: str) -> str:
@@ -1174,19 +1193,24 @@ def primary_search_scope(query: str) -> str:
     return "wiki"
 
 
-def _rank_search_hit(raw_score: int, rel: str, title: str, tokens: list[str]) -> float:
+def _rank_search_hit(raw_score: int, rel: str, title: str, tokens: list[str], aliases: list[str] | None = None) -> float:
     """Rank exact pages above aggregate pages without changing the AND contract."""
     score = float(raw_score)
     title_lower = title.lower()
     slug_words = set(_slug_search_text(rel).split())
+    alias_text = " ".join(aliases or []).lower()
 
-    # Slug/title hits are strong signals for canonical pages. Body-only counts
-    # otherwise let indexes and overview pages dominate because they repeat terms.
+    # Slug/title/alias hits are strong signals for canonical pages. Body-only
+    # counts otherwise let indexes and overview pages dominate through repeats.
     for token in tokens:
         if token in slug_words:
             score += 30
         if token in title_lower:
             score += 15
+        if token in alias_text:
+            score += 20
+    if alias_text and all(token in alias_text for token in tokens):
+        score += 40
 
     if rel.endswith("/index.md"):
         score *= 0.2
@@ -1265,11 +1289,12 @@ def search_wiki(
                 if s and not s.startswith("---") and ":" not in s[:20]:
                     title = s[:80]
                     break
-            searchable = f"{rel} {_slug_search_text(rel)} {title}\n{text}"
+            aliases = _extract_search_aliases(text)
+            searchable = f"{rel} {_slug_search_text(rel)} {title} {' '.join(aliases)}\n{text}"
             raw_score = _score_file_for_query(searchable.lower(), tokens)
             if raw_score == 0:
                 continue
-            score = _rank_search_hit(raw_score, rel, title, tokens)
+            score = _rank_search_hit(raw_score, rel, title, tokens, aliases)
             results.append({
                 "path": rel,
                 "score": score,
