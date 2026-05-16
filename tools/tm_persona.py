@@ -110,7 +110,7 @@ def render_30s() -> str:
 - 开工还必须跑 lessons 检索：`$env:TM_AGENT="<agent>"; py tools/tm_lessons.py search "<任务关键词>"`，读 top-3，避免重复事故。
 - 首次/陌生 agent 再读本快照：`py tools/tm_persona.py compile --depth 30s` 或 MCP `get_agent_onboarding("30s")`。
 - 写入边界：只写自己拥有的 wiki 分区；不确定、跨分区、self-evolution 提案走 inbox；`topic` 用 `selfevolution`，不是 `self-evolution`。
-- 写入入口：inbox 用 `tm_io.py write-inbox` 或 MCP `write_inbox`；稳定 wiki 用 owner 路径；对话级事实用 `write_memory` 路由，不直接造 inbox 文件。
+- 写入入口：inbox 用 `tm_io.py write-inbox` 或 MCP `write_inbox`；稳定 wiki 用 owner 路径；对话级事实用 `write_memory` 路由，不直接造 inbox 文件。报告 Mem0 id 时区分 `write_memory returned id`、`direct_readback_ok`、`search_self_hit`、`not checked`。
 - 结论纪律：计划、推断、已验证现状必须分开；依赖本机/服务状态的结论先查 live state；不要把“准备做”写成“已落地”。
 - Git 纪律：只 stage 本次文件；`git add` 后同回合 commit；commit 后同回合 push；hook reject 先修根因，agent 不用 `--no-verify`。
 """
@@ -141,8 +141,9 @@ def render_5min(lessons: list[Lesson]) -> str:
         [
             "CLI preflight：`py tools/tm_io.py preflight`。",
             "CLI inbox：`py tools/tm_io.py write-inbox --agent <agent> --topic <topic> --title <title>`，正文走 stdin；强制投递用 `--force-inbox`。",
+            "CLI Mem0 审计：`py tools/tm_io.py mem0-verify --id <uuid> --terms \"<key terms>\"`；不要用 grep/digest/search 0 命中直接判定 id 幻觉。",
             "MCP 只读：`check_worktree`、`close_session`、`read_page`、`list_partition`、`lint_page`、`lint_repo`、`get_agent_onboarding`。",
-            "MCP 写入：`write_inbox`、`propose_wiki_page`、`write_memory`；reader role 调用写工具会被拒绝。",
+            "MCP 写入：`write_inbox`、`propose_wiki_page`、`write_memory`；MCP 审计：`verify_memory_id`；reader role 调用写工具会被拒绝。",
         ]
     )
     live_state_rules = _bullet_lines(
@@ -162,7 +163,7 @@ def render_5min(lessons: list[Lesson]) -> str:
             "**OpenClaw**：本地 agent runtime / MCP 客户端容器，笔记本端跑 agent 进程；tigermemory 通过 `tigermemory-ce` 插件接入。详见 `wiki/systems/openclaw-runtime.md`、`wiki/systems/openclaw-capabilities.md`。",
             "**Hermes**：持续跟踪 / 分阶段推进 agent，适合多轮研究、长期跟踪、阶段性总结；不擅长一次性深度专题。详见 `wiki/systems/hermes-docs-index.md`。",
             "**DeerFlow**：深度专题研究 agent，吃结构化任务（目标 / 范围 / 时间窗 / 输出格式），不要把模糊问题整包丢进去。详见 `wiki/systems/deerflow-research-engine.md`。",
-            "**Mem0 / OpenMemory**：对话级实时记忆层（atomic event-style，例如“X 部署了”“Y 工具不适合 Z”），HTTP `:8765` `user_id=tiger`；长文 / 规则 / 历史文案在 Wiki，不在 Mem0。详见 `wiki/systems/multi-endpoint-mem0.md`、`wiki/systems/openclaw-memory-stack-clarification.md`。",
+            "**Mem0 / OpenMemory**：对话级实时记忆层（atomic event-style，例如“X 部署了”“Y 工具不适合 Z”），HTTP `:8765` `user_id=tiger`；长文 / 规则 / 历史文案在 Wiki，不在 Mem0。`write_memory` 返回的 id 用 `verify_memory_id` direct readback 审计，不靠文件 grep 0 命中判幻觉。详见 `wiki/systems/multi-endpoint-mem0.md`、`wiki/systems/openmemory-ce-limits.md`。",
             "**Cascade / Codex / Claude Code / Kimi**：常驻 agent。写入主入口：D:\\tigermemory（人工 + Cascade / Codex / Obsidian）↔ WSL `~/tigermemory`（Claude Code / MCP / Hermes / DeerFlow），通过 GitHub origin 同步；开工先 `git pull --ff-only`。元规则修改权限只在 `claude-code` + `human`。完整 agent 枚举：`AGENTS.md §3`。",
             "**OpenSpace**：登录态网页 / 浏览器自动化 / 桌面采集；目前主要通过技能 / 上游 agent 间接接入。",
             "**search_tigermemory**（MCP）：检索的统一入口，分组返回 wiki / lessons / onboarding / mem0；wiki 召回已是 lexical + embedding 的 RRF 混合 (`tm_core.search_wiki_hybrid`)。详见 `wiki/systems/memory-retrieval-eval.md`。",
