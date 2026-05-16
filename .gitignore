@@ -38,3 +38,5 @@ data/expense_import/staging/
 data/expense_import/extracted/
 data/expense_import/logs/
 data/expense_import/reports/2026/audit_replay/*.sqlite
+data/expense_import/reports/2026/audit_replay/**/*.sqlite
+data/expense_import/reports/2026/audit_replay/40_shadow_workdir/
