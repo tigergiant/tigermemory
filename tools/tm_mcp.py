@@ -387,7 +387,18 @@ def propose_wiki_page(
             index_path.write_text(prior_index, encoding="utf-8")
         raise
 
-    return {"path": wiki_rel, "committed": True, "commit_sha": sha, "review": review}
+    result = {"path": wiki_rel, "committed": True, "commit_sha": sha, "review": review}
+    try:
+        result.update(
+            tm_memory_ops.schedule_embed_refresh(
+                scope="wiki",
+                reason="propose_wiki_page",
+                paths=files_to_add,
+            )
+        )
+    except Exception as exc:
+        result["warnings"] = [f"embed refresh scheduling failed: {exc}"]
+    return result
 
 
 @mcp.tool()
@@ -480,7 +491,18 @@ def write_sources(
             full_path.write_text(prior, encoding="utf-8")
         raise
 
-    return {"path": rel, "committed": True, "commit_sha": sha}
+    result = {"path": rel, "committed": True, "commit_sha": sha}
+    try:
+        result.update(
+            tm_memory_ops.schedule_embed_refresh(
+                scope="wiki",
+                reason="write_sources",
+                paths=[rel],
+            )
+        )
+    except Exception as exc:
+        result["warnings"] = [f"embed refresh scheduling failed: {exc}"]
+    return result
 
 
 @mcp.tool()

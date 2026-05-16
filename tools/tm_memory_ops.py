@@ -5,6 +5,8 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import subprocess
+import sys
 import threading
 import time
 from typing import Any, Callable
@@ -14,8 +16,12 @@ import tm_route
 
 
 DIGEST_DEBOUNCE_SECONDS = int(os.environ.get("TM_DIGEST_DEBOUNCE_SECONDS", "180"))
+EMBED_REFRESH_DEBOUNCE_SECONDS = int(os.environ.get("TM_EMBED_REFRESH_DEBOUNCE_SECONDS", "180"))
+EMBED_REFRESH_TIMEOUT_SECONDS = int(os.environ.get("TM_EMBED_REFRESH_TIMEOUT_SECONDS", "300"))
 _digest_timer: threading.Timer | None = None
 _digest_lock = threading.Lock()
+_embed_timers: dict[str, threading.Timer] = {}
+_embed_lock = threading.Lock()
 
 
 def _refresh_digest_today() -> None:
@@ -35,6 +41,63 @@ def schedule_digest_refresh() -> None:
         timer.daemon = True
         _digest_timer = timer
         timer.start()
+
+
+def _refresh_embed_index(scope: str, reason: str, paths: list[str]) -> None:
+    script = tm_core.REPO_ROOT / "tools" / "tm_embed_index.py"
+    cmd = [sys.executable, str(script), "refresh", "--scope", scope]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=tm_core.REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=EMBED_REFRESH_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except Exception as exc:
+        print(
+            f"[tm_memory_ops] WARN embed refresh failed before completion "
+            f"scope={scope} reason={reason!r} paths={paths!r}: {exc}",
+            file=sys.stderr,
+        )
+        return
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "").strip().replace("\n", " | ")[:500]
+        print(
+            f"[tm_memory_ops] WARN embed refresh exited {proc.returncode} "
+            f"scope={scope} reason={reason!r} paths={paths!r}: {stderr}",
+            file=sys.stderr,
+        )
+
+
+def schedule_embed_refresh(
+    *,
+    scope: str = "wiki",
+    reason: str = "",
+    paths: list[str] | None = None,
+) -> dict[str, Any]:
+    """Debounced embedding index refresh for long-lived write services."""
+    if scope not in {"wiki", "wiki_only", "sources_only"}:
+        raise ValueError("scope must be one of: wiki, wiki_only, sources_only")
+    path_list = list(paths or [])
+    with _embed_lock:
+        existing = _embed_timers.get(scope)
+        if existing is not None:
+            existing.cancel()
+        timer = threading.Timer(
+            EMBED_REFRESH_DEBOUNCE_SECONDS,
+            _refresh_embed_index,
+            args=(scope, reason, path_list),
+        )
+        timer.daemon = True
+        _embed_timers[scope] = timer
+        timer.start()
+    return {
+        "embed_refresh_scheduled": True,
+        "embed_refresh_scope": scope,
+        "embed_refresh_debounce_seconds": EMBED_REFRESH_DEBOUNCE_SECONDS,
+    }
 
 
 def extract_mem0_id(data: dict[str, Any]) -> str:

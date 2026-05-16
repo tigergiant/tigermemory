@@ -145,6 +145,85 @@ def test_write_memory_uses_shared_memory_ops(monkeypatch):
     assert captured["kwargs"]["include_readback"] is True
 
 
+def test_propose_wiki_page_owner_schedules_embed_refresh(tmp_path, monkeypatch):
+    import tm_review  # type: ignore[import-not-found]
+
+    (tmp_path / "wiki" / "systems").mkdir(parents=True)
+    calls = []
+    monkeypatch.setattr(tm_mcp.tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setitem(tm_mcp.tm_core.PARTITION_OWNERS, "systems", {"codex"})
+    monkeypatch.setattr(
+        tm_review,
+        "review_draft",
+        lambda _body: {"score": 80, "issues": [], "suggestions": [], "review_skipped": False},
+    )
+    monkeypatch.setattr(tm_mcp.tm_core, "git_commit_push", lambda _files, _msg: "abc123")
+    monkeypatch.setattr(
+        tm_mcp.tm_memory_ops,
+        "schedule_embed_refresh",
+        lambda **kwargs: calls.append(kwargs) or {
+            "embed_refresh_scheduled": True,
+            "embed_refresh_scope": kwargs["scope"],
+        },
+    )
+    old = tm_mcp._ROLE
+    try:
+        tm_mcp._ROLE = "writer"
+        result = tm_mcp.propose_wiki_page(
+            "codex",
+            "systems",
+            "bc-embed-test",
+            "owner: codex\nstatus: draft",
+            "## Summary\n\nbody\n\n## Sources\n\n- test",
+        )
+    finally:
+        tm_mcp._ROLE = old
+
+    assert result["path"] == "wiki/systems/bc-embed-test.md"
+    assert result["embed_refresh_scheduled"] is True
+    assert calls == [{
+        "scope": "wiki",
+        "reason": "propose_wiki_page",
+        "paths": ["wiki/systems/bc-embed-test.md"],
+    }]
+
+
+def test_write_sources_schedules_wiki_embed_refresh(tmp_path, monkeypatch):
+    (tmp_path / "sources").mkdir()
+    calls = []
+    monkeypatch.setattr(tm_mcp.tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_mcp.tm_core, "git_commit_push", lambda _files, _msg: "abc123")
+    monkeypatch.setattr(
+        tm_mcp.tm_memory_ops,
+        "schedule_embed_refresh",
+        lambda **kwargs: calls.append(kwargs) or {
+            "embed_refresh_scheduled": True,
+            "embed_refresh_scope": kwargs["scope"],
+        },
+    )
+    old = tm_mcp._ROLE
+    try:
+        tm_mcp._ROLE = "writer"
+        result = tm_mcp.write_sources(
+            "codex",
+            "bc",
+            "source-test",
+            "https://example.com/source",
+            "codex-via-test",
+            "source body",
+        )
+    finally:
+        tm_mcp._ROLE = old
+
+    assert result["path"] == "sources/bc/source-test.md"
+    assert result["embed_refresh_scheduled"] is True
+    assert calls == [{
+        "scope": "wiki",
+        "reason": "write_sources",
+        "paths": ["sources/bc/source-test.md"],
+    }]
+
+
 def test_reader_role_allows_read_tools():
     """Reader role must NOT block read-only tools (get_agent_onboarding)."""
     old = tm_mcp._ROLE

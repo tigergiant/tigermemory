@@ -84,3 +84,60 @@ def test_write_memory_budget_exhaustion_skips_mem0(monkeypatch):
     assert result["route"] == "inbox"
     assert calls["mem0"] == 0
     assert "budget exhausted" in result["reasons"]
+
+
+def test_schedule_embed_refresh_debounces_by_scope(monkeypatch):
+    created = []
+
+    class FakeTimer:
+        def __init__(self, interval, function, args=()):
+            self.interval = interval
+            self.function = function
+            self.args = args
+            self.daemon = False
+            self.cancelled = False
+            self.started = False
+            created.append(self)
+
+        def cancel(self):
+            self.cancelled = True
+
+        def start(self):
+            self.started = True
+
+    monkeypatch.setattr(tm_memory_ops.threading, "Timer", FakeTimer)
+    monkeypatch.setattr(tm_memory_ops, "EMBED_REFRESH_DEBOUNCE_SECONDS", 7)
+    tm_memory_ops._embed_timers.clear()
+
+    first = tm_memory_ops.schedule_embed_refresh(scope="wiki", reason="first", paths=["wiki/a.md"])
+    second = tm_memory_ops.schedule_embed_refresh(scope="wiki", reason="second", paths=["wiki/b.md"])
+
+    assert first["embed_refresh_scheduled"] is True
+    assert first["embed_refresh_scope"] == "wiki"
+    assert second["embed_refresh_debounce_seconds"] == 7
+    assert len(created) == 2
+    assert created[0].cancelled is True
+    assert created[1].started is True
+    assert created[1].args == ("wiki", "second", ["wiki/b.md"])
+
+
+def test_refresh_embed_index_uses_refresh_subprocess(monkeypatch):
+    captured = {}
+
+    class Result:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return Result()
+
+    monkeypatch.setattr(tm_memory_ops.subprocess, "run", fake_run)
+
+    tm_memory_ops._refresh_embed_index("wiki", "test", ["wiki/a.md"])
+
+    assert captured["cmd"][0] == sys.executable
+    assert captured["cmd"][2:] == ["refresh", "--scope", "wiki"]
+    assert captured["kwargs"]["cwd"] == tm_memory_ops.tm_core.REPO_ROOT
+    assert captured["kwargs"]["check"] is False
