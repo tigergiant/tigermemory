@@ -6,6 +6,8 @@ import pathlib
 import sys
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
@@ -156,3 +158,32 @@ def test_verify_memory_id_distinguishes_not_found_and_unreachable(monkeypatch):
 
     monkeypatch.setattr(tm_core, "mem0_get", lambda _id: "{not-json")
     assert tm_core.verify_memory_id(mem_id)["status"] == "mem0_unreachable"
+
+
+def test_mem0_update_content_puts_content_only(monkeypatch):
+    mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"
+    captured = {}
+
+    def fake_request(url, data=None, *, timeout, method=None):
+        captured.update({"url": url, "data": data, "timeout": timeout, "method": method})
+        return '{"id": "fd65b298-05bd-493c-83ce-e37d84447362"}'
+
+    monkeypatch.setattr(tm_core, "mem0_base", lambda: "http://localhost:8765")
+    monkeypatch.setattr(tm_core, "mem0_request", fake_request)
+
+    raw = tm_core.mem0_update_content(mem_id, "replacement content")
+
+    assert raw.startswith('{"id"')
+    assert captured["url"].endswith(f"/api/v1/memories/{mem_id}")
+    assert captured["timeout"] == tm_core.MEM0_WRITE_TIMEOUT
+    assert captured["method"] == "PUT"
+    payload = json.loads(captured["data"].decode("utf-8"))
+    assert payload == {"user_id": "tiger", "memory_content": "replacement content"}
+    assert "metadata" not in payload
+
+
+def test_mem0_update_content_rejects_invalid_uuid_and_empty_content():
+    with pytest.raises(ValueError):
+        tm_core.mem0_update_content("fd65", "replacement content")
+    with pytest.raises(ValueError):
+        tm_core.mem0_update_content("fd65b298-05bd-493c-83ce-e37d84447362", "   ")

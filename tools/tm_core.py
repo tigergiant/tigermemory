@@ -510,6 +510,29 @@ def mem0_delete(memory_ids: list[str]) -> str:
     )
 
 
+def mem0_update_content(memory_id: str, memory_content: str) -> str:
+    """PUT replacement content for a Mem0 memory.
+
+    OpenMemory CE ignores metadata on PUT, so this wrapper intentionally
+    exposes content-only updates. To change metadata, delete + recreate.
+    """
+    mem_id = memory_id.strip()
+    if not MEM0_UUID_RE.fullmatch(mem_id):
+        raise ValueError("memory_id must be a full UUID")
+    if not memory_content.strip():
+        raise ValueError("memory_content required")
+    payload = json.dumps({
+        "user_id": "tiger",
+        "memory_content": memory_content,
+    }).encode("utf-8")
+    return mem0_request(
+        f"{mem0_base().rstrip('/')}/api/v1/memories/{urllib.parse.quote(mem_id)}",
+        data=payload,
+        timeout=MEM0_WRITE_TIMEOUT,
+        method="PUT",
+    )
+
+
 def mem0_search(query: str, size: int = 5, match_mode: str = "id_first") -> str:
     """GET memories by query. Returns raw response body."""
     if match_mode not in {"id_first", "token_and", "substring"}:

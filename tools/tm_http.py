@@ -575,6 +575,12 @@ async def suggest_wiki_patches(req: SuggestPatchesRequest):
             except (ValueError, OSError) as e:
                 log_json("warn", trace_id, "/suggest_wiki_patches", 200,
                          (time.time() - start) * 1000, save_error=str(e))
+            else:
+                try:
+                    tm_memory_ops.schedule_digest_refresh()
+                except Exception as e:
+                    log_json("warn", trace_id, "/suggest_wiki_patches", 200,
+                             (time.time() - start) * 1000, digest_refresh_error=str(e))
 
         return SuggestPatchesResponse(
             count=len(patches), patches=patches, inbox_path=inbox_path

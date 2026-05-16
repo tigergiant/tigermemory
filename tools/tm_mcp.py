@@ -286,13 +286,19 @@ def propose_wiki_page(
             except OSError:
                 pass
             raise
-        return {
+        result = {
             "path": inbox_rel,
             "committed": True,
             "commit_sha": sha,
             "fallback_reason": f"L2 review score {review['score']} < 30",
             "review": review,
         }
+        try:
+            tm_memory_ops.schedule_digest_refresh()
+            result["digest_refresh_scheduled"] = True
+        except Exception as exc:
+            result["warnings"] = [f"digest refresh scheduling failed: {exc}"]
+        return result
 
     owners = tm_core.PARTITION_OWNERS[partition]
 
@@ -330,7 +336,7 @@ def propose_wiki_page(
             except OSError:
                 pass
             raise
-        return {
+        result = {
             "path": inbox_rel,
             "committed": True,
             "commit_sha": sha,
@@ -340,6 +346,12 @@ def propose_wiki_page(
             ),
             "review": review,
         }
+        try:
+            tm_memory_ops.schedule_digest_refresh()
+            result["digest_refresh_scheduled"] = True
+        except Exception as exc:
+            result["warnings"] = [f"digest refresh scheduling failed: {exc}"]
+        return result
 
     # Owner path.
     wiki_rel = f"wiki/{partition}/{slug}.md"

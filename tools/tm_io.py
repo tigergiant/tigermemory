@@ -12,6 +12,7 @@ Usage:
   tm_io.py commit-push  --files <f>... --agent <name> --action <a> --summary <s>
   tm_io.py mem0-write   --agent <name> --topic <topic>                   # text  on stdin
   tm_io.py mem0-search  --query <q> [--size N]
+  tm_io.py mem0-update-content --id <uuid>                               # content on stdin
   tm_io.py lint-page    <path>
   tm_io.py status       [--json]
   tm_io.py preflight    [--json]
@@ -180,6 +181,19 @@ def cmd_mem0_verify(args: argparse.Namespace) -> None:
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
+def cmd_mem0_update_content(args: argparse.Namespace) -> None:
+    content = sys.stdin.read()
+    if not content.strip():
+        _die("memory_content required on stdin")
+    try:
+        resp = tm_core.mem0_update_content(args.id, content)
+    except RuntimeError as e:
+        _die(str(e), code=4)
+    except ValueError as e:
+        _die(str(e), code=2)
+    print(resp)
+
+
 # ---------- lint-page ----------
 
 def cmd_lint_page(args: argparse.Namespace) -> None:
@@ -310,6 +324,10 @@ def main() -> None:
     mv.add_argument("--terms")
     mv.add_argument("--digest-date")
     mv.set_defaults(func=cmd_mem0_verify)
+
+    mu = sub.add_parser("mem0-update-content", help="PUT replacement content only; metadata changes require delete + recreate")
+    mu.add_argument("--id", required=True)
+    mu.set_defaults(func=cmd_mem0_update_content)
 
     lp = sub.add_parser("lint-page", help="validate a Wiki page against PAGE_FORMATS.md")
     lp.add_argument("path")

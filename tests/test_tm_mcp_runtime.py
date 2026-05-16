@@ -224,6 +224,81 @@ def test_write_sources_schedules_wiki_embed_refresh(tmp_path, monkeypatch):
     }]
 
 
+def test_propose_wiki_page_l2_fallback_schedules_digest_refresh(tmp_path, monkeypatch):
+    import tm_review  # type: ignore[import-not-found]
+
+    (tmp_path / "inbox").mkdir()
+    calls = []
+    monkeypatch.setattr(tm_mcp.tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setitem(tm_mcp.tm_core.PARTITION_OWNERS, "systems", {"codex"})
+    monkeypatch.setattr(
+        tm_review,
+        "review_draft",
+        lambda _body: {"score": 10, "issues": [], "suggestions": [], "review_skipped": False},
+    )
+    monkeypatch.setattr(tm_mcp.tm_core, "git_commit_push", lambda _files, _msg: "abc123")
+    monkeypatch.setattr(tm_mcp.tm_memory_ops, "schedule_digest_refresh", lambda: calls.append("digest"))
+    monkeypatch.setattr(
+        tm_mcp.tm_memory_ops,
+        "schedule_embed_refresh",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("fallback must not refresh embed index")),
+    )
+    old = tm_mcp._ROLE
+    try:
+        tm_mcp._ROLE = "writer"
+        result = tm_mcp.propose_wiki_page(
+            "codex",
+            "systems",
+            "bc-l2-fallback",
+            "owner: codex\nstatus: draft",
+            "low score body",
+        )
+    finally:
+        tm_mcp._ROLE = old
+
+    assert result["path"].startswith("inbox/")
+    assert result["digest_refresh_scheduled"] is True
+    assert calls == ["digest"]
+
+
+def test_propose_wiki_page_non_owner_fallback_schedules_digest_refresh(tmp_path, monkeypatch):
+    import tm_review  # type: ignore[import-not-found]
+
+    (tmp_path / "inbox").mkdir()
+    calls = []
+    monkeypatch.setattr(tm_mcp.tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setitem(tm_mcp.tm_core.PARTITION_OWNERS, "systems", {"claude-code"})
+    monkeypatch.setattr(
+        tm_review,
+        "review_draft",
+        lambda _body: {"score": 80, "issues": [], "suggestions": [], "review_skipped": False},
+    )
+    monkeypatch.setattr(tm_mcp.tm_core, "git_commit_push", lambda _files, _msg: "abc123")
+    monkeypatch.setattr(tm_mcp.tm_memory_ops, "schedule_digest_refresh", lambda: calls.append("digest"))
+    monkeypatch.setattr(
+        tm_mcp.tm_memory_ops,
+        "schedule_embed_refresh",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("fallback must not refresh embed index")),
+    )
+    old = tm_mcp._ROLE
+    try:
+        tm_mcp._ROLE = "writer"
+        result = tm_mcp.propose_wiki_page(
+            "codex",
+            "systems",
+            "bc-non-owner",
+            "owner: codex\nstatus: draft",
+            "## Summary\n\nbody",
+        )
+    finally:
+        tm_mcp._ROLE = old
+
+    assert result["path"].startswith("inbox/")
+    assert "not an owner" in result["fallback_reason"]
+    assert result["digest_refresh_scheduled"] is True
+    assert calls == ["digest"]
+
+
 def test_reader_role_allows_read_tools():
     """Reader role must NOT block read-only tools (get_agent_onboarding)."""
     old = tm_mcp._ROLE
