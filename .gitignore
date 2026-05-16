@@ -25,3 +25,15 @@ data/expense_tracker/
 
 # Top-level catch-all for any local npm experiments
 node_modules/
+
+# 敏感账单原始文件（仅保留 README，禁止入库账单内容）
+data/expense_import/raw/**/*.pdf
+data/expense_import/raw/**/*.csv
+data/expense_import/raw/**/*.xlsx
+data/expense_import/raw/**/*.xls
+
+# expense_import 中间产物与备份（PII / 大体量，不入库）
+data/expense_import/backups/
+data/expense_import/staging/
+data/expense_import/extracted/
+data/expense_import/logs/
