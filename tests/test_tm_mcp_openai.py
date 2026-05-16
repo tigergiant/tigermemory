@@ -42,6 +42,13 @@ def test_search_extra_docs_finds_agents_rebase_rule():
     assert results[0].metadata["path"] == "AGENTS.md"
     assert "rebase" in results[0].metadata["snippet"].casefold()
     assert tm_mcp_openai._has_strong_extra_doc_match(results)
+    assert tm_mcp_openai._should_fast_path_extra_docs("git rebase conflict abort inbox", results)
+
+
+def test_extra_docs_do_not_fast_path_domain_queries():
+    results = tm_mcp_openai._search_extra_doc_results("IPFB", 3)
+    assert results
+    assert not tm_mcp_openai._should_fast_path_extra_docs("IPFB", results)
 
 
 def test_chatgpt_is_regular_agent_without_person_partition_access():

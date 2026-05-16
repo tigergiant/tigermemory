@@ -552,6 +552,34 @@ def _has_strong_extra_doc_match(results: list[SearchResult]) -> bool:
     return float(results[0].metadata.get("score") or 0.0) >= 10.0
 
 
+_EXTRA_DOC_FAST_PATH_TERMS = {
+    "agents",
+    "agent",
+    "agentrules",
+    "rebase",
+    "conflict",
+    "abort",
+    "git",
+    "hook",
+    "preflight",
+    "onboarding",
+    "dirty",
+    "worktree",
+    "commit",
+    "push",
+    "pull",
+    "inbox",
+    "write_memory",
+}
+
+
+def _should_fast_path_extra_docs(query: str, results: list[SearchResult]) -> bool:
+    if not _has_strong_extra_doc_match(results):
+        return False
+    terms = set(_query_terms(query))
+    return bool(terms & _EXTRA_DOC_FAST_PATH_TERMS)
+
+
 def _search_wiki_results(query: str, limit: int) -> list[SearchResult]:
     hits = tm_core.search_wiki_hybrid(query, size=limit, include_sources=True, include_inbox=False)
     results: list[SearchResult] = []
@@ -618,9 +646,12 @@ def register_tools(server: FastMCP, *, max_fetch_chars: int) -> None:
         q = (query or "").strip()
         if not q:
             raise ValueError("query must be non-empty")
-        results = _search_extra_doc_results(q, 3)
-        if not _has_strong_extra_doc_match(results):
-            results.extend(_search_wiki_results(q, 8))
+        extra_results = _search_extra_doc_results(q, 3)
+        wiki_results = _search_wiki_results(q, 8)
+        if _should_fast_path_extra_docs(q, extra_results):
+            results = [*extra_results, *wiki_results]
+        else:
+            results = [*wiki_results, *extra_results]
         results.extend(_search_mem0_results(q, 5))
         return SearchResponse(results=results[:12])
 
