@@ -227,17 +227,27 @@ def git_commit_push(files: list[str], msg: str) -> str:
 def git_session_status() -> dict[str, Any]:
     """Return a read-only session preflight snapshot for agent start/end checks.
 
-    Stat cache phantom protection (added 2026-05-16, lessons/2026-05-16-close-session-stat-cache-phantom.md):
-    cross-fs scenarios (WSL 9P, Windows mount, CRLF/LF) can cause `git status` to
-    report ' M' entries whose actual content matches HEAD byte-for-byte. We:
+    Phantom protection (added 2026-05-16, lessons/2026-05-16-close-session-stat-cache-phantom.md)
+    catches two classes of false-positive dirty entries:
+
+    - **stat-cache phantom**: cross-fs (WSL 9P, Windows mount) mtime drift makes
+      `git status` flag a file as ' M' when it's byte-for-byte equal to HEAD.
+    - **EOL phantom**: Windows-side editors (PowerShell, Obsidian, VSCode) save
+      CRLF; WSL git default `core.autocrlf=false` sees the working-tree CRLF vs
+      LF in index and reports diff. Windows-side Git-for-Windows default
+      `autocrlf=true` silently round-trips, hiding the diff. Result: same file,
+      different verdicts depending on which git binary asks.
+
+    Detection pipeline:
 
     1. Run `git update-index --refresh` to let git CLI itself reset the in-index
        stat cache where possible (fast, no-op when not needed).
-    2. For every ' M' / 'M ' / 'MM' entry left, run `git diff --quiet HEAD -- <path>`.
-       Exit 0 means content equals HEAD (no real change) — entry is reclassified
-       as phantom and excluded from `dirty_count`, `paths`, and the dirty-worktree
-       blocker. It surfaces in new `phantom_count` / `phantom_paths` fields for
-       transparency so agents/humans can spot stat-cache drift.
+    2. For every ' M' / 'M ' / 'MM' entry, run `git diff --quiet HEAD -- <path>`.
+       Exit 0 → byte-for-byte equal to HEAD → stat-cache phantom.
+    3. Otherwise, run `git diff --quiet --ignore-cr-at-eol HEAD -- <path>`.
+       Exit 0 → only CRLF↔LF differs → EOL phantom.
+    4. Phantoms are excluded from `dirty_count`, `paths`, and the dirty-worktree
+       blocker. They surface in `phantom_count` / `phantom_paths` for transparency.
 
     Untracked ('??') and staged-only changes ('A ', 'D ', 'R ', etc.) are NOT
     subject to phantom detection — they reflect real index/worktree state.
@@ -251,19 +261,24 @@ def git_session_status() -> dict[str, Any]:
     status_r = run(["git", "status", "--porcelain=v1"], check=True)
     raw_lines = [line for line in status_r.stdout.splitlines() if line]
 
-    # Step 2: phantom detection. Only ' M' / 'M ' / 'MM' rows can be phantom; for
-    # those, ask git diff whether real content differs. We restrict to the most
-    # common modify-only XY codes; rename/delete/typechange always reflect real
-    # changes and are passed through unchanged.
+    # Step 2 + 3: two-pass phantom detection. Only ' M' / 'M ' / 'MM' rows can
+    # be phantom; rename/delete/typechange always reflect real changes.
     phantom_paths: list[str] = []
     lines: list[str] = []
     for line in raw_lines:
         xy = line[:2]
         path = line[3:].strip()
         if xy in (" M", "M ", "MM") and path:
-            diff_r = run(["git", "diff", "--quiet", "HEAD", "--", path], check=False)
-            if diff_r.returncode == 0:
-                # Working tree + index both match HEAD — stat cache phantom.
+            # Pass 2: byte-for-byte equality (catches stat-cache phantom).
+            byte_eq = run(["git", "diff", "--quiet", "HEAD", "--", path], check=False)
+            if byte_eq.returncode == 0:
+                phantom_paths.append(line)
+                continue
+            # Pass 3: EOL-equivalence (catches CRLF↔LF phantom). --ignore-cr-at-eol
+            # treats trailing CR as whitespace, so a file that differs only in
+            # line endings reports rc=0 here while still rc=1 in pass 2.
+            eol_eq = run(["git", "diff", "--quiet", "--ignore-cr-at-eol", "HEAD", "--", path], check=False)
+            if eol_eq.returncode == 0:
                 phantom_paths.append(line)
                 continue
         lines.append(line)

@@ -252,15 +252,27 @@ investment portfolio family holdings investment portfolio family holdings invest
 import types  # noqa: E402  -- kept local to phantom tests for clarity
 
 
-def _make_fake_run(status_lines: list[str], real_dirty_paths: set[str]):
+def _make_fake_run(
+    status_lines: list[str],
+    real_dirty_paths: set[str],
+    eol_only_paths: set[str] | None = None,
+):
     """Build a fake `tm_core.run` for phantom tests.
 
     `status_lines` is what `git status --porcelain=v1` returns (one line per
-    entry, including the XY prefix and space). `real_dirty_paths` is the set
-    of paths for which `git diff --quiet HEAD -- <path>` should report a real
-    diff (return code 1). Any other ' M' / 'M ' / 'MM' path will be treated
-    as phantom (return code 0).
+    entry, including the XY prefix and space).
+
+    `real_dirty_paths` is the set of paths that are TRULY dirty: both passes
+    (`git diff --quiet HEAD --` and `git diff --quiet --ignore-cr-at-eol HEAD --`)
+    return rc=1 for these.
+
+    `eol_only_paths` is the set of paths whose only diff is CRLF↔LF: pass 2
+    (byte-equality) returns rc=1, but pass 3 (--ignore-cr-at-eol) returns rc=0.
+
+    Anything else (` M` / `M ` / `MM` entry not in either set) is a stat-cache
+    phantom: pass 2 returns rc=0 immediately.
     """
+    eol_only_paths = eol_only_paths or set()
     calls: list[list[str]] = []
 
     def _proc(rc: int, stdout: str = "", stderr: str = "") -> types.SimpleNamespace:
@@ -275,7 +287,11 @@ def _make_fake_run(status_lines: list[str], real_dirty_paths: set[str]):
             return _proc(0, "\n".join(status_lines) + ("\n" if status_lines else ""))
         if head == ["git", "diff"] and "--quiet" in cmd:
             path = cmd[-1]
-            return _proc(1 if path in real_dirty_paths else 0)
+            if "--ignore-cr-at-eol" in cmd:
+                # Pass 3: only TRULY dirty paths still differ here.
+                return _proc(1 if path in real_dirty_paths else 0)
+            # Pass 2: bytes differ for both real-dirty and eol-only.
+            return _proc(1 if (path in real_dirty_paths or path in eol_only_paths) else 0)
         if cmd[:3] == ["git", "diff", "--name-only"]:
             return _proc(0)
         if cmd[:3] == ["git", "branch", "--show-current"]:
@@ -382,6 +398,47 @@ def test_git_session_status_runs_update_index_refresh_first(monkeypatch, tmp_pat
     status_idx = next(i for i, c in enumerate(git_cmds) if c[:2] == ["git", "status"])
     refresh_idx = next(i for i, c in enumerate(git_cmds) if c[:2] == ["git", "update-index"])
     assert refresh_idx < status_idx
+
+
+def test_git_session_status_excludes_eol_only_phantom(monkeypatch, tmp_path):
+    """CRLF↔LF only diff (Windows editor saves CRLF; WSL git autocrlf=false sees
+    diff vs LF index) should be reclassified as phantom via --ignore-cr-at-eol.
+
+    Repro from 2026-05-16 V3.1C incident: D:\\tigermemory\\.gitignore and
+    deploy/openmemory/scripts/install-backup-task.ps1 showed 65-line diff but
+    every hunk was '-LF +CRLF' on identical content. close_session correctly
+    flagged real codex audit_replay/* as dirty but should NOT have flagged the
+    EOL-only entries.
+    """
+    _install_hooks(tmp_path)
+    fake_run, calls = _make_fake_run(
+        status_lines=[
+            " M .gitignore",                                                # EOL-only phantom
+            " M deploy/openmemory/scripts/install-backup-task.ps1",         # EOL-only phantom
+            " M data/expense_import/reports/2026/audit_replay/alipay.jsonl",  # real dirty (codex)
+        ],
+        real_dirty_paths={"data/expense_import/reports/2026/audit_replay/alipay.jsonl"},
+        eol_only_paths={".gitignore", "deploy/openmemory/scripts/install-backup-task.ps1"},
+    )
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_core, "run", fake_run)
+
+    result = tm_core.git_session_status()
+
+    assert result["dirty_count"] == 1, "only the codex real-dirty entry should remain"
+    assert result["paths"] == [" M data/expense_import/reports/2026/audit_replay/alipay.jsonl"]
+    assert result["phantom_count"] == 2
+    assert sorted(result["phantom_paths"]) == [
+        " M .gitignore",
+        " M deploy/openmemory/scripts/install-backup-task.ps1",
+    ]
+    # Sanity: the kernel issued both passes for the EOL-only entries; for the
+    # real-dirty entry it stops after pass 3 with rc=1.
+    diff_quiet_calls = [c for c in calls if c[:2] == ["git", "diff"] and "--quiet" in c]
+    pass2_calls = [c for c in diff_quiet_calls if "--ignore-cr-at-eol" not in c]
+    pass3_calls = [c for c in diff_quiet_calls if "--ignore-cr-at-eol" in c]
+    assert len(pass2_calls) == 3   # one per ' M' entry
+    assert len(pass3_calls) == 3   # all three need pass 3 (pass 2 returned rc=1)
 
 
 def test_git_session_status_does_not_phantom_check_untracked(monkeypatch, tmp_path):
