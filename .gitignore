@@ -3,7 +3,10 @@ Obsidian/
 .omx/
 *.base
 runtime/
-sources/assets/
+# Asset source directory: keep large images local, but track lightweight
+# index pages for GitHub-backed memory retrieval.
+sources/assets/*
+!sources/assets/index.md
 *.tmp
 .tmp/
 .trash/
