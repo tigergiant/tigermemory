@@ -225,9 +225,48 @@ def git_commit_push(files: list[str], msg: str) -> str:
 
 
 def git_session_status() -> dict[str, Any]:
-    """Return a read-only session preflight snapshot for agent start/end checks."""
+    """Return a read-only session preflight snapshot for agent start/end checks.
+
+    Stat cache phantom protection (added 2026-05-16, lessons/2026-05-16-close-session-stat-cache-phantom.md):
+    cross-fs scenarios (WSL 9P, Windows mount, CRLF/LF) can cause `git status` to
+    report ' M' entries whose actual content matches HEAD byte-for-byte. We:
+
+    1. Run `git update-index --refresh` to let git CLI itself reset the in-index
+       stat cache where possible (fast, no-op when not needed).
+    2. For every ' M' / 'M ' / 'MM' entry left, run `git diff --quiet HEAD -- <path>`.
+       Exit 0 means content equals HEAD (no real change) — entry is reclassified
+       as phantom and excluded from `dirty_count`, `paths`, and the dirty-worktree
+       blocker. It surfaces in new `phantom_count` / `phantom_paths` fields for
+       transparency so agents/humans can spot stat-cache drift.
+
+    Untracked ('??') and staged-only changes ('A ', 'D ', 'R ', etc.) are NOT
+    subject to phantom detection — they reflect real index/worktree state.
+    """
+    # Step 1: ask git to refresh its own stat cache. This is a no-op for files
+    # that are genuinely modified, but clears mtime-only drift on touched-but-
+    # unchanged files. Suppress output via check=False; we don't care about its
+    # stdout.
+    run(["git", "update-index", "--refresh"], check=False)
+
     status_r = run(["git", "status", "--porcelain=v1"], check=True)
-    lines = [line for line in status_r.stdout.splitlines() if line]
+    raw_lines = [line for line in status_r.stdout.splitlines() if line]
+
+    # Step 2: phantom detection. Only ' M' / 'M ' / 'MM' rows can be phantom; for
+    # those, ask git diff whether real content differs. We restrict to the most
+    # common modify-only XY codes; rename/delete/typechange always reflect real
+    # changes and are passed through unchanged.
+    phantom_paths: list[str] = []
+    lines: list[str] = []
+    for line in raw_lines:
+        xy = line[:2]
+        path = line[3:].strip()
+        if xy in (" M", "M ", "MM") and path:
+            diff_r = run(["git", "diff", "--quiet", "HEAD", "--", path], check=False)
+            if diff_r.returncode == 0:
+                # Working tree + index both match HEAD — stat cache phantom.
+                phantom_paths.append(line)
+                continue
+        lines.append(line)
 
     staged = 0
     unstaged = 0
@@ -306,6 +345,11 @@ def git_session_status() -> dict[str, Any]:
         "hooks_installed": hooks_installed,
         "blockers": blockers,
         "paths": lines,
+        # Stat cache phantom protection: paths that git status reported as
+        # modified but git diff --quiet HEAD verified as byte-for-byte equal to
+        # HEAD. These are excluded from dirty_count and blockers.
+        "phantom_count": len(phantom_paths),
+        "phantom_paths": phantom_paths,
     }
 
 

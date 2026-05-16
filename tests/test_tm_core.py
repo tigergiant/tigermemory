@@ -239,3 +239,167 @@ investment portfolio family holdings investment portfolio family holdings invest
     results = tm_core.search_wiki("portfolio holdings family investment", size=2, include_sources=False)
 
     assert results[0]["path"] == "wiki/investment/portfolio-overview.md"
+
+
+# ---------------------------------------------------------------------------
+# git_session_status — phantom detection (added 2026-05-16)
+# Background: stat cache drift on cross-fs (WSL 9P, Windows mount, CRLF/LF)
+# can make `git status --porcelain=v1` report ' M' entries whose actual content
+# matches HEAD byte-for-byte. close_session must not block on these phantoms.
+# See lessons/2026-05-16-close-session-stat-cache-phantom.md.
+# ---------------------------------------------------------------------------
+
+import types  # noqa: E402  -- kept local to phantom tests for clarity
+
+
+def _make_fake_run(status_lines: list[str], real_dirty_paths: set[str]):
+    """Build a fake `tm_core.run` for phantom tests.
+
+    `status_lines` is what `git status --porcelain=v1` returns (one line per
+    entry, including the XY prefix and space). `real_dirty_paths` is the set
+    of paths for which `git diff --quiet HEAD -- <path>` should report a real
+    diff (return code 1). Any other ' M' / 'M ' / 'MM' path will be treated
+    as phantom (return code 0).
+    """
+    calls: list[list[str]] = []
+
+    def _proc(rc: int, stdout: str = "", stderr: str = "") -> types.SimpleNamespace:
+        return types.SimpleNamespace(returncode=rc, stdout=stdout, stderr=stderr)
+
+    def fake_run(cmd: list[str], check: bool = True) -> types.SimpleNamespace:
+        calls.append(cmd)
+        head = cmd[:2]
+        if head == ["git", "update-index"]:
+            return _proc(0)
+        if head == ["git", "status"]:
+            return _proc(0, "\n".join(status_lines) + ("\n" if status_lines else ""))
+        if head == ["git", "diff"] and "--quiet" in cmd:
+            path = cmd[-1]
+            return _proc(1 if path in real_dirty_paths else 0)
+        if cmd[:3] == ["git", "diff", "--name-only"]:
+            return _proc(0)
+        if cmd[:3] == ["git", "branch", "--show-current"]:
+            return _proc(0, "master\n")
+        if cmd[:3] == ["git", "rev-parse", "--verify"]:
+            return _proc(0, "abc1234\n")
+        if cmd[:2] == ["git", "rev-parse"]:
+            return _proc(0, "origin/master\n")
+        if head == ["git", "rev-list"]:
+            return _proc(0, "0\t0\n")
+        if head == ["git", "config"]:
+            return _proc(0, ".githooks\n")
+        return _proc(0)
+
+    return fake_run, calls
+
+
+def _install_hooks(tmp_path: pathlib.Path) -> None:
+    githooks = tmp_path / ".githooks"
+    githooks.mkdir()
+    for hook in ("pre-commit", "commit-msg", "post-commit"):
+        (githooks / hook).write_text("#!/bin/sh\n", encoding="utf-8")
+
+
+def test_git_session_status_excludes_pure_phantom_dirty(monkeypatch, tmp_path):
+    """ ' M' entries with no real content diff should be reclassified as phantom."""
+    _install_hooks(tmp_path)
+    fake_run, calls = _make_fake_run(
+        status_lines=[" M .gitignore", " M deploy/openmemory/scripts/install-backup-task.ps1"],
+        real_dirty_paths=set(),  # both are phantom (no real diff)
+    )
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_core, "run", fake_run)
+
+    result = tm_core.git_session_status()
+
+    assert result["dirty_count"] == 0
+    assert result["paths"] == []
+    assert result["phantom_count"] == 2
+    assert sorted(result["phantom_paths"]) == [
+        " M .gitignore",
+        " M deploy/openmemory/scripts/install-backup-task.ps1",
+    ]
+    # No dirty-worktree blocker should remain when only phantoms exist.
+    assert not any(b.startswith("dirty worktree:") for b in result["blockers"])
+    assert result["ok"] is True
+
+
+def test_git_session_status_keeps_real_dirty_when_mixed_with_phantom(monkeypatch, tmp_path):
+    """Mixed phantom + real should yield dirty_count=1, phantom_count=1."""
+    _install_hooks(tmp_path)
+    fake_run, _calls = _make_fake_run(
+        status_lines=[" M phantom.md", " M real.md", "?? new.md"],
+        real_dirty_paths={"real.md"},
+    )
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_core, "run", fake_run)
+
+    result = tm_core.git_session_status()
+
+    assert result["dirty_count"] == 2  # 1 real-modified + 1 untracked
+    assert result["paths"] == [" M real.md", "?? new.md"]
+    assert result["phantom_count"] == 1
+    assert result["phantom_paths"] == [" M phantom.md"]
+    assert result["unstaged_count"] == 1
+    assert result["untracked_count"] == 1
+    assert any(b == "dirty worktree: 2" for b in result["blockers"])
+    assert result["ok"] is False
+
+
+def test_git_session_status_real_only_baseline_unaffected(monkeypatch, tmp_path):
+    """Pre-existing behaviour preserved when no entries are phantoms."""
+    _install_hooks(tmp_path)
+    fake_run, _calls = _make_fake_run(
+        status_lines=["MM both.md", " M working.md", "M  staged.md"],
+        real_dirty_paths={"both.md", "working.md", "staged.md"},
+    )
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_core, "run", fake_run)
+
+    result = tm_core.git_session_status()
+
+    assert result["dirty_count"] == 3
+    assert result["phantom_count"] == 0
+    assert result["phantom_paths"] == []
+    # Sanity: staged + unstaged accounting unchanged.
+    assert result["staged_count"] == 2  # MM and M_
+    assert result["unstaged_count"] == 2  # MM and _M
+
+
+def test_git_session_status_runs_update_index_refresh_first(monkeypatch, tmp_path):
+    """The kernel must invoke `git update-index --refresh` before reading status,
+    so git CLI itself can reset stat cache where possible (cheap fast path)."""
+    _install_hooks(tmp_path)
+    fake_run, calls = _make_fake_run(status_lines=[], real_dirty_paths=set())
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_core, "run", fake_run)
+
+    tm_core.git_session_status()
+
+    git_cmds = [c for c in calls if c[:1] == ["git"]]
+    assert git_cmds[0][:3] == ["git", "update-index", "--refresh"]
+    # And status comes after refresh.
+    status_idx = next(i for i, c in enumerate(git_cmds) if c[:2] == ["git", "status"])
+    refresh_idx = next(i for i, c in enumerate(git_cmds) if c[:2] == ["git", "update-index"])
+    assert refresh_idx < status_idx
+
+
+def test_git_session_status_does_not_phantom_check_untracked(monkeypatch, tmp_path):
+    """ '??' entries are real (untracked, by definition); they must never be
+    submitted to the phantom diff check (which would be both wrong and slow)."""
+    _install_hooks(tmp_path)
+    fake_run, calls = _make_fake_run(
+        status_lines=["?? new1.md", "?? new2.md"],
+        real_dirty_paths=set(),
+    )
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_core, "run", fake_run)
+
+    result = tm_core.git_session_status()
+
+    assert result["dirty_count"] == 2
+    assert result["untracked_count"] == 2
+    assert result["phantom_count"] == 0
+    # Verify no `git diff --quiet` was issued for untracked paths.
+    diff_quiet_calls = [c for c in calls if c[:2] == ["git", "diff"] and "--quiet" in c]
+    assert diff_quiet_calls == []
