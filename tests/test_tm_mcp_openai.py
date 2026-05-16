@@ -30,6 +30,17 @@ def test_safe_text_file_rejects_non_knowledge_paths():
         tm_mcp_openai._safe_text_file("../AGENTS.md")
 
 
+def test_safe_text_file_allows_agents_md_as_readonly_root_doc():
+    assert tm_mcp_openai._safe_text_file("AGENTS.md").name == "AGENTS.md"
+
+
+def test_search_extra_docs_finds_agents_rebase_rule():
+    results = tm_mcp_openai._search_extra_doc_results("git rebase conflict abort inbox", 3)
+    assert results
+    assert results[0].metadata["path"] == "AGENTS.md"
+    assert "rebase" in results[0].metadata["snippet"].casefold()
+
+
 def test_openai_facade_exposes_only_first_step_tools():
     async def _list_names():
         server = tm_mcp_openai._build_mcp(

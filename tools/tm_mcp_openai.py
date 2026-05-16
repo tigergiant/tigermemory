@@ -51,6 +51,7 @@ READ_SCOPE = "tm:read"
 DEFAULT_PUBLIC_BASE = "https://tm-openai.doodiu.cloud"
 DEFAULT_STORE_PATH = tm_core.REPO_ROOT / "runtime" / "openmemory" / "openai-mcp-oauth.json"
 DEFAULT_MAX_FETCH_CHARS = 80_000
+EXTRA_READONLY_DOCS = ("AGENTS.md",)
 
 _DEFAULT_ALLOWED_HOSTS = [
     "localhost", "localhost:*",
@@ -376,8 +377,8 @@ def _safe_text_file(path: str) -> pathlib.Path:
     rel = path.replace("\\", "/").strip()
     if rel.startswith("/") or rel.startswith("../") or "/../" in rel:
         raise ValueError("invalid path")
-    if not (rel.startswith("wiki/") or rel.startswith("sources/")):
-        raise ValueError("fetch only allows wiki/ and sources/ documents")
+    if not (rel.startswith("wiki/") or rel.startswith("sources/") or rel in EXTRA_READONLY_DOCS):
+        raise ValueError("fetch only allows wiki/, sources/, and approved root documents")
     full = (tm_core.REPO_ROOT / rel).resolve()
     full.relative_to(tm_core.REPO_ROOT.resolve())
     if not full.is_file():
@@ -386,10 +387,76 @@ def _safe_text_file(path: str) -> pathlib.Path:
 
 
 def _title_from_text(path: str, text: str) -> str:
+    if text.startswith("---\n"):
+        for line in text.splitlines()[1:40]:
+            if line == "---":
+                break
+            if line.startswith("title:"):
+                return line.removeprefix("title:").strip().strip("\"'")
     for line in text.splitlines():
         if line.startswith("# "):
             return line[2:].strip()
     return pathlib.PurePosixPath(path).stem.replace("-", " ")
+
+
+def _query_terms(query: str) -> list[str]:
+    raw_terms = re.findall(r"[A-Za-z0-9_.:/-]+|[\u4e00-\u9fff]{2,}", query.casefold())
+    terms: list[str] = []
+    for term in raw_terms:
+        if term not in terms:
+            terms.append(term)
+    return terms
+
+
+def _snippet_around(text: str, terms: list[str], *, max_chars: int = 500) -> str:
+    lowered = text.casefold()
+    start = 0
+    for term in terms:
+        index = lowered.find(term)
+        if index >= 0:
+            start = max(0, index - 180)
+            break
+    snippet = " ".join(text[start:start + max_chars].split())
+    return snippet
+
+
+def _search_extra_doc_results(query: str, limit: int) -> list[SearchResult]:
+    terms = _query_terms(query)
+    if not terms:
+        return []
+
+    results: list[SearchResult] = []
+    for path in EXTRA_READONLY_DOCS:
+        full = tm_core.REPO_ROOT / path
+        try:
+            text = full.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        lowered = text.casefold()
+        header = "\n".join(text.splitlines()[:80]).casefold()
+        score = 0.0
+        if query.casefold() in lowered:
+            score += 20.0
+        for term in terms:
+            if term in header:
+                score += 5.0
+            elif term in lowered:
+                score += 1.0
+        if score <= 0:
+            continue
+        results.append(SearchResult(
+            id=_page_id(path),
+            title=_title_from_text(path, text),
+            url=_page_url(path),
+            metadata={
+                "source": "repo",
+                "path": path,
+                "score": score,
+                "snippet": _snippet_around(text, terms),
+            },
+        ))
+    results.sort(key=lambda item: float(item.metadata.get("score") or 0.0), reverse=True)
+    return results[:limit]
 
 
 def _search_wiki_results(query: str, limit: int) -> list[SearchResult]:
@@ -458,7 +525,8 @@ def register_tools(server: FastMCP, *, max_fetch_chars: int) -> None:
         q = (query or "").strip()
         if not q:
             raise ValueError("query must be non-empty")
-        results = _search_wiki_results(q, 8)
+        results = _search_extra_doc_results(q, 3)
+        results.extend(_search_wiki_results(q, 8))
         results.extend(_search_mem0_results(q, 5))
         return SearchResponse(results=results[:12])
 
