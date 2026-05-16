@@ -26,7 +26,13 @@ EXPECTED_TOOLS = ["search", "fetch", "get_agent_onboarding", "write_memory"]
 
 def _json_get(url: str, *, timeout: float) -> dict[str, Any]:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "tigermemory-openai-smoke/1.0",
+        },
+    )
     with opener.open(req, timeout=timeout) as resp:
         body = resp.read(256_000).decode("utf-8", errors="replace")
         return {"status": getattr(resp, "status", 200), "json": json.loads(body)}
