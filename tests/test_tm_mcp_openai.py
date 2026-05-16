@@ -39,6 +39,7 @@ def test_search_extra_docs_finds_agents_rebase_rule():
     assert results
     assert results[0].metadata["path"] == "AGENTS.md"
     assert "rebase" in results[0].metadata["snippet"].casefold()
+    assert tm_mcp_openai._has_strong_extra_doc_match(results)
 
 
 def test_openai_facade_exposes_only_first_step_tools():

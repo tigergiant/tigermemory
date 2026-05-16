@@ -459,6 +459,12 @@ def _search_extra_doc_results(query: str, limit: int) -> list[SearchResult]:
     return results[:limit]
 
 
+def _has_strong_extra_doc_match(results: list[SearchResult]) -> bool:
+    if not results:
+        return False
+    return float(results[0].metadata.get("score") or 0.0) >= 10.0
+
+
 def _search_wiki_results(query: str, limit: int) -> list[SearchResult]:
     hits = tm_core.search_wiki_hybrid(query, size=limit, include_sources=True, include_inbox=False)
     results: list[SearchResult] = []
@@ -526,7 +532,8 @@ def register_tools(server: FastMCP, *, max_fetch_chars: int) -> None:
         if not q:
             raise ValueError("query must be non-empty")
         results = _search_extra_doc_results(q, 3)
-        results.extend(_search_wiki_results(q, 8))
+        if not _has_strong_extra_doc_match(results):
+            results.extend(_search_wiki_results(q, 8))
         results.extend(_search_mem0_results(q, 5))
         return SearchResponse(results=results[:12])
 
