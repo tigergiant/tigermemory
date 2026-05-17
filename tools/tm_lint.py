@@ -113,17 +113,22 @@ def check_D_format_drift() -> list[str]:
     return findings
 
 
+MD_PAGE_LINK_RE = re.compile(r"\]\(([^)#?]+\.md)(?:#[^)]+)?\)")
+
+
 def check_E_orphan_pages() -> list[str]:
-    """Wiki pages not referenced by any index.md via relative link."""
+    """Wiki pages not referenced by any other wiki page via relative link."""
     all_pages = {p.relative_to(REPO).as_posix() for p in REPO.glob("wiki/**/*.md")
                  if p.name != "index.md"}
     linked = set()
-    for idx in REPO.glob("wiki/**/index.md"):
-        idx_text = idx.read_text(encoding="utf-8", errors="ignore")
-        for m in re.finditer(r"\]\(([^)]+\.md)\)", idx_text):
+    for src in REPO.glob("wiki/**/*.md"):
+        src_text = src.read_text(encoding="utf-8", errors="ignore")
+        for m in MD_PAGE_LINK_RE.finditer(src_text):
             link = m.group(1)
-            # Resolve relative to index location
-            resolved = (idx.parent / link).resolve()
+            if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", link):
+                continue
+            # Resolve relative to the page containing the link.
+            resolved = (src.parent / link).resolve()
             try:
                 rel = resolved.relative_to(REPO).as_posix()
                 linked.add(rel)
@@ -278,7 +283,7 @@ def render_dashboard(results: dict[str, Any]) -> str:
         ("B", f"inbox 积压（> {INBOX_AGE_DAYS} 天）"),
         ("C", f"未评审 commit（近 {UNREVIEWED_WINDOW_DAYS} 天）"),
         ("D", "格式漂移（lint_page_errors 全量扫描）"),
-        ("E", "孤儿页（未被 index 链到）"),
+        ("E", "孤儿页（未被 Wiki 页面链到）"),
         ("F", "断言缺来源（DeepSeek 判断）"),
         ("G", "跨页矛盾（DeepSeek 两两对比）"),
     ]:
