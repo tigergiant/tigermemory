@@ -61,7 +61,7 @@ DEFAULT_STORE_PATH = tm_core.REPO_ROOT / "runtime" / "openmemory" / "openai-mcp-
 DEFAULT_MAX_FETCH_CHARS = 80_000
 MAX_WRITE_MEMORY_CHARS = 4_000
 EXTRA_READONLY_DOCS = ("AGENTS.md",)
-READYZ_TIMEOUT_SECONDS = float(os.environ.get("TM_OPENAI_MCP_READYZ_TIMEOUT", "2.5"))
+READYZ_TIMEOUT_SECONDS = float(os.environ.get("TM_OPENAI_MCP_READYZ_TIMEOUT", "8.0"))
 
 _DEFAULT_ALLOWED_HOSTS = [
     "localhost", "localhost:*",
