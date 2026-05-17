@@ -241,7 +241,7 @@ investment portfolio family holdings investment portfolio family holdings invest
     assert results[0]["path"] == "wiki/investment/portfolio-overview.md"
 
 
-def test_search_wiki_hybrid_keeps_high_confidence_lexical_anchors(monkeypatch):
+def test_search_wiki_hybrid_promotes_dominant_lexical_anchor(monkeypatch):
     import types
 
     lex_hits = [
@@ -261,11 +261,31 @@ def test_search_wiki_hybrid_keeps_high_confidence_lexical_anchors(monkeypatch):
 
     results = tm_core.search_wiki_hybrid("exact semantic query", size=3, include_sources=False)
 
-    assert results[0]["path"] == "wiki/systems/semantic-top.md"
-    assert [item["path"] for item in results[1:]] == [
+    assert [item["path"] for item in results[:2]] == [
         "wiki/systems/exact-a.md",
         "wiki/systems/exact-b.md",
     ]
+
+
+def test_search_wiki_hybrid_does_not_promote_retrieval_eval_report(monkeypatch):
+    import types
+
+    lex_hits = [
+        {"path": "wiki/systems/memory-retrieval-eval.md", "score": 600.0, "title": "report", "snippet": ""},
+        {"path": "wiki/systems/exact-target.md", "score": 400.0, "title": "exact", "snippet": ""},
+    ]
+    emb_hits = [
+        {"path": "wiki/systems/semantic-top.md", "score": 0.9, "title": "semantic"},
+        {"path": "wiki/systems/exact-target.md", "score": 0.8, "title": "exact"},
+    ]
+
+    monkeypatch.setattr(tm_core, "search_wiki", lambda *_args, **_kwargs: lex_hits)
+    monkeypatch.setitem(sys.modules, "tm_embed_index", types.SimpleNamespace(search=lambda *_args, **_kwargs: emb_hits))
+
+    results = tm_core.search_wiki_hybrid("exact semantic query", size=3, include_sources=False)
+
+    assert results[0]["path"] == "wiki/systems/exact-target.md"
+    assert "wiki/systems/memory-retrieval-eval.md" in [item["path"] for item in results]
 
 
 # ---------------------------------------------------------------------------

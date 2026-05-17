@@ -1268,6 +1268,8 @@ def _rank_search_hit(raw_score: int, rel: str, title: str, tokens: list[str], al
             score += 15
         if token in alias_text:
             score += 20
+    if title_lower and all(token in title_lower for token in tokens):
+        score += 80
     if alias_text and all(token in alias_text for token in tokens):
         score += 40
 
@@ -1372,6 +1374,15 @@ def search_wiki(
 _RRF_K = 60
 _HYBRID_LEXICAL_ANCHOR_COUNT = 2
 _HYBRID_LEXICAL_ANCHOR_MIN_SCORE = 100.0
+_HYBRID_LEXICAL_FIRST_MIN_SCORE = 150.0
+_HYBRID_LEXICAL_FIRST_RATIO = 1.25
+_HYBRID_LEXICAL_FIRST_SKIP_SUFFIXES = (
+    "wiki/systems/memory-retrieval-eval.md",
+)
+
+
+def _skip_hybrid_lexical_first(path: str) -> bool:
+    return path.endswith("/index.md") or path in _HYBRID_LEXICAL_FIRST_SKIP_SUFFIXES
 
 
 def search_wiki_hybrid(
@@ -1442,14 +1453,29 @@ def search_wiki_hybrid(
         fused[path]["score"] += 1.0 / (_RRF_K + rank)
 
     ordered = sorted(fused.values(), key=lambda v: -v["score"])
+    lex_score_by_path: dict[str, float] = {}
+    lexical_first_candidate: tuple[str, float] | None = None
     anchor_paths: list[str] = []
-    for hit in lex_hits[:_HYBRID_LEXICAL_ANCHOR_COUNT]:
+    for hit in lex_hits:
         try:
             lex_score = float(hit.get("score") or 0.0)
         except (TypeError, ValueError):
             lex_score = 0.0
         path = str(hit.get("path") or "")
-        if path and lex_score >= _HYBRID_LEXICAL_ANCHOR_MIN_SCORE and path not in anchor_paths:
+        if not path:
+            continue
+        lex_score_by_path[path] = lex_score
+        if (
+            lexical_first_candidate is None
+            and lex_score >= _HYBRID_LEXICAL_FIRST_MIN_SCORE
+            and not _skip_hybrid_lexical_first(path)
+        ):
+            lexical_first_candidate = (path, lex_score)
+        if (
+            len(anchor_paths) < _HYBRID_LEXICAL_ANCHOR_COUNT
+            and lex_score >= _HYBRID_LEXICAL_ANCHOR_MIN_SCORE
+            and path not in anchor_paths
+        ):
             anchor_paths.append(path)
 
     out: list[dict[str, Any]] = []
@@ -1467,7 +1493,20 @@ def search_wiki_hybrid(
         seen.add(path)
         out.append(merged)
 
-    if ordered:
+    promoted_first = False
+    if ordered and lexical_first_candidate:
+        top_path = str(ordered[0]["hit"].get("path") or "")
+        top_lex_score = lex_score_by_path.get(top_path, 0.0)
+        candidate_path, candidate_score = lexical_first_candidate
+        if candidate_path != top_path and candidate_score >= max(
+            _HYBRID_LEXICAL_FIRST_MIN_SCORE,
+            top_lex_score * _HYBRID_LEXICAL_FIRST_RATIO,
+        ):
+            entry = fused.get(candidate_path)
+            if entry:
+                add_entry(entry)
+                promoted_first = True
+    if ordered and not promoted_first:
         add_entry(ordered[0])
     for path in anchor_paths:
         entry = fused.get(path)

@@ -279,6 +279,15 @@ def run_search_grouped(
 RRF_K = 60  # standard constant from the RRF paper; small k=10..100 all behave similarly.
 HYBRID_LEXICAL_ANCHOR_COUNT = 2
 HYBRID_LEXICAL_ANCHOR_MIN_SCORE = 100.0
+HYBRID_LEXICAL_FIRST_MIN_SCORE = 150.0
+HYBRID_LEXICAL_FIRST_RATIO = 1.25
+HYBRID_LEXICAL_FIRST_SKIP_SUFFIXES = (
+    "wiki/systems/memory-retrieval-eval.md",
+)
+
+
+def skip_hybrid_lexical_first(path: str) -> bool:
+    return path.endswith("/index.md") or path in HYBRID_LEXICAL_FIRST_SKIP_SUFFIXES
 
 
 def search_wiki_case_hybrid(
@@ -312,10 +321,23 @@ def search_wiki_case_hybrid(
         # Prefer lex hit object if both branches found it (snippet richer).
 
     ordered = sorted(fused.values(), key=lambda v: -v["score"])
-    anchor_paths = [
-        hit.path for hit in lex[:HYBRID_LEXICAL_ANCHOR_COUNT]
-        if hit.score >= HYBRID_LEXICAL_ANCHOR_MIN_SCORE
-    ]
+    lex_score_by_path: dict[str, float] = {}
+    lexical_first_candidate: tuple[str, float] | None = None
+    anchor_paths: list[str] = []
+    for hit in lex:
+        lex_score_by_path[hit.path] = hit.score
+        if (
+            lexical_first_candidate is None
+            and hit.score >= HYBRID_LEXICAL_FIRST_MIN_SCORE
+            and not skip_hybrid_lexical_first(hit.path)
+        ):
+            lexical_first_candidate = (hit.path, hit.score)
+        if (
+            len(anchor_paths) < HYBRID_LEXICAL_ANCHOR_COUNT
+            and hit.score >= HYBRID_LEXICAL_ANCHOR_MIN_SCORE
+            and hit.path not in anchor_paths
+        ):
+            anchor_paths.append(hit.path)
     out: list[SearchHit] = []
     seen: set[str] = set()
     limit = max(1, top_k)
@@ -336,7 +358,20 @@ def search_wiki_case_hybrid(
             source="wiki",
         ))
 
-    if ordered:
+    promoted_first = False
+    if ordered and lexical_first_candidate:
+        top_path = ordered[0]["hit"].path
+        top_lex_score = lex_score_by_path.get(top_path, 0.0)
+        candidate_path, candidate_score = lexical_first_candidate
+        if candidate_path != top_path and candidate_score >= max(
+            HYBRID_LEXICAL_FIRST_MIN_SCORE,
+            top_lex_score * HYBRID_LEXICAL_FIRST_RATIO,
+        ):
+            entry = fused.get(candidate_path)
+            if entry:
+                add_entry(entry)
+                promoted_first = True
+    if ordered and not promoted_first:
         add_entry(ordered[0])
     for path in anchor_paths:
         entry = fused.get(path)
