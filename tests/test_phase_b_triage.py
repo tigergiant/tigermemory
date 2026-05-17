@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -101,6 +102,49 @@ def base_row(**overrides) -> dict:
     return row
 
 
+def row_with_identity(*, sha_prefix: str = "abcdef123456", source_row_no: int = 7, pair_role: str = "out", **overrides) -> dict:
+    record = {
+        **base_row()["record_redacted"],
+        "source_file_sha256_12": sha_prefix,
+        "source_row_no": source_row_no,
+        "pair_role": pair_role,
+    }
+    record.update(overrides.pop("record_redacted", {}))
+    return base_row(record_redacted=record, **overrides)
+
+
+def write_merge_context(
+    tmp_path: Path,
+    *,
+    full_sha: str = "abcdef1234567890",
+    source_row_no: int = 7,
+    pair_role: str = "out",
+    absorbed_idxs: list[int] | None = None,
+    canonical_idx: int | None = None,
+) -> triage.MergeContext:
+    max_idx = max([canonical_idx or 0, *(absorbed_idxs or [0])])
+    normalized = []
+    for idx in range(max_idx + 1):
+        normalized.append(
+            {
+                "source_file_sha256": full_sha if idx == max_idx else f"other{idx:012d}",
+                "source_row_no": source_row_no if idx == max_idx else idx,
+                "pair_role": pair_role if idx == max_idx else "out",
+            }
+        )
+    normalized_path = tmp_path / "normalized_transactions.jsonl"
+    merge_groups_path = tmp_path / "merge_groups.jsonl"
+    normalized_path.write_text(
+        "\n".join(json.dumps(row) for row in normalized) + "\n",
+        encoding="utf-8",
+    )
+    merge_groups_path.write_text(
+        json.dumps({"canonical_idx": canonical_idx, "absorbed_idxs": absorbed_idxs or []}) + "\n",
+        encoding="utf-8",
+    )
+    return triage.load_merge_context(normalized_path, merge_groups_path)
+
+
 def test_internal_transfer_classified_b1(tmp_path):
     conn = make_db(tmp_path / "ledger.sqlite")
     row = base_row(record_redacted={**base_row()["record_redacted"], "status": "internal_transfer"})
@@ -198,3 +242,78 @@ def test_jsonl_roundtrip(tmp_path):
     rows = [{"z": 1, "text": "中文"}]
     triage.write_jsonl(out, rows)
     assert json.loads(out.read_text(encoding="utf-8")) == rows[0]
+
+
+def test_b9_merge_group_absorbed_classified(tmp_path):
+    conn = make_db(tmp_path / "ledger.sqlite")
+    merge_context = write_merge_context(tmp_path, absorbed_idxs=[5])
+    row = row_with_identity()
+    assert triage.classify_row(conn, row, merge_context=merge_context)[0] == "B9"
+
+
+def test_b9_canonical_idx_not_classified_b9(tmp_path):
+    conn = make_db(tmp_path / "ledger.sqlite")
+    merge_context = write_merge_context(tmp_path, canonical_idx=5)
+    row = row_with_identity()
+    assert triage.classify_row(conn, row, merge_context=merge_context)[0] == "B8"
+
+
+def test_b9_sha256_prefix_match(tmp_path):
+    conn = make_db(tmp_path / "ledger.sqlite")
+    merge_context = write_merge_context(tmp_path, full_sha="123456789abcffff", absorbed_idxs=[5])
+    row = row_with_identity(sha_prefix="123456789abc")
+    assert triage.classify_row(conn, row, merge_context=merge_context)[0] == "B9"
+
+
+def test_b9_missing_merge_groups_file_fails_loudly(tmp_path):
+    db_path = tmp_path / "ledger.sqlite"
+    conn = make_db(db_path)
+    conn.close()
+    unmatched = tmp_path / "unmatched.jsonl"
+    unmatched.write_text(json.dumps(row_with_identity()) + "\n", encoding="utf-8")
+    normalized = tmp_path / "normalized_transactions.jsonl"
+    normalized.write_text(
+        json.dumps({"source_file_sha256": "abcdef1234567890", "source_row_no": 7, "pair_role": "out"}) + "\n",
+        encoding="utf-8",
+    )
+
+    repo = Path(__file__).resolve().parent.parent
+    result = subprocess.run(
+        [
+            sys.executable,
+            "tools/expense_import/_phase_b_triage.py",
+            "--unmatched",
+            str(unmatched),
+            "--ledger-db",
+            str(db_path),
+            "--normalized",
+            str(normalized),
+            "--merge-groups",
+            str(tmp_path / "missing.jsonl"),
+            "--report",
+            str(tmp_path / "report.md"),
+            "--out-jsonl",
+            str(tmp_path / "out.jsonl"),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode != 0
+    assert "merge_groups file is required" in result.stderr
+
+
+def test_b9_inserted_before_b7_in_priority(tmp_path):
+    conn = make_db(tmp_path / "ledger.sqlite")
+    merge_context = write_merge_context(tmp_path, absorbed_idxs=[5])
+    row = row_with_identity(status="ambiguous", match_ids=[1, 2], match_deleted=[False, True])
+    assert triage.classify_row(conn, row, merge_context=merge_context)[0] == "B9"
+
+
+def test_b9_after_b4_b5_in_priority(tmp_path):
+    conn = make_db(tmp_path / "ledger.sqlite")
+    insert_entry(conn, row_id=10, tags=",aggregate_card,", deleted_at="2026-05-16T00:00:00+08:00")
+    merge_context = write_merge_context(tmp_path, absorbed_idxs=[5])
+    row = row_with_identity(match_ids=[10], match_deleted=[True])
+    assert triage.classify_row(conn, row, merge_context=merge_context)[0] == "B5"
