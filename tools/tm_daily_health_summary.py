@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -21,10 +22,54 @@ from typing import Any
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_KNOWN_DEBT = REPO_ROOT / "wiki/operations/daily-health-known-debt.md"
 RESOLVED_STATUSES = {"resolved", "closed", "done"}
+AUTOMATION_ID = "tigermemory-daily-health-scan"
+AUTOMATION_CONTRACT_SCHEMA = "daily-health-automation-contract-v1"
+AUTOMATION_CONTRACT_CHECKS = (
+    {
+        "id": "self_contract_audit",
+        "description": "automation prompt asks the scan to audit this contract",
+        "markers": ("tm_daily_health_summary.py automation-contract",),
+    },
+    {
+        "id": "live_grounding",
+        "description": "scan starts from live repo/runtime state",
+        "markers": ("git pull --ff-only origin master", "git status", "tm_lessons.py search"),
+    },
+    {
+        "id": "answer_quality",
+        "description": "memory_answer eval and trace checks are part of the scan",
+        "markers": ("tm_answer_eval.py eval", "tm_answer_trace.py summary", "tm_answer_trace.py failures"),
+    },
+    {
+        "id": "retrieval_quality",
+        "description": "lexical smoke and hybrid production retrieval evals are separated",
+        "markers": ("tm_memory_eval.py eval", "--recall hybrid", "--embedding-base-url http://127.0.0.1:19190/v1"),
+    },
+    {
+        "id": "machine_summary",
+        "description": "daily report uses reproducible intermediate JSON and a machine summary",
+        "markers": (".tmp/daily-health", "tm_daily_health_summary.py assemble", "机器可读摘要"),
+    },
+    {
+        "id": "known_debt_flow",
+        "description": "known debt is read and classified by state transition",
+        "markers": ("daily-health-known-debt.md", "new / known / resolved / worsened"),
+    },
+    {
+        "id": "writeback_closeout",
+        "description": "scan commits, pushes, syncs WSL, and writes tigermemory closeout memory",
+        "markers": ("git commit", "git push", "write_memory", "git pull --ff-only origin master"),
+    },
+)
 
 
 def _read_text(path: pathlib.Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
+
+
+def default_automation_path() -> pathlib.Path:
+    home = os.environ.get("USERPROFILE") or os.environ.get("HOME") or ""
+    return pathlib.Path(home) / ".codex" / "automations" / AUTOMATION_ID / "automation.toml"
 
 
 def load_json_report(path: pathlib.Path | str) -> dict[str, Any]:
@@ -112,6 +157,34 @@ def summarize_known_debt(rows: list[dict[str, str]], *, today: dt.date | None = 
     }
 
 
+def audit_automation_contract(text: str, *, path: pathlib.Path | str | None = None) -> dict[str, Any]:
+    normalized = text.lower()
+    checks: list[dict[str, Any]] = []
+    for check in AUTOMATION_CONTRACT_CHECKS:
+        missing_markers = [
+            marker for marker in check["markers"]
+            if marker.lower() not in normalized
+        ]
+        checks.append({
+            "id": check["id"],
+            "description": check["description"],
+            "ok": not missing_markers,
+            "missing_markers": missing_markers,
+        })
+    missing = [check for check in checks if not check["ok"]]
+    return {
+        "schema_version": AUTOMATION_CONTRACT_SCHEMA,
+        "automation_id": AUTOMATION_ID,
+        "path": str(path) if path else None,
+        "status": "ok" if not missing else "fail",
+        "check_count": len(checks),
+        "passed_count": len(checks) - len(missing),
+        "missing_count": len(missing),
+        "missing": missing,
+        "checks": checks,
+    }
+
+
 def compact_answer_eval(report: dict[str, Any] | None) -> dict[str, Any] | None:
     if not report:
         return None
@@ -192,6 +265,34 @@ def cmd_known_debt(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_automation_contract(args: argparse.Namespace) -> int:
+    path = pathlib.Path(args.path) if args.path else default_automation_path()
+    try:
+        text = _read_text(path)
+        report = audit_automation_contract(text, path=path)
+    except FileNotFoundError:
+        report = {
+            "schema_version": AUTOMATION_CONTRACT_SCHEMA,
+            "automation_id": AUTOMATION_ID,
+            "path": str(path),
+            "status": "fail",
+            "check_count": len(AUTOMATION_CONTRACT_CHECKS),
+            "passed_count": 0,
+            "missing_count": len(AUTOMATION_CONTRACT_CHECKS),
+            "missing": [{"id": "automation_file", "missing_markers": [str(path)]}],
+            "checks": [],
+        }
+    if args.json:
+        sys.stdout.write(json.dumps(report, ensure_ascii=False, sort_keys=True) + "\n")
+    elif report["status"] == "ok":
+        sys.stdout.write(f"ok: {report['automation_id']} contract passed ({report['passed_count']}/{report['check_count']})\n")
+    else:
+        sys.stdout.write(f"fail: {report['automation_id']} contract missing {report['missing_count']} checks\n")
+        for item in report["missing"]:
+            sys.stdout.write(f"- {item['id']}: {', '.join(item.get('missing_markers') or [])}\n")
+    return 0 if report["status"] == "ok" else 1
+
+
 def _optional_json(path: str | None) -> dict[str, Any] | None:
     return load_json_report(REPO_ROOT / path) if path else None
 
@@ -236,6 +337,11 @@ def main() -> None:
     debt_p.add_argument("--file", default="wiki/operations/daily-health-known-debt.md")
     debt_p.add_argument("--today", default=None, help="YYYY-MM-DD override for tests")
     debt_p.set_defaults(func=cmd_known_debt)
+
+    audit_p = sub.add_parser("automation-contract", help="audit Codex daily-health automation prompt contract")
+    audit_p.add_argument("--path", default=None, help="automation.toml path; defaults to the local Codex automation")
+    audit_p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    audit_p.set_defaults(func=cmd_automation_contract)
 
     assemble_p = sub.add_parser("assemble", help="assemble daily-health machine summary JSON")
     assemble_p.add_argument("--health-color", default="yellow")

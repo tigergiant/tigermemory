@@ -10,6 +10,18 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 import tm_daily_health_summary  # type: ignore[import-not-found]
 
 
+GOOD_AUTOMATION_PROMPT = """
+Run git pull --ff-only origin master, full git status line count, and py tools/tm_lessons.py search.
+Run py tools/tm_daily_health_summary.py automation-contract --json.
+Persist .tmp/daily-health/YYYY-MM-DD/ files.
+Run py tools/tm_answer_eval.py eval, py tools/tm_answer_trace.py summary, and py tools/tm_answer_trace.py failures.
+Run py tools/tm_memory_eval.py eval and py tools/tm_memory_eval.py eval --recall hybrid --embedding-base-url http://127.0.0.1:19190/v1.
+Run py tools/tm_daily_health_summary.py assemble and place the result under ## 机器可读摘要.
+Read wiki/operations/daily-health-known-debt.md and classify findings as new / known / resolved / worsened.
+Use git commit, git push, git pull --ff-only origin master, and write_memory at closeout.
+"""
+
+
 def test_load_json_report_tolerates_llm_log_lines(tmp_path):
     report = tmp_path / "answer.json"
     report.write_text(
@@ -50,6 +62,44 @@ def test_summarize_known_debt_counts_status_and_review_dates():
     assert report["by_status"]["active"] == 1
     assert report["review_overdue_ids"] == ["a"]
     assert report["review_due_soon_ids"] == ["c"]
+
+
+def test_audit_automation_contract_passes_complete_prompt():
+    report = tm_daily_health_summary.audit_automation_contract(
+        GOOD_AUTOMATION_PROMPT,
+        path="automation.toml",
+    )
+
+    assert report["schema_version"] == "daily-health-automation-contract-v1"
+    assert report["status"] == "ok"
+    assert report["missing"] == []
+    assert report["passed_count"] == report["check_count"]
+
+
+def test_audit_automation_contract_reports_missing_markers():
+    report = tm_daily_health_summary.audit_automation_contract(
+        "Run git status only.",
+        path="automation.toml",
+    )
+
+    assert report["status"] == "fail"
+    assert report["missing_count"] > 0
+    missing_ids = {item["id"] for item in report["missing"]}
+    assert "answer_quality" in missing_ids
+    assert "machine_summary" in missing_ids
+
+
+def test_cmd_automation_contract_json_exit_codes(tmp_path, monkeypatch):
+    automation = tmp_path / "automation.toml"
+    automation.write_text(GOOD_AUTOMATION_PROMPT, encoding="utf-8")
+    captured: list[str] = []
+    monkeypatch.setattr(tm_daily_health_summary.sys.stdout, "write", captured.append)
+
+    args = type("Args", (), {"path": str(automation), "json": True})()
+
+    assert tm_daily_health_summary.cmd_automation_contract(args) == 0
+    report = json.loads("".join(captured))
+    assert report["status"] == "ok"
 
 
 def test_compact_answer_eval_omits_success_rows():
