@@ -277,6 +277,8 @@ def run_search_grouped(
 
 
 RRF_K = 60  # standard constant from the RRF paper; small k=10..100 all behave similarly.
+HYBRID_LEXICAL_ANCHOR_COUNT = 2
+HYBRID_LEXICAL_ANCHOR_MIN_SCORE = 100.0
 
 
 def search_wiki_case_hybrid(
@@ -310,9 +312,21 @@ def search_wiki_case_hybrid(
         # Prefer lex hit object if both branches found it (snippet richer).
 
     ordered = sorted(fused.values(), key=lambda v: -v["score"])
+    anchor_paths = [
+        hit.path for hit in lex[:HYBRID_LEXICAL_ANCHOR_COUNT]
+        if hit.score >= HYBRID_LEXICAL_ANCHOR_MIN_SCORE
+    ]
     out: list[SearchHit] = []
-    for entry in ordered[:top_k]:
+    seen: set[str] = set()
+    limit = max(1, top_k)
+
+    def add_entry(entry: dict[str, Any]) -> None:
+        if len(out) >= limit:
+            return
         h = entry["hit"]
+        if h.path in seen:
+            return
+        seen.add(h.path)
         # Re-stamp score with the fused RRF score so downstream sort is stable.
         out.append(SearchHit(
             path=h.path,
@@ -321,6 +335,17 @@ def search_wiki_case_hybrid(
             score=round(entry["score"], 6),
             source="wiki",
         ))
+
+    if ordered:
+        add_entry(ordered[0])
+    for path in anchor_paths:
+        entry = fused.get(path)
+        if entry:
+            add_entry(entry)
+    for entry in ordered[1:]:
+        if len(out) >= limit:
+            break
+        add_entry(entry)
     return out
 
 
@@ -1120,8 +1145,35 @@ def print_report(report: dict[str, Any]) -> None:
     print("Note: retrieval hit@k covers kind=retrieval cases only. Runtime probes are reported separately and do not enter the retrieval denominator; quality hit@k further excludes retrieval cases whose target runtime is unavailable.")
 
 
+def load_eval_env(path: pathlib.Path) -> None:
+    """Load embedding-related variables from a simple KEY=VALUE .env file."""
+    if not path.exists():
+        raise ValueError(f"env file not found: {path}")
+    allowed_exact = {
+        "OPENAI_API_KEY",
+    }
+    allowed_prefixes = ("EMBEDDING_",)
+    with path.open("r", encoding="utf-8") as f:
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name, value = line.split("=", 1)
+            name = name.strip()
+            if not name:
+                continue
+            if name not in allowed_exact and not any(name.startswith(prefix) for prefix in allowed_prefixes):
+                continue
+            value = value.strip().strip('"').strip("'")
+            os.environ[name] = value
+
+
 def cmd_eval(args: argparse.Namespace) -> int:
     try:
+        if args.env_file:
+            load_eval_env(REPO_ROOT / args.env_file)
+        if args.embedding_base_url:
+            os.environ["EMBEDDING_BASE_URL"] = args.embedding_base_url.rstrip("/")
         cases = load_cases(REPO_ROOT / args.cases)
         report = evaluate(
             cases,
@@ -1138,7 +1190,11 @@ def cmd_eval(args: argparse.Namespace) -> int:
 
     if args.json:
         # Write UTF-8 directly to stdout buffer to avoid GBK encoding errors in PowerShell
-        json_str = json.dumps(report, ensure_ascii=False, indent=2)
+        output = dict(report)
+        if args.compact:
+            output.pop("results", None)
+            output.pop("probe_results", None)
+        json_str = json.dumps(output, ensure_ascii=False, indent=2)
         sys.stdout.buffer.write(json_str.encode("utf-8"))
         sys.stdout.buffer.write(b"\n")
     else:
@@ -1154,6 +1210,8 @@ def main() -> None:
     eval_p.add_argument("--cases", default="tests/fixtures/memory_eval_cases.jsonl")
     eval_p.add_argument("--top-k", type=int, default=5)
     eval_p.add_argument("--json", action="store_true", help="emit full JSON report")
+    eval_p.add_argument("--compact", action="store_true",
+                        help="with --json, omit per-case rows that include raw queries")
     mode = eval_p.add_mutually_exclusive_group()
     mode.add_argument("--fuse", action="store_true",
                       help="force-merge all sources with per-source score normalization "
@@ -1174,6 +1232,10 @@ def main() -> None:
     eval_p.add_argument("--candidate-k", type=int, default=None,
                         help="candidate pool size fed into rerank. Defaults to max(top_k*3, 10). "
                              "Ignored when --rerank=off.")
+    eval_p.add_argument("--env-file", default=None,
+                        help="load embedding-related env vars from a local .env file before eval")
+    eval_p.add_argument("--embedding-base-url", default=None,
+                        help="override EMBEDDING_BASE_URL for local eval without editing .env")
     eval_p.set_defaults(func=cmd_eval)
 
     args = parser.parse_args()

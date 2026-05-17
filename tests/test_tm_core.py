@@ -241,6 +241,33 @@ investment portfolio family holdings investment portfolio family holdings invest
     assert results[0]["path"] == "wiki/investment/portfolio-overview.md"
 
 
+def test_search_wiki_hybrid_keeps_high_confidence_lexical_anchors(monkeypatch):
+    import types
+
+    lex_hits = [
+        {"path": "wiki/systems/exact-a.md", "score": 200.0, "title": "exact a", "snippet": ""},
+        {"path": "wiki/systems/exact-b.md", "score": 150.0, "title": "exact b", "snippet": ""},
+        {"path": "wiki/systems/filler.md", "score": 20.0, "title": "filler", "snippet": ""},
+        {"path": "wiki/systems/semantic-top.md", "score": 10.0, "title": "semantic", "snippet": ""},
+    ]
+    emb_hits = [
+        {"path": "wiki/systems/semantic-top.md", "score": 0.9, "title": "semantic"},
+        {"path": "wiki/systems/semantic-two.md", "score": 0.8, "title": "semantic two"},
+        {"path": "wiki/systems/semantic-three.md", "score": 0.7, "title": "semantic three"},
+    ]
+
+    monkeypatch.setattr(tm_core, "search_wiki", lambda *_args, **_kwargs: lex_hits)
+    monkeypatch.setitem(sys.modules, "tm_embed_index", types.SimpleNamespace(search=lambda *_args, **_kwargs: emb_hits))
+
+    results = tm_core.search_wiki_hybrid("exact semantic query", size=3, include_sources=False)
+
+    assert results[0]["path"] == "wiki/systems/semantic-top.md"
+    assert [item["path"] for item in results[1:]] == [
+        "wiki/systems/exact-a.md",
+        "wiki/systems/exact-b.md",
+    ]
+
+
 # ---------------------------------------------------------------------------
 # git_session_status — phantom detection (added 2026-05-16)
 # Background: stat cache drift on cross-fs (WSL 9P, Windows mount, CRLF/LF)

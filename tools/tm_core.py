@@ -1370,6 +1370,8 @@ def search_wiki(
 # Standard RRF constant (Cormack et al., 2009). k=10..100 all behave similarly;
 # 60 is the canonical default and what most production hybrid retrievers use.
 _RRF_K = 60
+_HYBRID_LEXICAL_ANCHOR_COUNT = 2
+_HYBRID_LEXICAL_ANCHOR_MIN_SCORE = 100.0
 
 
 def search_wiki_hybrid(
@@ -1440,11 +1442,41 @@ def search_wiki_hybrid(
         fused[path]["score"] += 1.0 / (_RRF_K + rank)
 
     ordered = sorted(fused.values(), key=lambda v: -v["score"])
+    anchor_paths: list[str] = []
+    for hit in lex_hits[:_HYBRID_LEXICAL_ANCHOR_COUNT]:
+        try:
+            lex_score = float(hit.get("score") or 0.0)
+        except (TypeError, ValueError):
+            lex_score = 0.0
+        path = str(hit.get("path") or "")
+        if path and lex_score >= _HYBRID_LEXICAL_ANCHOR_MIN_SCORE and path not in anchor_paths:
+            anchor_paths.append(path)
+
     out: list[dict[str, Any]] = []
-    for entry in ordered[:max(1, size)]:
+    seen: set[str] = set()
+    limit = max(1, size)
+
+    def add_entry(entry: dict[str, Any]) -> None:
+        if len(out) >= limit:
+            return
         merged = dict(entry["hit"])
         merged["score"] = round(entry["score"], 6)
+        path = str(merged.get("path") or "")
+        if not path or path in seen:
+            return
+        seen.add(path)
         out.append(merged)
+
+    if ordered:
+        add_entry(ordered[0])
+    for path in anchor_paths:
+        entry = fused.get(path)
+        if entry:
+            add_entry(entry)
+    for entry in ordered[1:]:
+        if len(out) >= limit:
+            break
+        add_entry(entry)
     return out
 
 
