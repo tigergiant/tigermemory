@@ -188,6 +188,11 @@ class MemoryAnswerEvidence(BaseModel):
     title: str
     excerpt: str
     score: float
+    authority: float | None = None
+    relevance: float | None = None
+    topic: str | None = None
+    source_role: str | None = None
+    created_at: str | None = None
 
 
 class MemoryAnswerResponse(BaseModel):

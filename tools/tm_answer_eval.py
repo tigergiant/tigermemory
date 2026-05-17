@@ -89,6 +89,8 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     supported_claims = sum(item["supported_claim_count"] for item in results)
     predicted_not_found = [item for item in results if item["status"] == "not_found"]
     expected_not_found_hits = sum(1 for item in predicted_not_found if item["expected_status"] == "not_found")
+    expected_conflicts = [item for item in results if item["expected_status"] == "conflict"]
+    conflict_correct = sum(1 for item in expected_conflicts if item["status"] == "conflict")
     return {
         "case_count": case_count,
         "status_correct": status_correct,
@@ -101,16 +103,30 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
         "must_contain_hit_rate": contain_hit / len(contain_expected) if contain_expected else 0.0,
         "claim_support_rate": supported_claims / total_claims if total_claims else 0.0,
         "not_found_precision": expected_not_found_hits / len(predicted_not_found) if predicted_not_found else 0.0,
+        "expected_conflict_case_count": len(expected_conflicts),
+        "conflict_correct": conflict_correct,
+        "conflict_correct_rate": conflict_correct / len(expected_conflicts) if expected_conflicts else 1.0,
     }
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
     cases = load_cases(args.cases)
     results = [eval_case(case) for case in cases]
+    summary = summarize(results)
+    failures = [
+        item for item in results
+        if not (
+            item["status_ok"]
+            and item["expected_evidence_hit"]
+            and item["must_contain_hit"]
+        )
+    ]
     report = {
-        **summarize(results),
-        "results": results,
+        **summary,
+        "failures": failures,
     }
+    if not args.compact:
+        report["results"] = results
     if args.json:
         sys.stdout.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     else:
@@ -119,8 +135,13 @@ def cmd_eval(args: argparse.Namespace) -> int:
             f"status={report['status_correct']}/{report['case_count']} "
             f"evidence={report['expected_evidence_hit']}/{report['expected_evidence_case_count']} "
             f"claim_support_rate={report['claim_support_rate']:.2f} "
-            f"not_found_precision={report['not_found_precision']:.2f}"
+            f"not_found_precision={report['not_found_precision']:.2f} "
+            f"conflict={report['conflict_correct']}/{report['expected_conflict_case_count']}"
         )
+        if failures:
+            print(f"failures={len(failures)}")
+            for item in failures[:10]:
+                print(f"- {item['id']}: expected={item['expected_status']} actual={item['status']}")
     return 0
 
 
@@ -130,6 +151,7 @@ def main() -> None:
     eval_p = sub.add_parser("eval", help="run memory_answer cases")
     eval_p.add_argument("--cases", default="tests/fixtures/memory_answer_cases.jsonl")
     eval_p.add_argument("--json", action="store_true")
+    eval_p.add_argument("--compact", action="store_true", help="omit per-case successes; keep summary and failures")
     eval_p.set_defaults(func=cmd_eval)
     args = parser.parse_args()
     raise SystemExit(args.func(args))

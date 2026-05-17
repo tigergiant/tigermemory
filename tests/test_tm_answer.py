@@ -52,6 +52,8 @@ def test_memory_answer_core_expands_evidence_and_generates_answer(monkeypatch, t
     assert result["status"] == "ok"
     assert result["claims"][0]["support"] == ["e1"]
     assert result["evidence"][0]["id"] == "e1"
+    assert result["evidence"][0]["authority"] >= 90.0
+    assert result["evidence"][0]["source_role"] == "canonical_wiki"
     assert result["trace_id"]
     assert (tmp_path / "trace.jsonl").exists()
 
@@ -155,3 +157,51 @@ def test_memory_answer_core_redacts_secrets(monkeypatch, tmp_path):
     assert "[REDACTED]" in result["answer"]
     assert "[REDACTED]" in result["claims"][0]["text"]
     assert "[REDACTED]" in result["evidence"][0]["excerpt"]
+
+
+def test_memory_answer_core_filters_weak_evidence_before_llm(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(
+        tm_answer.tm_search,
+        "search_tigermemory",
+        lambda *_args, **_kwargs: _search_result({
+            "source": "lessons",
+            "path": "wiki/self-evolution/lessons/2026-05-10-retrieval-eval-query-pollution.md",
+            "title": "retrieval eval guard",
+            "snippet": "generic tigermemory lesson",
+            "score": 1.0,
+        }),
+    )
+    monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", lambda *_args: calls.append("llm"))
+
+    result = tm_answer.memory_answer_core("zzzz impossible 7f3b2c9d", scope="lessons")
+
+    assert result["status"] == "not_found"
+    assert result["evidence"] == []
+    assert calls == []
+    assert any("weak-evidence guard" in warning for warning in result["warnings"])
+
+
+def test_memory_answer_core_conflict_scan_short_circuits_llm(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(
+        tm_answer.tm_search,
+        "search_tigermemory",
+        lambda *_args, **_kwargs: _search_result({
+            "source": "mem0",
+            "path": "mem0:conflict",
+            "title": "systems / codex",
+            "snippet": "P5.2 小额规则内自动下单 与 P5.2 不自动下单 两种说法冲突",
+            "score": 5.0,
+        }),
+    )
+    monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", lambda *_args: calls.append("llm"))
+
+    result = tm_answer.memory_answer_core("P5.2 自动下单 冲突", scope="mem0")
+
+    assert result["status"] == "conflict"
+    assert result["claims"][0]["support"] == ["e1"]
+    assert calls == []
+    assert result["trace"]["conflict_scan"]["conflict"] is True

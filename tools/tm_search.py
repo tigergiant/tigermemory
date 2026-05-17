@@ -16,14 +16,24 @@ SEARCH_SCOPES = {"auto", "all", "wiki", "lessons", "onboarding", "mem0"}
 DEFAULT_DOGFOOD_LOG = tm_core.REPO_ROOT / ".tmp" / "search-tigermemory.jsonl"
 
 
-def format_search_hit(source: str, path: str, title: str, snippet: str, score: float) -> dict[str, Any]:
-    return {
+def format_search_hit(
+    source: str,
+    path: str,
+    title: str,
+    snippet: str,
+    score: float,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    hit = {
         "source": source,
         "path": path,
         "title": title,
         "snippet": snippet,
         "score": score,
     }
+    if extra:
+        hit.update(extra)
+    return hit
 
 
 def _search_lessons_group(query: str, top_k: int) -> list[dict[str, Any]]:
@@ -100,6 +110,10 @@ def _search_mem0_group(query: str, top_k: int) -> tuple[list[dict[str, Any]], st
             f"{meta.get('topic', 'unknown')} / {meta.get('source', 'unknown')}",
             text[:300],
             score,
+            extra={
+                "created_at": item.get("created_at"),
+                "updated_at": item.get("updated_at"),
+            },
         ))
     return hits, None
 
