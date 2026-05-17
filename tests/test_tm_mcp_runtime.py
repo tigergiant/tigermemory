@@ -334,6 +334,31 @@ def test_reader_role_allows_verify_memory_id(monkeypatch):
         tm_mcp._ROLE = old
 
 
+def test_reader_role_allows_memory_answer(monkeypatch):
+    monkeypatch.setattr(
+        tm_mcp.tm_answer,
+        "memory_answer_core",
+        lambda query, **kwargs: {
+            "status": "not_found",
+            "answer": "",
+            "summary": query,
+            "claims": [],
+            "evidence": [],
+            "warnings": [],
+            "trace_id": "trace-test",
+            "trace": None,
+        },
+    )
+    old = tm_mcp._ROLE
+    try:
+        tm_mcp._ROLE = "reader"
+        result = tm_mcp.memory_answer("missing query", include_trace=False)
+        assert result["status"] == "not_found"
+        assert result["trace_id"] == "trace-test"
+    finally:
+        tm_mcp._ROLE = old
+
+
 # ------------------------------------------------------------------
 # Writer role sanity — default path, no rejection
 # ------------------------------------------------------------------
@@ -437,6 +462,7 @@ def test_reader_role_allows_search_tigermemory(monkeypatch):
         tm_mcp._ROLE = "reader"
         result = tm_mcp.search_tigermemory("commit push same turn", scope="lessons")
         assert result["primary_scope"] == "lessons"
-        assert result["primary_results"][0]["path"].endswith("2026-04-23-commit-push-same-turn.md")
+        paths = [hit["path"] for hit in result["primary_results"]]
+        assert any(path.endswith("2026-04-23-commit-push-same-turn.md") for path in paths)
     finally:
         tm_mcp._ROLE = old

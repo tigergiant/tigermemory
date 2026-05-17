@@ -10,6 +10,7 @@ Read tools (callable in both writer and reader roles):
 - search_memories           — Mem0 atomic event memory search
 - search_wiki               — wiki/sources file-based search
 - search_tigermemory        — grouped search across wiki/lessons/onboarding/Mem0
+- memory_answer             — evidence-first answer with citations and trace
 - read_page                 — read wiki/inbox file content
 - list_partition            — list slugs in a wiki partition
 - get_agent_onboarding      — onboarding snapshot
@@ -61,12 +62,13 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 import tm_core
-import tm_lessons
+import tm_answer
 import tm_memory_ops
 import tm_minimax
 import tm_persona
 import tm_review_tools
 import tm_expense
+import tm_search
 
 
 # ---------- MCP Server ----------
@@ -110,16 +112,6 @@ def _require_writer() -> None:
     """Raise PermissionError if current role is not 'writer'."""
     if _ROLE != "writer":
         raise PermissionError(f"write tool not allowed for role={_ROLE}")
-
-
-def _log_search_tigermemory(payload: dict[str, Any]) -> None:
-    """Best-effort dogfood log for grouped search usage."""
-    try:
-        _SEARCH_DOGFOOD_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with _SEARCH_DOGFOOD_LOG.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
-    except Exception:
-        return
 
 
 def _review_for_memory(text: str) -> dict[str, Any]:
@@ -582,97 +574,6 @@ def search_wiki(
     return tm_core.search_wiki(query, size, include_sources, include_inbox)
 
 
-_SEARCH_SCOPES = {"auto", "all", "wiki", "lessons", "onboarding", "mem0"}
-
-
-def _format_search_hit(source: str, path: str, title: str, snippet: str, score: float) -> dict[str, Any]:
-    return {
-        "source": source,
-        "path": path,
-        "title": title,
-        "snippet": snippet,
-        "score": score,
-    }
-
-
-def _search_lessons_group(query: str, top_k: int) -> list[dict[str, Any]]:
-    tokens = [t for t in re.split(r"\s+", query.strip()) if t]
-    scored: list[tuple[int, Any, str, str]] = []
-    if not tokens or not tm_lessons.LESSONS_DIR.exists():
-        return []
-    for path in sorted(tm_lessons.LESSONS_DIR.glob("*.md")):
-        if path.name == "index.md":
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
-        score, title, _aliases = tm_lessons._score_lesson(text, tokens)
-        if score > 0:
-            scored.append((score, path, title, tm_lessons._excerpt(text, tokens, width=120)))
-    scored.sort(key=lambda item: (-item[0], item[1].name))
-    return [
-        _format_search_hit(
-            "lessons",
-            path.relative_to(tm_core.REPO_ROOT).as_posix(),
-            title,
-            excerpt,
-            float(score),
-        )
-        for score, path, title, excerpt in scored[:top_k]
-    ]
-
-
-def _search_onboarding_group(query: str, top_k: int) -> list[dict[str, Any]]:
-    tokens = [t.lower() for t in re.split(r"\s+", query.strip()) if t]
-    if not tokens:
-        return []
-    hits: list[dict[str, Any]] = []
-    for depth in ("30s", "5min", "full"):
-        content = tm_persona.compile_snapshot(depth)
-        lower = content.lower()
-        score = 0
-        for token in tokens:
-            count = lower.count(token)
-            if count == 0:
-                score = 0
-                break
-            score += count
-        if score > 0:
-            hits.append(_format_search_hit(
-                "onboarding",
-                tm_persona.SNAPSHOT_PAGE,
-                f"Agent Onboarding Snapshot ({depth})",
-                content[:300].replace("\n", " ").strip(),
-                float(score),
-            ))
-    hits.sort(key=lambda hit: (-hit["score"], hit["title"]))
-    return hits[:top_k]
-
-
-def _search_mem0_group(query: str, top_k: int) -> tuple[list[dict[str, Any]], str | None]:
-    try:
-        data = json.loads(tm_core.mem0_search(query, size=top_k))
-    except Exception as exc:
-        return [], f"mem0 unavailable: {exc}"
-    items = data.get("items") or data.get("results") or []
-    hits: list[dict[str, Any]] = []
-    for index, item in enumerate(items[:top_k], 1):
-        meta = item.get("metadata_") or item.get("metadata") or {}
-        text = str(item.get("content") or item.get("memory") or item.get("text") or "")
-        mem_id = str(item.get("id") or f"rank-{index}")
-        raw_score = item.get("score")
-        score = float(raw_score) if isinstance(raw_score, (int, float)) else float(top_k - index + 1)
-        hits.append(_format_search_hit(
-            "mem0",
-            f"mem0:{mem_id}",
-            f"{meta.get('topic', 'unknown')} / {meta.get('source', 'unknown')}",
-            text[:300],
-            score,
-        ))
-    return hits, None
-
-
 @mcp.tool()
 def search_tigermemory(query: str, scope: str = "auto", top_k: int = 5) -> dict[str, Any]:
     """Grouped search across tigermemory knowledge surfaces.
@@ -681,69 +582,36 @@ def search_tigermemory(query: str, scope: str = "auto", top_k: int = 5) -> dict[
     deliberately does not fuse all sources into one normalized ranking because
     eval showed that hurts hit@1.
     """
-    q = (query or "").strip()
-    selected_scope = (scope or "auto").strip().lower()
-    if not q:
-        raise ValueError("query must be non-empty")
-    if selected_scope not in _SEARCH_SCOPES:
-        raise ValueError(f"invalid scope {scope!r}; expected one of {sorted(_SEARCH_SCOPES)}")
-    limit = min(max(int(top_k), 1), 20)
+    return tm_search.search_tigermemory(query, scope=scope, top_k=top_k, role=_ROLE, dogfood_log=_SEARCH_DOGFOOD_LOG)
 
-    primary_scope = tm_core.primary_search_scope(q) if selected_scope in ("auto", "all") else selected_scope
-    scopes = ["wiki", "lessons", "onboarding", "mem0"] if selected_scope in ("auto", "all") else [selected_scope]
-    groups: dict[str, list[dict[str, Any]]] = {}
-    warnings: list[str] = []
 
-    if "wiki" in scopes:
-        include_sources = selected_scope in ("auto", "all")
-        # Use hybrid lexical+embedding recall (RRF). Phase 2f eval (2026-05-06)
-        # showed hit@3 71/81 vs lexical-only 50/81 on the canonical fixture.
-        # `search_wiki_hybrid` falls back to lexical-only if the embed index
-        # is missing or the embedding backend is unreachable.
-        groups["wiki"] = [
-            _format_search_hit(
-                "wiki",
-                str(hit.get("path", "")),
-                str(hit.get("title", "")),
-                str(hit.get("snippet", "")),
-                float(hit.get("score", 0.0)),
-            )
-            for hit in tm_core.search_wiki_hybrid(q, size=limit, include_sources=include_sources, include_inbox=False)
-        ]
-    if "lessons" in scopes:
-        groups["lessons"] = _search_lessons_group(q, limit)
-    if "onboarding" in scopes:
-        groups["onboarding"] = _search_onboarding_group(q, limit)
-    if "mem0" in scopes:
-        mem_hits, mem_warning = _search_mem0_group(q, limit)
-        groups["mem0"] = mem_hits
-        if mem_warning:
-            warnings.append(mem_warning)
+@mcp.tool()
+def memory_answer(
+    query: str,
+    scope: str = "auto",
+    top_k: int = 5,
+    max_evidence: int = 6,
+    include_trace: bool = True,
+) -> dict[str, Any]:
+    """Evidence-first answer over tigermemory search surfaces.
 
-    result = {
-        "query": q,
-        "scope": selected_scope,
-        "strategy": "grouped-intent-budget-v1",
-        "primary_scope": primary_scope,
-        "primary_results": groups.get(primary_scope, []),
-        "groups": groups,
-        "warnings": warnings,
-    }
-    primary_results = result["primary_results"]
-    _log_search_tigermemory({
-        "ts": datetime.datetime.now(tm_core.TZ_CN).isoformat(),
-        "role": _ROLE,
-        "query": q,
-        "scope": selected_scope,
-        "top_k": limit,
-        "strategy": result["strategy"],
-        "primary_scope": primary_scope,
-        "primary_top_path": primary_results[0].get("path") if primary_results else None,
-        "primary_count": len(primary_results),
-        "group_counts": {name: len(items) for name, items in groups.items()},
-        "warnings": warnings,
-    })
-    return result
+    Args:
+        query: User question to answer from tigermemory evidence.
+        scope: auto | all | wiki | lessons | onboarding | mem0.
+        top_k: Per-source search limit, clamped to 1..10.
+        max_evidence: Evidence items to expand/read, clamped to 1..12.
+        include_trace: Include trace details in the response.
+
+    Returns:
+        {status, answer, summary, claims, evidence, warnings, trace_id, trace}.
+    """
+    return tm_answer.memory_answer_core(
+        query,
+        scope=scope,
+        top_k=top_k,
+        max_evidence=max_evidence,
+        include_trace=include_trace,
+    )
 
 
 @mcp.tool()

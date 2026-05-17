@@ -44,3 +44,41 @@ def test_suggest_wiki_patches_save_schedules_digest_refresh(monkeypatch):
 
     assert result.inbox_path == "inbox/2026-05-16-0000-codex-cross.md"
     assert calls == ["digest"]
+
+
+def test_memory_answer_endpoint_delegates_to_core(monkeypatch):
+    captured = {}
+
+    def fake_core(query, **kwargs):
+        captured["query"] = query
+        captured.update(kwargs)
+        return {
+            "status": "not_found",
+            "answer": "",
+            "summary": "no evidence",
+            "claims": [],
+            "evidence": [],
+            "warnings": [],
+            "trace_id": "trace-http",
+            "trace": None,
+        }
+
+    monkeypatch.setattr(tm_http.tm_answer, "memory_answer_core", fake_core)
+
+    req = tm_http.MemoryAnswerRequest(
+        query="missing query",
+        scope="wiki",
+        top_k=3,
+        max_evidence=2,
+        include_trace=False,
+    )
+    result = asyncio.run(tm_http.memory_answer(req))
+
+    assert result["trace_id"] == "trace-http"
+    assert captured == {
+        "query": "missing query",
+        "scope": "wiki",
+        "top_k": 3,
+        "max_evidence": 2,
+        "include_trace": False,
+    }

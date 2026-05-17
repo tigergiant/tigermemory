@@ -2,9 +2,10 @@
 """
 tools/tm_http.py — HTTP wrapper for tigermemory (FastAPI).
 
-Exposes 7 endpoints for OpenClaw context-engine plugin:
+Exposes tigermemory HTTP endpoints for OpenClaw context-engine plugin and local tooling:
 - GET /health
 - POST /search_memories
+- POST /memory/answer
 - POST /read_wiki
 - POST /list_partition
 - POST /write_memory
@@ -33,6 +34,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import tm_core
+import tm_answer
 import tm_memory_ops
 import tm_review
 
@@ -162,6 +164,41 @@ class SearchMemoriesRequest(BaseModel):
 class SearchMemoriesResponse(BaseModel):
     count: int
     results: list[dict] | None = None
+
+
+class MemoryAnswerRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=1000)
+    scope: str = Field(default="auto", pattern=r"^(auto|all|wiki|lessons|onboarding|mem0)$")
+    top_k: int = Field(default=5, ge=1, le=10)
+    max_evidence: int = Field(default=6, ge=1, le=12)
+    include_trace: bool = True
+
+
+class MemoryAnswerClaim(BaseModel):
+    id: str
+    text: str
+    support: list[str]
+    confidence: float
+
+
+class MemoryAnswerEvidence(BaseModel):
+    id: str
+    source: str
+    path: str
+    title: str
+    excerpt: str
+    score: float
+
+
+class MemoryAnswerResponse(BaseModel):
+    status: str
+    answer: str
+    summary: str
+    claims: list[MemoryAnswerClaim]
+    evidence: list[MemoryAnswerEvidence]
+    warnings: list[str]
+    trace_id: str
+    trace: dict[str, Any] | None = None
 
 
 class ReadWikiRequest(BaseModel):
@@ -442,6 +479,26 @@ async def search_memories(req: SearchMemoriesRequest):
         raise HTTPException(status_code=502, detail=f"mem0 unreachable: {e}")
     finally:
         log_json("info", trace_id, "/search_memories", 200, (time.time() - start) * 1000, query_len=len(req.query))
+
+
+@app.post("/memory/answer", response_model=MemoryAnswerResponse)
+async def memory_answer(req: MemoryAnswerRequest):
+    trace_id = str(uuid.uuid4())
+    start = time.time()
+    try:
+        result = tm_answer.memory_answer_core(
+            req.query,
+            scope=req.scope,
+            top_k=req.top_k,
+            max_evidence=req.max_evidence,
+            include_trace=req.include_trace,
+        )
+        return result
+    except Exception as e:
+        log_json("error", trace_id, "/memory/answer", 500, (time.time() - start) * 1000, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"memory_answer failed: {e}")
+    finally:
+        log_json("info", trace_id, "/memory/answer", 200, (time.time() - start) * 1000, query_len=len(req.query))
 
 
 @app.post("/read_wiki", response_model=ReadWikiResponse)
