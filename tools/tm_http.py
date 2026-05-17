@@ -152,6 +152,9 @@ class HealthResponse(BaseModel):
     version: str
     tm_core_version: str | None = None
     mem0_reachable: bool
+    mem0_api_reachable: bool | None = None
+    mem0_api_latency_ms: float | None = None
+    mem0_api_error: str | None = None
     deepseek_reachable: bool | None = None
     uptime_seconds: float
 
@@ -337,6 +340,27 @@ def _probe_mem0_reachable() -> bool:
         return False
 
 
+def _probe_mem0_api(timeout: int = 2) -> dict[str, Any]:
+    """Cheap API-level probe for cases where the port is open but the app is hung."""
+    start = time.time()
+    try:
+        tm_core.mem0_request(
+            f"{tm_core.mem0_base().rstrip()}/api/v1/memories/categories?user_id=tiger",
+            timeout=timeout,
+        )
+        return {
+            "reachable": True,
+            "latency_ms": round((time.time() - start) * 1000, 1),
+            "error": None,
+        }
+    except Exception as exc:
+        return {
+            "reachable": False,
+            "latency_ms": round((time.time() - start) * 1000, 1),
+            "error": str(exc)[:200],
+        }
+
+
 def _git_sha() -> str | None:
     """Return short git sha of tigermemory HEAD, or None if unavailable."""
     try:
@@ -421,11 +445,15 @@ async def health():
     trace_id = str(uuid.uuid4())
     start = time.time()
     try:
+        mem0_api = _probe_mem0_api()
         return HealthResponse(
             ok=True,
             version=VERSION,
             tm_core_version=app.state.tm_core_version,
             mem0_reachable=_probe_mem0_reachable(),
+            mem0_api_reachable=mem0_api["reachable"],
+            mem0_api_latency_ms=mem0_api["latency_ms"],
+            mem0_api_error=mem0_api["error"],
             deepseek_reachable=None,
             uptime_seconds=time.time() - _start_time,
         )

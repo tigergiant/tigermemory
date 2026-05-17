@@ -82,3 +82,34 @@ def test_memory_answer_endpoint_delegates_to_core(monkeypatch):
         "max_evidence": 2,
         "include_trace": False,
     }
+
+
+def test_mem0_api_probe_reports_latency_and_error(monkeypatch):
+    calls = {}
+
+    def fake_request(url, **kwargs):
+        calls["url"] = url
+        calls["kwargs"] = kwargs
+        return '{"categories":[],"total":0}'
+
+    monkeypatch.setattr(tm_http.tm_core, "mem0_base", lambda: "http://localhost:8765")
+    monkeypatch.setattr(tm_http.tm_core, "mem0_request", fake_request)
+
+    ok = tm_http._probe_mem0_api(timeout=3)
+
+    assert ok["reachable"] is True
+    assert ok["latency_ms"] >= 0
+    assert ok["error"] is None
+    assert calls["url"] == "http://localhost:8765/api/v1/memories/categories?user_id=tiger"
+    assert calls["kwargs"]["timeout"] == 3
+
+    monkeypatch.setattr(
+        tm_http.tm_core,
+        "mem0_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("Mem0 timeout: timed out")),
+    )
+
+    fail = tm_http._probe_mem0_api(timeout=3)
+
+    assert fail["reachable"] is False
+    assert "timed out" in fail["error"]
