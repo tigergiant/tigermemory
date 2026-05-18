@@ -5,7 +5,7 @@ OpenAI / ChatGPT-facing MCP facade for tigermemory.
 This server intentionally exposes a narrow ChatGPT-facing surface:
 
 - search(query) -> OpenAI company-knowledge compatible result list
-- fetch(id) -> OpenAI company-knowledge compatible full document fetch
+- fetch(id, start?, max_chars?) -> document fetch with optional chunking
 - get_agent_onboarding(depth) -> read-only tigermemory operating context
 - write_memory(topic, text) -> LLM-routed memory write as agent "chatgpt"
 
@@ -59,6 +59,7 @@ WRITE_AGENT = "chatgpt"
 DEFAULT_PUBLIC_BASE = "https://tm-openai.doodiu.cloud"
 DEFAULT_STORE_PATH = tm_core.REPO_ROOT / "runtime" / "openmemory" / "openai-mcp-oauth.json"
 DEFAULT_MAX_FETCH_CHARS = 80_000
+DEFAULT_RECOMMENDED_FETCH_CHARS = 12_000
 MAX_WRITE_MEMORY_CHARS = 4_000
 EXTRA_READONLY_DOCS = ("AGENTS.md",)
 READYZ_TIMEOUT_SECONDS = float(os.environ.get("TM_OPENAI_MCP_READYZ_TIMEOUT", "8.0"))
@@ -581,6 +582,66 @@ def _title_from_text(path: str, text: str) -> str:
     return pathlib.PurePosixPath(path).stem.replace("-", " ")
 
 
+def _document_sections(text: str, *, limit: int = 80) -> list[dict[str, Any]]:
+    sections: list[dict[str, Any]] = []
+    char_start = 0
+    for line_no, line in enumerate(text.splitlines(keepends=True), 1):
+        stripped = line.strip()
+        match = re.match(r"^(#{1,6})\s+(.+)$", stripped)
+        if match:
+            sections.append({
+                "line": line_no,
+                "char_start": char_start,
+                "level": len(match.group(1)),
+                "title": match.group(2).strip(),
+            })
+            if len(sections) >= limit:
+                break
+        char_start += len(line)
+    return sections
+
+
+def _slice_fetch_text(
+    text: str,
+    *,
+    start: int = 0,
+    max_chars: int | None,
+    default_limit: int,
+) -> tuple[str, dict[str, Any]]:
+    if start < 0:
+        raise ValueError("start must be >= 0")
+    if start > len(text):
+        raise ValueError("start must be <= document length")
+    if default_limit <= 0:
+        raise ValueError("default fetch limit must be positive")
+    if max_chars is not None and max_chars <= 0:
+        raise ValueError("max_chars must be positive")
+
+    requested_limit = default_limit if max_chars is None else max_chars
+    limit = min(requested_limit, default_limit)
+    end = min(len(text), start + limit)
+    line_count = len(text.splitlines())
+    next_start = end if end < len(text) else None
+    return text[start:end], {
+        "start": start,
+        "end": end,
+        "returned_chars": end - start,
+        "requested_max_chars": requested_limit,
+        "max_fetch_chars": default_limit,
+        "total_chars": len(text),
+        "line_count": line_count,
+        "truncated": end < len(text),
+        "partial": start > 0 or end < len(text),
+        "next_start": next_start,
+        "sections": _document_sections(text),
+        "chunk_hint": (
+            f"Document is partial; call fetch with start={next_start} and max_chars="
+            f"{min(DEFAULT_RECOMMENDED_FETCH_CHARS, default_limit)} to continue."
+            if next_start is not None else ""
+        ),
+    }
+
+
 def _query_terms(query: str) -> list[str]:
     raw_terms = re.findall(r"[A-Za-z0-9_.:/-]+|[\u4e00-\u9fff]{2,}", query.casefold())
     terms: list[str] = []
@@ -754,39 +815,52 @@ def register_tools(server: FastMCP, *, max_fetch_chars: int) -> None:
     @server.tool(
         name="fetch",
         title="Fetch tigermemory document",
-        description="Fetch a full tigermemory document or memory by id returned from search.",
+        description=(
+            "Fetch a tigermemory document or memory by id returned from search. "
+            "For long documents, use optional start and max_chars to read chunks; "
+            "continue from metadata.next_start until it is null."
+        ),
         annotations=READ_ONLY_TOOL,
         meta=_tool_meta(),
         structured_output=True,
     )
-    def fetch(id: str) -> FetchResponse:
+    def fetch(id: str, start: int = 0, max_chars: int | None = None) -> FetchResponse:
         item_id = (id or "").strip()
         if item_id.startswith("page:"):
             path = _decode_page_id(item_id)
             full = _safe_text_file(path)
-            text = full.read_text(encoding="utf-8")
-            truncated = len(text) > max_fetch_chars
-            if truncated:
-                text = text[:max_fetch_chars]
+            full_text = full.read_text(encoding="utf-8")
+            text, slice_meta = _slice_fetch_text(
+                full_text,
+                start=start,
+                max_chars=max_chars,
+                default_limit=max_fetch_chars,
+            )
             return FetchResponse(
                 id=item_id,
-                title=_title_from_text(path, text),
+                title=_title_from_text(path, full_text),
                 text=text,
                 url=_page_url(path),
-                metadata={"source": "repo", "path": path, "truncated": truncated},
+                metadata={"source": "repo", "path": path, **slice_meta},
             )
         if item_id.startswith("mem0:"):
             mem_id = _mem0_id(item_id)
             url = f"{tm_core.mem0_base().rstrip('/')}/api/v1/memories/{urllib.parse.quote(mem_id)}"
             data = json.loads(tm_core.mem0_request(url))
-            text = str(data.get("text") or data.get("content") or data.get("memory") or "")
+            full_text = str(data.get("text") or data.get("content") or data.get("memory") or "")
+            text, slice_meta = _slice_fetch_text(
+                full_text,
+                start=start,
+                max_chars=max_chars,
+                default_limit=max_fetch_chars,
+            )
             metadata = data.get("metadata_") or data.get("metadata") or {}
             return FetchResponse(
                 id=item_id,
                 title=f"Memory: {metadata.get('topic', 'unknown')} / {metadata.get('source', 'unknown')}",
                 text=text,
                 url=_mem0_url(mem_id),
-                metadata={"source": "mem0", "memory_id": mem_id, **metadata},
+                metadata={"source": "mem0", "memory_id": mem_id, **metadata, **slice_meta},
             )
         raise ValueError("id must be a value returned by search")
 

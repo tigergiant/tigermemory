@@ -25,6 +25,46 @@ def test_page_id_roundtrip():
     assert tm_mcp_openai._decode_page_id(tm_mcp_openai._page_id(path)) == path
 
 
+def test_slice_fetch_text_reports_chunk_metadata():
+    text = "# Title\nalpha\n## Detail\n" + ("x" * 20)
+
+    chunk, meta = tm_mcp_openai._slice_fetch_text(
+        text,
+        start=0,
+        max_chars=12,
+        default_limit=20,
+    )
+
+    assert chunk == text[:12]
+    assert meta["start"] == 0
+    assert meta["end"] == 12
+    assert meta["total_chars"] == len(text)
+    assert meta["truncated"] is True
+    assert meta["partial"] is True
+    assert meta["next_start"] == 12
+    assert meta["sections"][:2] == [
+        {"line": 1, "char_start": 0, "level": 1, "title": "Title"},
+        {"line": 3, "char_start": 14, "level": 2, "title": "Detail"},
+    ]
+    assert "start=12" in meta["chunk_hint"]
+
+
+def test_slice_fetch_text_caps_requested_size_to_default_limit():
+    text = "abcdef"
+
+    chunk, meta = tm_mcp_openai._slice_fetch_text(
+        text,
+        start=1,
+        max_chars=99,
+        default_limit=3,
+    )
+
+    assert chunk == "bcd"
+    assert meta["requested_max_chars"] == 99
+    assert meta["max_fetch_chars"] == 3
+    assert meta["next_start"] == 4
+
+
 def test_safe_text_file_rejects_non_knowledge_paths():
     with pytest.raises(ValueError):
         tm_mcp_openai._safe_text_file("runtime/openmemory/.env")
