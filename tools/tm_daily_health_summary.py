@@ -36,6 +36,11 @@ AUTOMATION_CONTRACT_CHECKS = (
         "markers": ("git pull --ff-only origin master", "git status", "tm_lessons.py search"),
     },
     {
+        "id": "runtime_health_probe",
+        "description": "scan records tm_http health with mem0 API signals",
+        "markers": ("tm_http /health", "mem0_api_reachable", "mem0_api_latency_ms", "mem0_api_error"),
+    },
+    {
         "id": "answer_quality",
         "description": "memory_answer eval and trace checks are part of the scan",
         "markers": ("tm_answer_eval.py eval", "tm_answer_trace.py summary", "tm_answer_trace.py failures"),
@@ -302,12 +307,19 @@ def cmd_assemble(args: argparse.Namespace) -> int:
         load_known_debt(REPO_ROOT / args.known_debt_file),
         today=dt.date.fromisoformat(args.today) if args.today else dt.date.today(),
     )
+    health_probe = _optional_json(args.health_json)
     summary = {
         "schema_version": "daily-health-summary-v1",
         "health_color": args.health_color,
         "blocking_count": args.blocking_count,
         "known_debt_count": known_debt["active_count"],
         "new_problem_count": args.new_problem_count,
+        "health_probe": None if health_probe is None else {
+            "mem0_reachable": health_probe.get("mem0_reachable"),
+            "mem0_api_reachable": health_probe.get("mem0_api_reachable"),
+            "mem0_api_latency_ms": health_probe.get("mem0_api_latency_ms"),
+            "mem0_api_error": health_probe.get("mem0_api_error"),
+        },
         "known_debt_changes": {
             "new": args.known_debt_new,
             "known": args.known_debt_known,
@@ -352,6 +364,7 @@ def main() -> None:
     assemble_p.add_argument("--known-debt-resolved", type=int, default=0)
     assemble_p.add_argument("--known-debt-worsened", type=int, default=0)
     assemble_p.add_argument("--known-debt-file", default="wiki/operations/daily-health-known-debt.md")
+    assemble_p.add_argument("--health-json", default=None, help="optional tm_http /health JSON file")
     assemble_p.add_argument("--answer-eval", default=None)
     assemble_p.add_argument("--answer-trace-summary", default=None)
     assemble_p.add_argument("--answer-trace-failures", default=None)

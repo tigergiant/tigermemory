@@ -14,9 +14,11 @@ GOOD_AUTOMATION_PROMPT = """
 Run git pull --ff-only origin master, full git status line count, and py tools/tm_lessons.py search.
 Run py tools/tm_daily_health_summary.py automation-contract --json.
 Persist .tmp/daily-health/YYYY-MM-DD/ files.
+Run tm_http /health and persist the JSON to .tmp/daily-health/YYYY-MM-DD/health.json.
+Use mem0_reachable, mem0_api_reachable, mem0_api_latency_ms, and mem0_api_error as first-class health signals.
 Run py tools/tm_answer_eval.py eval, py tools/tm_answer_trace.py summary, and py tools/tm_answer_trace.py failures.
 Run py tools/tm_memory_eval.py eval and py tools/tm_memory_eval.py eval --recall hybrid --embedding-base-url http://127.0.0.1:19190/v1.
-Run py tools/tm_daily_health_summary.py assemble and place the result under ## 机器可读摘要.
+Run py tools/tm_daily_health_summary.py assemble with the health JSON and place the result under ## 机器可读摘要.
 Read wiki/operations/daily-health-known-debt.md and classify findings as new / known / resolved / worsened.
 Use git commit, git push, git pull --ff-only origin master, and write_memory at closeout.
 """
@@ -158,6 +160,14 @@ def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
         "status_counts": {"ok": 9, "not_found": 1},
         "llm_counts": {"ok": 3, "missing": 7},
     }), encoding="utf-8")
+    health = tmp_path / "health.json"
+    health.write_text(json.dumps({
+        "ok": True,
+        "mem0_reachable": True,
+        "mem0_api_reachable": True,
+        "mem0_api_latency_ms": 123.4,
+        "mem0_api_error": None,
+    }), encoding="utf-8")
     failures.write_text(json.dumps({"failure_count": 1, "failures": [{"trace_id": "x"}]}), encoding="utf-8")
     lexical.write_text(json.dumps({"case_count": 80, "hit1": 61, "hit3": 67, "recall": "lexical", "top_k": 3}), encoding="utf-8")
     hybrid.write_text(json.dumps({"case_count": 80, "hit1": 80, "hit3": 80, "recall": "hybrid", "top_k": 3}), encoding="utf-8")
@@ -182,6 +192,7 @@ def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
         "known_debt_known": 1,
         "known_debt_resolved": 0,
         "known_debt_worsened": 0,
+        "health_json": "health.json",
         "answer_eval": "answer.json",
         "answer_trace_summary": "trace.json",
         "answer_trace_failures": "failures.json",
@@ -200,6 +211,8 @@ def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
     assert summary["schema_version"] == "daily-health-summary-v1"
     assert summary["known_debt_count"] == 1
     assert summary["known_debt_changes"]["known"] == 1
+    assert summary["health_probe"]["mem0_api_reachable"] is True
+    assert summary["health_probe"]["mem0_api_latency_ms"] == 123.4
     assert summary["answer_eval"]["status_correct"] == 25
     assert summary["answer_trace"]["failure_count"] == 1
     assert summary["retrieval_eval_lexical"]["hit3"] == 67
