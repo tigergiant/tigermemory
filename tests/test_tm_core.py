@@ -288,6 +288,22 @@ def test_search_wiki_hybrid_does_not_promote_retrieval_eval_report(monkeypatch):
     assert "wiki/systems/memory-retrieval-eval.md" in [item["path"] for item in results]
 
 
+def test_search_wiki_lexical_demotes_retrieval_eval_report():
+    results = tm_core.search_wiki("OpenMemory CE search limits", size=3, include_sources=False)
+
+    assert results[0]["path"] == "wiki/systems/openmemory-ce-limits.md"
+
+
+def test_search_wiki_lexical_expands_cjk_domain_terms():
+    assert tm_core.search_wiki("记忆库备份策略", size=1, include_sources=False)[0]["path"] == "wiki/operations/mem0-backup.md"
+    assert tm_core.search_wiki("虎哥个人资料", size=1, include_sources=False)[0]["path"] == "wiki/person/tiger.md"
+    assert tm_core.search_wiki("变基出现冲突怎么办", size=1, include_sources=True)[0]["path"] == "AGENTS.md"
+
+
+def test_primary_scope_routes_chinese_commit_push_to_lessons():
+    assert tm_core.primary_search_scope("提交后忘记推送") == "lessons"
+
+
 # ---------------------------------------------------------------------------
 # git_session_status — phantom detection (added 2026-05-16)
 # Background: stat cache drift on cross-fs (WSL 9P, Windows mount, CRLF/LF)

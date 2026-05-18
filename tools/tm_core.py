@@ -1187,7 +1187,7 @@ def embed_one(text: str, *, timeout: int | None = None) -> list[float]:
 # ---------- Wiki search (file-based) ----------
 
 _SEARCH_ROOTS = {
-    "wiki": ("wiki",),
+    "wiki": ("wiki", "AGENTS.md"),
     "sources": ("sources",),
     "inbox": ("inbox",),
 }
@@ -1195,16 +1195,103 @@ _SEARCH_EXTS = {".md", ".txt"}
 _SEARCH_FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 _SEARCH_ALIASES_INLINE_RE = re.compile(r'^aliases:\s*\[(.+?)\]\s*$', re.MULTILINE)
 _SEARCH_ALIAS_ITEM_RE = re.compile(r'"([^"]*)"|\'([^\']*)\'')
+_SEARCH_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_SEARCH_AGGREGATE_REPORT_PATHS = {
+    "wiki/systems/memory-retrieval-eval.md",
+}
+_SEARCH_CJK_STOP_TERMS = {
+    "如何",
+    "怎么",
+    "怎么办",
+    "方法",
+    "步骤",
+    "能力",
+    "这样做",
+}
+_SEARCH_CJK_SYNONYMS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("提交", ("提交", "commit")),
+    ("推送", ("推送", "push")),
+    ("钩子", ("钩子", "hook")),
+    ("绕过", ("绕过", "bypass", "no-verify", "no verify")),
+    ("记忆库", ("记忆库", "mem0", "openmemory")),
+    ("备份", ("备份", "backup")),
+    ("策略", ("策略", "retention", "恢复")),
+    ("虎哥", ("虎哥", "tiger", "giant")),
+    ("个人资料", ("个人资料", "profile", "person")),
+    ("豆豆", ("豆豆", "doodiu")),
+    ("品牌", ("品牌", "brand")),
+    ("定位", ("定位", "positioning")),
+    ("编码", ("编码", "coding")),
+    ("极简", ("极简", "simplicity", "最小")),
+    ("原则", ("原则", "principles")),
+    ("变基", ("变基", "rebase")),
+    ("冲突", ("冲突", "conflict")),
+    ("流式", ("流式", "streaming", "stream")),
+    ("语音", ("语音", "voice")),
+    ("图像", ("图像", "image")),
+    ("识别", ("识别", "recognition", "analyze", "describe")),
+    ("插件", ("插件", "plugin")),
+    ("发布", ("发布", "publish", "publishing")),
+    ("上线", ("上线", "publish", "publishing")),
+    ("调试", ("调试", "debug")),
+    ("安装", ("安装", "install", "installation")),
+    ("总结", ("总结", "summarization", "summary", "summarize")),
+    ("集成", ("集成", "integration", "integrate")),
+    ("供应链", ("供应链", "production", "supplier")),
+    ("工厂", ("工厂", "factory")),
+    ("列表", ("列表", "index")),
+)
 
 
-def _score_file_for_query(text_lower: str, tokens: list[str]) -> int:
-    """Return sum of (occurrences of each token). 0 if any token missing — AND semantics."""
+def search_query_term_groups(query: str) -> list[list[str]]:
+    """Return AND groups with OR alternatives for lightweight lexical recall.
+
+    The wiki search remains deterministic lexical search. This helper only
+    expands compact CJK task phrases into stable domain terms and English
+    aliases, so pages do not need to copy full eval/user queries into aliases.
+    """
+    groups: list[list[str]] = []
+    seen: set[tuple[str, ...]] = set()
+    for raw in re.split(r"\s+", (query or "").strip().lower()):
+        token = raw.strip()
+        if not token:
+            continue
+        token_groups: list[list[str]] = []
+        if _SEARCH_CJK_RE.search(token):
+            for cjk_term, alternatives in _SEARCH_CJK_SYNONYMS:
+                if cjk_term in token:
+                    token_groups.append([alt.lower() for alt in alternatives if alt])
+            for stop_term in _SEARCH_CJK_STOP_TERMS:
+                token = token.replace(stop_term, "")
+        if not token_groups and token:
+            token_groups.append([token])
+        for group in token_groups:
+            key = tuple(dict.fromkeys(item for item in group if item))
+            if key and key not in seen:
+                groups.append(list(key))
+                seen.add(key)
+    return groups
+
+
+def flatten_search_query_terms(term_groups: list[list[str]]) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    for group in term_groups:
+        for item in group:
+            if item and item not in seen:
+                terms.append(item)
+                seen.add(item)
+    return terms
+
+
+def _score_file_for_query(text_lower: str, term_groups: list[list[str]]) -> int:
+    """Return occurrence score. 0 if any required term group is missing."""
     total = 0
-    for t in tokens:
-        c = text_lower.count(t)
-        if c == 0:
-            return 0  # require every token to appear at least once
-        total += c
+    for group in term_groups:
+        group_score = sum(text_lower.count(term) for term in group if term)
+        if group_score == 0:
+            return 0
+        total += group_score
     return total
 
 
@@ -1243,6 +1330,8 @@ def primary_search_scope(query: str) -> str:
     mem0_wiki_triggers = ("promotion", "lifecycle", "duplicate", "compilation", "wiki")
     if any(trigger in q for trigger in lesson_triggers):
         return "lessons"
+    if ("提交" in q and "推送" in q) or "绕过钩子" in q or "绕过 hook" in q:
+        return "lessons"
     if any(trigger in q for trigger in onboarding_triggers):
         return "onboarding"
     if "mem0" in q and any(trigger in q for trigger in mem0_wiki_triggers):
@@ -1252,7 +1341,21 @@ def primary_search_scope(query: str) -> str:
     return "wiki"
 
 
-def _rank_search_hit(raw_score: int, rel: str, title: str, tokens: list[str], aliases: list[str] | None = None) -> float:
+def _group_in_text(group: list[str], text: str) -> bool:
+    return any(term in text for term in group if term)
+
+
+def _group_in_slug(group: list[str], slug_words: set[str]) -> bool:
+    return any(term in slug_words for term in group if term)
+
+
+def _rank_search_hit(
+    raw_score: int,
+    rel: str,
+    title: str,
+    term_groups: list[list[str]],
+    aliases: list[str] | None = None,
+) -> float:
     """Rank exact pages above aggregate pages without changing the AND contract."""
     score = float(raw_score)
     title_lower = title.lower()
@@ -1261,18 +1364,20 @@ def _rank_search_hit(raw_score: int, rel: str, title: str, tokens: list[str], al
 
     # Slug/title/alias hits are strong signals for canonical pages. Body-only
     # counts otherwise let indexes and overview pages dominate through repeats.
-    for token in tokens:
-        if token in slug_words:
+    for group in term_groups:
+        if _group_in_slug(group, slug_words):
             score += 30
-        if token in title_lower:
+        if _group_in_text(group, title_lower):
             score += 15
-        if token in alias_text:
+        if _group_in_text(group, alias_text):
             score += 20
-    if title_lower and all(token in title_lower for token in tokens):
+    if title_lower and all(_group_in_text(group, title_lower) for group in term_groups):
         score += 80
-    if alias_text and all(token in alias_text for token in tokens):
+    if alias_text and all(_group_in_text(group, alias_text) for group in term_groups):
         score += 40
 
+    if rel in _SEARCH_AGGREGATE_REPORT_PATHS:
+        score *= 0.05
     if rel.endswith("/index.md"):
         score *= 0.2
     if rel.startswith("wiki/operations/") and "dashboard" in rel:
@@ -1317,9 +1422,10 @@ def search_wiki(
     q = (query or "").strip()
     if not q:
         return []
-    tokens = [t.lower() for t in q.split() if t.strip()]
-    if not tokens:
+    term_groups = search_query_term_groups(q)
+    if not term_groups:
         return []
+    snippet_terms = flatten_search_query_terms(term_groups)
 
     roots: list[str] = list(_SEARCH_ROOTS["wiki"])
     if include_sources:
@@ -1332,7 +1438,8 @@ def search_wiki(
         root_path = REPO_ROOT / root
         if not root_path.exists():
             continue
-        for p in root_path.rglob("*"):
+        paths = [root_path] if root_path.is_file() else root_path.rglob("*")
+        for p in paths:
             if not p.is_file() or p.suffix.lower() not in _SEARCH_EXTS:
                 continue
             rel = p.relative_to(REPO_ROOT).as_posix()
@@ -1352,15 +1459,15 @@ def search_wiki(
                     break
             aliases = _extract_search_aliases(text)
             searchable = f"{rel} {_slug_search_text(rel)} {title} {' '.join(aliases)}\n{text}"
-            raw_score = _score_file_for_query(searchable.lower(), tokens)
+            raw_score = _score_file_for_query(searchable.lower(), term_groups)
             if raw_score == 0:
                 continue
-            score = _rank_search_hit(raw_score, rel, title, tokens, aliases)
+            score = _rank_search_hit(raw_score, rel, title, term_groups, aliases)
             results.append({
                 "path": rel,
                 "score": score,
                 "title": title,
-                "snippet": _best_snippet(text, tokens),
+                "snippet": _best_snippet(text, snippet_terms),
             })
 
     results.sort(key=lambda r: (-r["score"], r["path"]))

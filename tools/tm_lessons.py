@@ -26,6 +26,8 @@ import re
 import sys
 from typing import List, Tuple
 
+import tm_core
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 LESSONS_DIR = REPO_ROOT / "wiki" / "self-evolution" / "lessons"
 LOG_DIR = REPO_ROOT / ".tmp"
@@ -93,16 +95,17 @@ def _score_lesson(text: str, query_tokens: List[str]) -> Tuple[int, str, List[st
     aliases_lc = " ".join(aliases).lower()
     body_lc = body.lower()
 
+    term_groups = tm_core.search_query_term_groups(" ".join(query_tokens))
     score = 0
-    for tok in query_tokens:
-        tok_lc = tok.lower()
-        if not tok_lc:
+    for group in term_groups:
+        title_hits = sum(1 for term in group if term and term in title_lc)
+        alias_hits = sum(1 for term in group if term and term in aliases_lc)
+        body_hits = sum(body_lc.count(term) for term in group if term)
+        if not (title_hits or alias_hits or body_hits):
             continue
-        if tok_lc in title_lc:
-            score += 5
-        if tok_lc in aliases_lc:
-            score += 3
-        score += body_lc.count(tok_lc)
+        score += title_hits * 5
+        score += alias_hits * 3
+        score += body_hits
     return score, title, aliases
 
 
@@ -110,7 +113,7 @@ def _excerpt(text: str, query_tokens: List[str], width: int = 80) -> str:
     """Return a short excerpt around the first query token hit, or first line."""
     fm, body = _split_frontmatter(text)
     body_lc = body.lower()
-    for tok in query_tokens:
+    for tok in tm_core.flatten_search_query_terms(tm_core.search_query_term_groups(" ".join(query_tokens))):
         idx = body_lc.find(tok.lower())
         if idx >= 0:
             start = max(0, idx - width // 3)
