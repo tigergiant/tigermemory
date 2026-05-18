@@ -34,6 +34,11 @@ def _query_hash(query: Any) -> str:
     return hashlib.sha256(str(query or "").encode("utf-8")).hexdigest()[:12]
 
 
+def _row_query_hash(row: dict[str, Any]) -> str:
+    value = str(row.get("query_hash") or "").strip()
+    return value or _query_hash(row.get("query"))
+
+
 def _row_run_id(row: dict[str, Any]) -> str | None:
     value = row.get("run_id")
     trace = row.get("trace")
@@ -112,6 +117,19 @@ def _duration_ms(row: dict[str, Any]) -> float | None:
     return None
 
 
+def _percentile(values: list[float], percentile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return round(ordered[0], 2)
+    rank = (len(ordered) - 1) * (percentile / 100.0)
+    lower = int(rank)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = rank - lower
+    return round(ordered[lower] * (1 - weight) + ordered[upper] * weight, 2)
+
+
 def _query_class(row: dict[str, Any]) -> str:
     trace = row.get("trace")
     if isinstance(trace, dict) and trace.get("query_class"):
@@ -146,7 +164,7 @@ def compact_row(row: dict[str, Any], *, include_query: bool = False) -> dict[str
         "trace_id": str(row.get("trace_id") or ""),
         "ts": str(row.get("ts") or ""),
         "status": str(row.get("status") or "unknown"),
-        "query_hash": _query_hash(row.get("query")),
+        "query_hash": _row_query_hash(row),
         "query_class": _query_class(row),
         "duration_ms": _duration_ms(row),
         "evidence_count": len(evidence),
@@ -157,7 +175,7 @@ def compact_row(row: dict[str, Any], *, include_query: bool = False) -> dict[str
     }
     if run_id:
         item["run_id"] = run_id
-    if include_query:
+    if include_query and row.get("query") is not None:
         item["query"] = tm_answer.redact_secrets(str(row.get("query") or ""))
     return item
 
@@ -204,7 +222,10 @@ def summarize_rows(
         "llm_counts": dict(sorted(llm_counts.items())),
         "duration_ms": {
             "count": len(durations),
+            "min": round(min(durations), 2) if durations else None,
             "avg": round(sum(durations) / len(durations), 2) if durations else None,
+            "p50": _percentile(durations, 50),
+            "p95": _percentile(durations, 95),
             "max": round(max(durations), 2) if durations else None,
         },
         "evidence_gate": {

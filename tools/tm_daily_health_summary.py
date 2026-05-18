@@ -205,6 +205,17 @@ PROMPT_AUDIT_TARGETS = (
             "brand",
         ),
     },
+    {
+        "id": "memory-answer-evidence-policy",
+        "path": "wiki/systems/memory-answer-evidence-policy.md",
+        "description": "Memory Answer evidence authority and trace privacy policy",
+        "markers": (
+            "canonical_wiki",
+            "mem0_recent",
+            "TM_ANSWER_TRACE_RAW_QUERY",
+            "--disable-trace-write",
+        ),
+    },
 )
 ROLE_IDENTITY_COVERAGE_PATH = "wiki/systems/tigermemory-agent-access.md"
 
@@ -435,6 +446,7 @@ def compact_trace_summary(summary: dict[str, Any] | None, failures: dict[str, An
         "run_id_missing_count": summary.get("run_id_missing_count"),
         "status_counts": summary.get("status_counts") or {},
         "llm_counts": summary.get("llm_counts") or {},
+        "duration_ms": summary.get("duration_ms") or {},
         "failure_count": failures.get("failure_count", 0),
     }
 

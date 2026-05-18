@@ -77,8 +77,77 @@ def test_memory_answer_core_not_found_skips_llm(monkeypatch, tmp_path):
     assert calls == []
     trace_row = json.loads((tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()[-1])
     assert trace_row["run_id"] == "unit-run-hidden"
+    assert "query" not in trace_row
+    assert trace_row["query_hash"]
     assert trace_row["trace"]["run_id"] == "unit-run-hidden"
     assert trace_row["trace"]["query_class"] == "recall"
+    assert "expanded_queries" not in trace_row["trace"]
+    assert trace_row["trace"]["expanded_query_hashes"]
+    assert "query" not in trace_row["trace"]["calls"][0]
+    assert trace_row["trace"]["calls"][0]["query_hash"]
+
+
+def test_memory_answer_core_can_disable_trace_write(monkeypatch, tmp_path):
+    calls = []
+    trace_path = tmp_path / "trace.jsonl"
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", trace_path)
+    monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", lambda *_args, **_kwargs: _search_result())
+    monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", lambda *_args: calls.append("llm"))
+
+    result = tm_answer.memory_answer_core("sensitive query", scope="wiki", write_trace=False)
+
+    assert result["status"] == "not_found"
+    assert not trace_path.exists()
+    assert calls == []
+
+
+def test_expand_queries_reads_registry(monkeypatch, tmp_path):
+    registry = tmp_path / "query_expansions.json"
+    registry.write_text(
+        json.dumps([{
+            "id": "unit",
+            "patterns": ["unit trigger"],
+            "expansions": ["unit expanded target"],
+        }], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tm_answer, "QUERY_EXPANSION_REGISTRY", registry)
+
+    assert "unit expanded target" in tm_answer.expand_queries("please use unit trigger")
+
+
+def test_conflict_scan_reads_registry(monkeypatch, tmp_path):
+    registry = tmp_path / "conflict_patterns.json"
+    registry.write_text(
+        json.dumps([{
+            "id": "unit-status",
+            "positive": ["unit-done"],
+            "negative": ["unit-pending"],
+        }], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tm_answer, "CONFLICT_PATTERN_REGISTRY", registry)
+
+    result = tm_answer.scan_conflicts(
+        "unit conflict",
+        [{"id": "e1", "title": "status", "excerpt": "unit-done and unit-pending"}],
+        "conflict_audit",
+    )
+
+    assert result["conflict"] is True
+    assert any(item["name"] == "unit-status" for item in result["conflicts"])
+
+
+def test_best_excerpt_prefers_distinct_query_terms_over_repeats():
+    text = "\n\n".join([
+        "## P4 状态记录\n\ntrace trace trace trace trace trace trace trace trace",
+        "## P2 完成报告\n\nP1 P2 trace replay summary failures 已完成。",
+    ])
+
+    excerpt = tm_answer._best_excerpt(text, "Memory Answer 开发计划 P1 P2 trace replay", "")
+
+    assert "P2 完成报告" in excerpt
+    assert excerpt.startswith("## P2 完成报告")
 
 
 def test_memory_answer_core_drops_unsupported_claims(monkeypatch, tmp_path):

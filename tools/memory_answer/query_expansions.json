@@ -1,0 +1,29 @@
+[
+  {
+    "id": "known-debt",
+    "patterns": ["known debt", "已知债", "每日巡检 债", "daily health debt"],
+    "expansions": ["每日健康巡检 已知债务"],
+    "source": "real_failure",
+    "owner": "codex",
+    "last_verified": "2026-05-19",
+    "notes": "Daily-health known debt questions should land on the checklist and known-debt pages."
+  },
+  {
+    "id": "p5-2-review-only",
+    "patterns": ["p5.2 review-only", "p5.2 只读", "p5.2 自动下单", "p5.2 交易建议"],
+    "expansions": ["P5.2 L1 review-only trade suggestion hold_and_monitor 不触发 MiniQMT 券商下单"],
+    "source": "real_failure",
+    "owner": "codex",
+    "last_verified": "2026-05-19",
+    "notes": "Preserve the L1 review-only investment boundary."
+  },
+  {
+    "id": "mem0-write-readback",
+    "patterns": ["verify_memory_id", "direct_readback", "mem0 id"],
+    "expansions": ["verify_memory_id write_memory direct_readback Mem0 id"],
+    "source": "real_failure",
+    "owner": "codex",
+    "last_verified": "2026-05-19",
+    "notes": "Route write_memory closeout verification questions toward Mem0 id readback evidence."
+  }
+]

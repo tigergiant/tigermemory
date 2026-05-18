@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import datetime
+import hashlib
 import json
+import os
 import re
 import sys
 import time
@@ -15,6 +18,9 @@ import tm_core
 import tm_search
 
 TRACE_LOG = tm_core.REPO_ROOT / ".tmp" / "memory-answer-trace.jsonl"
+QUERY_EXPANSION_REGISTRY = tm_core.REPO_ROOT / "tools" / "memory_answer" / "query_expansions.json"
+CONFLICT_PATTERN_REGISTRY = tm_core.REPO_ROOT / "tools" / "memory_answer" / "conflict_patterns.json"
+TRACE_RAW_QUERY_ENV = "TM_ANSWER_TRACE_RAW_QUERY"
 ANSWER_STATUSES = {"ok", "not_found", "conflict", "error"}
 
 SECRET_PATTERNS = [
@@ -69,6 +75,24 @@ def redact_secrets(text: str) -> str:
     for pattern in SECRET_PATTERNS:
         value = pattern.sub("[REDACTED]", value)
     return value
+
+
+def query_hash(query: Any) -> str:
+    return hashlib.sha256(redact_secrets(str(query or "")).encode("utf-8")).hexdigest()[:12]
+
+
+def _load_registry(path: Any) -> list[dict[str, Any]]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def _trace_raw_query_enabled() -> bool:
+    return str(os.environ.get(TRACE_RAW_QUERY_ENV) or "").strip().lower() in {"1", "true", "yes", "debug"}
 
 
 def normalize_run_id(run_id: str | None) -> str | None:
@@ -128,7 +152,9 @@ def _best_excerpt(text: str, query: str, fallback: str, max_chars: int = 900) ->
                 heading_bonus = 3
         lower = candidate.lower()
         matched = [token for token in tokens if token in lower]
-        score = len(matched) * 10 + sum(lower.count(token) for token in tokens)
+        unique_matched = set(matched)
+        repeat_signal = min(sum(lower.count(token) for token in unique_matched), 8)
+        score = len(unique_matched) * 100 + repeat_signal
         score += heading_bonus
         if score:
             scored.append((score, -idx, candidate))
@@ -340,6 +366,13 @@ def expand_queries(query: str) -> list[str]:
     q = query.strip()
     lower = q.lower()
     expanded = [q]
+    for rule in _load_registry(QUERY_EXPANSION_REGISTRY):
+        patterns = rule.get("patterns")
+        expansions = rule.get("expansions")
+        if not isinstance(patterns, list) or not isinstance(expansions, list):
+            continue
+        if any(str(pattern).strip() and str(pattern).lower() in lower for pattern in patterns):
+            expanded.extend(str(item) for item in expansions if str(item).strip())
     if "known debt" in lower or "已知债" in q or ("每日巡检" in q and "债" in q):
         expanded.append("每日健康巡检 已知债务")
     if "p5.2" in lower and (
@@ -455,9 +488,8 @@ def _find_terms(text: str, terms: tuple[str, ...]) -> list[str]:
     return [term for term in terms if term.lower() in lower]
 
 
-def scan_conflicts(query: str, evidence: list[dict[str, Any]], query_class: str) -> dict[str, Any]:
-    """Lightweight deterministic conflict scan for explicit conflict questions."""
-    checks = [
+def _base_conflict_checks() -> list[dict[str, Any]]:
+    return [
         {
             "name": "order_execution_boundary",
             "positive": ("小额规则内自动下单", "真实下单", "触发 miniqmt", "券商下单", "buy/sell trigger"),
@@ -474,6 +506,27 @@ def scan_conflicts(query: str, evidence: list[dict[str, Any]], query_class: str)
             "negative": ("commit/push pending", "commit/push：pending", "未 push", "awaiting push"),
         },
     ]
+
+
+def _load_conflict_checks() -> list[dict[str, Any]]:
+    checks = _base_conflict_checks()
+    for rule in _load_registry(CONFLICT_PATTERN_REGISTRY):
+        name = str(rule.get("id") or rule.get("name") or "").strip()
+        positive = rule.get("positive")
+        negative = rule.get("negative")
+        if not name or not isinstance(positive, list) or not isinstance(negative, list):
+            continue
+        checks.append({
+            "name": name,
+            "positive": tuple(str(item) for item in positive if str(item).strip()),
+            "negative": tuple(str(item) for item in negative if str(item).strip()),
+        })
+    return checks
+
+
+def scan_conflicts(query: str, evidence: list[dict[str, Any]], query_class: str) -> dict[str, Any]:
+    """Lightweight deterministic conflict scan for explicit conflict questions."""
+    checks = _load_conflict_checks()
     text_query = query.lower()
     should_escalate = query_class == "conflict_audit" or any(
         marker in text_query for marker in ("冲突", "矛盾", "conflict", "是否一致")
@@ -521,13 +574,39 @@ def _write_trace(row: dict[str, Any]) -> None:
         return
 
 
+def _sanitize_trace_for_storage(trace: dict[str, Any], *, include_raw_query: bool) -> dict[str, Any]:
+    stored = copy.deepcopy(trace)
+    expanded_queries = stored.get("expanded_queries")
+    if isinstance(expanded_queries, list):
+        stored["expanded_query_hashes"] = [query_hash(item) for item in expanded_queries]
+        if include_raw_query:
+            stored["expanded_queries"] = [redact_secrets(str(item)) for item in expanded_queries]
+        else:
+            stored.pop("expanded_queries", None)
+
+    calls = stored.get("calls")
+    if isinstance(calls, list):
+        for call in calls:
+            if not isinstance(call, dict) or "query" not in call:
+                continue
+            call["query_hash"] = query_hash(call.get("query"))
+            if include_raw_query:
+                call["query"] = redact_secrets(str(call.get("query") or ""))
+            else:
+                call.pop("query", None)
+    return stored
+
+
 def _write_result_trace(result: dict[str, Any], trace: dict[str, Any], query: str) -> None:
+    include_raw_query = _trace_raw_query_enabled()
     row = {
         "ts": datetime.datetime.now(tm_core.TZ_CN).isoformat(),
         **result,
-        "trace": trace,
-        "query": query,
+        "trace": _sanitize_trace_for_storage(trace, include_raw_query=include_raw_query),
+        "query_hash": query_hash(query),
     }
+    if include_raw_query:
+        row["query"] = redact_secrets(query)
     _write_trace(row)
 
 
@@ -539,6 +618,7 @@ def memory_answer_core(
     *,
     include_trace: bool = True,
     run_id: str | None = None,
+    write_trace: bool = True,
 ) -> dict[str, Any]:
     """Answer a memory query from expanded evidence, with traceable grounding."""
     started = time.monotonic()
@@ -607,7 +687,8 @@ def memory_answer_core(
             "trace_id": trace_id,
             "trace": trace if include_trace else None,
         }
-        _write_result_trace(result, trace, q)
+        if write_trace:
+            _write_result_trace(result, trace, q)
         return result
 
     conflict_scan = scan_conflicts(q, evidence, query_class)
@@ -637,7 +718,8 @@ def memory_answer_core(
             "trace_id": trace_id,
             "trace": trace if include_trace else None,
         }
-        _write_result_trace(result, trace, q)
+        if write_trace:
+            _write_result_trace(result, trace, q)
         return result
 
     ok, parsed = _call_memory_answer_llm(q, evidence)
@@ -656,7 +738,8 @@ def memory_answer_core(
             "trace_id": trace_id,
             "trace": trace if include_trace else None,
         }
-        _write_result_trace(result, trace, q)
+        if write_trace:
+            _write_result_trace(result, trace, q)
         return result
 
     if not isinstance(parsed, dict):
@@ -687,7 +770,8 @@ def memory_answer_core(
     }
     if not result["summary"]:
         result["summary"] = "已基于证据生成回答。" if status == "ok" else "未能生成可用答案。"
-    _write_result_trace(result, trace, q)
+    if write_trace:
+        _write_result_trace(result, trace, q)
     return result
 
 
@@ -745,8 +829,9 @@ def cmd_answer(args: argparse.Namespace) -> int:
         scope=args.scope,
         top_k=args.top_k,
         max_evidence=args.max_evidence,
-        include_trace=not args.no_trace,
+        include_trace=not args.no_trace_payload,
         run_id=args.run_id,
+        write_trace=not args.disable_trace_write,
     )
     if args.json:
         indent = None if args.compact else 2
@@ -769,7 +854,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
     answer_p.add_argument("--top-k", type=int, default=5)
     answer_p.add_argument("--max-evidence", type=int, default=6)
     answer_p.add_argument("--run-id", default=None, help="optional run id for grouping trace rows")
-    answer_p.add_argument("--no-trace", action="store_true", help="omit trace payload from the response")
+    answer_p.add_argument(
+        "--no-trace-payload",
+        dest="no_trace_payload",
+        action="store_true",
+        help="omit trace payload from the response; local sanitized trace is still written",
+    )
+    answer_p.add_argument(
+        "--no-trace",
+        dest="no_trace_payload",
+        action="store_true",
+        help="deprecated alias for --no-trace-payload",
+    )
+    answer_p.add_argument(
+        "--disable-trace-write",
+        action="store_true",
+        help="do not append a local trace row",
+    )
     answer_p.add_argument("--json", action="store_true", help="print the full response as JSON")
     answer_p.add_argument("--compact", action="store_true", help="print compact JSON when --json is used")
     answer_p.set_defaults(func=cmd_answer)

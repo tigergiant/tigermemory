@@ -221,6 +221,7 @@ def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
         "run_id_missing_count": 0,
         "status_counts": {"ok": 9, "not_found": 1},
         "llm_counts": {"ok": 3, "missing": 7},
+        "duration_ms": {"count": 10, "avg": 220.0, "p50": 180.0, "p95": 420.0, "max": 450.0},
     }), encoding="utf-8")
     health = tmp_path / "health.json"
     health.write_text(json.dumps({
@@ -287,6 +288,7 @@ def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
     assert summary["health_probe"]["mem0_api_latency_ms"] == 123.4
     assert summary["answer_eval"]["status_correct"] == 25
     assert summary["answer_trace"]["failure_count"] == 1
+    assert summary["answer_trace"]["duration_ms"]["p95"] == 420.0
     assert summary["prompt_audit"]["status"] == "ok"
     assert summary["prompt_audit"]["check_count"] == 8
     assert summary["prompt_audit"]["agent_count"] == 13

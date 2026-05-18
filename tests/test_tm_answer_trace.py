@@ -22,6 +22,7 @@ def _row(
     status: str,
     query: str = "daily-health known debt",
     run_id: str | None = None,
+    duration_ms: float | None = 123.4,
 ) -> dict:
     row = {
         "ts": "2026-05-17T21:30:00+08:00",
@@ -44,7 +45,6 @@ def _row(
         }],
         "trace": {
             "query_class": "synthesis",
-            "duration_ms": 123.4,
             "selected_evidence": ["e1"],
             "calls": [
                 {"tool": "search_tigermemory", "query": query, "group_counts": {"wiki": 1}},
@@ -55,6 +55,8 @@ def _row(
             "conflict_scan": {"conflict": status == "conflict"},
         },
     }
+    if duration_ms is not None:
+        row["trace"]["duration_ms"] = duration_ms
     if run_id:
         row["run_id"] = run_id
         row["trace"]["run_id"] = run_id
@@ -76,6 +78,29 @@ def test_summary_counts_status_llm_and_gate(tmp_path):
     assert report["evidence_gate"] == {"kept": 3, "dropped": 3}
     assert report["duration_ms"]["count"] == 3
     assert report["duration_ms"]["avg"] == 123.4
+    assert report["duration_ms"]["p50"] == 123.4
+    assert report["duration_ms"]["p95"] == 123.4
+
+
+def test_summary_duration_percentiles_ignore_missing_values(tmp_path):
+    log = tmp_path / "trace.jsonl"
+    _write_jsonl(log, [
+        _row("t-1", "ok", duration_ms=100.0),
+        _row("t-2", "ok", duration_ms=200.0),
+        _row("t-3", "ok", duration_ms=300.0),
+        _row("t-4", "ok", duration_ms=400.0),
+        _row("t-missing", "ok", duration_ms=None),
+    ])
+
+    rows, invalid = tm_answer_trace.load_trace_rows(log)
+    report = tm_answer_trace.summarize_rows(rows, invalid)
+
+    assert report["duration_ms"]["count"] == 4
+    assert report["duration_ms"]["avg"] == 250.0
+    assert report["duration_ms"]["min"] == 100.0
+    assert report["duration_ms"]["p50"] == 250.0
+    assert report["duration_ms"]["p95"] == 385.0
+    assert report["duration_ms"]["max"] == 400.0
 
 
 def test_failures_include_non_ok_without_query_text_by_default(tmp_path):
@@ -89,6 +114,20 @@ def test_failures_include_non_ok_without_query_text_by_default(tmp_path):
     assert failures[0]["status"] == "not_found"
     assert "query" not in failures[0]
     assert failures[0]["query_hash"]
+
+
+def test_compact_row_uses_stored_query_hash_without_raw_query(tmp_path):
+    log = tmp_path / "trace.jsonl"
+    row = _row("t-not-found", "not_found")
+    row.pop("query", None)
+    row["query_hash"] = "abc123hash"
+    _write_jsonl(log, [row])
+
+    rows, _invalid = tm_answer_trace.load_trace_rows(log)
+    compact = tm_answer_trace.compact_row(rows[0], include_query=True)
+
+    assert compact["query_hash"] == "abc123hash"
+    assert "query" not in compact
 
 
 def test_summary_latest_zero_omits_latest_rows(tmp_path):

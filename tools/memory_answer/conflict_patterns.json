@@ -1,0 +1,29 @@
+[
+  {
+    "id": "project-status",
+    "positive": ["done", "closed", "completed", "已完成", "已关闭", "已结项"],
+    "negative": ["planned", "pending", "todo", "计划", "待办", "未完成"],
+    "source": "P5-review",
+    "owner": "codex",
+    "last_verified": "2026-05-19",
+    "notes": "Catch planned/done ambiguity in roadmap, report, and daily-health evidence."
+  },
+  {
+    "id": "read-only-write-boundary",
+    "positive": ["can write", "write-enabled", "可写", "允许写入", "直接写"],
+    "negative": ["read-only", "只读", "不得写入", "不写库"],
+    "source": "P5-review",
+    "owner": "codex",
+    "last_verified": "2026-05-19",
+    "notes": "Catch read-only versus write-capable boundary conflicts."
+  },
+  {
+    "id": "metric-drift",
+    "positive": ["80/80", "100%", "pass", "passed", "green"],
+    "negative": ["55/80", "63/80", "failed", "failure", "red", "yellow"],
+    "source": "P5-review",
+    "owner": "codex",
+    "last_verified": "2026-05-19",
+    "notes": "Catch obvious old/new metric drift only when the query asks for conflict or consistency."
+  }
+]
