@@ -62,6 +62,7 @@ def test_slice_fetch_text_caps_requested_size_to_default_limit():
     assert chunk == "bcd"
     assert meta["requested_max_chars"] == 99
     assert meta["max_fetch_chars"] == 3
+    assert meta["recommended_max_chars"] == 3
     assert meta["next_start"] == 4
 
 
