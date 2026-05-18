@@ -2,9 +2,11 @@
 """Evidence-first memory answer orchestration for tigermemory."""
 from __future__ import annotations
 
+import argparse
 import datetime
 import json
 import re
+import sys
 import time
 import uuid
 from typing import Any
@@ -663,3 +665,92 @@ def memory_answer_core(
         result["summary"] = "已基于证据生成回答。" if status == "ok" else "未能生成可用答案。"
     _write_trace({"ts": datetime.datetime.now(tm_core.TZ_CN).isoformat(), **result, "query": q})
     return result
+
+
+def _print_answer_text(result: dict[str, Any]) -> None:
+    status = str(result.get("status") or "error")
+    summary = str(result.get("summary") or "").strip()
+    answer = str(result.get("answer") or "").strip()
+    trace_id = str(result.get("trace_id") or "")
+
+    print(f"status: {status}")
+    if summary:
+        print(f"summary: {summary}")
+    if answer:
+        print("")
+        print(answer)
+
+    claims = [claim for claim in (result.get("claims") or []) if isinstance(claim, dict)]
+    if claims:
+        print("")
+        print("claims:")
+        for claim in claims:
+            support = ", ".join(str(item) for item in (claim.get("support") or []))
+            print(f"- {claim.get('id')}: {claim.get('text')} [{support}]")
+
+    evidence = [item for item in (result.get("evidence") or []) if isinstance(item, dict)]
+    if evidence:
+        print("")
+        print("evidence:")
+        for item in evidence:
+            source = item.get("source") or "unknown"
+            path = item.get("path") or ""
+            title = item.get("title") or ""
+            score = item.get("score")
+            score_text = f", score={score}" if score is not None else ""
+            print(f"- {item.get('id')}: {source} {path} {title}{score_text}".rstrip())
+
+    warnings = [str(w) for w in (result.get("warnings") or [])]
+    if warnings:
+        print("")
+        print("warnings:")
+        for warning in warnings:
+            print(f"- {warning}")
+
+    if trace_id:
+        print("")
+        print(f"trace_id: {trace_id}")
+
+
+def cmd_answer(args: argparse.Namespace) -> int:
+    result = memory_answer_core(
+        args.query,
+        scope=args.scope,
+        top_k=args.top_k,
+        max_evidence=args.max_evidence,
+        include_trace=not args.no_trace,
+    )
+    if args.json:
+        indent = None if args.compact else 2
+        sys.stdout.write(json.dumps(result, ensure_ascii=False, indent=indent, sort_keys=True) + "\n")
+    else:
+        _print_answer_text(result)
+    return 2 if result.get("status") == "error" else 0
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="tm_answer.py", description=__doc__)
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    answer_p = sub.add_parser("answer", help="answer one query with evidence and trace")
+    answer_p.add_argument("query", help="question to answer from tigermemory evidence")
+    answer_p.add_argument(
+        "--scope",
+        default="auto",
+        choices=("auto", "wiki", "lessons", "onboarding", "mem0", "all"),
+    )
+    answer_p.add_argument("--top-k", type=int, default=5)
+    answer_p.add_argument("--max-evidence", type=int, default=6)
+    answer_p.add_argument("--no-trace", action="store_true", help="omit trace payload from the response")
+    answer_p.add_argument("--json", action="store_true", help="print the full response as JSON")
+    answer_p.add_argument("--compact", action="store_true", help="print compact JSON when --json is used")
+    answer_p.set_defaults(func=cmd_answer)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_arg_parser().parse_args(argv)
+    return int(args.func(args))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
