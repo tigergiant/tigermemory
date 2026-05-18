@@ -19,6 +19,7 @@ Use mem0_reachable, mem0_api_reachable, mem0_api_latency_ms, and mem0_api_error 
 Run py tools/tm_answer_eval.py eval, py tools/tm_answer_trace.py summary, and py tools/tm_answer_trace.py failures.
 Run py tools/tm_memory_eval.py eval and py tools/tm_memory_eval.py eval --recall hybrid --embedding-base-url http://127.0.0.1:19190/v1.
 Run py tools/tm_daily_health_summary.py assemble with the health JSON and place the result under ## 机器可读摘要.
+Run py tools/tm_daily_health_summary.py validate-report and confirm schema_version and health_probe are present.
 Read wiki/operations/daily-health-known-debt.md and classify findings as new / known / resolved / worsened.
 Use git commit, git push, git pull --ff-only origin master, and write_memory at closeout.
 """
@@ -218,3 +219,81 @@ def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
     assert summary["retrieval_eval_lexical"]["hit3"] == 67
     assert summary["retrieval_eval_hybrid"]["hit1"] == 80
     assert summary["commit_sha"] == "abc123"
+
+
+def _daily_summary() -> dict:
+    return {
+        "schema_version": "daily-health-summary-v1",
+        "health_color": "yellow",
+        "blocking_count": 0,
+        "known_debt_count": 1,
+        "new_problem_count": 0,
+        "health_probe": {
+            "mem0_reachable": True,
+            "mem0_api_reachable": True,
+            "mem0_api_latency_ms": 123.4,
+            "mem0_api_error": None,
+        },
+        "known_debt_changes": {"new": 0, "known": 1, "resolved": 0, "worsened": 0},
+        "answer_eval": {"case_count": 25, "status_correct": 25},
+        "answer_trace": {"row_count": 10, "failure_count": 0},
+        "retrieval_eval_lexical": {"case_count": 80, "hit3": 67},
+        "retrieval_eval_hybrid": {"case_count": 80, "hit3": 80},
+        "commit_sha": "abc123",
+        "push_result": "pushed",
+    }
+
+
+def test_validate_daily_report_accepts_machine_summary_before_sources():
+    text = "\n".join([
+        "# daily",
+        "## 机器可读摘要",
+        json.dumps(_daily_summary(), ensure_ascii=False, sort_keys=True),
+        "## 来源",
+        "- live checks",
+    ])
+
+    report = tm_daily_health_summary.validate_daily_report(text, path="report.md")
+
+    assert report["schema_version"] == "daily-health-report-validation-v1"
+    assert report["status"] == "ok"
+    assert report["summary_present"] is True
+    assert report["missing_fields"] == []
+
+
+def test_validate_daily_report_rejects_missing_health_probe():
+    summary = _daily_summary()
+    summary.pop("health_probe")
+    text = "\n".join([
+        "# daily",
+        "## 机器可读摘要",
+        json.dumps(summary, ensure_ascii=False, sort_keys=True),
+        "## 来源",
+        "- live checks",
+    ])
+
+    report = tm_daily_health_summary.validate_daily_report(text, path="report.md")
+
+    assert report["status"] == "fail"
+    assert "health_probe" in report["missing_fields"]
+
+
+def test_cmd_validate_report_json_exit_codes(tmp_path, monkeypatch):
+    report_path = tmp_path / "daily.md"
+    report_path.write_text(
+        "\n".join([
+            "# daily",
+            "## 机器可读摘要",
+            json.dumps(_daily_summary(), ensure_ascii=False, sort_keys=True),
+            "## 来源",
+            "- live checks",
+        ]),
+        encoding="utf-8",
+    )
+    captured: list[str] = []
+    monkeypatch.setattr(tm_daily_health_summary.sys.stdout, "write", captured.append)
+
+    args = type("Args", (), {"path": str(report_path), "today": None, "json": True})()
+
+    assert tm_daily_health_summary.cmd_validate_report(args) == 0
+    assert json.loads("".join(captured))["status"] == "ok"

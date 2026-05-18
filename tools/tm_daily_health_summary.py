@@ -24,6 +24,31 @@ DEFAULT_KNOWN_DEBT = REPO_ROOT / "wiki/operations/daily-health-known-debt.md"
 RESOLVED_STATUSES = {"resolved", "closed", "done"}
 AUTOMATION_ID = "tigermemory-daily-health-scan"
 AUTOMATION_CONTRACT_SCHEMA = "daily-health-automation-contract-v1"
+DAILY_SUMMARY_SCHEMA = "daily-health-summary-v1"
+DAILY_REPORT_VALIDATION_SCHEMA = "daily-health-report-validation-v1"
+REQUIRED_DAILY_SUMMARY_FIELDS = (
+    "schema_version",
+    "health_color",
+    "blocking_count",
+    "known_debt_count",
+    "new_problem_count",
+    "health_probe",
+    "known_debt_changes",
+    "answer_eval",
+    "answer_trace",
+    "retrieval_eval_lexical",
+    "retrieval_eval_hybrid",
+    "commit_sha",
+    "push_result",
+)
+REQUIRED_HEALTH_PROBE_FIELDS = (
+    "mem0_reachable",
+    "mem0_api_reachable",
+    "mem0_api_latency_ms",
+    "mem0_api_error",
+)
+SUMMARY_HEADINGS = ("## 机器可读摘要", "## Machine-readable Summary")
+SOURCE_HEADINGS = ("## 来源", "## Sources")
 AUTOMATION_CONTRACT_CHECKS = (
     {
         "id": "self_contract_audit",
@@ -56,6 +81,11 @@ AUTOMATION_CONTRACT_CHECKS = (
         "markers": (".tmp/daily-health", "tm_daily_health_summary.py assemble", "机器可读摘要"),
     },
     {
+        "id": "report_validation",
+        "description": "daily report machine summary is validated after writing",
+        "markers": ("tm_daily_health_summary.py validate-report", "health_probe", "schema_version"),
+    },
+    {
         "id": "known_debt_flow",
         "description": "known debt is read and classified by state transition",
         "markers": ("daily-health-known-debt.md", "new / known / resolved / worsened"),
@@ -75,6 +105,11 @@ def _read_text(path: pathlib.Path) -> str:
 def default_automation_path() -> pathlib.Path:
     home = os.environ.get("USERPROFILE") or os.environ.get("HOME") or ""
     return pathlib.Path(home) / ".codex" / "automations" / AUTOMATION_ID / "automation.toml"
+
+
+def default_daily_report_path(today: str | None = None) -> pathlib.Path:
+    report_date = today or dt.date.today().isoformat()
+    return REPO_ROOT / "wiki" / "operations" / "daily-health" / f"{report_date}.md"
 
 
 def load_json_report(path: pathlib.Path | str) -> dict[str, Any]:
@@ -262,6 +297,74 @@ def current_commit_sha() -> str:
     return result.stdout.strip() or "unknown"
 
 
+def extract_machine_summary(text: str) -> tuple[dict[str, Any] | None, list[str]]:
+    lines = text.splitlines()
+    summary_index: int | None = None
+    source_index: int | None = None
+    errors: list[str] = []
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped in SUMMARY_HEADINGS and summary_index is None:
+            summary_index = idx
+        if stripped in SOURCE_HEADINGS and source_index is None:
+            source_index = idx
+    if summary_index is None:
+        return None, ["missing machine-readable summary section"]
+    if source_index is not None and source_index < summary_index:
+        errors.append("machine-readable summary must appear before sources")
+    end_index = source_index if source_index is not None and source_index > summary_index else len(lines)
+    for line in lines[summary_index + 1 : end_index]:
+        raw = line.strip()
+        if not raw or raw.startswith("```"):
+            continue
+        if not raw.startswith("{"):
+            continue
+        try:
+            summary = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            return None, [*errors, f"invalid machine summary JSON: {exc}"]
+        if not isinstance(summary, dict):
+            return None, [*errors, "machine summary JSON must be an object"]
+        return summary, errors
+    return None, [*errors, "missing machine summary JSON object"]
+
+
+def validate_daily_report(text: str, *, path: pathlib.Path | str | None = None) -> dict[str, Any]:
+    missing_sections: list[str] = []
+    if not any(heading in text for heading in SOURCE_HEADINGS):
+        missing_sections.append("sources")
+    summary, errors = extract_machine_summary(text)
+    missing_fields: list[str] = []
+    nested_missing_fields: list[str] = []
+    if summary is None:
+        missing_sections.append("machine-readable summary")
+    else:
+        missing_fields = [key for key in REQUIRED_DAILY_SUMMARY_FIELDS if key not in summary]
+        if summary.get("schema_version") != DAILY_SUMMARY_SCHEMA:
+            errors.append(f"schema_version must be {DAILY_SUMMARY_SCHEMA}")
+        health_probe = summary.get("health_probe")
+        if not isinstance(health_probe, dict):
+            nested_missing_fields.append("health_probe")
+        else:
+            nested_missing_fields.extend(
+                f"health_probe.{key}"
+                for key in REQUIRED_HEALTH_PROBE_FIELDS
+                if key not in health_probe
+            )
+    status = "ok" if not (missing_sections or missing_fields or nested_missing_fields or errors) else "fail"
+    return {
+        "schema_version": DAILY_REPORT_VALIDATION_SCHEMA,
+        "path": str(path) if path else None,
+        "status": status,
+        "missing_sections": sorted(set(missing_sections)),
+        "missing_fields": missing_fields,
+        "nested_missing_fields": nested_missing_fields,
+        "errors": errors,
+        "summary_present": summary is not None,
+        "summary_keys": sorted(summary.keys()) if isinstance(summary, dict) else [],
+    }
+
+
 def cmd_known_debt(args: argparse.Namespace) -> int:
     rows = load_known_debt(REPO_ROOT / args.file)
     today = dt.date.fromisoformat(args.today) if args.today else dt.date.today()
@@ -309,7 +412,7 @@ def cmd_assemble(args: argparse.Namespace) -> int:
     )
     health_probe = _optional_json(args.health_json)
     summary = {
-        "schema_version": "daily-health-summary-v1",
+        "schema_version": DAILY_SUMMARY_SCHEMA,
         "health_color": args.health_color,
         "blocking_count": args.blocking_count,
         "known_debt_count": known_debt["active_count"],
@@ -339,6 +442,35 @@ def cmd_assemble(args: argparse.Namespace) -> int:
     }
     sys.stdout.write(json.dumps(summary, ensure_ascii=False, sort_keys=True) + "\n")
     return 0
+
+
+def cmd_validate_report(args: argparse.Namespace) -> int:
+    path = pathlib.Path(args.path) if args.path else default_daily_report_path(args.today)
+    try:
+        report = validate_daily_report(_read_text(path), path=path)
+    except FileNotFoundError:
+        report = {
+            "schema_version": DAILY_REPORT_VALIDATION_SCHEMA,
+            "path": str(path),
+            "status": "fail",
+            "missing_sections": [],
+            "missing_fields": [],
+            "nested_missing_fields": [],
+            "errors": [f"report not found: {path}"],
+            "summary_present": False,
+            "summary_keys": [],
+        }
+    if args.json:
+        sys.stdout.write(json.dumps(report, ensure_ascii=False, sort_keys=True) + "\n")
+    elif report["status"] == "ok":
+        sys.stdout.write(f"ok: {report['path']} machine summary valid\n")
+    else:
+        sys.stdout.write(f"fail: {report['path']} machine summary invalid\n")
+        for key in ("missing_sections", "missing_fields", "nested_missing_fields", "errors"):
+            values = report.get(key) or []
+            if values:
+                sys.stdout.write(f"- {key}: {', '.join(values)}\n")
+    return 0 if report["status"] == "ok" else 1
 
 
 def main() -> None:
@@ -374,6 +506,12 @@ def main() -> None:
     assemble_p.add_argument("--push-result", default="pending")
     assemble_p.add_argument("--today", default=None, help="YYYY-MM-DD override for tests")
     assemble_p.set_defaults(func=cmd_assemble)
+
+    validate_p = sub.add_parser("validate-report", help="validate a daily-health report machine summary")
+    validate_p.add_argument("--path", default=None, help="daily report path; defaults to today's report")
+    validate_p.add_argument("--today", default=None, help="YYYY-MM-DD override when --path is omitted")
+    validate_p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    validate_p.set_defaults(func=cmd_validate_report)
 
     args = parser.parse_args()
     raise SystemExit(args.func(args))
