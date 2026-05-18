@@ -99,6 +99,18 @@ LINTER_DASHBOARDS = {
     "wiki/operations/backlinks-dashboard.md",
 }
 
+AUTO_GENERATED_DIRS = {
+    "wiki/investment/decision-log",
+}
+
+
+def is_auto_generated_path(rel_path: str) -> bool:
+    normalized = rel_path.replace("\\", "/").strip("/")
+    return any(
+        normalized == prefix or normalized.startswith(f"{prefix}/")
+        for prefix in AUTO_GENERATED_DIRS
+    )
+
 # Regex patterns
 TITLE_RE = re.compile(r"[A-Za-z0-9\u4e00-\u9fff _\-]{1,80}")
 SLUG_RE = re.compile(r"[a-z0-9\-]+")

@@ -55,6 +55,7 @@ import datetime
 import json
 import os
 import re
+import subprocess
 import sys
 from typing import Any
 
@@ -777,7 +778,7 @@ def lint_repo(path: str | None = None) -> dict[str, Any]:
             if page_file.name == "index.md":
                 continue
             rel = f"wiki/{partition}/{page_file.name}"
-            if rel in tm_core.LINTER_DASHBOARDS:
+            if rel in tm_core.LINTER_DASHBOARDS or tm_core.is_auto_generated_path(rel):
                 continue
             if page_file.stem not in index_content:
                 orphan_pages.append(rel)
@@ -809,7 +810,7 @@ def lint_repo(path: str | None = None) -> dict[str, Any]:
             if page_file.name == "index.md":
                 continue
             rel = f"wiki/{partition}/{page_file.name}"
-            if rel in tm_core.LINTER_DASHBOARDS:
+            if rel in tm_core.LINTER_DASHBOARDS or tm_core.is_auto_generated_path(rel):
                 continue
             content = page_file.read_text(encoding="utf-8")
             if "## 来源" not in content:
@@ -828,6 +829,50 @@ def lint_repo(path: str | None = None) -> dict[str, Any]:
         "missing_sources": missing_sources,
         "partition_mismatches": partition_mismatches,
     }
+
+
+@mcp.tool()
+def single_stock_deep_dive(ticker: str, trade_date: str) -> dict[str, Any]:
+    """Run TradingAgents single-stock deep research and return a JSON summary.
+
+    The tool is intentionally single-stock only. It writes detailed reports to
+    wiki/investment/decision-log through TradingAgents' CLI adapter and returns
+    the final rating, report paths, provider trace, warnings, and cost estimate.
+    """
+    _require_writer()
+    ta_root = os.environ.get("TRADINGAGENTS_ROOT", "/home/giant/workspaces/TradingAgents")
+    python_bin = os.environ.get("TRADINGAGENTS_PYTHON", os.path.join(ta_root, ".venv", "bin", "python"))
+    env = os.environ.copy()
+    env["PYTHONPATH"] = ta_root
+    result = subprocess.run(
+        [python_bin, "tools/tm_adapter.py", ticker, trade_date],
+        cwd=ta_root,
+        capture_output=True,
+        text=True,
+        timeout=int(os.environ.get("TRADINGAGENTS_MCP_TIMEOUT_SEC", "1800")),
+        env=env,
+    )
+    if result.returncode != 0:
+        return {
+            "ok": False,
+            "returncode": result.returncode,
+            "error": (result.stderr or result.stdout)[-2000:],
+            "stdout_tail": result.stdout[-2000:],
+            "stderr_tail": result.stderr[-2000:],
+        }
+    try:
+        payload = json.loads(result.stdout.strip().splitlines()[-1])
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"invalid tm_adapter JSON output: {exc}",
+            "stdout_tail": result.stdout[-2000:],
+            "stderr_tail": result.stderr[-2000:],
+        }
+    if result.stderr.strip():
+        payload.setdefault("warnings", []).append("stderr_nonempty")
+        payload["stderr_tail"] = result.stderr[-2000:]
+    return payload
 
 
 # ---------- Daily Digest Review Tools ----------
