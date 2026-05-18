@@ -67,8 +67,8 @@ AUTOMATION_CONTRACT_CHECKS = (
     },
     {
         "id": "answer_quality",
-        "description": "memory_answer eval and trace checks are part of the scan",
-        "markers": ("tm_answer_eval.py eval", "tm_answer_trace.py summary", "tm_answer_trace.py failures"),
+        "description": "memory_answer eval and trace checks are grouped by the current scan run id",
+        "markers": ("tm_answer_eval.py eval", "tm_answer_trace.py summary", "tm_answer_trace.py failures", "--run-id", "--status error"),
     },
     {
         "id": "retrieval_quality",
@@ -242,6 +242,7 @@ def compact_answer_eval(report: dict[str, Any] | None) -> dict[str, Any] | None:
         "not_found_precision",
         "expected_conflict_case_count",
         "conflict_correct",
+        "run_id",
     )
     out = {key: report.get(key) for key in keys if key in report}
     out["failure_count"] = len(failure_ids)
@@ -258,6 +259,9 @@ def compact_trace_summary(summary: dict[str, Any] | None, failures: dict[str, An
         "row_count": summary.get("row_count"),
         "invalid_row_count": summary.get("invalid_row_count"),
         "trace_present_count": summary.get("trace_present_count"),
+        "selected_run_id": summary.get("selected_run_id") or failures.get("selected_run_id"),
+        "run_id_counts": summary.get("run_id_counts") or {},
+        "run_id_missing_count": summary.get("run_id_missing_count"),
         "status_counts": summary.get("status_counts") or {},
         "llm_counts": summary.get("llm_counts") or {},
         "failure_count": failures.get("failure_count", 0),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import pathlib
 import sys
 
@@ -47,15 +48,19 @@ def test_memory_answer_core_expands_evidence_and_generates_answer(monkeypatch, t
         }),
     )
 
-    result = tm_answer.memory_answer_core("write_memory toolkit", scope="wiki")
+    result = tm_answer.memory_answer_core("write_memory toolkit", scope="wiki", run_id="unit-run-1")
 
     assert result["status"] == "ok"
+    assert result["run_id"] == "unit-run-1"
     assert result["claims"][0]["support"] == ["e1"]
     assert result["evidence"][0]["id"] == "e1"
     assert result["evidence"][0]["authority"] >= 90.0
     assert result["evidence"][0]["source_role"] == "canonical_wiki"
     assert result["trace_id"]
+    assert result["trace"]["run_id"] == "unit-run-1"
     assert (tmp_path / "trace.jsonl").exists()
+    trace_row = json.loads((tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert trace_row["run_id"] == "unit-run-1"
 
 
 def test_memory_answer_core_not_found_skips_llm(monkeypatch, tmp_path):
@@ -64,11 +69,16 @@ def test_memory_answer_core_not_found_skips_llm(monkeypatch, tmp_path):
     monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", lambda *_args, **_kwargs: _search_result())
     monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", lambda *_args: calls.append("llm"))
 
-    result = tm_answer.memory_answer_core("no such memory", scope="wiki")
+    result = tm_answer.memory_answer_core("no such memory", scope="wiki", include_trace=False, run_id="unit-run-hidden")
 
     assert result["status"] == "not_found"
     assert result["evidence"] == []
+    assert result["trace"] is None
     assert calls == []
+    trace_row = json.loads((tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert trace_row["run_id"] == "unit-run-hidden"
+    assert trace_row["trace"]["run_id"] == "unit-run-hidden"
+    assert trace_row["trace"]["query_class"] == "recall"
 
 
 def test_memory_answer_core_drops_unsupported_claims(monkeypatch, tmp_path):

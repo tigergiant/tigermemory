@@ -592,6 +592,7 @@ def memory_answer(
     top_k: int = 5,
     max_evidence: int = 6,
     include_trace: bool = True,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Evidence-first answer over tigermemory search surfaces.
 
@@ -601,9 +602,10 @@ def memory_answer(
         top_k: Per-source search limit, clamped to 1..10.
         max_evidence: Evidence items to expand/read, clamped to 1..12.
         include_trace: Include trace details in the response.
+        run_id: Optional run id for grouping trace rows from one eval or scan.
 
     Returns:
-        {status, answer, summary, claims, evidence, warnings, trace_id, trace}.
+        {status, answer, summary, claims, evidence, warnings, run_id, trace_id, trace}.
     """
     return tm_answer.memory_answer_core(
         query,
@@ -611,6 +613,7 @@ def memory_answer(
         top_k=top_k,
         max_evidence=max_evidence,
         include_trace=include_trace,
+        run_id=run_id,
     )
 
 

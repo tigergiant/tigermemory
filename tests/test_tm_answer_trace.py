@@ -17,8 +17,13 @@ def _write_jsonl(path: pathlib.Path, rows: list[dict]) -> None:
     )
 
 
-def _row(trace_id: str, status: str, query: str = "daily-health known debt") -> dict:
-    return {
+def _row(
+    trace_id: str,
+    status: str,
+    query: str = "daily-health known debt",
+    run_id: str | None = None,
+) -> dict:
+    row = {
         "ts": "2026-05-17T21:30:00+08:00",
         "trace_id": trace_id,
         "query": query,
@@ -50,6 +55,10 @@ def _row(trace_id: str, status: str, query: str = "daily-health known debt") -> 
             "conflict_scan": {"conflict": status == "conflict"},
         },
     }
+    if run_id:
+        row["run_id"] = run_id
+        row["trace"]["run_id"] = run_id
+    return row
 
 
 def test_summary_counts_status_llm_and_gate(tmp_path):
@@ -91,6 +100,37 @@ def test_summary_latest_zero_omits_latest_rows(tmp_path):
 
     assert report["row_count"] == 1
     assert report["latest"] == []
+
+
+def test_run_id_filter_and_summary_selection(tmp_path):
+    log = tmp_path / "trace.jsonl"
+    _write_jsonl(log, [
+        _row("t-a1", "ok", run_id="run-a"),
+        _row("t-b1", "not_found", run_id="run-b"),
+        _row("t-b2", "error", run_id="run-b"),
+    ])
+
+    rows, invalid = tm_answer_trace.load_trace_rows(log, run_id="run-b")
+    report = tm_answer_trace.summarize_rows(rows, invalid, selected_run_id="run-b")
+    failures = tm_answer_trace.failure_rows(rows)
+
+    assert [row["trace_id"] for row in rows] == ["t-b1", "t-b2"]
+    assert report["selected_run_id"] == "run-b"
+    assert report["run_id_counts"] == {"run-b": 2}
+    assert report["run_id_missing_count"] == 0
+    assert [row["trace_id"] for row in failures] == ["t-b1", "t-b2"]
+    assert tm_answer_trace.compact_row(rows[0])["run_id"] == "run-b"
+
+
+def test_latest_run_id_uses_latest_non_empty_run(tmp_path):
+    log = tmp_path / "trace.jsonl"
+    _write_jsonl(log, [_row("t-a", "ok", run_id="run-a"), _row("t-no-run", "ok"), _row("t-b", "ok", run_id="run-b")])
+
+    rows, _invalid = tm_answer_trace.load_trace_rows(log)
+    selected, selected_run_id = tm_answer_trace.select_rows(rows, latest_run=True)
+
+    assert selected_run_id == "run-b"
+    assert [row["trace_id"] for row in selected] == ["t-b"]
 
 
 def test_replay_is_compact_and_omits_evidence_excerpt(tmp_path):

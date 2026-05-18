@@ -71,6 +71,13 @@ def redact_secrets(text: str) -> str:
     return value
 
 
+def normalize_run_id(run_id: str | None) -> str | None:
+    value = redact_secrets(str(run_id or "").strip())
+    if not value:
+        return None
+    return value[:120]
+
+
 def _strip_frontmatter(text: str) -> str:
     if text.startswith("---\n"):
         end = text.find("\n---\n", 4)
@@ -514,6 +521,16 @@ def _write_trace(row: dict[str, Any]) -> None:
         return
 
 
+def _write_result_trace(result: dict[str, Any], trace: dict[str, Any], query: str) -> None:
+    row = {
+        "ts": datetime.datetime.now(tm_core.TZ_CN).isoformat(),
+        **result,
+        "trace": trace,
+        "query": query,
+    }
+    _write_trace(row)
+
+
 def memory_answer_core(
     query: str,
     scope: str = "auto",
@@ -521,6 +538,7 @@ def memory_answer_core(
     max_evidence: int = 6,
     *,
     include_trace: bool = True,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Answer a memory query from expanded evidence, with traceable grounding."""
     started = time.monotonic()
@@ -532,8 +550,10 @@ def memory_answer_core(
     limit = min(max(int(top_k), 1), 10)
     evidence_limit = min(max(int(max_evidence), 1), 12)
     trace_id = str(uuid.uuid4())
+    normalized_run_id = normalize_run_id(run_id)
     query_class = classify_query(q)
     trace: dict[str, Any] = {
+        "run_id": normalized_run_id,
         "query_class": query_class,
         "expanded_queries": expand_queries(q),
         "calls": [],
@@ -583,10 +603,11 @@ def memory_answer_core(
             "claims": [],
             "evidence": [],
             "warnings": warnings,
+            "run_id": normalized_run_id,
             "trace_id": trace_id,
             "trace": trace if include_trace else None,
         }
-        _write_trace({"ts": datetime.datetime.now(tm_core.TZ_CN).isoformat(), **result, "query": q})
+        _write_result_trace(result, trace, q)
         return result
 
     conflict_scan = scan_conflicts(q, evidence, query_class)
@@ -612,10 +633,11 @@ def memory_answer_core(
             "claims": claims,
             "evidence": evidence,
             "warnings": warnings,
+            "run_id": normalized_run_id,
             "trace_id": trace_id,
             "trace": trace if include_trace else None,
         }
-        _write_trace({"ts": datetime.datetime.now(tm_core.TZ_CN).isoformat(), **result, "query": q})
+        _write_result_trace(result, trace, q)
         return result
 
     ok, parsed = _call_memory_answer_llm(q, evidence)
@@ -630,10 +652,11 @@ def memory_answer_core(
             "claims": [],
             "evidence": evidence,
             "warnings": warnings,
+            "run_id": normalized_run_id,
             "trace_id": trace_id,
             "trace": trace if include_trace else None,
         }
-        _write_trace({"ts": datetime.datetime.now(tm_core.TZ_CN).isoformat(), **result, "query": q})
+        _write_result_trace(result, trace, q)
         return result
 
     if not isinstance(parsed, dict):
@@ -658,12 +681,13 @@ def memory_answer_core(
         "claims": claims,
         "evidence": evidence,
         "warnings": warnings,
+        "run_id": normalized_run_id,
         "trace_id": trace_id,
         "trace": trace if include_trace else None,
     }
     if not result["summary"]:
         result["summary"] = "已基于证据生成回答。" if status == "ok" else "未能生成可用答案。"
-    _write_trace({"ts": datetime.datetime.now(tm_core.TZ_CN).isoformat(), **result, "query": q})
+    _write_result_trace(result, trace, q)
     return result
 
 
@@ -672,6 +696,7 @@ def _print_answer_text(result: dict[str, Any]) -> None:
     summary = str(result.get("summary") or "").strip()
     answer = str(result.get("answer") or "").strip()
     trace_id = str(result.get("trace_id") or "")
+    run_id = str(result.get("run_id") or "")
 
     print(f"status: {status}")
     if summary:
@@ -710,6 +735,8 @@ def _print_answer_text(result: dict[str, Any]) -> None:
     if trace_id:
         print("")
         print(f"trace_id: {trace_id}")
+    if run_id:
+        print(f"run_id: {run_id}")
 
 
 def cmd_answer(args: argparse.Namespace) -> int:
@@ -719,6 +746,7 @@ def cmd_answer(args: argparse.Namespace) -> int:
         top_k=args.top_k,
         max_evidence=args.max_evidence,
         include_trace=not args.no_trace,
+        run_id=args.run_id,
     )
     if args.json:
         indent = None if args.compact else 2
@@ -740,6 +768,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     answer_p.add_argument("--top-k", type=int, default=5)
     answer_p.add_argument("--max-evidence", type=int, default=6)
+    answer_p.add_argument("--run-id", default=None, help="optional run id for grouping trace rows")
     answer_p.add_argument("--no-trace", action="store_true", help="omit trace payload from the response")
     answer_p.add_argument("--json", action="store_true", help="print the full response as JSON")
     answer_p.add_argument("--compact", action="store_true", help="print compact JSON when --json is used")

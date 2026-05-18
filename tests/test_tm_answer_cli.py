@@ -25,6 +25,7 @@ def _result(status: str = "ok") -> dict:
             "score": 12.0,
         }],
         "warnings": [],
+        "run_id": None,
         "trace_id": "trace-1",
         "trace": None,
     }
@@ -33,13 +34,14 @@ def _result(status: str = "ok") -> dict:
 def test_cli_answer_json_delegates_to_core(monkeypatch, capsys):
     captured = {}
 
-    def fake_core(query, scope, top_k, max_evidence, include_trace):
+    def fake_core(query, scope, top_k, max_evidence, include_trace, run_id):
         captured.update({
             "query": query,
             "scope": scope,
             "top_k": top_k,
             "max_evidence": max_evidence,
             "include_trace": include_trace,
+            "run_id": run_id,
         })
         return _result()
 
@@ -55,6 +57,8 @@ def test_cli_answer_json_delegates_to_core(monkeypatch, capsys):
         "--max-evidence",
         "2",
         "--no-trace",
+        "--run-id",
+        "cli-run-1",
         "--json",
         "--compact",
     ])
@@ -68,6 +72,7 @@ def test_cli_answer_json_delegates_to_core(monkeypatch, capsys):
         "top_k": 3,
         "max_evidence": 2,
         "include_trace": False,
+        "run_id": "cli-run-1",
     }
 
 

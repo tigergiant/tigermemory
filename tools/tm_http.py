@@ -175,6 +175,7 @@ class MemoryAnswerRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=10)
     max_evidence: int = Field(default=6, ge=1, le=12)
     include_trace: bool = True
+    run_id: str | None = Field(default=None, max_length=120)
 
 
 class MemoryAnswerClaim(BaseModel):
@@ -205,6 +206,7 @@ class MemoryAnswerResponse(BaseModel):
     claims: list[MemoryAnswerClaim]
     evidence: list[MemoryAnswerEvidence]
     warnings: list[str]
+    run_id: str | None = None
     trace_id: str
     trace: dict[str, Any] | None = None
 
@@ -525,6 +527,7 @@ async def memory_answer(req: MemoryAnswerRequest):
             top_k=req.top_k,
             max_evidence=req.max_evidence,
             include_trace=req.include_trace,
+            run_id=req.run_id,
         )
         return result
     except Exception as e:

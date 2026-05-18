@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
 import tm_answer
+import tm_core
 
 
 def load_cases(path: str) -> list[dict[str, Any]]:
@@ -28,13 +31,19 @@ def load_cases(path: str) -> list[dict[str, Any]]:
     return cases
 
 
-def eval_case(case: dict[str, Any]) -> dict[str, Any]:
+def default_run_id() -> str:
+    stamp = dt.datetime.now(tm_core.TZ_CN).strftime("%Y%m%d-%H%M%S")
+    return f"answer-eval-{stamp}-{uuid.uuid4().hex[:8]}"
+
+
+def eval_case(case: dict[str, Any], *, run_id: str | None = None) -> dict[str, Any]:
     result = tm_answer.memory_answer_core(
         str(case["query"]),
         scope=str(case.get("scope", "auto")),
         top_k=int(case.get("top_k", 5)),
         max_evidence=int(case.get("max_evidence", 6)),
         include_trace=False,
+        run_id=run_id,
     )
     expected_status = case.get("expected_status")
     expected_paths = [str(p) for p in case.get("expected_evidence_paths", [])]
@@ -74,6 +83,7 @@ def eval_case(case: dict[str, Any]) -> dict[str, Any]:
         "claim_count": len(claims),
         "supported_claim_count": len(supported_claims),
         "trace_id": result.get("trace_id"),
+        "run_id": result.get("run_id"),
         "warnings": result.get("warnings") or [],
     }
 
@@ -111,7 +121,8 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 def cmd_eval(args: argparse.Namespace) -> int:
     cases = load_cases(args.cases)
-    results = [eval_case(case) for case in cases]
+    run_id = tm_answer.normalize_run_id(args.run_id) or default_run_id()
+    results = [eval_case(case, run_id=run_id) for case in cases]
     summary = summarize(results)
     failures = [
         item for item in results
@@ -123,6 +134,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
     ]
     report = {
         **summary,
+        "run_id": run_id,
         "failures": failures,
     }
     if not args.compact:
@@ -152,6 +164,7 @@ def main() -> None:
     eval_p.add_argument("--cases", default="tests/fixtures/memory_answer_cases.jsonl")
     eval_p.add_argument("--json", action="store_true")
     eval_p.add_argument("--compact", action="store_true", help="omit per-case successes; keep summary and failures")
+    eval_p.add_argument("--run-id", default=None, help="optional run id shared by all memory_answer trace rows")
     eval_p.set_defaults(func=cmd_eval)
     args = parser.parse_args()
     raise SystemExit(args.func(args))

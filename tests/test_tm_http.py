@@ -59,6 +59,7 @@ def test_memory_answer_endpoint_delegates_to_core(monkeypatch):
             "claims": [],
             "evidence": [],
             "warnings": [],
+            "run_id": kwargs.get("run_id"),
             "trace_id": "trace-http",
             "trace": None,
         }
@@ -71,16 +72,19 @@ def test_memory_answer_endpoint_delegates_to_core(monkeypatch):
         top_k=3,
         max_evidence=2,
         include_trace=False,
+        run_id="http-run-1",
     )
     result = asyncio.run(tm_http.memory_answer(req))
 
     assert result["trace_id"] == "trace-http"
+    assert result["run_id"] == "http-run-1"
     assert captured == {
         "query": "missing query",
         "scope": "wiki",
         "top_k": 3,
         "max_evidence": 2,
         "include_trace": False,
+        "run_id": "http-run-1",
     }
 
 

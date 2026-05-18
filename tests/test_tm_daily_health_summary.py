@@ -16,7 +16,7 @@ Run py tools/tm_daily_health_summary.py automation-contract --json.
 Persist .tmp/daily-health/YYYY-MM-DD/ files.
 Run tm_http /health and persist the JSON to .tmp/daily-health/YYYY-MM-DD/health.json.
 Use mem0_reachable, mem0_api_reachable, mem0_api_latency_ms, and mem0_api_error as first-class health signals.
-Run py tools/tm_answer_eval.py eval, py tools/tm_answer_trace.py summary, and py tools/tm_answer_trace.py failures.
+Run py tools/tm_answer_eval.py eval --run-id daily-health-YYYY-MM-DD, py tools/tm_answer_trace.py summary --run-id daily-health-YYYY-MM-DD, and py tools/tm_answer_trace.py failures --status error --run-id daily-health-YYYY-MM-DD.
 Run py tools/tm_memory_eval.py eval and py tools/tm_memory_eval.py eval --recall hybrid --embedding-base-url http://127.0.0.1:19190/v1.
 Run py tools/tm_daily_health_summary.py assemble with the health JSON and place the result under ## 机器可读摘要.
 Run py tools/tm_daily_health_summary.py validate-report and confirm schema_version and health_probe are present.
@@ -115,6 +115,7 @@ def test_compact_answer_eval_omits_success_rows():
         "not_found_precision": 1.0,
         "expected_conflict_case_count": 1,
         "conflict_correct": 1,
+        "run_id": "daily-health-test",
         "failures": [{"id": "case-a", "query": "raw query should not leak"}],
         "results": [{"id": "case-ok", "query": "raw query should not leak"}],
     }
@@ -130,6 +131,7 @@ def test_compact_answer_eval_omits_success_rows():
         "not_found_precision": 1.0,
         "expected_conflict_case_count": 1,
         "conflict_correct": 1,
+        "run_id": "daily-health-test",
         "failure_count": 1,
         "failure_ids": ["case-a"],
     }
@@ -152,12 +154,16 @@ def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
         "not_found_precision": 1.0,
         "expected_conflict_case_count": 2,
         "conflict_correct": 2,
+        "run_id": "daily-health-2026-05-18",
         "failures": [],
     }), encoding="utf-8")
     trace.write_text(json.dumps({
         "row_count": 10,
         "invalid_row_count": 0,
         "trace_present_count": 3,
+        "selected_run_id": "daily-health-2026-05-18",
+        "run_id_counts": {"daily-health-2026-05-18": 10},
+        "run_id_missing_count": 0,
         "status_counts": {"ok": 9, "not_found": 1},
         "llm_counts": {"ok": 3, "missing": 7},
     }), encoding="utf-8")
