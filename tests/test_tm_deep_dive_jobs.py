@@ -1,0 +1,95 @@
+from __future__ import annotations
+
+import json
+import os
+import pathlib
+import sys
+
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "tools"))
+
+import tm_deep_dive_jobs  # type: ignore[import-not-found]
+
+
+class _FakePopen:
+    def __init__(self, *_args, **_kwargs):
+        self.pid = os.getpid()
+
+
+def test_start_job_returns_running_status(tmp_path, monkeypatch):
+    monkeypatch.setenv("TRADINGAGENTS_JOB_ROOT", str(tmp_path / "jobs"))
+    monkeypatch.setattr(tm_deep_dive_jobs.subprocess, "Popen", _FakePopen)
+
+    result = tm_deep_dive_jobs.start_job("600519.SH", "2026-05-16")
+
+    assert result["ok"] is True
+    assert result["status"] == "running"
+    assert result["ticker"] == "600519.SH"
+    status = tm_deep_dive_jobs.get_status(result["job_id"])
+    assert status["status"] == "running"
+    assert status["worker_pid"] == os.getpid()
+
+
+def test_worker_writes_completed_result(tmp_path, monkeypatch):
+    jobs_root = tmp_path / "jobs"
+    ta_root = tmp_path / "TradingAgents"
+    tools_dir = ta_root / "tools"
+    tools_dir.mkdir(parents=True)
+    adapter = tools_dir / "tm_adapter.py"
+    payload = {
+        "ok": True,
+        "ticker": "600519.SH",
+        "trade_date": "2026-05-16",
+        "rating": "Hold",
+        "processed_signal": "Hold",
+        "warnings": [],
+        "report_paths": {"final_decision": "/tmp/final.md"},
+        "cost_estimate_usd": 0.0,
+    }
+    adapter.write_text(
+        "import json\n"
+        f"print(json.dumps({payload!r}, ensure_ascii=False, sort_keys=True))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TRADINGAGENTS_JOB_ROOT", str(jobs_root))
+    monkeypatch.setenv("TRADINGAGENTS_ROOT", str(ta_root))
+    monkeypatch.setenv("TRADINGAGENTS_PYTHON", sys.executable)
+
+    job_id = "ta-20260519T010203Z-abcdef12"
+    rc = tm_deep_dive_jobs.run_worker(job_id, "600519.SH", "2026-05-16")
+
+    assert rc == 0
+    status = tm_deep_dive_jobs.get_status(job_id)
+    assert status["status"] == "completed"
+    assert status["rating"] == "Hold"
+    result = tm_deep_dive_jobs.fetch_result(job_id)
+    assert result["ok"] is True
+    assert result["job_id"] == job_id
+    assert result["rating"] == "Hold"
+
+
+def test_fetch_result_before_completion_returns_status(tmp_path, monkeypatch):
+    monkeypatch.setenv("TRADINGAGENTS_JOB_ROOT", str(tmp_path / "jobs"))
+    job_id = "ta-20260519T010203Z-12345678"
+    directory = tm_deep_dive_jobs.job_dir(job_id)
+    directory.mkdir(parents=True)
+    tm_deep_dive_jobs.status_path(job_id).write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "job_id": job_id,
+                "ticker": "600519.SH",
+                "trade_date": "2026-05-16",
+                "status": "running",
+                "worker_pid": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = tm_deep_dive_jobs.fetch_result(job_id)
+
+    assert result["ok"] is False
+    assert result["status"] == "running"
+    assert result["status_detail"]["job_id"] == job_id

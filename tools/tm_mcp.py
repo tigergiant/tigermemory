@@ -24,6 +24,9 @@ Read tools (callable in both writer and reader roles):
 - expense_query             — query/aggregate expense entries (private SQLite) [v1 alias]
 - expense_write             — unified write: record/update/delete/batch_record (private SQLite)
 - expense_read              — unified read: list/aggregate/trend/sql (private SQLite)
+- start_deep_dive           — start TradingAgents single-stock deep-dive job
+- get_deep_dive_status      — poll TradingAgents deep-dive job state
+- fetch_deep_dive_result    — fetch completed TradingAgents deep-dive JSON
 
 Write tools (writer role only):
 - propose_wiki_page         — wiki page draft with L2 review + inbox fallback
@@ -70,6 +73,7 @@ import tm_persona
 import tm_review_tools
 import tm_expense
 import tm_search
+import tm_deep_dive_jobs
 
 
 # ---------- MCP Server ----------
@@ -873,6 +877,29 @@ def single_stock_deep_dive(ticker: str, trade_date: str) -> dict[str, Any]:
         payload.setdefault("warnings", []).append("stderr_nonempty")
         payload["stderr_tail"] = result.stderr[-2000:]
     return payload
+
+
+@mcp.tool()
+def start_deep_dive(ticker: str, trade_date: str) -> dict[str, Any]:
+    """Start a TradingAgents single-stock deep-dive background job.
+
+    This returns immediately with a job_id. Use get_deep_dive_status(job_id)
+    to poll and fetch_deep_dive_result(job_id) after completion.
+    """
+    _require_writer()
+    return tm_deep_dive_jobs.start_job(ticker, trade_date)
+
+
+@mcp.tool()
+def get_deep_dive_status(job_id: str) -> dict[str, Any]:
+    """Return status for a TradingAgents background deep-dive job."""
+    return tm_deep_dive_jobs.get_status(job_id)
+
+
+@mcp.tool()
+def fetch_deep_dive_result(job_id: str) -> dict[str, Any]:
+    """Return the completed TradingAgents deep-dive result JSON for a job."""
+    return tm_deep_dive_jobs.fetch_result(job_id)
 
 
 # ---------- Daily Digest Review Tools ----------
