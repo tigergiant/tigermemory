@@ -18,6 +18,8 @@ import sys
 from collections import Counter
 from typing import Any
 
+import tm_core
+
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_KNOWN_DEBT = REPO_ROOT / "wiki/operations/daily-health-known-debt.md"
@@ -26,6 +28,7 @@ AUTOMATION_ID = "tigermemory-daily-health-scan"
 AUTOMATION_CONTRACT_SCHEMA = "daily-health-automation-contract-v1"
 DAILY_SUMMARY_SCHEMA = "daily-health-summary-v1"
 DAILY_REPORT_VALIDATION_SCHEMA = "daily-health-report-validation-v1"
+PROMPT_AUDIT_SCHEMA = "daily-health-prompt-audit-v1"
 REQUIRED_DAILY_SUMMARY_FIELDS = (
     "schema_version",
     "health_color",
@@ -36,6 +39,7 @@ REQUIRED_DAILY_SUMMARY_FIELDS = (
     "known_debt_changes",
     "answer_eval",
     "answer_trace",
+    "prompt_audit",
     "retrieval_eval_lexical",
     "retrieval_eval_hybrid",
     "commit_sha",
@@ -83,6 +87,18 @@ AUTOMATION_CONTRACT_CHECKS = (
         "markers": ("tm_answer_eval.py eval", "tm_answer_trace.py summary", "tm_answer_trace.py failures", "--run-id", "--status error"),
     },
     {
+        "id": "role_prompt_audit",
+        "description": "scan audits agent role prompts and routing prompts against current tigermemory architecture",
+        "markers": (
+            "tm_daily_health_summary.py prompt-audit",
+            "requested_topic",
+            "topic taxonomy",
+            "ChatGPT facade",
+            "agent role prompts",
+            "agent identity coverage",
+        ),
+    },
+    {
         "id": "retrieval_quality",
         "description": "lexical smoke and hybrid production retrieval evals are separated",
         "markers": ("tm_memory_eval.py eval", "--recall hybrid", "--embedding-base-url http://127.0.0.1:19190/v1"),
@@ -108,6 +124,89 @@ AUTOMATION_CONTRACT_CHECKS = (
         "markers": ("git commit", "git push", "write_memory", "git pull --ff-only origin master"),
     },
 )
+PROMPT_AUDIT_TARGETS = (
+    {
+        "id": "root-agent-rules",
+        "path": "AGENTS.md",
+        "description": "repo-wide agent contract and ChatGPT delayed MCP discovery",
+        "markers": (
+            "Codex / ChatGPT 延迟加载 MCP 规则",
+            "tool_search",
+            "write_memory(agent=\"chatgpt\"",
+            "topic 归属（内容决定 topic，不是 agent 固定）",
+        ),
+    },
+    {
+        "id": "agent-onboarding-snapshot",
+        "path": "tools/tm_persona.py",
+        "description": "deterministic get_agent_onboarding source",
+        "markers": (
+            "get_agent_onboarding",
+            "write_memory",
+            "verify_memory_id",
+            "AGENTS.md",
+        ),
+    },
+    {
+        "id": "agent-access-policy",
+        "path": "wiki/systems/tigermemory-agent-access.md",
+        "description": "agent access list and role boundary page",
+        "markers": (
+            "chatgpt",
+            "codex",
+            "write_memory",
+            "get_agent_onboarding",
+        ),
+    },
+    {
+        "id": "chatgpt-openai-facade",
+        "path": "tools/tm_mcp_openai.py",
+        "description": "ChatGPT connector instructions and tool descriptions",
+        "markers": (
+            "Narrow connector for tigermemory",
+            "Pick topic by the user's domain",
+            "IPFB/brand/copywriting/campaign/product/WeChat content",
+            "server adds today's date",
+            "preserve_requested_topic=True",
+        ),
+    },
+    {
+        "id": "memory-routing-llm",
+        "path": "tools/tm_route.py",
+        "description": "LLM route prompt and topic taxonomy",
+        "markers": (
+            "requested_topic",
+            "强先验",
+            "IPFB、品牌、文案、企划、商品、波段、公众号、微信图文、营销活动属于 brand",
+            "systems",
+            "operations",
+        ),
+    },
+    {
+        "id": "memory-write-orchestration",
+        "path": "tools/tm_memory_ops.py",
+        "description": "write_memory storage topic and route audit metadata",
+        "markers": (
+            "preserve_requested_topic",
+            "route_requested_topic",
+            "stored_topic",
+            "topic mismatch",
+        ),
+    },
+    {
+        "id": "chatgpt-access-doc",
+        "path": "wiki/systems/chatgpt-mcp-access.md",
+        "description": "human-facing ChatGPT connector runbook",
+        "markers": (
+            "ChatGPT",
+            "requested_topic",
+            "topic_inferred",
+            "公众号",
+            "brand",
+        ),
+    },
+)
+ROLE_IDENTITY_COVERAGE_PATH = "wiki/systems/tigermemory-agent-access.md"
 
 
 def _read_text(path: pathlib.Path) -> str:
@@ -237,6 +336,66 @@ def audit_automation_contract(text: str, *, path: pathlib.Path | str | None = No
     }
 
 
+def audit_role_prompts(*, root: pathlib.Path = REPO_ROOT) -> dict[str, Any]:
+    """Audit deterministic agent prompts and role docs for current architecture markers."""
+    checks: list[dict[str, Any]] = []
+    for target in PROMPT_AUDIT_TARGETS:
+        rel = str(target["path"])
+        path = root / rel
+        if not path.exists():
+            checks.append({
+                "id": target["id"],
+                "path": rel,
+                "description": target["description"],
+                "ok": False,
+                "missing_markers": list(target["markers"]),
+                "error": "missing file",
+            })
+            continue
+        text = _read_text(path)
+        missing = [
+            marker for marker in target["markers"]
+            if marker not in text
+        ]
+        checks.append({
+            "id": target["id"],
+            "path": rel,
+            "description": target["description"],
+            "ok": not missing,
+            "missing_markers": missing,
+            "error": None,
+        })
+    role_doc = root / ROLE_IDENTITY_COVERAGE_PATH
+    agent_names = sorted(tm_core.AGENTS)
+    regular_wiki_agents = sorted(getattr(tm_core, "_ALL_REGULAR_AGENTS", ()))
+    role_doc_text = _read_text(role_doc) if role_doc.exists() else ""
+    missing_agents = [
+        agent for agent in agent_names
+        if agent not in role_doc_text
+    ]
+    checks.append({
+        "id": "agent-identity-coverage",
+        "path": ROLE_IDENTITY_COVERAGE_PATH,
+        "description": "agent access policy covers every identity from tm_core.AGENTS",
+        "ok": role_doc.exists() and not missing_agents,
+        "missing_markers": missing_agents,
+        "error": None if role_doc.exists() else "missing file",
+    })
+    missing_checks = [check for check in checks if not check["ok"]]
+    return {
+        "schema_version": PROMPT_AUDIT_SCHEMA,
+        "status": "ok" if not missing_checks else "fail",
+        "check_count": len(checks),
+        "passed_count": len(checks) - len(missing_checks),
+        "missing_count": len(missing_checks),
+        "agent_count": len(agent_names),
+        "agents": agent_names,
+        "regular_wiki_agents": regular_wiki_agents,
+        "missing": missing_checks,
+        "checks": checks,
+    }
+
+
 def compact_answer_eval(report: dict[str, Any] | None) -> dict[str, Any] | None:
     if not report:
         return None
@@ -297,6 +456,27 @@ def compact_retrieval_eval(report: dict[str, Any] | None) -> dict[str, Any] | No
         "top_k",
     )
     return {key: report.get(key) for key in keys if key in report}
+
+
+def compact_prompt_audit(report: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not report:
+        return None
+    missing_ids = [
+        str(item.get("id") or "")
+        for item in report.get("missing") or []
+        if isinstance(item, dict) and item.get("id")
+    ]
+    compact = {
+        "schema_version": report.get("schema_version"),
+        "status": report.get("status"),
+        "check_count": report.get("check_count"),
+        "passed_count": report.get("passed_count"),
+        "missing_count": report.get("missing_count"),
+        "missing_ids": missing_ids,
+    }
+    if report.get("agent_count") is not None:
+        compact["agent_count"] = report.get("agent_count")
+    return compact
 
 
 def current_commit_sha() -> str:
@@ -424,6 +604,19 @@ def cmd_automation_contract(args: argparse.Namespace) -> int:
     return 0 if report["status"] == "ok" else 1
 
 
+def cmd_prompt_audit(args: argparse.Namespace) -> int:
+    report = audit_role_prompts()
+    if args.json:
+        sys.stdout.write(json.dumps(report, ensure_ascii=False, sort_keys=True) + "\n")
+    elif report["status"] == "ok":
+        sys.stdout.write(f"ok: prompt audit passed ({report['passed_count']}/{report['check_count']})\n")
+    else:
+        sys.stdout.write(f"fail: prompt audit missing {report['missing_count']} checks\n")
+        for item in report["missing"]:
+            sys.stdout.write(f"- {item['id']}: {', '.join(item.get('missing_markers') or [])}\n")
+    return 0 if report["status"] == "ok" else 1
+
+
 def _optional_json(path: str | None) -> dict[str, Any] | None:
     return load_json_report(REPO_ROOT / path) if path else None
 
@@ -458,6 +651,7 @@ def cmd_assemble(args: argparse.Namespace) -> int:
             _optional_json(args.answer_trace_summary),
             _optional_json(args.answer_trace_failures),
         ),
+        "prompt_audit": compact_prompt_audit(_optional_json(args.prompt_audit)),
         "retrieval_eval_lexical": compact_retrieval_eval(_optional_json(args.retrieval_lexical)),
         "retrieval_eval_hybrid": compact_retrieval_eval(_optional_json(args.retrieval_hybrid)),
         "commit_sha": args.commit_sha or current_commit_sha(),
@@ -510,6 +704,10 @@ def main() -> None:
     audit_p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     audit_p.set_defaults(func=cmd_automation_contract)
 
+    prompt_audit_p = sub.add_parser("prompt-audit", help="audit agent role prompts and routing prompts")
+    prompt_audit_p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    prompt_audit_p.set_defaults(func=cmd_prompt_audit)
+
     assemble_p = sub.add_parser("assemble", help="assemble daily-health machine summary JSON")
     assemble_p.add_argument("--health-color", default="yellow")
     assemble_p.add_argument("--blocking-count", type=int, default=0)
@@ -523,6 +721,7 @@ def main() -> None:
     assemble_p.add_argument("--answer-eval", default=None)
     assemble_p.add_argument("--answer-trace-summary", default=None)
     assemble_p.add_argument("--answer-trace-failures", default=None)
+    assemble_p.add_argument("--prompt-audit", default=None)
     assemble_p.add_argument("--retrieval-lexical", default=None)
     assemble_p.add_argument("--retrieval-hybrid", default=None)
     assemble_p.add_argument("--commit-sha", default=None)

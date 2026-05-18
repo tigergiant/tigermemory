@@ -18,6 +18,7 @@ Run tm_http /health and persist the JSON to .tmp/daily-health/YYYY-MM-DD/health.
 Use mem0_reachable, mem0_api_reachable, mem0_api_latency_ms, and mem0_api_error as first-class health signals.
 Write the human-facing daily report and final closeout as 中文优先 / Chinese-first content; if English is needed, use 中英双文.
 Run py tools/tm_answer_eval.py eval --run-id daily-health-YYYY-MM-DD, py tools/tm_answer_trace.py summary --run-id daily-health-YYYY-MM-DD, and py tools/tm_answer_trace.py failures --status error --run-id daily-health-YYYY-MM-DD.
+Run py tools/tm_daily_health_summary.py prompt-audit --json to audit agent role prompts, agent identity coverage, ChatGPT facade prompt, requested_topic handling, and topic taxonomy.
 Run py tools/tm_memory_eval.py eval and py tools/tm_memory_eval.py eval --recall hybrid --embedding-base-url http://127.0.0.1:19190/v1.
 Run py tools/tm_daily_health_summary.py assemble with the health JSON and place the result under ## 机器可读摘要.
 Run py tools/tm_daily_health_summary.py validate-report and confirm schema_version and health_probe are present.
@@ -106,6 +107,58 @@ def test_cmd_automation_contract_json_exit_codes(tmp_path, monkeypatch):
     assert report["status"] == "ok"
 
 
+def test_audit_role_prompts_reports_marker_status(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_daily_health_summary, "PROMPT_AUDIT_TARGETS", (
+        {
+            "id": "ok-file",
+            "path": "ok.md",
+            "description": "complete",
+            "markers": ("alpha", "beta"),
+        },
+        {
+            "id": "missing-marker",
+            "path": "bad.md",
+            "description": "incomplete",
+            "markers": ("gamma", "delta"),
+        },
+    ))
+    role_doc = tmp_path / tm_daily_health_summary.ROLE_IDENTITY_COVERAGE_PATH
+    role_doc.parent.mkdir(parents=True)
+    role_doc.write_text(" ".join(sorted(tm_daily_health_summary.tm_core.AGENTS)), encoding="utf-8")
+    (tmp_path / "ok.md").write_text("alpha beta", encoding="utf-8")
+    (tmp_path / "bad.md").write_text("gamma only", encoding="utf-8")
+
+    report = tm_daily_health_summary.audit_role_prompts(root=tmp_path)
+
+    assert report["schema_version"] == "daily-health-prompt-audit-v1"
+    assert report["status"] == "fail"
+    assert report["passed_count"] == 2
+    assert report["missing_count"] == 1
+    assert report["agent_count"] == len(tm_daily_health_summary.tm_core.AGENTS)
+    assert report["missing"][0]["id"] == "missing-marker"
+    assert report["missing"][0]["missing_markers"] == ["delta"]
+
+
+def test_compact_prompt_audit_omits_full_marker_details():
+    compact = tm_daily_health_summary.compact_prompt_audit({
+        "schema_version": "daily-health-prompt-audit-v1",
+        "status": "fail",
+        "check_count": 2,
+        "passed_count": 1,
+        "missing_count": 1,
+        "missing": [{"id": "role-a", "missing_markers": ["secret prompt text"]}],
+    })
+
+    assert compact == {
+        "schema_version": "daily-health-prompt-audit-v1",
+        "status": "fail",
+        "check_count": 2,
+        "passed_count": 1,
+        "missing_count": 1,
+        "missing_ids": ["role-a"],
+    }
+
+
 def test_compact_answer_eval_omits_success_rows():
     report = {
         "case_count": 2,
@@ -144,6 +197,7 @@ def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
     failures = tmp_path / "failures.json"
     lexical = tmp_path / "lexical.json"
     hybrid = tmp_path / "hybrid.json"
+    prompt_audit = tmp_path / "prompt-audit.json"
     debt = tmp_path / "known-debt.md"
 
     answer.write_text(json.dumps({
@@ -179,6 +233,15 @@ def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
     failures.write_text(json.dumps({"failure_count": 1, "failures": [{"trace_id": "x"}]}), encoding="utf-8")
     lexical.write_text(json.dumps({"case_count": 80, "hit1": 61, "hit3": 67, "recall": "lexical", "top_k": 3}), encoding="utf-8")
     hybrid.write_text(json.dumps({"case_count": 80, "hit1": 80, "hit3": 80, "recall": "hybrid", "top_k": 3}), encoding="utf-8")
+    prompt_audit.write_text(json.dumps({
+        "schema_version": "daily-health-prompt-audit-v1",
+        "status": "ok",
+        "check_count": 8,
+        "passed_count": 8,
+        "missing_count": 0,
+        "agent_count": 13,
+        "missing": [],
+    }), encoding="utf-8")
     debt.write_text(
         "\n".join([
             "| id | status | review_by_date |",
@@ -204,6 +267,7 @@ def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
         "answer_eval": "answer.json",
         "answer_trace_summary": "trace.json",
         "answer_trace_failures": "failures.json",
+        "prompt_audit": "prompt-audit.json",
         "retrieval_lexical": "lexical.json",
         "retrieval_hybrid": "hybrid.json",
         "commit_sha": "abc123",
@@ -223,6 +287,9 @@ def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
     assert summary["health_probe"]["mem0_api_latency_ms"] == 123.4
     assert summary["answer_eval"]["status_correct"] == 25
     assert summary["answer_trace"]["failure_count"] == 1
+    assert summary["prompt_audit"]["status"] == "ok"
+    assert summary["prompt_audit"]["check_count"] == 8
+    assert summary["prompt_audit"]["agent_count"] == 13
     assert summary["retrieval_eval_lexical"]["hit3"] == 67
     assert summary["retrieval_eval_hybrid"]["hit1"] == 80
     assert summary["commit_sha"] == "abc123"
@@ -244,6 +311,15 @@ def _daily_summary() -> dict:
         "known_debt_changes": {"new": 0, "known": 1, "resolved": 0, "worsened": 0},
         "answer_eval": {"case_count": 25, "status_correct": 25},
         "answer_trace": {"row_count": 10, "failure_count": 0},
+        "prompt_audit": {
+            "schema_version": "daily-health-prompt-audit-v1",
+            "status": "ok",
+            "check_count": 8,
+            "passed_count": 8,
+            "missing_count": 0,
+            "agent_count": 13,
+            "missing_ids": [],
+        },
         "retrieval_eval_lexical": {"case_count": 80, "hit3": 67},
         "retrieval_eval_hybrid": {"case_count": 80, "hit3": 80},
         "commit_sha": "abc123",
