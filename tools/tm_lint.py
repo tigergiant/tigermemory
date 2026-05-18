@@ -105,10 +105,12 @@ def check_D_format_drift() -> list[str]:
     for p in REPO.glob("wiki/**/*.md"):
         if p.name == "index.md":
             continue
+        rel = p.relative_to(REPO).as_posix()
+        if tm_core.is_auto_generated_path(rel):
+            continue
         text = p.read_text(encoding="utf-8", errors="ignore")
         errs = tm_core.lint_page_errors(text)
         if errs:
-            rel = p.relative_to(REPO).as_posix()
             findings.append(f"{rel}: {', '.join(errs)}")
     return findings
 

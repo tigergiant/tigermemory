@@ -1361,6 +1361,18 @@ def _group_in_slug(group: list[str], slug_words: set[str]) -> bool:
     return any(term in slug_words for term in group if term)
 
 
+def _is_person_profile_query(term_groups: list[list[str]]) -> bool:
+    has_person = any(
+        "个人资料" in group or "profile" in group or "person" in group
+        for group in term_groups
+    )
+    has_tiger = any(
+        "虎哥" in group or "tiger" in group or "giant" in group
+        for group in term_groups
+    )
+    return has_person and has_tiger
+
+
 def _rank_search_hit(
     raw_score: int,
     rel: str,
@@ -1387,6 +1399,8 @@ def _rank_search_hit(
         score += 80
     if alias_text and all(_group_in_text(group, alias_text) for group in term_groups):
         score += 40
+    if rel.startswith("wiki/person/") and not rel.endswith("/index.md") and _is_person_profile_query(term_groups):
+        score += 80
 
     if rel in _SEARCH_AGGREGATE_REPORT_PATHS:
         score *= 0.05

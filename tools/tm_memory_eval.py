@@ -18,6 +18,7 @@ import pathlib
 import re
 import sys
 import time
+import urllib.parse
 from dataclasses import dataclass
 from typing import Any
 
@@ -1200,7 +1201,22 @@ def load_eval_env(path: pathlib.Path) -> None:
             if name not in allowed_exact and not any(name.startswith(prefix) for prefix in allowed_prefixes):
                 continue
             value = value.strip().strip('"').strip("'")
+            if name == "EMBEDDING_BASE_URL":
+                value = normalize_embedding_base_url_for_host(value)
             os.environ[name] = value
+
+
+def normalize_embedding_base_url_for_host(value: str) -> str:
+    """Map Docker-only host aliases to host-local URLs for Windows CLI eval."""
+    base = value.rstrip("/")
+    if os.name != "nt":
+        return base
+    parsed = urllib.parse.urlparse(base)
+    if parsed.hostname != "host.docker.internal":
+        return base
+    port = f":{parsed.port}" if parsed.port else ""
+    netloc = f"localhost{port}"
+    return urllib.parse.urlunparse(parsed._replace(netloc=netloc)).rstrip("/")
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
