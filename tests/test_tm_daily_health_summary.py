@@ -16,6 +16,7 @@ Run py tools/tm_daily_health_summary.py automation-contract --json.
 Persist .tmp/daily-health/YYYY-MM-DD/ files.
 Run tm_http /health and persist the JSON to .tmp/daily-health/YYYY-MM-DD/health.json.
 Use mem0_reachable, mem0_api_reachable, mem0_api_latency_ms, and mem0_api_error as first-class health signals.
+Write the human-facing daily report and final closeout as 中文优先 / Chinese-first content; if English is needed, use 中英双文.
 Run py tools/tm_answer_eval.py eval --run-id daily-health-YYYY-MM-DD, py tools/tm_answer_trace.py summary --run-id daily-health-YYYY-MM-DD, and py tools/tm_answer_trace.py failures --status error --run-id daily-health-YYYY-MM-DD.
 Run py tools/tm_memory_eval.py eval and py tools/tm_memory_eval.py eval --recall hybrid --embedding-base-url http://127.0.0.1:19190/v1.
 Run py tools/tm_daily_health_summary.py assemble with the health JSON and place the result under ## 机器可读摘要.
@@ -253,6 +254,16 @@ def _daily_summary() -> dict:
 def test_validate_daily_report_accepts_machine_summary_before_sources():
     text = "\n".join([
         "# daily",
+        "## 中文总览",
+        "已验证：ok。推断：none。待确认：none。规划：continue。",
+        "## 已验证现状",
+        "ok",
+        "## 推断",
+        "none",
+        "## 待确认",
+        "none",
+        "## 规划",
+        "continue",
         "## 机器可读摘要",
         json.dumps(_daily_summary(), ensure_ascii=False, sort_keys=True),
         "## 来源",
@@ -272,6 +283,8 @@ def test_validate_daily_report_rejects_missing_health_probe():
     summary.pop("health_probe")
     text = "\n".join([
         "# daily",
+        "## 中文总览",
+        "已验证：ok。推断：none。待确认：none。规划：continue。",
         "## 机器可读摘要",
         json.dumps(summary, ensure_ascii=False, sort_keys=True),
         "## 来源",
@@ -284,11 +297,31 @@ def test_validate_daily_report_rejects_missing_health_probe():
     assert "health_probe" in report["missing_fields"]
 
 
+def test_validate_daily_report_rejects_english_only_human_report():
+    text = "\n".join([
+        "# daily",
+        "## Verified State",
+        "ok",
+        "## Machine-readable Summary",
+        json.dumps(_daily_summary(), ensure_ascii=False, sort_keys=True),
+        "## Sources",
+        "- live checks",
+    ])
+
+    report = tm_daily_health_summary.validate_daily_report(text, path="report.md")
+
+    assert report["status"] == "fail"
+    assert "chinese-first language contract" in report["missing_sections"]
+    assert "## 中文总览" in report["missing_language_markers"]
+
+
 def test_cmd_validate_report_json_exit_codes(tmp_path, monkeypatch):
     report_path = tmp_path / "daily.md"
     report_path.write_text(
         "\n".join([
             "# daily",
+            "## 中文总览",
+            "已验证：ok。推断：none。待确认：none。规划：continue。",
             "## 机器可读摘要",
             json.dumps(_daily_summary(), ensure_ascii=False, sort_keys=True),
             "## 来源",

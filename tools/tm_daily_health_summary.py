@@ -49,6 +49,13 @@ REQUIRED_HEALTH_PROBE_FIELDS = (
 )
 SUMMARY_HEADINGS = ("## 机器可读摘要", "## Machine-readable Summary")
 SOURCE_HEADINGS = ("## 来源", "## Sources")
+REQUIRED_CHINESE_REPORT_MARKERS = (
+    "## 中文总览",
+    "已验证",
+    "推断",
+    "待确认",
+    "规划",
+)
 AUTOMATION_CONTRACT_CHECKS = (
     {
         "id": "self_contract_audit",
@@ -64,6 +71,11 @@ AUTOMATION_CONTRACT_CHECKS = (
         "id": "runtime_health_probe",
         "description": "scan records tm_http health with mem0 API signals",
         "markers": ("tm_http /health", "mem0_api_reachable", "mem0_api_latency_ms", "mem0_api_error"),
+    },
+    {
+        "id": "report_language",
+        "description": "human-facing report and closeout are Chinese-first or Chinese-English bilingual",
+        "markers": ("中文优先", "Chinese-first", "中英双文"),
     },
     {
         "id": "answer_quality",
@@ -337,6 +349,12 @@ def validate_daily_report(text: str, *, path: pathlib.Path | str | None = None) 
     missing_sections: list[str] = []
     if not any(heading in text for heading in SOURCE_HEADINGS):
         missing_sections.append("sources")
+    missing_language_markers = [
+        marker for marker in REQUIRED_CHINESE_REPORT_MARKERS
+        if marker not in text
+    ]
+    if missing_language_markers:
+        missing_sections.append("chinese-first language contract")
     summary, errors = extract_machine_summary(text)
     missing_fields: list[str] = []
     nested_missing_fields: list[str] = []
@@ -363,6 +381,7 @@ def validate_daily_report(text: str, *, path: pathlib.Path | str | None = None) 
         "missing_sections": sorted(set(missing_sections)),
         "missing_fields": missing_fields,
         "nested_missing_fields": nested_missing_fields,
+        "missing_language_markers": missing_language_markers,
         "errors": errors,
         "summary_present": summary is not None,
         "summary_keys": sorted(summary.keys()) if isinstance(summary, dict) else [],
