@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import datetime
 import json
 import os
 import pathlib
@@ -105,12 +106,14 @@ class OnboardingResponse(BaseModel):
 class WriteMemoryResponse(BaseModel):
     route: str
     score: int | None = None
+    topic: str | None = None
     topic_inferred: str | None = None
     id: str | None = None
     path: str | None = None
     commit_sha: str | None = None
     reasons: str | None = None
     verified: dict[str, Any] | None = None
+    warnings: list[str] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -390,7 +393,9 @@ def _build_mcp(auth_mode: str, public_base: str, link_secret: str | None, store_
             "Narrow connector for tigermemory. Use search first, then fetch by id. "
             "For durable notes, use write_memory; the tigermemory service routes it "
             "to mem0, inbox, or discard. This facade intentionally does not expose "
-            "wiki/source/admin/media/expense tools."
+            "wiki/source/admin/media/expense tools. For write_memory, choose topic by "
+            "the user's domain, not by implementation words: IPFB, brand, copywriting, "
+            "campaign, product, and WeChat content belong to brand."
         ),
         "transport_security": TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
@@ -483,9 +488,26 @@ def _mem0_url(mem_id: str) -> str:
     return f"tigermemory://mem0/{mem_id}"
 
 
+_DATE_PREFIX_RE = re.compile(r"^\s*\d{4}-\d{2}-\d{2}\b")
+
+
+def _normalize_chatgpt_memory_text(text: str, *, today: str | None = None) -> tuple[str, list[str]]:
+    clean_text = (text or "").strip()
+    warnings: list[str] = []
+    if not clean_text:
+        return clean_text, warnings
+    if not _DATE_PREFIX_RE.match(clean_text):
+        date_prefix = today or datetime.datetime.now(tm_core.TZ_CN).strftime("%Y-%m-%d")
+        clean_text = f"{date_prefix} {clean_text}"
+        warnings.append("text lacked YYYY-MM-DD prefix; added server-side date prefix")
+    if len(clean_text) > 1_200:
+        warnings.append("text is long for Mem0; consider promoting stable rules to wiki/brand")
+    return clean_text, warnings
+
+
 def _write_memory_via_router(topic: str, text: str) -> WriteMemoryResponse:
     clean_topic = (topic or "").strip()
-    clean_text = (text or "").strip()
+    clean_text, warnings = _normalize_chatgpt_memory_text(text)
     tm_core.validate_topic(clean_topic)
     if not clean_text:
         raise ValueError("text must be non-empty")
@@ -498,16 +520,19 @@ def _write_memory_via_router(topic: str, text: str) -> WriteMemoryResponse:
         force_inbox=False,
         total_budget_s=25,
         include_readback=True,
+        preserve_requested_topic=True,
     )
     return WriteMemoryResponse(
         route=str(data.get("route") or ""),
         score=data.get("score") if isinstance(data.get("score"), int) else None,
+        topic=data.get("topic") if isinstance(data.get("topic"), str) else None,
         topic_inferred=data.get("topic_inferred") if isinstance(data.get("topic_inferred"), str) else None,
         id=data.get("id") if isinstance(data.get("id"), str) else None,
         path=data.get("path") if isinstance(data.get("path"), str) else None,
         commit_sha=data.get("commit_sha") if isinstance(data.get("commit_sha"), str) else None,
         reasons=data.get("reasons") if isinstance(data.get("reasons"), str) else None,
         verified=data.get("verified") if isinstance(data.get("verified"), dict) else None,
+        warnings=[*warnings, *data.get("warnings", [])] if isinstance(data.get("warnings", []), list) else warnings,
         raw=data,
     )
 
@@ -887,7 +912,11 @@ def register_tools(server: FastMCP, *, max_fetch_chars: int) -> None:
         description=(
             "Write a durable note through tigermemory's server-side router. "
             "The service may store it in Mem0, route it to inbox for review, or discard it. "
-            "This does not grant direct wiki, source, admin, media, expense, or filesystem writes."
+            "This does not grant direct wiki, source, admin, media, expense, or filesystem writes. "
+            "Pick topic by the user's domain: IPFB/brand/copywriting/campaign/product/WeChat content "
+            "should use topic=brand even if the note mentions SVG, editor, code, or workflow. "
+            "Start durable notes with YYYY-MM-DD; if omitted, the server adds today's date. "
+            "Keep Mem0 notes concise and reusable; long stable specs should later be promoted to wiki."
         ),
         annotations=WRITE_MEMORY_TOOL,
         meta=_tool_meta([WRITE_MEMORY_SCOPE]),

@@ -52,6 +52,96 @@ def test_write_memory_success_adds_verified_readback(monkeypatch):
     assert result["verified"]["search_by_id_self_hit"] is True
 
 
+def test_write_memory_can_preserve_requested_topic_for_storage(monkeypatch):
+    mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"
+    captured = {}
+
+    def fake_mem0_write(agent, topic, text, metadata_extra=None, **kwargs):
+        captured["agent"] = agent
+        captured["topic"] = topic
+        captured["text"] = text
+        captured["metadata_extra"] = metadata_extra
+        captured["kwargs"] = kwargs
+        return json.dumps({"id": mem_id})
+
+    monkeypatch.setattr(
+        tm_memory_ops.tm_route,
+        "route_memory",
+        lambda *_args, **_kwargs: tm_route.RouteDecision(
+            route="mem0",
+            score=85,
+            topic_inferred="operations",
+            issues=[],
+            reasons="technical brand workflow",
+            is_transient=False,
+            is_sensitive=False,
+            needs_human_review=False,
+        ),
+    )
+    monkeypatch.setattr(tm_memory_ops.tm_core, "mem0_write", fake_mem0_write)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "verify_memory_id", lambda _id: {"direct_readback_ok": True})
+    monkeypatch.setattr(tm_memory_ops, "schedule_digest_refresh", lambda: None)
+
+    result = tm_memory_ops.write_memory_with_review(
+        "chatgpt",
+        "brand",
+        "body",
+        preserve_requested_topic=True,
+    )
+
+    assert result["route"] == "mem0"
+    assert result["topic"] == "brand"
+    assert result["topic_inferred"] == "operations"
+    assert result["warnings"] == [
+        "topic mismatch: requested_topic=brand, topic_inferred=operations, stored_topic=brand"
+    ]
+    assert captured["topic"] == "brand"
+    assert captured["metadata_extra"]["route_requested_topic"] == "brand"
+    assert captured["metadata_extra"]["route_topic_inferred"] == "operations"
+    assert captured["metadata_extra"]["stored_topic"] == "brand"
+
+
+def test_write_memory_does_not_preserve_requested_topic_for_sensitive_content(monkeypatch):
+    captured = {}
+
+    def fake_write_and_commit_inbox(agent, topic, title, text, frontmatter_extra=None):
+        captured["topic"] = topic
+        captured["frontmatter_extra"] = frontmatter_extra
+        return "inbox/x.md", "abc123"
+
+    monkeypatch.setattr(
+        tm_memory_ops.tm_route,
+        "route_memory",
+        lambda *_args, **_kwargs: tm_route.RouteDecision(
+            route="inbox",
+            score=85,
+            topic_inferred="person",
+            issues=[],
+            reasons="sensitive personal content",
+            is_transient=False,
+            is_sensitive=True,
+            needs_human_review=False,
+        ),
+    )
+    monkeypatch.setattr(tm_memory_ops.tm_core, "write_and_commit_inbox", fake_write_and_commit_inbox)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "git_remote_blob_url", lambda rel: f"https://example/{rel}")
+    monkeypatch.setattr(tm_memory_ops, "schedule_digest_refresh", lambda: None)
+
+    result = tm_memory_ops.write_memory_with_review(
+        "chatgpt",
+        "brand",
+        "body",
+        preserve_requested_topic=True,
+    )
+
+    assert result["route"] == "inbox"
+    assert result["topic"] == "person"
+    assert result.get("warnings", []) == []
+    assert captured["topic"] == "person"
+    assert captured["frontmatter_extra"]["route_requested_topic"] == "brand"
+    assert captured["frontmatter_extra"]["stored_topic"] == "person"
+
+
 def test_write_memory_results_empty_falls_back_to_inbox(monkeypatch):
     monkeypatch.setattr(tm_memory_ops.tm_route, "route_memory", lambda *_args, **_kwargs: _decision())
     monkeypatch.setattr(tm_memory_ops.tm_core, "mem0_write", lambda *_args, **_kwargs: json.dumps({"results": []}))

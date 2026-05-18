@@ -146,13 +146,18 @@ def _to_inbox(
     decision: tm_route.RouteDecision,
     agent: str,
     text: str,
+    *,
+    requested_topic: str,
+    storage_topic: str,
 ) -> dict[str, Any]:
     fm_extra = decision.as_metadata()
+    fm_extra["route_requested_topic"] = requested_topic
+    fm_extra["stored_topic"] = storage_topic
     fm_extra["routed_by"] = "tigermemory"
     fm_extra["route_decision_reason"] = decision.reasons
     rel, sha = tm_core.write_and_commit_inbox(
         agent,
-        decision.topic_inferred,
+        storage_topic,
         f"Routed memory {decision.score}",
         text,
         frontmatter_extra=fm_extra,
@@ -164,10 +169,50 @@ def _to_inbox(
         "commit_sha": sha,
         "url": tm_core.git_remote_blob_url(rel),
         "score": decision.score,
+        "topic": storage_topic,
         "topic_inferred": decision.topic_inferred,
         "reasons": decision.reasons,
         "unreviewed": decision.unreviewed,
     }
+
+
+def _storage_topic(
+    requested_topic: str,
+    decision: tm_route.RouteDecision,
+    *,
+    preserve_requested_topic: bool,
+) -> str:
+    """Choose the final storage topic while keeping LLM inference auditable."""
+    if not preserve_requested_topic:
+        return decision.topic_inferred
+    if decision.is_sensitive or decision.topic_inferred == "person":
+        return decision.topic_inferred
+    return requested_topic
+
+
+def _route_metadata(
+    decision: tm_route.RouteDecision,
+    *,
+    requested_topic: str,
+    storage_topic: str,
+) -> dict[str, Any]:
+    meta = decision.as_metadata()
+    meta["route_requested_topic"] = requested_topic
+    meta["stored_topic"] = storage_topic
+    return meta
+
+
+def _topic_warnings(
+    requested_topic: str,
+    decision: tm_route.RouteDecision,
+    storage_topic: str,
+) -> list[str]:
+    if storage_topic == decision.topic_inferred:
+        return []
+    return [(
+        f"topic mismatch: requested_topic={requested_topic}, "
+        f"topic_inferred={decision.topic_inferred}, stored_topic={storage_topic}"
+    )]
 
 
 def write_memory_with_review(
@@ -179,6 +224,7 @@ def write_memory_with_review(
     total_budget_s: int | None = None,
     mem0_min_reserve_s: int = 5,
     include_readback: bool = True,
+    preserve_requested_topic: bool = False,
     warn: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Route a memory write to discard/mem0/inbox with consistent fallback semantics."""
@@ -201,9 +247,17 @@ def write_memory_with_review(
         return {
             "route": "discard",
             "score": decision.score,
+            "topic": _storage_topic(topic, decision, preserve_requested_topic=preserve_requested_topic),
+            "topic_inferred": decision.topic_inferred,
             "issues": decision.issues,
             "reasons": decision.reasons,
         }
+
+    storage_topic = _storage_topic(
+        topic,
+        decision,
+        preserve_requested_topic=preserve_requested_topic,
+    )
 
     if decision.route == "mem0":
         remaining: float | None = None
@@ -214,7 +268,8 @@ def write_memory_with_review(
                 if warn:
                     warn("budget_exhausted", {
                         "agent": agent,
-                        "topic": decision.topic_inferred,
+                        "topic": storage_topic,
+                        "topic_inferred": decision.topic_inferred,
                         "elapsed": elapsed,
                         "total_budget_s": total_budget_s,
                     })
@@ -239,17 +294,25 @@ def write_memory_with_review(
             try:
                 data = json.loads(tm_core.mem0_write(
                     agent,
-                    decision.topic_inferred,
+                    storage_topic,
                     text,
-                    metadata_extra=decision.as_metadata(),
+                    metadata_extra=_route_metadata(
+                        decision,
+                        requested_topic=topic,
+                        storage_topic=storage_topic,
+                    ),
                     timeout=timeout,
                 ))
                 memory_id = extract_mem0_id(data)
                 data["id"] = memory_id
                 data["route"] = "mem0"
                 data["score"] = decision.score
+                data["topic"] = storage_topic
                 data["topic_inferred"] = decision.topic_inferred
                 data["reasons"] = decision.reasons
+                if not isinstance(data.get("warnings"), list):
+                    data["warnings"] = []
+                data["warnings"].extend(_topic_warnings(topic, decision, storage_topic))
                 try:
                     data["verified"] = _verified_summary(memory_id, include_readback=include_readback)
                 except Exception as exc:
@@ -262,7 +325,8 @@ def write_memory_with_review(
                 if warn:
                     warn("mem0_fallback", {
                         "agent": agent,
-                        "topic": decision.topic_inferred,
+                        "topic": storage_topic,
+                        "topic_inferred": decision.topic_inferred,
                         "text_len": len(text),
                         "error": err,
                     })
@@ -278,4 +342,17 @@ def write_memory_with_review(
                     unreviewed=decision.unreviewed,
                 )
 
-    return _to_inbox(decision, agent, text)
+    storage_topic = _storage_topic(
+        topic,
+        decision,
+        preserve_requested_topic=preserve_requested_topic,
+    )
+    result = _to_inbox(
+        decision,
+        agent,
+        text,
+        requested_topic=topic,
+        storage_topic=storage_topic,
+    )
+    result.setdefault("warnings", []).extend(_topic_warnings(topic, decision, storage_topic))
+    return result

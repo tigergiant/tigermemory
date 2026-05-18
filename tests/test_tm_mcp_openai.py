@@ -98,6 +98,28 @@ def test_chatgpt_is_regular_agent_without_person_partition_access():
     assert "chatgpt" not in tm_core.PARTITION_OWNERS["person"]
 
 
+def test_normalize_chatgpt_memory_text_adds_date_and_warns_on_long_text():
+    text, warnings = tm_mcp_openai._normalize_chatgpt_memory_text("memory body", today="2026-05-18")
+
+    assert text == "2026-05-18 memory body"
+    assert warnings == ["text lacked YYYY-MM-DD prefix; added server-side date prefix"]
+
+    existing, existing_warnings = tm_mcp_openai._normalize_chatgpt_memory_text(
+        "2026-05-17 already dated",
+        today="2026-05-18",
+    )
+
+    assert existing == "2026-05-17 already dated"
+    assert existing_warnings == []
+
+    _long_text, long_warnings = tm_mcp_openai._normalize_chatgpt_memory_text(
+        "x" * 1201,
+        today="2026-05-18",
+    )
+
+    assert "text is long for Mem0; consider promoting stable rules to wiki/brand" in long_warnings
+
+
 def test_write_memory_via_router_uses_fixed_chatgpt_agent(monkeypatch):
     calls = []
 
@@ -106,6 +128,7 @@ def test_write_memory_via_router_uses_fixed_chatgpt_agent(monkeypatch):
         return {
             "route": "mem0",
             "score": 88,
+            "topic": topic,
             "topic_inferred": "systems",
             "id": "mem-id",
             "reasons": "accepted",
@@ -118,15 +141,22 @@ def test_write_memory_via_router_uses_fixed_chatgpt_agent(monkeypatch):
         fake_write_memory_with_review,
     )
 
-    result = tm_mcp_openai._write_memory_via_router("systems", "durable ChatGPT test note")
+    result = tm_mcp_openai._write_memory_via_router("systems", "2026-05-18 durable ChatGPT test note")
 
     assert result.route == "mem0"
     assert result.id == "mem-id"
+    assert result.topic == "systems"
+    assert result.warnings == []
     assert calls == [(
         "chatgpt",
         "systems",
-        "durable ChatGPT test note",
-        {"force_inbox": False, "total_budget_s": 25, "include_readback": True},
+        "2026-05-18 durable ChatGPT test note",
+        {
+            "force_inbox": False,
+            "total_budget_s": 25,
+            "include_readback": True,
+            "preserve_requested_topic": True,
+        },
     )]
 
 
