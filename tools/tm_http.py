@@ -11,6 +11,8 @@ Exposes tigermemory HTTP endpoints for OpenClaw context-engine plugin and local 
 - POST /write_memory
 - POST /write_inbox
 - POST /review_draft
+- POST /expense_record
+- POST /expense_batch_record
 
 All business logic lives in tm_core.py / tm_review.py. This module only
 does HTTP ↔ Python function conversion.
@@ -35,6 +37,7 @@ from urllib.parse import urlparse
 
 import tm_core
 import tm_answer
+import tm_expense
 import tm_memory_ops
 import tm_review
 
@@ -249,6 +252,24 @@ class WriteInboxRequest(BaseModel):
 
 class ReviewDraftRequest(BaseModel):
     body: str = Field(..., min_length=1, max_length=20000)
+
+
+class ExpenseRecordRequest(BaseModel):
+    kind: str = Field(..., pattern=r"^(expense|income)$")
+    amount: float = Field(..., ge=0)
+    category: str = Field(..., min_length=1, max_length=80)
+    occurred_at: str | None = Field(default=None, max_length=40)
+    currency: str = Field(default="CNY", max_length=8)
+    merchant: str | None = Field(default=None, max_length=200)
+    note: str | None = Field(default=None, max_length=2000)
+    payment_method: str | None = Field(default=None, max_length=80)
+    source_agent: str = Field(default="openclaw", max_length=80)
+    source_text: str | None = Field(default=None, max_length=4000)
+
+
+class ExpenseBatchRecordRequest(BaseModel):
+    entries: list[dict] = Field(..., min_length=1, max_length=500)
+    confirm_new_category: bool = False
 
 
 class RefineFactsRequest(BaseModel):
@@ -703,6 +724,74 @@ async def review_draft(req: ReviewDraftRequest):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         log_json("info", trace_id, "/review_draft", 200, (time.time() - start) * 1000, score=result.get("score"), skipped=result.get("review_skipped"))
+
+
+@app.post("/expense_record")
+async def expense_record(req: ExpenseRecordRequest):
+    """Record a single expense/income entry via tm_expense.expense_record (v1 alias).
+
+    Returns tm_expense's response dict (`ok`, `id`, `normalized`, etc.) or
+    `{"ok": false, "needs_confirmation": true, ...}` when the category is unknown.
+    Bearer auth is enforced by the global middleware; the ledger is private and
+    git-ignored.
+    """
+    trace_id = str(uuid.uuid4())
+    start = time.time()
+    try:
+        result = tm_expense.expense_record(
+            kind=req.kind,
+            amount=req.amount,
+            category=req.category,
+            occurred_at=req.occurred_at,
+            currency=req.currency,
+            merchant=req.merchant,
+            note=req.note,
+            payment_method=req.payment_method,
+            source_agent=req.source_agent,
+            source_text=req.source_text,
+        )
+        return result
+    except Exception as e:
+        log_json("error", trace_id, "/expense_record", 500, (time.time() - start) * 1000, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        log_json(
+            "info", trace_id, "/expense_record", 200, (time.time() - start) * 1000,
+            kind=req.kind, amount=req.amount, category=req.category,
+        )
+
+
+@app.post("/expense_batch_record")
+async def expense_batch_record(req: ExpenseBatchRecordRequest):
+    """Batch-record expense entries via tm_expense.expense_write(action='batch_record').
+
+    Entry schema (per item in req.entries) is the one consumed by
+    tm_expense._action_batch_record: required `kind`, `amount`, `category`;
+    optional `occurred_at`, `currency`, `merchant`, `note`, `payment_method`,
+    `tags`, `status`, `source_external_id`, `source_agent`, `source_text`.
+
+    Returns tm_expense's raw response: `{ok, action, inserted, skipped_duplicate,
+    cross_source_actions, errors}`. Dedup is enforced by `source_external_id`
+    UNIQUE index or `dedup_hash` fallback; duplicates increment
+    `skipped_duplicate` instead of failing the batch.
+    """
+    trace_id = str(uuid.uuid4())
+    start = time.time()
+    try:
+        result = tm_expense.expense_write(
+            action="batch_record",
+            entries=req.entries,
+            confirm_new_category=req.confirm_new_category,
+        )
+        return result
+    except Exception as e:
+        log_json("error", trace_id, "/expense_batch_record", 500, (time.time() - start) * 1000, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        log_json(
+            "info", trace_id, "/expense_batch_record", 200, (time.time() - start) * 1000,
+            entry_count=len(req.entries),
+        )
 
 
 # ---------- CLI ----------
