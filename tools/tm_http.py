@@ -595,7 +595,7 @@ async def write_memory(req: WriteMemoryRequest):
     trace_id = str(uuid.uuid4())
     start = time.time()
     try:
-        return _write_memory_with_review(req.agent, req.topic, req.text)
+        return _write_memory_with_review(req.agent, req.topic, req.text, force_inbox=req.force_inbox)
     except Exception as e:
         log_json("error", trace_id, "/write_memory", 502, (time.time() - start) * 1000, detail=str(e))
         raise HTTPException(status_code=502, detail=f"write_memory failed: {e}")

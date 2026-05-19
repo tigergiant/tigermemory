@@ -101,6 +101,91 @@ def test_write_memory_can_preserve_requested_topic_for_storage(monkeypatch):
     assert captured["metadata_extra"]["stored_topic"] == "brand"
 
 
+def test_write_memory_preserves_requested_topic_by_default(monkeypatch):
+    mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"
+    captured = {}
+
+    def fake_mem0_write(agent, topic, text, metadata_extra=None, **kwargs):
+        captured["topic"] = topic
+        captured["metadata_extra"] = metadata_extra
+        return json.dumps({"id": mem_id})
+
+    monkeypatch.setattr(
+        tm_memory_ops.tm_route,
+        "route_memory",
+        lambda *_args, **_kwargs: tm_route.RouteDecision(
+            route="mem0",
+            score=90,
+            topic_inferred="production",
+            issues=[],
+            reasons="misread production-ready wording",
+            is_transient=False,
+            is_sensitive=False,
+            needs_human_review=False,
+        ),
+    )
+    monkeypatch.setattr(tm_memory_ops.tm_core, "mem0_write", fake_mem0_write)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "verify_memory_id", lambda _id: {"direct_readback_ok": True})
+    monkeypatch.setattr(tm_memory_ops, "schedule_digest_refresh", lambda: None)
+
+    result = tm_memory_ops.write_memory_with_review(
+        "codex",
+        "systems",
+        "2026-05-19 Memory Answer production-ready closeout.",
+    )
+
+    assert result["route"] == "mem0"
+    assert result["topic"] == "systems"
+    assert result["topic_inferred"] == "production"
+    assert captured["topic"] == "systems"
+    assert captured["metadata_extra"]["route_requested_topic"] == "systems"
+    assert captured["metadata_extra"]["route_topic_inferred"] == "production"
+    assert captured["metadata_extra"]["stored_topic"] == "systems"
+    assert result["warnings"] == [
+        "topic mismatch: requested_topic=systems, topic_inferred=production, stored_topic=systems"
+    ]
+
+
+def test_write_memory_can_opt_out_of_requested_topic_preservation(monkeypatch):
+    mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"
+    captured = {}
+
+    def fake_mem0_write(agent, topic, text, metadata_extra=None, **kwargs):
+        captured["topic"] = topic
+        captured["metadata_extra"] = metadata_extra
+        return json.dumps({"id": mem_id})
+
+    monkeypatch.setattr(
+        tm_memory_ops.tm_route,
+        "route_memory",
+        lambda *_args, **_kwargs: tm_route.RouteDecision(
+            route="mem0",
+            score=90,
+            topic_inferred="operations",
+            issues=[],
+            reasons="operator note",
+            is_transient=False,
+            is_sensitive=False,
+            needs_human_review=False,
+        ),
+    )
+    monkeypatch.setattr(tm_memory_ops.tm_core, "mem0_write", fake_mem0_write)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "verify_memory_id", lambda _id: {"direct_readback_ok": True})
+    monkeypatch.setattr(tm_memory_ops, "schedule_digest_refresh", lambda: None)
+
+    result = tm_memory_ops.write_memory_with_review(
+        "codex",
+        "systems",
+        "body",
+        preserve_requested_topic=False,
+    )
+
+    assert result["topic"] == "operations"
+    assert result["warnings"] == []
+    assert captured["topic"] == "operations"
+    assert captured["metadata_extra"]["stored_topic"] == "operations"
+
+
 def test_write_memory_does_not_preserve_requested_topic_for_sensitive_content(monkeypatch):
     captured = {}
 

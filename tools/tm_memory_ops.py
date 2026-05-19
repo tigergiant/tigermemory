@@ -224,7 +224,7 @@ def write_memory_with_review(
     total_budget_s: int | None = None,
     mem0_min_reserve_s: int = 5,
     include_readback: bool = True,
-    preserve_requested_topic: bool = False,
+    preserve_requested_topic: bool = True,
     warn: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Route a memory write to discard/mem0/inbox with consistent fallback semantics."""

@@ -43,3 +43,5 @@ def test_route_memory_passes_requested_topic_and_taxonomy_context(monkeypatch):
     assert "IPFB 公众号 SVG 编辑器规范" in captured["content"]
     assert "requested_topic 是调用方选择的业务分区" in captured["prompt"]
     assert "IPFB、品牌、文案、企划、商品、波段、公众号、微信图文、营销活动属于 brand" in captured["prompt"]
+    assert "production 只用于 Doodiu ERP、生产、供应链、订单、采购、库存、工厂/生产系统" in captured["prompt"]
+    assert "Memory Answer、MCP、HTTP、CLI、trace、eval、daily-health 工具" in captured["prompt"]

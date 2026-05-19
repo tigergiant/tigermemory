@@ -88,6 +88,35 @@ def test_memory_answer_endpoint_delegates_to_core(monkeypatch):
     }
 
 
+def test_write_memory_endpoint_forwards_force_inbox(monkeypatch):
+    captured = {}
+
+    def fake_write_memory_with_review(agent, topic, text, force_inbox=False):
+        captured["agent"] = agent
+        captured["topic"] = topic
+        captured["text"] = text
+        captured["force_inbox"] = force_inbox
+        return {"route": "inbox", "path": "inbox/x.md"}
+
+    monkeypatch.setattr(tm_http, "_write_memory_with_review", fake_write_memory_with_review)
+
+    req = tm_http.WriteMemoryRequest(
+        agent="codex",
+        topic="systems",
+        text="needs human review",
+        force_inbox=True,
+    )
+    result = asyncio.run(tm_http.write_memory(req))
+
+    assert result["route"] == "inbox"
+    assert captured == {
+        "agent": "codex",
+        "topic": "systems",
+        "text": "needs human review",
+        "force_inbox": True,
+    }
+
+
 def test_mem0_api_probe_reports_latency_and_error(monkeypatch):
     calls = {}
 

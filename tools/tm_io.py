@@ -49,10 +49,16 @@ def cmd_write_inbox(args: argparse.Namespace) -> None:
     if not body:
         _die("body required on stdin", code=2)
 
+    import tm_memory_ops
     import tm_route
 
     if args.force_inbox:
-        fm_extra = {"routed_by": "tigermemory", "route_decision_reason": "force_inbox CLI"}
+        fm_extra = {
+            "routed_by": "tigermemory",
+            "route_decision_reason": "force_inbox CLI",
+            "route_requested_topic": args.topic,
+            "stored_topic": args.topic,
+        }
         try:
             rel = tm_core.write_inbox_file(args.agent, args.topic, args.title, body, frontmatter_extra=fm_extra)
         except ValueError as e:
@@ -74,12 +80,21 @@ def cmd_write_inbox(args: argparse.Namespace) -> None:
         return
 
     if decision.route == "mem0":
+        storage_topic = tm_memory_ops._storage_topic(
+            args.topic,
+            decision,
+            preserve_requested_topic=True,
+        )
         try:
             resp = tm_core.mem0_write(
                 args.agent,
-                decision.topic_inferred,
+                storage_topic,
                 body,
-                metadata_extra=decision.as_metadata(),
+                metadata_extra=tm_memory_ops._route_metadata(
+                    decision,
+                    requested_topic=args.topic,
+                    storage_topic=storage_topic,
+                ),
             )
         except ValueError as e:
             _die(str(e), code=2)
@@ -89,13 +104,22 @@ def cmd_write_inbox(args: argparse.Namespace) -> None:
         return
 
     # route == "inbox"
-    fm_extra = decision.as_metadata()
+    storage_topic = tm_memory_ops._storage_topic(
+        args.topic,
+        decision,
+        preserve_requested_topic=True,
+    )
+    fm_extra = tm_memory_ops._route_metadata(
+        decision,
+        requested_topic=args.topic,
+        storage_topic=storage_topic,
+    )
     fm_extra["routed_by"] = "tigermemory"
     fm_extra["route_decision_reason"] = decision.reasons
     try:
         rel = tm_core.write_inbox_file(
             args.agent,
-            decision.topic_inferred,
+            storage_topic,
             args.title,
             body,
             frontmatter_extra=fm_extra,
@@ -108,8 +132,11 @@ def cmd_write_inbox(args: argparse.Namespace) -> None:
         "route": "inbox",
         "path": rel,
         "score": decision.score,
+        "topic": storage_topic,
+        "topic_inferred": decision.topic_inferred,
         "reasons": decision.reasons,
         "unreviewed": decision.unreviewed,
+        "warnings": tm_memory_ops._topic_warnings(args.topic, decision, storage_topic),
     }))
 
 
