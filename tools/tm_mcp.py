@@ -27,6 +27,7 @@ Read tools (callable in both writer and reader roles):
 - start_deep_dive           — start TradingAgents single-stock deep-dive job
 - get_deep_dive_status      — poll TradingAgents deep-dive job state
 - fetch_deep_dive_result    — fetch completed TradingAgents deep-dive JSON
+- start_stability_eval      — run N TradingAgents deep dives and write a consensus label
 
 Write tools (writer role only):
 - propose_wiki_page         — wiki page draft with L2 review + inbox fallback
@@ -74,6 +75,7 @@ import tm_review_tools
 import tm_expense
 import tm_search
 import tm_deep_dive_jobs
+import tm_stability_eval
 
 
 # ---------- MCP Server ----------
@@ -902,6 +904,17 @@ def get_deep_dive_status(job_id: str) -> dict[str, Any]:
 def fetch_deep_dive_result(job_id: str) -> dict[str, Any]:
     """Return the completed TradingAgents deep-dive result JSON for a job."""
     return tm_deep_dive_jobs.fetch_result(job_id)
+
+
+@mcp.tool()
+def start_stability_eval(ticker: str, trade_date: str, profile: str = "deep", n: int = 3) -> dict[str, Any]:
+    """Run N TradingAgents deep dives and write a stability consensus report.
+
+    This is intentionally opt-in: fast scan remains single-run, while a human or
+    dashboard action can request a deeper stability evaluation for one ticker.
+    """
+    _require_writer()
+    return tm_stability_eval.start_stability_eval(ticker, trade_date, profile=profile, n=n)
 
 
 # ---------- Daily Digest Review Tools ----------
