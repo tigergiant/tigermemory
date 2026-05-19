@@ -836,12 +836,13 @@ def lint_repo(path: str | None = None) -> dict[str, Any]:
 
 
 @mcp.tool()
-def single_stock_deep_dive(ticker: str, trade_date: str) -> dict[str, Any]:
+def single_stock_deep_dive(ticker: str, trade_date: str, profile: str = "deep") -> dict[str, Any]:
     """Run TradingAgents single-stock deep research and return a JSON summary.
 
     The tool is intentionally single-stock only. It writes detailed reports to
     wiki/investment/decision-log through TradingAgents' CLI adapter and returns
     the final rating, report paths, provider trace, warnings, and cost estimate.
+    profile may be "deep" for the full chain or "fast" for daily scanning.
     """
     _require_writer()
     ta_root = os.environ.get("TRADINGAGENTS_ROOT", "/home/giant/workspaces/TradingAgents")
@@ -849,7 +850,7 @@ def single_stock_deep_dive(ticker: str, trade_date: str) -> dict[str, Any]:
     env = os.environ.copy()
     env["PYTHONPATH"] = ta_root
     result = subprocess.run(
-        [python_bin, "tools/tm_adapter.py", ticker, trade_date],
+        [python_bin, "tools/tm_adapter.py", ticker, trade_date, "--profile", profile],
         cwd=ta_root,
         capture_output=True,
         text=True,
@@ -880,14 +881,15 @@ def single_stock_deep_dive(ticker: str, trade_date: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def start_deep_dive(ticker: str, trade_date: str) -> dict[str, Any]:
+def start_deep_dive(ticker: str, trade_date: str, profile: str = "deep") -> dict[str, Any]:
     """Start a TradingAgents single-stock deep-dive background job.
 
     This returns immediately with a job_id. Use get_deep_dive_status(job_id)
     to poll and fetch_deep_dive_result(job_id) after completion.
+    profile may be "deep" for the full chain or "fast" for daily scanning.
     """
     _require_writer()
-    return tm_deep_dive_jobs.start_job(ticker, trade_date)
+    return tm_deep_dive_jobs.start_job(ticker, trade_date, profile=profile)
 
 
 @mcp.tool()

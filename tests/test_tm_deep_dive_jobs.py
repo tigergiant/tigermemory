@@ -21,13 +21,15 @@ def test_start_job_returns_running_status(tmp_path, monkeypatch):
     monkeypatch.setenv("TRADINGAGENTS_JOB_ROOT", str(tmp_path / "jobs"))
     monkeypatch.setattr(tm_deep_dive_jobs.subprocess, "Popen", _FakePopen)
 
-    result = tm_deep_dive_jobs.start_job("600519.SH", "2026-05-16")
+    result = tm_deep_dive_jobs.start_job("600519.SH", "2026-05-16", profile="fast")
 
     assert result["ok"] is True
     assert result["status"] == "running"
     assert result["ticker"] == "600519.SH"
+    assert result["profile"] == "fast"
     status = tm_deep_dive_jobs.get_status(result["job_id"])
     assert status["status"] == "running"
+    assert status["profile"] == "fast"
     assert status["worker_pid"] == os.getpid()
 
 
@@ -42,6 +44,7 @@ def test_worker_writes_completed_result(tmp_path, monkeypatch):
         "ticker": "600519.SH",
         "trade_date": "2026-05-16",
         "rating": "Hold",
+        "profile": "fast",
         "processed_signal": "Hold",
         "warnings": [],
         "report_paths": {"final_decision": "/tmp/final.md"},
@@ -57,16 +60,18 @@ def test_worker_writes_completed_result(tmp_path, monkeypatch):
     monkeypatch.setenv("TRADINGAGENTS_PYTHON", sys.executable)
 
     job_id = "ta-20260519T010203Z-abcdef12"
-    rc = tm_deep_dive_jobs.run_worker(job_id, "600519.SH", "2026-05-16")
+    rc = tm_deep_dive_jobs.run_worker(job_id, "600519.SH", "2026-05-16", profile="fast")
 
     assert rc == 0
     status = tm_deep_dive_jobs.get_status(job_id)
     assert status["status"] == "completed"
     assert status["rating"] == "Hold"
+    assert status["profile"] == "fast"
     result = tm_deep_dive_jobs.fetch_result(job_id)
     assert result["ok"] is True
     assert result["job_id"] == job_id
     assert result["rating"] == "Hold"
+    assert result["profile"] == "fast"
 
 
 def test_fetch_result_before_completion_returns_status(tmp_path, monkeypatch):

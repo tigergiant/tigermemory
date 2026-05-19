@@ -20,6 +20,7 @@ TERMINAL_STATUSES = {"completed", "failed"}
 JOB_ID_RE = re.compile(r"^ta-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$")
 TICKER_RE = re.compile(r"^[0-9A-Z._-]{3,20}$")
 TRADE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+PROFILE_RE = re.compile(r"^(deep|fast)$")
 
 
 def jobs_root() -> pathlib.Path:
@@ -62,6 +63,13 @@ def validate_job_id(job_id: str) -> str:
     value = job_id.strip()
     if not JOB_ID_RE.fullmatch(value):
         raise ValueError(f"invalid job_id: {job_id!r}")
+    return value
+
+
+def validate_profile(profile: str) -> str:
+    value = (profile or "deep").strip().lower()
+    if not PROFILE_RE.fullmatch(value):
+        raise ValueError("profile must be 'deep' or 'fast'")
     return value
 
 
@@ -130,27 +138,29 @@ def _parse_last_json_line(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _base_status(job_id: str, ticker: str, trade_date: str, status: str) -> dict[str, Any]:
+def _base_status(job_id: str, ticker: str, trade_date: str, status: str, profile: str = "deep") -> dict[str, Any]:
     return {
         "ok": status not in {"failed"},
         "job_id": job_id,
         "ticker": ticker,
         "trade_date": trade_date,
+        "profile": profile,
         "status": status,
         "created_at": now_utc(),
         "updated_at": now_utc(),
     }
 
 
-def start_job(ticker: str, trade_date: str) -> dict[str, Any]:
+def start_job(ticker: str, trade_date: str, profile: str = "deep") -> dict[str, Any]:
     ticker = validate_ticker(ticker)
     trade_date = validate_trade_date(trade_date)
+    profile = validate_profile(profile)
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     job_id = f"ta-{stamp}-{uuid.uuid4().hex[:8]}"
     directory = job_dir(job_id)
     directory.mkdir(parents=True, exist_ok=False)
 
-    status = _base_status(job_id, ticker, trade_date, "starting")
+    status = _base_status(job_id, ticker, trade_date, "starting", profile=profile)
     status.update(
         {
             "ta_root": str(ta_root()),
@@ -163,7 +173,7 @@ def start_job(ticker: str, trade_date: str) -> dict[str, Any]:
 
     env = os.environ.copy()
     env["PYTHONPATH"] = str(tm_core.REPO_ROOT / "tools")
-    command = [sys.executable, str(pathlib.Path(__file__).resolve()), "worker", job_id, ticker, trade_date]
+    command = [sys.executable, str(pathlib.Path(__file__).resolve()), "worker", job_id, ticker, trade_date, profile]
     proc = subprocess.Popen(
         command,
         cwd=str(tm_core.REPO_ROOT),
@@ -182,16 +192,18 @@ def start_job(ticker: str, trade_date: str) -> dict[str, Any]:
         "status": "running",
         "ticker": ticker,
         "trade_date": trade_date,
+        "profile": profile,
         "poll_after_sec": 30,
         "status_path": str(status_path(job_id)),
     }
 
 
-def run_worker(job_id: str, ticker: str, trade_date: str) -> int:
+def run_worker(job_id: str, ticker: str, trade_date: str, profile: str = "deep") -> int:
     job_id = validate_job_id(job_id)
     ticker = validate_ticker(ticker)
     trade_date = validate_trade_date(trade_date)
-    status = _base_status(job_id, ticker, trade_date, "running")
+    profile = validate_profile(profile)
+    status = _base_status(job_id, ticker, trade_date, "running", profile=profile)
     status.update(
         {
             "worker_pid": os.getpid(),
@@ -209,7 +221,7 @@ def run_worker(job_id: str, ticker: str, trade_date: str) -> int:
     env["PYTHONPATH"] = str(ta_root())
     try:
         result = subprocess.run(
-            [python_bin(), "tools/tm_adapter.py", ticker, trade_date],
+            [python_bin(), "tools/tm_adapter.py", ticker, trade_date, "--profile", profile],
             cwd=str(ta_root()),
             capture_output=True,
             text=True,
@@ -234,6 +246,7 @@ def run_worker(job_id: str, ticker: str, trade_date: str) -> int:
                     "updated_at": now_utc(),
                     "rating": payload.get("rating"),
                     "processed_signal": payload.get("processed_signal"),
+                    "profile": payload.get("profile") or profile,
                     "warnings": payload.get("warnings") or [],
                     "report_paths": payload.get("report_paths") or {},
                     "cost_estimate_usd": payload.get("cost_estimate_usd"),
@@ -320,10 +333,11 @@ def fetch_result(job_id: str) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
-        raise SystemExit("usage: tm_deep_dive_jobs.py worker <job_id> <ticker> <trade_date>")
-    if argv[0] == "worker" and len(argv) == 4:
-        return run_worker(argv[1], argv[2], argv[3])
-    raise SystemExit("usage: tm_deep_dive_jobs.py worker <job_id> <ticker> <trade_date>")
+        raise SystemExit("usage: tm_deep_dive_jobs.py worker <job_id> <ticker> <trade_date> [profile]")
+    if argv[0] == "worker" and len(argv) in {4, 5}:
+        profile = argv[4] if len(argv) == 5 else "deep"
+        return run_worker(argv[1], argv[2], argv[3], profile=profile)
+    raise SystemExit("usage: tm_deep_dive_jobs.py worker <job_id> <ticker> <trade_date> [profile]")
 
 
 if __name__ == "__main__":
