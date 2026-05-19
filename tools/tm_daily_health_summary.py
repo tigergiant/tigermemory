@@ -27,6 +27,7 @@ RESOLVED_STATUSES = {"resolved", "closed", "done"}
 AUTOMATION_ID = "tigermemory-daily-health-scan"
 AUTOMATION_CONTRACT_SCHEMA = "daily-health-automation-contract-v1"
 DAILY_SUMMARY_SCHEMA = "daily-health-summary-v1"
+DAILY_TREND_SCHEMA = "daily-health-trend-v1"
 DAILY_REPORT_VALIDATION_SCHEMA = "daily-health-report-validation-v1"
 PROMPT_AUDIT_SCHEMA = "daily-health-prompt-audit-v1"
 REQUIRED_DAILY_SUMMARY_FIELDS = (
@@ -109,9 +110,14 @@ AUTOMATION_CONTRACT_CHECKS = (
         "markers": (".tmp/daily-health", "tm_daily_health_summary.py assemble", "机器可读摘要"),
     },
     {
+        "id": "trend_history",
+        "description": "scan builds a compact trend from historical daily-health machine summaries",
+        "markers": ("tm_daily_health_summary.py trend", "daily-trend.json", "daily_trend"),
+    },
+    {
         "id": "report_validation",
         "description": "daily report machine summary is validated after writing",
-        "markers": ("tm_daily_health_summary.py validate-report", "health_probe", "schema_version"),
+        "markers": ("tm_daily_health_summary.py validate-report", "health_probe", "schema_version", "--require-daily-trend"),
     },
     {
         "id": "known_debt_flow",
@@ -491,6 +497,244 @@ def compact_prompt_audit(report: dict[str, Any] | None) -> dict[str, Any] | None
     return compact
 
 
+def _number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _int(value: Any) -> int | None:
+    number = _number(value)
+    return int(number) if number is not None else None
+
+
+def _ratio(numerator: Any, denominator: Any) -> float | None:
+    top = _number(numerator)
+    bottom = _number(denominator)
+    if top is None or bottom in (None, 0):
+        return None
+    return round(top / bottom, 4)
+
+
+def _nested(data: dict[str, Any], *keys: str) -> Any:
+    current: Any = data
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _report_path_label(path: pathlib.Path) -> str:
+    try:
+        return str(path.relative_to(REPO_ROOT)).replace("\\", "/")
+    except ValueError:
+        return str(path)
+
+
+def load_daily_report_summaries(
+    reports_dir: pathlib.Path | str | None = None,
+    *,
+    days: int = 14,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Load machine summaries from tracked daily-health reports."""
+    root = pathlib.Path(reports_dir) if reports_dir else REPO_ROOT / "wiki/operations/daily-health"
+    if not root.exists():
+        return [], [{"path": str(root), "error": "reports directory not found"}]
+    candidates = [
+        path for path in sorted(root.glob("*.md"))
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", path.stem)
+    ]
+    if days > 0:
+        candidates = candidates[-days:]
+    rows: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for path in candidates:
+        try:
+            summary, summary_errors = extract_machine_summary(_read_text(path))
+        except Exception as exc:  # pragma: no cover - defensive for corrupt files
+            errors.append({"date": path.stem, "path": _report_path_label(path), "error": str(exc)})
+            continue
+        if summary is None:
+            errors.append({
+                "date": path.stem,
+                "path": _report_path_label(path),
+                "errors": summary_errors,
+            })
+            continue
+        if summary_errors:
+            errors.append({
+                "date": path.stem,
+                "path": _report_path_label(path),
+                "errors": summary_errors,
+            })
+        rows.append({
+            "date": path.stem,
+            "path": _report_path_label(path),
+            "summary": summary,
+        })
+    return rows, errors
+
+
+def _compact_daily_summary(row: dict[str, Any]) -> dict[str, Any]:
+    summary = row.get("summary") if isinstance(row.get("summary"), dict) else {}
+    answer_eval = summary.get("answer_eval") if isinstance(summary.get("answer_eval"), dict) else {}
+    answer_trace = summary.get("answer_trace") if isinstance(summary.get("answer_trace"), dict) else {}
+    lexical = summary.get("retrieval_eval_lexical") if isinstance(summary.get("retrieval_eval_lexical"), dict) else {}
+    hybrid = summary.get("retrieval_eval_hybrid") if isinstance(summary.get("retrieval_eval_hybrid"), dict) else {}
+    health = summary.get("health_probe") if isinstance(summary.get("health_probe"), dict) else {}
+    prompt_audit = summary.get("prompt_audit") if isinstance(summary.get("prompt_audit"), dict) else {}
+    known_debt_changes = summary.get("known_debt_changes") if isinstance(summary.get("known_debt_changes"), dict) else {}
+    answer_status_rate = _ratio(answer_eval.get("status_correct"), answer_eval.get("case_count"))
+    return {
+        "date": row.get("date"),
+        "path": row.get("path"),
+        "health_color": summary.get("health_color"),
+        "blocking_count": _int(summary.get("blocking_count")),
+        "new_problem_count": _int(summary.get("new_problem_count")),
+        "known_debt_count": _int(summary.get("known_debt_count")),
+        "known_debt_changes": {
+            "new": _int(known_debt_changes.get("new")) or 0,
+            "known": _int(known_debt_changes.get("known")) or 0,
+            "resolved": _int(known_debt_changes.get("resolved")) or 0,
+            "worsened": _int(known_debt_changes.get("worsened")) or 0,
+        },
+        "mem0_api_reachable": health.get("mem0_api_reachable"),
+        "mem0_api_latency_ms": _number(health.get("mem0_api_latency_ms")),
+        "answer_status_rate": answer_status_rate,
+        "answer_status_correct": _int(answer_eval.get("status_correct")),
+        "answer_case_count": _int(answer_eval.get("case_count")),
+        "answer_failure_count": _int(answer_eval.get("failure_count")) or 0,
+        "answer_trace_failure_count": _int(answer_trace.get("failure_count")) or 0,
+        "answer_trace_p95_ms": _number(_nested(answer_trace, "duration_ms", "p95")),
+        "prompt_audit_status": prompt_audit.get("status"),
+        "retrieval_lexical_hit3_rate": _ratio(lexical.get("hit3"), lexical.get("case_count")),
+        "retrieval_hybrid_hit3_rate": _ratio(hybrid.get("hit3"), hybrid.get("case_count")),
+        "commit_sha": summary.get("commit_sha"),
+        "push_result": summary.get("push_result"),
+    }
+
+
+def _latest_number(rows: list[dict[str, Any]], key: str) -> float | int | None:
+    for row in reversed(rows):
+        value = row.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value
+    return None
+
+
+def _max_number(rows: list[dict[str, Any]], key: str) -> float | int | None:
+    values = [
+        value for row in rows
+        if isinstance((value := row.get(key)), (int, float)) and not isinstance(value, bool)
+    ]
+    return max(values) if values else None
+
+
+def _min_number(rows: list[dict[str, Any]], key: str) -> float | int | None:
+    values = [
+        value for row in rows
+        if isinstance((value := row.get(key)), (int, float)) and not isinstance(value, bool)
+    ]
+    return min(values) if values else None
+
+
+def build_daily_health_trend(
+    reports_dir: pathlib.Path | str | None = None,
+    *,
+    days: int = 14,
+) -> dict[str, Any]:
+    rows, errors = load_daily_report_summaries(reports_dir, days=days)
+    days_compact = [_compact_daily_summary(row) for row in rows]
+    color_counts = Counter(str(row.get("health_color") or "unknown") for row in days_compact)
+    problem_days = [
+        str(row["date"])
+        for row in days_compact
+        if (row.get("health_color") not in (None, "green", "ok"))
+        or (row.get("blocking_count") or 0) > 0
+        or (row.get("new_problem_count") or 0) > 0
+        or (row.get("answer_failure_count") or 0) > 0
+        or (row.get("answer_trace_failure_count") or 0) > 0
+        or row.get("prompt_audit_status") not in (None, "ok")
+        or row.get("mem0_api_reachable") is False
+    ]
+    latest = days_compact[-1] if days_compact else None
+    return {
+        "schema_version": DAILY_TREND_SCHEMA,
+        "report_count": len(days_compact),
+        "date_range": {
+            "start": days_compact[0]["date"] if days_compact else None,
+            "end": days_compact[-1]["date"] if days_compact else None,
+        },
+        "latest": latest,
+        "health_color_counts": dict(sorted(color_counts.items())),
+        "totals": {
+            "blocking_count": sum(row.get("blocking_count") or 0 for row in days_compact),
+            "new_problem_count": sum(row.get("new_problem_count") or 0 for row in days_compact),
+            "known_debt_new": sum(row["known_debt_changes"]["new"] for row in days_compact),
+            "known_debt_resolved": sum(row["known_debt_changes"]["resolved"] for row in days_compact),
+            "known_debt_worsened": sum(row["known_debt_changes"]["worsened"] for row in days_compact),
+        },
+        "answer_eval": {
+            "latest_status_rate": _latest_number(days_compact, "answer_status_rate"),
+            "min_status_rate": _min_number(days_compact, "answer_status_rate"),
+            "failure_days": [
+                row["date"] for row in days_compact if (row.get("answer_failure_count") or 0) > 0
+            ],
+        },
+        "answer_trace": {
+            "latest_failure_count": _latest_number(days_compact, "answer_trace_failure_count"),
+            "total_failure_count": sum(row.get("answer_trace_failure_count") or 0 for row in days_compact),
+            "latest_p95_ms": _latest_number(days_compact, "answer_trace_p95_ms"),
+            "max_p95_ms": _max_number(days_compact, "answer_trace_p95_ms"),
+        },
+        "retrieval_eval": {
+            "lexical_latest_hit3_rate": _latest_number(days_compact, "retrieval_lexical_hit3_rate"),
+            "lexical_min_hit3_rate": _min_number(days_compact, "retrieval_lexical_hit3_rate"),
+            "hybrid_latest_hit3_rate": _latest_number(days_compact, "retrieval_hybrid_hit3_rate"),
+            "hybrid_min_hit3_rate": _min_number(days_compact, "retrieval_hybrid_hit3_rate"),
+        },
+        "health_probe": {
+            "latest_mem0_api_reachable": latest.get("mem0_api_reachable") if latest else None,
+            "latest_mem0_api_latency_ms": latest.get("mem0_api_latency_ms") if latest else None,
+            "max_mem0_api_latency_ms": _max_number(days_compact, "mem0_api_latency_ms"),
+            "unreachable_days": [
+                row["date"] for row in days_compact if row.get("mem0_api_reachable") is False
+            ],
+        },
+        "problem_day_count": len(problem_days),
+        "problem_days": problem_days,
+        "errors": errors,
+        "days": days_compact,
+    }
+
+
+def compact_daily_trend(report: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not report:
+        return None
+    latest = report.get("latest") if isinstance(report.get("latest"), dict) else None
+    return {
+        "schema_version": report.get("schema_version"),
+        "report_count": report.get("report_count"),
+        "date_range": report.get("date_range"),
+        "latest": latest,
+        "health_color_counts": report.get("health_color_counts") or {},
+        "totals": report.get("totals") or {},
+        "answer_eval": report.get("answer_eval") or {},
+        "answer_trace": report.get("answer_trace") or {},
+        "retrieval_eval": report.get("retrieval_eval") or {},
+        "health_probe": report.get("health_probe") or {},
+        "problem_day_count": report.get("problem_day_count"),
+        "problem_days": (report.get("problem_days") or [])[-7:],
+        "error_count": len(report.get("errors") or []),
+    }
+
+
 def current_commit_sha() -> str:
     try:
         result = subprocess.run(
@@ -537,7 +781,12 @@ def extract_machine_summary(text: str) -> tuple[dict[str, Any] | None, list[str]
     return None, [*errors, "missing machine summary JSON object"]
 
 
-def validate_daily_report(text: str, *, path: pathlib.Path | str | None = None) -> dict[str, Any]:
+def validate_daily_report(
+    text: str,
+    *,
+    path: pathlib.Path | str | None = None,
+    require_daily_trend: bool = False,
+) -> dict[str, Any]:
     missing_sections: list[str] = []
     if not any(heading in text for heading in SOURCE_HEADINGS):
         missing_sections.append("sources")
@@ -556,6 +805,8 @@ def validate_daily_report(text: str, *, path: pathlib.Path | str | None = None) 
         missing_fields = [key for key in REQUIRED_DAILY_SUMMARY_FIELDS if key not in summary]
         if summary.get("schema_version") != DAILY_SUMMARY_SCHEMA:
             errors.append(f"schema_version must be {DAILY_SUMMARY_SCHEMA}")
+        if require_daily_trend and "daily_trend" not in summary:
+            missing_fields.append("daily_trend")
         health_probe = summary.get("health_probe")
         if not isinstance(health_probe, dict):
             nested_missing_fields.append("health_probe")
@@ -666,6 +917,7 @@ def cmd_assemble(args: argparse.Namespace) -> int:
         "prompt_audit": compact_prompt_audit(_optional_json(args.prompt_audit)),
         "retrieval_eval_lexical": compact_retrieval_eval(_optional_json(args.retrieval_lexical)),
         "retrieval_eval_hybrid": compact_retrieval_eval(_optional_json(args.retrieval_hybrid)),
+        "daily_trend": compact_daily_trend(_optional_json(args.daily_trend)),
         "commit_sha": args.commit_sha or current_commit_sha(),
         "push_result": args.push_result,
     }
@@ -673,10 +925,27 @@ def cmd_assemble(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_trend(args: argparse.Namespace) -> int:
+    report = build_daily_health_trend(args.reports_dir, days=args.days)
+    if args.json:
+        sys.stdout.write(json.dumps(report, ensure_ascii=False, sort_keys=True) + "\n")
+    else:
+        latest = report.get("latest") or {}
+        date_range = report.get("date_range") or {}
+        sys.stdout.write(
+            f"reports={report['report_count']} range={date_range.get('start')}..{date_range.get('end')} "
+            f"latest={latest.get('date')} color={latest.get('health_color')} "
+            f"problems={report['problem_day_count']} "
+            f"answer_p95={_nested(report, 'answer_trace', 'latest_p95_ms')} "
+            f"hybrid_hit3_rate={_nested(report, 'retrieval_eval', 'hybrid_latest_hit3_rate')}\n"
+        )
+    return 0
+
+
 def cmd_validate_report(args: argparse.Namespace) -> int:
     path = pathlib.Path(args.path) if args.path else default_daily_report_path(args.today)
     try:
-        report = validate_daily_report(_read_text(path), path=path)
+        report = validate_daily_report(_read_text(path), path=path, require_daily_trend=args.require_daily_trend)
     except FileNotFoundError:
         report = {
             "schema_version": DAILY_REPORT_VALIDATION_SCHEMA,
@@ -720,6 +989,12 @@ def main() -> None:
     prompt_audit_p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     prompt_audit_p.set_defaults(func=cmd_prompt_audit)
 
+    trend_p = sub.add_parser("trend", help="summarize historical daily-health machine summaries")
+    trend_p.add_argument("--reports-dir", default=None, help="daily-health report directory; defaults to wiki/operations/daily-health")
+    trend_p.add_argument("--days", type=int, default=14, help="number of latest dated reports to include; <=0 means all")
+    trend_p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    trend_p.set_defaults(func=cmd_trend)
+
     assemble_p = sub.add_parser("assemble", help="assemble daily-health machine summary JSON")
     assemble_p.add_argument("--health-color", default="yellow")
     assemble_p.add_argument("--blocking-count", type=int, default=0)
@@ -736,6 +1011,7 @@ def main() -> None:
     assemble_p.add_argument("--prompt-audit", default=None)
     assemble_p.add_argument("--retrieval-lexical", default=None)
     assemble_p.add_argument("--retrieval-hybrid", default=None)
+    assemble_p.add_argument("--daily-trend", default=None)
     assemble_p.add_argument("--commit-sha", default=None)
     assemble_p.add_argument("--push-result", default="pending")
     assemble_p.add_argument("--today", default=None, help="YYYY-MM-DD override for tests")
@@ -744,6 +1020,7 @@ def main() -> None:
     validate_p = sub.add_parser("validate-report", help="validate a daily-health report machine summary")
     validate_p.add_argument("--path", default=None, help="daily report path; defaults to today's report")
     validate_p.add_argument("--today", default=None, help="YYYY-MM-DD override when --path is omitted")
+    validate_p.add_argument("--require-daily-trend", action="store_true", help="require the P5 daily_trend field")
     validate_p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     validate_p.set_defaults(func=cmd_validate_report)
 

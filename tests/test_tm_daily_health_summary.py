@@ -20,8 +20,9 @@ Write the human-facing daily report and final closeout as 中文优先 / Chinese
 Run py tools/tm_answer_eval.py eval --run-id daily-health-YYYY-MM-DD, py tools/tm_answer_trace.py summary --run-id daily-health-YYYY-MM-DD, and py tools/tm_answer_trace.py failures --status error --run-id daily-health-YYYY-MM-DD.
 Run py tools/tm_daily_health_summary.py prompt-audit --json to audit agent role prompts, agent identity coverage, ChatGPT facade prompt, requested_topic handling, and topic taxonomy.
 Run py tools/tm_memory_eval.py eval and py tools/tm_memory_eval.py eval --recall hybrid --embedding-base-url http://127.0.0.1:19190/v1.
-Run py tools/tm_daily_health_summary.py assemble with the health JSON and place the result under ## 机器可读摘要.
-Run py tools/tm_daily_health_summary.py validate-report and confirm schema_version and health_probe are present.
+Run py tools/tm_daily_health_summary.py trend --json --days 14 > .tmp/daily-health/YYYY-MM-DD/daily-trend.json and pass daily_trend into the machine summary.
+Run py tools/tm_daily_health_summary.py assemble with the health JSON and daily-trend.json, then place the result under ## 机器可读摘要.
+Run py tools/tm_daily_health_summary.py validate-report --require-daily-trend and confirm schema_version and health_probe are present.
 Read wiki/operations/daily-health-known-debt.md and classify findings as new / known / resolved / worsened.
 Use git commit, git push, git pull --ff-only origin master, and write_memory at closeout.
 """
@@ -191,6 +192,67 @@ def test_compact_answer_eval_omits_success_rows():
     }
 
 
+def _write_daily_report(path: pathlib.Path, summary: dict) -> None:
+    path.write_text(
+        "\n".join([
+            "# daily",
+            "## 中文总览",
+            "已验证：ok。推断：none。待确认：none。规划：continue。",
+            "## 机器可读摘要",
+            json.dumps(summary, ensure_ascii=False, sort_keys=True),
+            "## 来源",
+            "- fixture",
+        ]),
+        encoding="utf-8",
+    )
+
+
+def test_daily_health_trend_summarizes_historical_machine_summaries(tmp_path, monkeypatch):
+    reports = tmp_path / "wiki/operations/daily-health"
+    reports.mkdir(parents=True)
+    monkeypatch.setattr(tm_daily_health_summary, "REPO_ROOT", tmp_path)
+    base = _daily_summary()
+    day1 = {
+        **base,
+        "health_color": "green",
+        "blocking_count": 0,
+        "new_problem_count": 0,
+        "known_debt_count": 0,
+        "health_probe": {**base["health_probe"], "mem0_api_latency_ms": 100.0},
+        "answer_trace": {"row_count": 25, "failure_count": 0, "duration_ms": {"p95": 300.0}},
+        "retrieval_eval_hybrid": {"case_count": 80, "hit3": 80},
+    }
+    day2 = {
+        **base,
+        "health_color": "red",
+        "blocking_count": 2,
+        "new_problem_count": 1,
+        "known_debt_count": 2,
+        "known_debt_changes": {"new": 1, "known": 0, "resolved": 0, "worsened": 1},
+        "health_probe": {**base["health_probe"], "mem0_api_reachable": False, "mem0_api_latency_ms": 250.0},
+        "answer_eval": {"case_count": 25, "status_correct": 24, "failure_count": 1},
+        "answer_trace": {"row_count": 25, "failure_count": 1, "duration_ms": {"p95": 900.0}},
+        "retrieval_eval_lexical": {"case_count": 80, "hit3": 79},
+        "retrieval_eval_hybrid": {"case_count": 80, "hit3": 80},
+    }
+    _write_daily_report(reports / "2026-05-18.md", day1)
+    _write_daily_report(reports / "2026-05-19.md", day2)
+
+    trend = tm_daily_health_summary.build_daily_health_trend(reports, days=14)
+
+    assert trend["schema_version"] == "daily-health-trend-v1"
+    assert trend["report_count"] == 2
+    assert trend["date_range"] == {"start": "2026-05-18", "end": "2026-05-19"}
+    assert trend["health_color_counts"] == {"green": 1, "red": 1}
+    assert trend["latest"]["date"] == "2026-05-19"
+    assert trend["totals"]["blocking_count"] == 2
+    assert trend["totals"]["known_debt_new"] == 1
+    assert trend["answer_eval"]["min_status_rate"] == 0.96
+    assert trend["answer_trace"]["max_p95_ms"] == 900.0
+    assert trend["health_probe"]["unreachable_days"] == ["2026-05-19"]
+    assert trend["problem_days"] == ["2026-05-19"]
+
+
 def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
     answer = tmp_path / "answer.json"
     trace = tmp_path / "trace.json"
@@ -198,6 +260,7 @@ def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
     lexical = tmp_path / "lexical.json"
     hybrid = tmp_path / "hybrid.json"
     prompt_audit = tmp_path / "prompt-audit.json"
+    trend = tmp_path / "daily-trend.json"
     debt = tmp_path / "known-debt.md"
 
     answer.write_text(json.dumps({
@@ -243,6 +306,21 @@ def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
         "agent_count": 13,
         "missing": [],
     }), encoding="utf-8")
+    trend.write_text(json.dumps({
+        "schema_version": "daily-health-trend-v1",
+        "report_count": 2,
+        "date_range": {"start": "2026-05-17", "end": "2026-05-18"},
+        "latest": {"date": "2026-05-18", "health_color": "yellow"},
+        "health_color_counts": {"yellow": 2},
+        "totals": {"blocking_count": 1},
+        "answer_eval": {"latest_status_rate": 1.0},
+        "answer_trace": {"latest_p95_ms": 420.0},
+        "retrieval_eval": {"hybrid_latest_hit3_rate": 1.0},
+        "health_probe": {"latest_mem0_api_reachable": True},
+        "problem_day_count": 1,
+        "problem_days": ["2026-05-18"],
+        "errors": [],
+    }), encoding="utf-8")
     debt.write_text(
         "\n".join([
             "| id | status | review_by_date |",
@@ -271,6 +349,7 @@ def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
         "prompt_audit": "prompt-audit.json",
         "retrieval_lexical": "lexical.json",
         "retrieval_hybrid": "hybrid.json",
+        "daily_trend": "daily-trend.json",
         "commit_sha": "abc123",
         "push_result": "pushed",
     })()
@@ -294,6 +373,8 @@ def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
     assert summary["prompt_audit"]["agent_count"] == 13
     assert summary["retrieval_eval_lexical"]["hit3"] == 67
     assert summary["retrieval_eval_hybrid"]["hit1"] == 80
+    assert summary["daily_trend"]["report_count"] == 2
+    assert summary["daily_trend"]["latest"]["date"] == "2026-05-18"
     assert summary["commit_sha"] == "abc123"
 
 
@@ -375,6 +456,24 @@ def test_validate_daily_report_rejects_missing_health_probe():
     assert "health_probe" in report["missing_fields"]
 
 
+def test_validate_daily_report_can_require_daily_trend():
+    summary = _daily_summary()
+    text = "\n".join([
+        "# daily",
+        "## 中文总览",
+        "已验证：ok。推断：none。待确认：none。规划：continue。",
+        "## 机器可读摘要",
+        json.dumps(summary, ensure_ascii=False, sort_keys=True),
+        "## 来源",
+        "- live checks",
+    ])
+
+    report = tm_daily_health_summary.validate_daily_report(text, path="report.md", require_daily_trend=True)
+
+    assert report["status"] == "fail"
+    assert "daily_trend" in report["missing_fields"]
+
+
 def test_validate_daily_report_rejects_english_only_human_report():
     text = "\n".join([
         "# daily",
@@ -410,7 +509,7 @@ def test_cmd_validate_report_json_exit_codes(tmp_path, monkeypatch):
     captured: list[str] = []
     monkeypatch.setattr(tm_daily_health_summary.sys.stdout, "write", captured.append)
 
-    args = type("Args", (), {"path": str(report_path), "today": None, "json": True})()
+    args = type("Args", (), {"path": str(report_path), "today": None, "require_daily_trend": False, "json": True})()
 
     assert tm_daily_health_summary.cmd_validate_report(args) == 0
     assert json.loads("".join(captured))["status"] == "ok"
