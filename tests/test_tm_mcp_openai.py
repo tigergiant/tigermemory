@@ -174,6 +174,113 @@ def test_write_memory_via_router_rejects_invalid_inputs(monkeypatch):
         tm_mcp_openai._write_memory_via_router("systems", "x" * 4001)
 
 
+def test_memory_answer_via_core_hides_trace_by_default(monkeypatch):
+    calls = []
+
+    def fake_memory_answer_core(query, **kwargs):
+        calls.append((query, kwargs))
+        return {
+            "status": "ok",
+            "answer": "Use the evidence-first answer.",
+            "summary": "Answered from evidence.",
+            "claims": [{"id": "c1", "text": "claim", "support": ["e1"], "confidence": 1.0}],
+            "evidence": [{
+                "id": "e1",
+                "source": "wiki",
+                "path": "wiki/systems/memory-answer-development-plan.md",
+                "title": "Memory Answer",
+                "excerpt": "compact evidence",
+                "score": 9.0,
+                "authority": 90.0,
+                "source_role": "system_doc",
+                "relevance": 2.0,
+                "match_count": 2,
+                "_snippet": "internal search snippet should not leak",
+            }],
+            "warnings": [],
+            "trace_id": "trace-123",
+            "trace": None,
+        }
+
+    monkeypatch.setattr(tm_mcp_openai.tm_answer, "memory_answer_core", fake_memory_answer_core)
+
+    result = tm_mcp_openai._memory_answer_via_core("how does memory_answer work?")
+
+    assert result["trace_id"] == "trace-123"
+    assert "trace" not in result
+    assert result["evidence"] == [{
+        "id": "e1",
+        "source": "wiki",
+        "path": "wiki/systems/memory-answer-development-plan.md",
+        "title": "Memory Answer",
+        "excerpt": "compact evidence",
+        "score": 9.0,
+        "authority": 90.0,
+        "source_role": "system_doc",
+        "relevance": 2.0,
+        "match_count": 2,
+    }]
+    assert calls == [("how does memory_answer work?", {
+        "scope": "auto",
+        "top_k": 5,
+        "max_evidence": 6,
+        "include_trace": False,
+    })]
+
+
+def test_memory_answer_via_core_can_include_trace_and_passes_arguments(monkeypatch):
+    calls = []
+
+    def fake_memory_answer_core(query, **kwargs):
+        calls.append((query, kwargs))
+        return {
+            "status": "not_found",
+            "answer": "",
+            "summary": "No evidence.",
+            "claims": [],
+            "evidence": [],
+            "warnings": ["all candidate evidence filtered"],
+            "trace_id": "trace-456",
+            "trace": {"calls": [{"tool": "search_tigermemory"}]},
+        }
+
+    monkeypatch.setattr(tm_mcp_openai.tm_answer, "memory_answer_core", fake_memory_answer_core)
+
+    result = tm_mcp_openai._memory_answer_via_core(
+        "recent onboarding",
+        scope="mem0",
+        top_k=10,
+        max_evidence=12,
+        include_trace=True,
+    )
+
+    assert result["trace"] == {"calls": [{"tool": "search_tigermemory"}]}
+    assert result["warnings"] == ["all candidate evidence filtered"]
+    assert calls == [("recent onboarding", {
+        "scope": "mem0",
+        "top_k": 10,
+        "max_evidence": 12,
+        "include_trace": True,
+    })]
+
+
+def test_memory_answer_via_core_rejects_invalid_arguments(monkeypatch):
+    monkeypatch.setattr(
+        tm_mcp_openai.tm_answer,
+        "memory_answer_core",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("core should not be called")),
+    )
+
+    with pytest.raises(ValueError, match="query"):
+        tm_mcp_openai._memory_answer_via_core(" ")
+    with pytest.raises(ValueError, match="scope"):
+        tm_mcp_openai._memory_answer_via_core("q", scope="bad")
+    with pytest.raises(ValueError, match="top_k"):
+        tm_mcp_openai._memory_answer_via_core("q", top_k=0)
+    with pytest.raises(ValueError, match="max_evidence"):
+        tm_mcp_openai._memory_answer_via_core("q", max_evidence=13)
+
+
 def test_write_memory_scope_guard(monkeypatch):
     monkeypatch.setattr(tm_mcp_openai, "get_access_token", lambda: None)
     tm_mcp_openai._require_write_memory_scope()
@@ -241,7 +348,7 @@ def test_readyz_payload_reports_dependency_state(tmp_path, monkeypatch):
     ]
 
 
-def test_openai_facade_exposes_second_step_tools_only():
+def test_openai_facade_exposes_narrow_chatgpt_tools_only():
     async def _list_names():
         server = tm_mcp_openai._build_mcp(
             auth_mode="none",
@@ -254,7 +361,7 @@ def test_openai_facade_exposes_second_step_tools_only():
 
     tools = anyio.run(_list_names)
     names = [tool.name for tool in tools]
-    assert names == ["search", "fetch", "get_agent_onboarding", "write_memory"]
+    assert names == ["search", "fetch", "get_agent_onboarding", "memory_answer", "write_memory"]
     assert all(tool.outputSchema for tool in tools)
     assert "propose_wiki_page" not in names
     assert "write_sources" not in names
@@ -263,6 +370,7 @@ def test_openai_facade_exposes_second_step_tools_only():
     assert by_name["search"].annotations.readOnlyHint is True
     assert by_name["fetch"].annotations.readOnlyHint is True
     assert by_name["get_agent_onboarding"].annotations.readOnlyHint is True
+    assert by_name["memory_answer"].annotations.readOnlyHint is True
     assert by_name["write_memory"].annotations.readOnlyHint is False
     assert by_name["write_memory"].annotations.destructiveHint is False
     assert by_name["write_memory"].annotations.openWorldHint is False

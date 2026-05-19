@@ -7,6 +7,7 @@ This server intentionally exposes a narrow ChatGPT-facing surface:
 - search(query) -> OpenAI company-knowledge compatible result list
 - fetch(id, start?, max_chars?) -> document fetch with optional chunking
 - get_agent_onboarding(depth) -> read-only tigermemory operating context
+- memory_answer(query, scope?, top_k?, max_evidence?, include_trace?) -> evidence-first answer
 - write_memory(topic, text) -> LLM-routed memory write as agent "chatgpt"
 
 It does not register the full tigermemory wiki/source/admin/media/expense toolset.
@@ -50,6 +51,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 import tm_core
+import tm_answer
 import tm_memory_ops
 import tm_persona
 
@@ -101,6 +103,17 @@ class OnboardingResponse(BaseModel):
     depth: str
     content: str
     sources: list[str]
+
+
+class MemoryAnswerResponse(BaseModel):
+    status: str
+    answer: str
+    summary: str
+    claims: list[dict[str, Any]] = Field(default_factory=list)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    trace_id: str
+    trace: dict[str, Any] | None = None
 
 
 class WriteMemoryResponse(BaseModel):
@@ -537,6 +550,78 @@ def _write_memory_via_router(topic: str, text: str) -> WriteMemoryResponse:
     )
 
 
+MEMORY_ANSWER_SCOPES = {"auto", "all", "wiki", "lessons", "onboarding", "mem0"}
+_EVIDENCE_RESPONSE_KEYS = (
+    "id",
+    "source",
+    "path",
+    "title",
+    "excerpt",
+    "score",
+    "authority",
+    "source_role",
+    "relevance",
+    "match_count",
+    "topic",
+    "source_agent",
+    "created_at",
+    "updated_at",
+)
+
+
+def _slim_memory_answer_evidence(items: Any) -> list[dict[str, Any]]:
+    if not isinstance(items, list):
+        return []
+    slim: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        slim.append({key: item[key] for key in _EVIDENCE_RESPONSE_KEYS if key in item})
+    return slim
+
+
+def _memory_answer_via_core(
+    query: str,
+    *,
+    scope: str = "auto",
+    top_k: int = 5,
+    max_evidence: int = 6,
+    include_trace: bool = False,
+) -> dict[str, Any]:
+    q = (query or "").strip()
+    clean_scope = (scope or "auto").strip()
+    if not q:
+        raise ValueError("query must be non-empty")
+    if clean_scope not in MEMORY_ANSWER_SCOPES:
+        raise ValueError(f"scope must be one of {sorted(MEMORY_ANSWER_SCOPES)}")
+    if not (1 <= int(top_k) <= 10):
+        raise ValueError("top_k must be between 1 and 10")
+    if not (1 <= int(max_evidence) <= 12):
+        raise ValueError("max_evidence must be between 1 and 12")
+
+    data = tm_answer.memory_answer_core(
+        q,
+        scope=clean_scope,
+        top_k=int(top_k),
+        max_evidence=int(max_evidence),
+        include_trace=bool(include_trace),
+    )
+    response = MemoryAnswerResponse(
+        status=str(data.get("status") or "error"),
+        answer=str(data.get("answer") or ""),
+        summary=str(data.get("summary") or ""),
+        claims=data.get("claims") if isinstance(data.get("claims"), list) else [],
+        evidence=_slim_memory_answer_evidence(data.get("evidence")),
+        warnings=[str(item) for item in data.get("warnings", [])] if isinstance(data.get("warnings"), list) else [],
+        trace_id=str(data.get("trace_id") or ""),
+        trace=data.get("trace") if include_trace and isinstance(data.get("trace"), dict) else None,
+    )
+    payload = response.model_dump() if hasattr(response, "model_dump") else response.dict()
+    if not include_trace:
+        payload.pop("trace", None)
+    return payload
+
+
 def _oauth_store_path() -> pathlib.Path:
     return pathlib.Path(os.environ.get("TM_OPENAI_MCP_OAUTH_STORE", str(DEFAULT_STORE_PATH)))
 
@@ -905,6 +990,34 @@ def register_tools(server: FastMCP, *, max_fetch_chars: int) -> None:
     def get_agent_onboarding(depth: Literal["30s", "5min", "full"] = "30s") -> OnboardingResponse:
         content = tm_persona.compile_snapshot(depth)
         return OnboardingResponse(depth=depth, content=content, sources=list(tm_persona.SOURCE_PATHS))
+
+    @server.tool(
+        name="memory_answer",
+        title="Answer from tigermemory evidence",
+        description=(
+            "Read-only evidence-first answer over tigermemory search surfaces. "
+            "Use this when the user asks a question that should be answered from tigermemory; "
+            "it returns answer, claims, compact evidence excerpts, warnings, and trace_id. "
+            "By default include_trace=false, so the full trace payload is omitted."
+        ),
+        annotations=READ_ONLY_TOOL,
+        meta=_tool_meta(),
+        structured_output=True,
+    )
+    def memory_answer(
+        query: str,
+        scope: Literal["auto", "all", "wiki", "lessons", "onboarding", "mem0"] = "auto",
+        top_k: int = 5,
+        max_evidence: int = 6,
+        include_trace: bool = False,
+    ) -> dict[str, Any]:
+        return _memory_answer_via_core(
+            query,
+            scope=scope,
+            top_k=top_k,
+            max_evidence=max_evidence,
+            include_trace=include_trace,
+        )
 
     @server.tool(
         name="write_memory",
