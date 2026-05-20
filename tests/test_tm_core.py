@@ -241,6 +241,36 @@ investment portfolio family holdings investment portfolio family holdings invest
     assert results[0]["path"] == "wiki/investment/portfolio-overview.md"
 
 
+def test_search_wiki_explain_includes_lexical_breakdown(monkeypatch, tmp_path):
+    wiki = tmp_path / "wiki"
+    (wiki / "systems").mkdir(parents=True)
+    (wiki / "systems" / "example.md").write_text(
+        """---
+owner: codex
+status: active
+updated: 2026-05-20
+aliases: ["route memory"]
+title: "Route Memory"
+---
+
+# Route Memory
+
+Body mentions routing.
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+
+    results = tm_core.search_wiki("route memory", size=1, include_sources=False, explain=True)
+
+    breakdown = results[0]["score_breakdown"]
+    assert breakdown["lexical_score"] == results[0]["score"]
+    assert breakdown["lexical_rank"] == 1
+    assert breakdown["alias_match"] is True
+    assert breakdown["vector_score"] is None
+    assert breakdown["rrf_score"] is None
+
+
 def test_search_wiki_hybrid_promotes_dominant_lexical_anchor(monkeypatch):
     import types
 
@@ -265,6 +295,30 @@ def test_search_wiki_hybrid_promotes_dominant_lexical_anchor(monkeypatch):
         "wiki/systems/exact-a.md",
         "wiki/systems/exact-b.md",
     ]
+
+
+def test_search_wiki_hybrid_explain_includes_branch_scores(monkeypatch):
+    import types
+
+    lex_hits = [
+        {"path": "wiki/systems/exact-a.md", "score": 200.0, "title": "exact a", "snippet": ""},
+        {"path": "wiki/systems/semantic-top.md", "score": 10.0, "title": "semantic", "snippet": ""},
+    ]
+    emb_hits = [
+        {"path": "wiki/systems/semantic-top.md", "score": 0.9, "title": "semantic"},
+        {"path": "wiki/systems/exact-a.md", "score": 0.5, "title": "exact a"},
+    ]
+
+    monkeypatch.setattr(tm_core, "search_wiki", lambda *_args, **_kwargs: lex_hits)
+    monkeypatch.setitem(sys.modules, "tm_embed_index", types.SimpleNamespace(search=lambda *_args, **_kwargs: emb_hits))
+
+    results = tm_core.search_wiki_hybrid("exact semantic query", size=2, include_sources=False, explain=True)
+
+    by_path = {item["path"]: item["score_breakdown"] for item in results}
+    assert by_path["wiki/systems/exact-a.md"]["lexical_score"] == 200.0
+    assert by_path["wiki/systems/exact-a.md"]["vector_score"] == 0.5
+    assert by_path["wiki/systems/exact-a.md"]["rrf_score"] == results[0]["score"]
+    assert by_path["wiki/systems/exact-a.md"]["degraded"] is False
 
 
 def test_search_wiki_hybrid_does_not_promote_retrieval_eval_report(monkeypatch):

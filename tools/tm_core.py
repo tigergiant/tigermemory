@@ -604,7 +604,13 @@ def mem0_update_content(memory_id: str, memory_content: str) -> str:
     )
 
 
-def mem0_search(query: str, size: int = 5, match_mode: str = "id_first") -> str:
+def mem0_search(
+    query: str,
+    size: int = 5,
+    match_mode: str = "id_first",
+    *,
+    explain: bool = False,
+) -> str:
     """GET memories by query. Returns raw response body."""
     if match_mode not in {"id_first", "token_and", "substring"}:
         raise ValueError("match_mode must be one of: id_first, token_and, substring")
@@ -1428,6 +1434,8 @@ def search_wiki(
     size: int = 5,
     include_sources: bool = True,
     include_inbox: bool = False,
+    *,
+    explain: bool = False,
 ) -> list[dict[str, Any]]:
     """File-based search over wiki/ (+ optional sources/, inbox/) markdown/text.
 
@@ -1489,15 +1497,37 @@ def search_wiki(
             if raw_score == 0:
                 continue
             score = _rank_search_hit(raw_score, rel, title, term_groups, aliases)
-            results.append({
+            hit = {
                 "path": rel,
                 "score": score,
                 "title": title,
                 "snippet": _best_snippet(text, snippet_terms),
-            })
+            }
+            if explain:
+                alias_text = " ".join(aliases).lower()
+                hit["score_breakdown"] = {
+                    "lexical_score": score,
+                    "lexical_rank": None,
+                    "vector_score": None,
+                    "vector_rank": None,
+                    "alias_match": bool(
+                        alias_text
+                        and any(_group_in_text(group, alias_text) for group in term_groups)
+                    ),
+                    "rrf_score": None,
+                    "lexical_anchor": False,
+                    "final_score": score,
+                }
+            results.append(hit)
 
     results.sort(key=lambda r: (-r["score"], r["path"]))
-    return results[:max(1, size)]
+    limited = results[:max(1, size)]
+    if explain:
+        for rank, hit in enumerate(limited, 1):
+            breakdown = hit.get("score_breakdown")
+            if isinstance(breakdown, dict):
+                breakdown["lexical_rank"] = rank
+    return limited
 
 
 # ---------- Hybrid lexical + embedding recall ----------
@@ -1523,6 +1553,8 @@ def search_wiki_hybrid(
     size: int = 5,
     include_sources: bool = True,
     include_inbox: bool = False,
+    *,
+    explain: bool = False,
 ) -> list[dict[str, Any]]:
     """Reciprocal-rank-fusion of `search_wiki` (lexical) and the embedding index.
 
@@ -1541,7 +1573,30 @@ def search_wiki_hybrid(
     drafts).
     """
     pool_k = max(size * 4, 12)
-    lex_hits = search_wiki(query, size=pool_k, include_sources=include_sources, include_inbox=include_inbox)
+    lex_hits = search_wiki(
+        query,
+        size=pool_k,
+        include_sources=include_sources,
+        include_inbox=include_inbox,
+        explain=explain,
+    )
+
+    def degraded_lexical_hits() -> list[dict[str, Any]]:
+        hits = [dict(hit) for hit in lex_hits[:max(1, size)]]
+        if explain:
+            for rank, hit in enumerate(hits, 1):
+                breakdown = dict(hit.get("score_breakdown") or {})
+                breakdown.update({
+                    "lexical_rank": rank,
+                    "vector_score": None,
+                    "vector_rank": None,
+                    "rrf_score": None,
+                    "lexical_anchor": False,
+                    "degraded": True,
+                    "final_score": hit.get("score"),
+                })
+                hit["score_breakdown"] = breakdown
+        return hits
 
     emb_hits: list[dict[str, Any]] = []
     try:
@@ -1552,9 +1607,9 @@ def search_wiki_hybrid(
     except RuntimeError:
         # Index empty / not built / embedding service unreachable.
         # Degrade silently to lexical-only — caller already gets useful results.
-        return lex_hits[:max(1, size)]
+        return degraded_lexical_hits()
     except Exception:
-        return lex_hits[:max(1, size)]
+        return degraded_lexical_hits()
 
     if not include_sources:
         emb_hits = [h for h in emb_hits if not h["path"].startswith("sources/")]
@@ -1587,9 +1642,11 @@ def search_wiki_hybrid(
 
     ordered = sorted(fused.values(), key=lambda v: -v["score"])
     lex_score_by_path: dict[str, float] = {}
+    lex_rank_by_path: dict[str, int] = {}
+    lex_alias_match_by_path: dict[str, bool] = {}
     lexical_first_candidate: tuple[str, float] | None = None
     anchor_paths: list[str] = []
-    for hit in lex_hits:
+    for rank, hit in enumerate(lex_hits, 1):
         try:
             lex_score = float(hit.get("score") or 0.0)
         except (TypeError, ValueError):
@@ -1598,6 +1655,10 @@ def search_wiki_hybrid(
         if not path:
             continue
         lex_score_by_path[path] = lex_score
+        lex_rank_by_path[path] = rank
+        breakdown = hit.get("score_breakdown")
+        if isinstance(breakdown, dict):
+            lex_alias_match_by_path[path] = bool(breakdown.get("alias_match"))
         if (
             lexical_first_candidate is None
             and lex_score >= _HYBRID_LEXICAL_FIRST_MIN_SCORE
@@ -1614,6 +1675,17 @@ def search_wiki_hybrid(
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     limit = max(1, size)
+    emb_score_by_path: dict[str, float] = {}
+    emb_rank_by_path: dict[str, int] = {}
+    for rank, hit in enumerate(emb_hits, 1):
+        path = str(hit.get("path") or "")
+        if not path:
+            continue
+        emb_rank_by_path[path] = rank
+        try:
+            emb_score_by_path[path] = float(hit.get("score") or 0.0)
+        except (TypeError, ValueError):
+            emb_score_by_path[path] = 0.0
 
     def add_entry(entry: dict[str, Any]) -> None:
         if len(out) >= limit:
@@ -1623,6 +1695,21 @@ def search_wiki_hybrid(
         path = str(merged.get("path") or "")
         if not path or path in seen:
             return
+        if explain:
+            merged["score_breakdown"] = {
+                "lexical_score": lex_score_by_path.get(path),
+                "lexical_rank": lex_rank_by_path.get(path),
+                "vector_score": emb_score_by_path.get(path),
+                "vector_rank": emb_rank_by_path.get(path),
+                "alias_match": lex_alias_match_by_path.get(path, False),
+                "rrf_score": merged["score"],
+                "lexical_anchor": path in anchor_paths or (
+                    lexical_first_candidate is not None
+                    and path == lexical_first_candidate[0]
+                ),
+                "degraded": False,
+                "final_score": merged["score"],
+            }
         seen.add(path)
         out.append(merged)
 

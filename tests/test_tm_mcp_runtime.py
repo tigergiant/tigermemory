@@ -132,7 +132,7 @@ def test_write_memory_uses_shared_memory_ops(monkeypatch):
     old = tm_mcp._ROLE
     try:
         tm_mcp._ROLE = "writer"
-        result = tm_mcp.write_memory("codex", "systems", "body", force_inbox=True)
+        result = tm_mcp.write_memory("codex", "systems", "body", force_inbox=True, light=False)
     finally:
         tm_mcp._ROLE = old
 
@@ -141,6 +141,7 @@ def test_write_memory_uses_shared_memory_ops(monkeypatch):
     assert captured["topic"] == "systems"
     assert captured["text"] == "body"
     assert captured["kwargs"]["force_inbox"] is True
+    assert captured["kwargs"]["light"] is False
     assert captured["kwargs"]["total_budget_s"] is None
     assert captured["kwargs"]["include_readback"] is True
 

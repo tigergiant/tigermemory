@@ -600,6 +600,7 @@ def memory_answer(
     max_evidence: int = 6,
     include_trace: bool = True,
     run_id: str | None = None,
+    evidence_char_budget: int = 2000,
 ) -> dict[str, Any]:
     """Evidence-first answer over tigermemory search surfaces.
 
@@ -610,6 +611,7 @@ def memory_answer(
         max_evidence: Evidence items to expand/read, clamped to 1..12.
         include_trace: Include trace details in the response.
         run_id: Optional run id for grouping trace rows from one eval or scan.
+        evidence_char_budget: Max total excerpt characters sent to the answer LLM.
 
     Returns:
         {status, answer, summary, claims, evidence, warnings, run_id, trace_id, trace}.
@@ -621,11 +623,12 @@ def memory_answer(
         max_evidence=max_evidence,
         include_trace=include_trace,
         run_id=run_id,
+        evidence_char_budget=evidence_char_budget,
     )
 
 
 @mcp.tool()
-def write_memory(agent: str, topic: str, text: str, force_inbox: bool = False) -> dict[str, Any]:
+def write_memory(agent: str, topic: str, text: str, force_inbox: bool = False, light: bool = False) -> dict[str, Any]:
     _require_writer()
     """Single canonical entry for agent memory writes. Server-side LLM routes to mem0 / inbox / discard.
 
@@ -634,6 +637,7 @@ def write_memory(agent: str, topic: str, text: str, force_inbox: bool = False) -
         topic: Topic name
         text: Memory text content
         force_inbox: If True, bypass routing and write directly to inbox (agent requests human review)
+        light: If True, skip DeepSeek routing for allowlisted low-risk pointer writes
 
     Returns:
         {"route": "mem0", "id": "..."} or {"route": "inbox", "path": "...", "commit_sha": "..."}
@@ -644,6 +648,7 @@ def write_memory(agent: str, topic: str, text: str, force_inbox: bool = False) -
         topic,
         text,
         force_inbox=force_inbox,
+        light=light,
         total_budget_s=None,
         include_readback=True,
     )

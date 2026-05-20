@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -22,6 +23,37 @@ _digest_timer: threading.Timer | None = None
 _digest_lock = threading.Lock()
 _embed_timers: dict[str, threading.Timer] = {}
 _embed_lock = threading.Lock()
+
+PHONE_RE = re.compile(r"(?<!\d)(?:\+?86[-\s]?)?1[3-9]\d{9}(?!\d)")
+CN_ID_RE = re.compile(
+    r"(?<![0-9Xx])[1-9]\d{5}(?:18|19|20)\d{2}(?:0[1-9]|1[0-2])"
+    r"(?:0[1-9]|[12]\d|3[01])\d{3}[0-9Xx](?![0-9Xx])"
+)
+BANK_KEYWORD = (
+    r"(?:银行卡号?|卡号|银行账号|银行账户|借记卡|储蓄卡|信用卡|银联卡|"
+    r"visa|master(?:card)?|amex|jcb|bank\s*card|"
+    r"card\s*(?:no\.?|number)|account\s*(?:no\.?|number))"
+)
+BANK_KEYWORD_RE = re.compile(BANK_KEYWORD, re.IGNORECASE)
+BANK_DIGITS = r"(?<![\dA-Fa-f])(?:\d[ -]?){13,19}(?![\dA-Fa-f])"
+BANK_DIGITS_RE = re.compile(BANK_DIGITS)
+BANK_CARD_CONTEXT_RE = re.compile(
+    rf"(?is)(?:{BANK_KEYWORD}.{{0,24}}{BANK_DIGITS}|{BANK_DIGITS}.{{0,24}}{BANK_KEYWORD})"
+)
+CREDENTIAL_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("bearer_token", re.compile(r"(?i)\b(?:Authorization\s*:\s*)?Bearer\s+[A-Za-z0-9._~+/=-]{12,}")),
+    (
+        "credential",
+        re.compile(
+            r"(?i)\b(?:api[_-]?key|token|secret|password|passwd|pwd|access[_-]?token|"
+            r"refresh[_-]?token|private[_-]?key)\s*[:=]\s*['\"]?[^'\"\s]{8,}"
+        ),
+    ),
+    (
+        "private_key",
+        re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL),
+    ),
+]
 
 
 def _refresh_digest_today() -> None:
@@ -142,6 +174,53 @@ def _verified_summary(memory_id: str, *, include_readback: bool) -> dict[str, An
     }
 
 
+def _light_sensitive_hits(text: str) -> list[dict[str, str]]:
+    hits: list[dict[str, str]] = []
+    if PHONE_RE.search(text):
+        hits.append({"kind": "phone", "pattern": "PHONE_RE"})
+    if CN_ID_RE.search(text):
+        hits.append({"kind": "cn_id", "pattern": "CN_ID_RE"})
+    hits.extend(_bank_card_hits(text))
+    hits.extend(_credential_hits(text))
+    return hits
+
+
+def _luhn_valid(digits: str) -> bool:
+    if not re.fullmatch(r"\d{13,19}", digits):
+        return False
+    total = 0
+    parity = len(digits) % 2
+    for index, char in enumerate(digits):
+        digit = int(char)
+        if index % 2 == parity:
+            digit *= 2
+            if digit > 9:
+                digit -= 9
+        total += digit
+    return total % 10 == 0
+
+
+def _bank_card_hits(text: str) -> list[dict[str, str]]:
+    hits: list[dict[str, str]] = []
+    for match in BANK_DIGITS_RE.finditer(text):
+        digits = re.sub(r"\D", "", match.group(0))
+        if not _luhn_valid(digits):
+            continue
+        context = text[max(0, match.start() - 24): min(len(text), match.end() + 24)]
+        if BANK_KEYWORD_RE.search(context):
+            hits.append({"kind": "bank_card", "pattern": "BANK_CARD_CONTEXT_RE"})
+            break
+    return hits
+
+
+def _credential_hits(text: str) -> list[dict[str, str]]:
+    hits: list[dict[str, str]] = []
+    for kind, pattern in CREDENTIAL_PATTERNS:
+        if pattern.search(text):
+            hits.append({"kind": kind, "pattern": pattern.pattern})
+    return hits
+
+
 def _to_inbox(
     decision: tm_route.RouteDecision,
     agent: str,
@@ -149,8 +228,11 @@ def _to_inbox(
     *,
     requested_topic: str,
     storage_topic: str,
+    metadata_extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     fm_extra = decision.as_metadata()
+    if metadata_extra:
+        fm_extra.update(metadata_extra)
     fm_extra["route_requested_topic"] = requested_topic
     fm_extra["stored_topic"] = storage_topic
     fm_extra["routed_by"] = "tigermemory"
@@ -163,7 +245,7 @@ def _to_inbox(
         frontmatter_extra=fm_extra,
     )
     schedule_digest_refresh()
-    return {
+    result = {
         "route": "inbox",
         "path": rel,
         "commit_sha": sha,
@@ -174,6 +256,9 @@ def _to_inbox(
         "reasons": decision.reasons,
         "unreviewed": decision.unreviewed,
     }
+    if metadata_extra:
+        result.update(metadata_extra)
+    return result
 
 
 def _storage_topic(
@@ -195,8 +280,11 @@ def _route_metadata(
     *,
     requested_topic: str,
     storage_topic: str,
+    metadata_extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     meta = decision.as_metadata()
+    if metadata_extra:
+        meta.update(metadata_extra)
     meta["route_requested_topic"] = requested_topic
     meta["stored_topic"] = storage_topic
     return meta
@@ -221,6 +309,7 @@ def write_memory_with_review(
     text: str,
     *,
     force_inbox: bool = False,
+    light: bool = False,
     total_budget_s: int | None = None,
     mem0_min_reserve_s: int = 5,
     include_readback: bool = True,
@@ -229,7 +318,58 @@ def write_memory_with_review(
 ) -> dict[str, Any]:
     """Route a memory write to discard/mem0/inbox with consistent fallback semantics."""
     t0 = time.monotonic()
-    decision = tm_route.route_memory(text, topic, agent)
+    if force_inbox and light:
+        raise ValueError("force_inbox and light are mutually exclusive")
+    route_metadata_extra: dict[str, Any] = {}
+    if light:
+        sensitive_hits = _light_sensitive_hits(text)
+        if sensitive_hits:
+            hit_types = [hit["kind"] for hit in sensitive_hits]
+            decision = tm_route.RouteDecision(
+                route="inbox",
+                score=0,
+                topic_inferred=topic,
+                issues=[f"light_sensitive_regex:{kind}" for kind in hit_types],
+                reasons=(
+                    "light_bypass_sensitive_guard: local sensitive regex matched; "
+                    "DeepSeek skipped; routed to inbox for human review"
+                ),
+                is_transient=False,
+                is_sensitive=True,
+                needs_human_review=True,
+                unreviewed=False,
+            )
+            route_metadata_extra = {
+                "light_bypass": True,
+                "route_mode": "light_bypass",
+                "light_sensitive_guard": True,
+                "light_sensitive_hit_types": hit_types,
+                "light_deepseek_called": False,
+            }
+        else:
+            decision = tm_route.RouteDecision(
+                route="mem0",
+                score=50,
+                topic_inferred=topic,
+                issues=[],
+                reasons=(
+                    "light_bypass: explicit caller opt-in; DeepSeek skipped; "
+                    "score=50 placeholder"
+                ),
+                is_transient=False,
+                is_sensitive=False,
+                needs_human_review=False,
+                unreviewed=False,
+            )
+            route_metadata_extra = {
+                "light_bypass": True,
+                "route_mode": "light_bypass",
+                "light_sensitive_guard": False,
+                "light_sensitive_hit_types": [],
+                "light_deepseek_called": False,
+            }
+    else:
+        decision = tm_route.route_memory(text, topic, agent)
     if force_inbox:
         decision = tm_route.RouteDecision(
             route="inbox",
@@ -300,6 +440,7 @@ def write_memory_with_review(
                         decision,
                         requested_topic=topic,
                         storage_topic=storage_topic,
+                        metadata_extra=route_metadata_extra,
                     ),
                     timeout=timeout,
                 ))
@@ -310,6 +451,8 @@ def write_memory_with_review(
                 data["topic"] = storage_topic
                 data["topic_inferred"] = decision.topic_inferred
                 data["reasons"] = decision.reasons
+                if route_metadata_extra:
+                    data.update(route_metadata_extra)
                 if not isinstance(data.get("warnings"), list):
                     data["warnings"] = []
                 data["warnings"].extend(_topic_warnings(topic, decision, storage_topic))
@@ -353,6 +496,7 @@ def write_memory_with_review(
         text,
         requested_topic=topic,
         storage_topic=storage_topic,
+        metadata_extra=route_metadata_extra,
     )
     result.setdefault("warnings", []).extend(_topic_warnings(topic, decision, storage_topic))
     return result

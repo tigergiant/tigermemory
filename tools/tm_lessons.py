@@ -24,7 +24,7 @@ import os
 import pathlib
 import re
 import sys
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
 import tm_core
 
@@ -82,8 +82,13 @@ def _split_frontmatter(text: str) -> Tuple[str, str]:
     return m.group(1), text[m.end():]
 
 
-def _score_lesson(text: str, query_tokens: List[str]) -> Tuple[int, str, List[str]]:
-    """Return (score, title, aliases) for a lesson file content.
+def _score_lesson(
+    text: str,
+    query_tokens: List[str],
+    *,
+    explain: bool = False,
+) -> Tuple[int, str, List[str], dict[str, Any] | None]:
+    """Return (score, title, aliases, score_breakdown) for a lesson file content.
 
     Score: title hit ×5, aliases hit ×3, body hit ×1 per token.
     """
@@ -97,6 +102,10 @@ def _score_lesson(text: str, query_tokens: List[str]) -> Tuple[int, str, List[st
 
     term_groups = tm_core.search_query_term_groups(" ".join(query_tokens))
     score = 0
+    total_title_hits = 0
+    total_alias_hits = 0
+    total_body_hits = 0
+    matched_terms: list[str] = []
     for group in term_groups:
         title_hits = sum(1 for term in group if term and term in title_lc)
         alias_hits = sum(1 for term in group if term and term in aliases_lc)
@@ -106,7 +115,30 @@ def _score_lesson(text: str, query_tokens: List[str]) -> Tuple[int, str, List[st
         score += title_hits * 5
         score += alias_hits * 3
         score += body_hits
-    return score, title, aliases
+        total_title_hits += title_hits
+        total_alias_hits += alias_hits
+        total_body_hits += body_hits
+        for term in group:
+            if (
+                term
+                and (
+                    term in title_lc
+                    or term in aliases_lc
+                    or term in body_lc
+                )
+                and term not in matched_terms
+            ):
+                matched_terms.append(term)
+    breakdown = None
+    if explain:
+        breakdown = {
+            "title_hits": total_title_hits,
+            "alias_hits": total_alias_hits,
+            "body_hits": total_body_hits,
+            "matched_terms": matched_terms,
+            "final_score": score,
+        }
+    return score, title, aliases, breakdown
 
 
 def _excerpt(text: str, query_tokens: List[str], width: int = 80) -> str:
@@ -166,7 +198,7 @@ def cmd_search(args: argparse.Namespace) -> int:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
-        score, title, aliases = _score_lesson(text, tokens)
+        score, title, aliases, _breakdown = _score_lesson(text, tokens)
         if score > 0:
             scored.append((score, path, title, aliases))
 

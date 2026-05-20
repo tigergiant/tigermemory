@@ -87,6 +87,60 @@ def test_memory_answer_core_not_found_skips_llm(monkeypatch, tmp_path):
     assert trace_row["trace"]["calls"][0]["query_hash"]
 
 
+def test_decide_injection_eligibility_table():
+    now = tm_answer.datetime.datetime(2026, 5, 20, tzinfo=tm_answer.datetime.timezone.utc)
+
+    assert tm_answer.decide_injection_eligibility(
+        {"source": "wiki", "path": "wiki/systems/page.md"},
+        now=now,
+    ) == {
+        "injection_eligible": False,
+        "injection_reason": "canonical_wiki_evidence_only",
+    }
+    assert tm_answer.decide_injection_eligibility(
+        {"source": "onboarding", "title": "Agent Onboarding Snapshot (30s)"},
+        now=now,
+    )["injection_eligible"] is True
+    assert tm_answer.decide_injection_eligibility(
+        {"source": "onboarding", "title": "Agent Onboarding Snapshot (full)"},
+        now=now,
+    )["injection_eligible"] is False
+    assert tm_answer.decide_injection_eligibility(
+        {
+            "source": "mem0",
+            "created_at": "2026-05-01T00:00:00+00:00",
+            "score_breakdown": {"route_decision": "mem0"},
+        },
+        now=now,
+    ) == {
+        "injection_eligible": True,
+        "injection_reason": "recent_atomic_memory",
+    }
+    assert tm_answer.decide_injection_eligibility(
+        {
+            "source": "mem0",
+            "created_at": "2025-12-01T00:00:00+00:00",
+            "score_breakdown": {"route_decision": "mem0"},
+        },
+        now=now,
+    ) == {
+        "injection_eligible": False,
+        "injection_reason": "low_quality_or_stale",
+    }
+
+
+def test_trim_evidence_for_prompt_enforces_total_excerpt_budget():
+    evidence = [
+        {"id": "e1", "excerpt": "abcde"},
+        {"id": "e2", "excerpt": "fghij"},
+    ]
+
+    trimmed, warnings = tm_answer.trim_evidence_for_prompt(evidence, max_chars=7)
+
+    assert [item["excerpt"] for item in trimmed] == ["abcde", "fg"]
+    assert warnings == ["prompt_budget_truncated=true"]
+
+
 def test_memory_answer_core_can_disable_trace_write(monkeypatch, tmp_path):
     calls = []
     trace_path = tmp_path / "trace.jsonl"
@@ -99,6 +153,94 @@ def test_memory_answer_core_can_disable_trace_write(monkeypatch, tmp_path):
     assert result["status"] == "not_found"
     assert not trace_path.exists()
     assert calls == []
+
+
+def test_memory_answer_core_trims_evidence_before_llm(monkeypatch, tmp_path):
+    captured = {}
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(
+        tm_answer.tm_search,
+        "search_tigermemory",
+        lambda *_args, **_kwargs: _search_result({
+            "source": "mem0",
+            "path": "mem0:long",
+            "title": "systems / codex",
+            "snippet": "needle " * 100,
+            "score": 1.0,
+        }),
+    )
+
+    def fake_llm(_query, evidence):
+        captured["evidence"] = evidence
+        return True, {
+            "status": "ok",
+            "answer": "Trimmed answer.",
+            "summary": "Trimmed.",
+            "claims": [{"id": "c1", "text": "trimmed", "support": ["e1"], "confidence": 0.8}],
+        }
+
+    monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", fake_llm)
+
+    result = tm_answer.memory_answer_core(
+        "needle",
+        scope="mem0",
+        evidence_char_budget=20,
+        run_id="budget-test",
+    )
+
+    assert len(captured["evidence"][0]["excerpt"]) == 20
+    assert result["trace"]["prompt_budget_truncated"] is True
+    assert "prompt_budget_truncated=true" in result["warnings"]
+
+
+def test_memory_answer_conflict_scan_uses_untrimmed_evidence(monkeypatch, tmp_path):
+    hits = [
+        {
+            "source": "mem0",
+            "path": "mem0:passed",
+            "title": "runtime status",
+            "snippet": "service " + ("x" * 40) + " passed",
+            "score": 1.0,
+        },
+        {
+            "source": "mem0",
+            "path": "mem0:unavailable",
+            "title": "runtime status",
+            "snippet": "service " + ("y" * 40) + " unavailable",
+            "score": 1.0,
+        },
+    ]
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(
+        tm_answer.tm_search,
+        "search_tigermemory",
+        lambda *_args, **_kwargs: {
+            "query": "service conflict",
+            "scope": "mem0",
+            "strategy": "grouped-intent-budget-v1",
+            "primary_scope": "mem0",
+            "primary_results": hits,
+            "groups": {"mem0": hits},
+            "warnings": [],
+        },
+    )
+    monkeypatch.setattr(
+        tm_answer,
+        "_call_memory_answer_llm",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("conflict path must not call LLM")),
+    )
+
+    result = tm_answer.memory_answer_core(
+        "service conflict",
+        scope="mem0",
+        evidence_char_budget=10,
+        run_id="conflict-budget-test",
+    )
+
+    assert result["status"] == "conflict"
+    assert result["trace"]["prompt_budget_truncated"] is True
+    assert result["evidence"][0]["excerpt"].endswith("passed")
+    assert result["evidence"][1]["excerpt"].endswith("unavailable")
 
 
 def test_expand_queries_reads_registry(monkeypatch, tmp_path):

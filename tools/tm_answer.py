@@ -290,6 +290,108 @@ def _passes_evidence_gate(evidence: dict[str, Any], query_class: str) -> tuple[b
     return False, "weak evidence: no specific query signal"
 
 
+def _parse_datetime(value: Any) -> datetime.datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=tm_core.TZ_CN)
+    return parsed
+
+
+def decide_injection_eligibility(
+    hit: dict[str, Any],
+    *,
+    now: datetime.datetime | None = None,
+) -> dict[str, Any]:
+    source = str(hit.get("source") or "")
+    path = str(hit.get("path") or "")
+    title = str(hit.get("title") or "")
+    score = float(hit.get("score") or 0.0)
+    current = now or datetime.datetime.now(datetime.timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=datetime.timezone.utc)
+
+    if source == "wiki":
+        if path.startswith("wiki/operations/daily-health/"):
+            return {"injection_eligible": False, "injection_reason": "operational_report_evidence_only"}
+        return {"injection_eligible": False, "injection_reason": "canonical_wiki_evidence_only"}
+
+    if source == "lessons" or path.startswith("wiki/self-evolution/lessons/"):
+        return {
+            "injection_eligible": score > 0,
+            "injection_reason": "preventive_rule" if score > 0 else "low_quality_or_stale",
+            "injection_budget_chars": 500 if score > 0 else None,
+        }
+
+    if source == "onboarding":
+        if "(full)" in title:
+            return {"injection_eligible": False, "injection_reason": "full_persona_too_long"}
+        if "(30s)" in title:
+            return {
+                "injection_eligible": True,
+                "injection_reason": "agent_persona_snapshot",
+                "injection_budget_chars": 800,
+            }
+        if "(5min)" in title:
+            return {
+                "injection_eligible": True,
+                "injection_reason": "agent_persona_snapshot",
+                "injection_budget_chars": 1000,
+            }
+        return {"injection_eligible": False, "injection_reason": "full_persona_too_long"}
+
+    if source == "mem0":
+        breakdown = hit.get("score_breakdown") if isinstance(hit.get("score_breakdown"), dict) else {}
+        route_decision = breakdown.get("route_decision")
+        if route_decision in {"inbox", "discard"} or hit.get("unreviewed"):
+            return {"injection_eligible": False, "injection_reason": "low_quality_or_stale"}
+        created_at = _parse_datetime(hit.get("created_at"))
+        age_days = None
+        if created_at is not None:
+            age_days = (current.astimezone(datetime.timezone.utc) - created_at.astimezone(datetime.timezone.utc)).days
+        if age_days is not None and age_days > 90:
+            return {"injection_eligible": False, "injection_reason": "low_quality_or_stale"}
+        if age_days is None or age_days <= 45:
+            return {"injection_eligible": True, "injection_reason": "recent_atomic_memory"}
+        return {"injection_eligible": False, "injection_reason": "low_quality_or_stale"}
+
+    return {"injection_eligible": False, "injection_reason": "unknown_source"}
+
+
+def trim_evidence_for_prompt(
+    evidence: list[dict[str, Any]],
+    *,
+    max_chars: int = 2000,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    if max_chars <= 0:
+        return [{**item, "excerpt": ""} for item in evidence], ["prompt_budget_truncated=true"]
+    remaining = max_chars
+    trimmed: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    truncated = False
+    for item in evidence:
+        copy_item = dict(item)
+        excerpt = redact_secrets(str(copy_item.get("excerpt") or ""))
+        if remaining <= 0:
+            copy_item["excerpt"] = ""
+            truncated = True
+        elif len(excerpt) > remaining:
+            copy_item["excerpt"] = excerpt[:remaining]
+            remaining = 0
+            truncated = True
+        else:
+            copy_item["excerpt"] = excerpt
+            remaining -= len(excerpt)
+        trimmed.append(copy_item)
+    if truncated:
+        warnings.append("prompt_budget_truncated=true")
+    return trimmed, warnings
+
+
 def expand_evidence(
     query: str,
     search_result: dict[str, Any],
@@ -318,6 +420,10 @@ def expand_evidence(
             "source_role": _source_role(source, path),
             "_snippet": snippet,
         }
+        if isinstance(hit.get("score_breakdown"), dict):
+            item["score_breakdown"] = hit["score_breakdown"]
+        injection = decide_injection_eligibility(hit)
+        item.update({k: v for k, v in injection.items() if v is not None})
         item.update(_extract_hit_metadata(hit, source, title))
         relevance, match_count, matched_terms = _relevance_score(query, item)
         item["relevance"] = round(relevance, 3)
@@ -619,6 +725,7 @@ def memory_answer_core(
     include_trace: bool = True,
     run_id: str | None = None,
     write_trace: bool = True,
+    evidence_char_budget: int = 2000,
 ) -> dict[str, Any]:
     """Answer a memory query from expanded evidence, with traceable grounding."""
     started = time.monotonic()
@@ -641,6 +748,8 @@ def memory_answer_core(
         "authority_scores": [],
         "conflict_scan": None,
         "selected_evidence": [],
+        "prompt_budget_truncated": False,
+        "evidence_char_budget": evidence_char_budget,
         "duration_ms": 0.0,
     }
 
@@ -659,6 +768,10 @@ def memory_answer_core(
     warnings = list(search_result.get("warnings") or [])
     excerpt_query = " ".join(trace["expanded_queries"])
     evidence, evidence_gate = expand_evidence(excerpt_query, search_result, evidence_limit, query_class)
+    llm_evidence, budget_warnings = trim_evidence_for_prompt(evidence, max_chars=evidence_char_budget)
+    if budget_warnings:
+        warnings.extend(budget_warnings)
+        trace["prompt_budget_truncated"] = True
     trace["evidence_gate"] = evidence_gate
     trace["authority_scores"] = [
         {
@@ -667,6 +780,9 @@ def memory_answer_core(
             "authority": item.get("authority"),
             "relevance": item.get("relevance"),
             "source_role": item.get("source_role"),
+            "score_breakdown": item.get("score_breakdown"),
+            "injection_eligible": item.get("injection_eligible"),
+            "injection_reason": item.get("injection_reason"),
         }
         for item in evidence
     ]
@@ -722,7 +838,7 @@ def memory_answer_core(
             _write_result_trace(result, trace, q)
         return result
 
-    ok, parsed = _call_memory_answer_llm(q, evidence)
+    ok, parsed = _call_memory_answer_llm(q, llm_evidence)
     if not ok:
         warnings.append(f"memory_answer LLM failed: {parsed}")
         trace["calls"].append({"tool": "DeepSeek", "purpose": "memory_answer", "ok": False})

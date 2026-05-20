@@ -178,7 +178,7 @@ def search_lessons_case(query: str, top_k: int) -> list[SearchHit]:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
-        score, title, _aliases = tm_lessons._score_lesson(text, tokens)
+        score, title, _aliases, _breakdown = tm_lessons._score_lesson(text, tokens)
         if score > 0:
             scored.append((score, path, title, tm_lessons._excerpt(text, tokens, width=120)))
     scored.sort(key=lambda item: (-item[0], item[1].name))

@@ -23,6 +23,10 @@ def format_search_hit(
     snippet: str,
     score: float,
     extra: dict[str, Any] | None = None,
+    *,
+    score_breakdown: dict[str, Any] | None = None,
+    injection_eligible: bool | None = None,
+    injection_reason: str | None = None,
 ) -> dict[str, Any]:
     hit = {
         "source": source,
@@ -31,6 +35,12 @@ def format_search_hit(
         "snippet": snippet,
         "score": score,
     }
+    if score_breakdown is not None:
+        hit["score_breakdown"] = score_breakdown
+    if injection_eligible is not None:
+        hit["injection_eligible"] = injection_eligible
+    if injection_reason is not None:
+        hit["injection_reason"] = injection_reason
     if extra:
         hit.update(extra)
     return hit
@@ -38,7 +48,7 @@ def format_search_hit(
 
 def _search_lessons_group(query: str, top_k: int) -> list[dict[str, Any]]:
     tokens = [t for t in re.split(r"\s+", query.strip()) if t]
-    scored: list[tuple[int, Any, str, str]] = []
+    scored: list[tuple[int, Any, str, str, dict[str, Any] | None]] = []
     if not tokens or not tm_lessons.LESSONS_DIR.exists():
         return []
     for path in sorted(tm_lessons.LESSONS_DIR.glob("*.md")):
@@ -48,9 +58,9 @@ def _search_lessons_group(query: str, top_k: int) -> list[dict[str, Any]]:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
-        score, title, _aliases = tm_lessons._score_lesson(text, tokens)
+        score, title, _aliases, breakdown = tm_lessons._score_lesson(text, tokens, explain=True)
         if score > 0:
-            scored.append((score, path, title, tm_lessons._excerpt(text, tokens, width=120)))
+            scored.append((score, path, title, tm_lessons._excerpt(text, tokens, width=120), breakdown))
     scored.sort(key=lambda item: (-item[0], item[1].name))
     return [
         format_search_hit(
@@ -59,8 +69,9 @@ def _search_lessons_group(query: str, top_k: int) -> list[dict[str, Any]]:
             title,
             excerpt,
             float(score),
+            score_breakdown=breakdown,
         )
-        for score, path, title, excerpt in scored[:top_k]
+        for score, path, title, excerpt, breakdown in scored[:top_k]
     ]
 
 
@@ -86,6 +97,12 @@ def _search_onboarding_group(query: str, top_k: int) -> list[dict[str, Any]]:
                 f"Agent Onboarding Snapshot ({depth})",
                 content[:300].replace("\n", " ").strip(),
                 float(score),
+                score_breakdown={
+                    "depth": depth,
+                    "token_hits": score,
+                    "matched_terms": [token for token in tokens if token in lower],
+                    "final_score": score,
+                },
             ))
     hits.sort(key=lambda hit: (-hit["score"], hit["title"]))
     return hits[:top_k]
@@ -104,6 +121,14 @@ def _search_mem0_group(query: str, top_k: int) -> tuple[list[dict[str, Any]], st
         mem_id = str(item.get("id") or f"rank-{index}")
         raw_score = item.get("score")
         score = float(raw_score) if isinstance(raw_score, (int, float)) else float(top_k - index + 1)
+        age_days = None
+        created_at = item.get("created_at")
+        if created_at:
+            try:
+                created_dt = datetime.datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+                age_days = (datetime.datetime.now(datetime.timezone.utc) - created_dt.astimezone(datetime.timezone.utc)).days
+            except ValueError:
+                age_days = None
         hits.append(format_search_hit(
             "mem0",
             f"mem0:{mem_id}",
@@ -113,6 +138,15 @@ def _search_mem0_group(query: str, top_k: int) -> tuple[list[dict[str, Any]], st
             extra={
                 "created_at": item.get("created_at"),
                 "updated_at": item.get("updated_at"),
+            },
+            score_breakdown={
+                "native_score": raw_score if isinstance(raw_score, (int, float)) else None,
+                "rank": index,
+                "rank_fallback": not isinstance(raw_score, (int, float)),
+                "age_days": age_days,
+                "route_decision": meta.get("route_decision"),
+                "topic": meta.get("topic"),
+                "final_score": score,
             },
         ))
     return hits, None
@@ -160,8 +194,9 @@ def search_tigermemory(
                 str(hit.get("title", "")),
                 str(hit.get("snippet", "")),
                 float(hit.get("score", 0.0)),
+                score_breakdown=hit.get("score_breakdown") if isinstance(hit.get("score_breakdown"), dict) else None,
             )
-            for hit in tm_core.search_wiki_hybrid(q, size=limit, include_sources=include_sources, include_inbox=False)
+            for hit in tm_core.search_wiki_hybrid(q, size=limit, include_sources=include_sources, include_inbox=False, explain=True)
         ]
     if "lessons" in scopes:
         groups["lessons"] = _search_lessons_group(q, limit)

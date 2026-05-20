@@ -85,17 +85,19 @@ def test_memory_answer_endpoint_delegates_to_core(monkeypatch):
         "max_evidence": 2,
         "include_trace": False,
         "run_id": "http-run-1",
+        "evidence_char_budget": 2000,
     }
 
 
 def test_write_memory_endpoint_forwards_force_inbox(monkeypatch):
     captured = {}
 
-    def fake_write_memory_with_review(agent, topic, text, force_inbox=False):
+    def fake_write_memory_with_review(agent, topic, text, force_inbox=False, light=False):
         captured["agent"] = agent
         captured["topic"] = topic
         captured["text"] = text
         captured["force_inbox"] = force_inbox
+        captured["light"] = light
         return {"route": "inbox", "path": "inbox/x.md"}
 
     monkeypatch.setattr(tm_http, "_write_memory_with_review", fake_write_memory_with_review)
@@ -105,6 +107,7 @@ def test_write_memory_endpoint_forwards_force_inbox(monkeypatch):
         topic="systems",
         text="needs human review",
         force_inbox=True,
+        light=False,
     )
     result = asyncio.run(tm_http.write_memory(req))
 
@@ -114,7 +117,26 @@ def test_write_memory_endpoint_forwards_force_inbox(monkeypatch):
         "topic": "systems",
         "text": "needs human review",
         "force_inbox": True,
+        "light": False,
     }
+
+
+def test_write_memory_endpoint_rejects_force_inbox_light_conflict(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tm_http, "_write_memory_with_review", lambda *_args, **_kwargs: calls.append("called"))
+
+    req = tm_http.WriteMemoryRequest(
+        agent="codex",
+        topic="systems",
+        text="needs human review",
+        force_inbox=True,
+        light=True,
+    )
+    with pytest.raises(tm_http.HTTPException) as exc:
+        asyncio.run(tm_http.write_memory(req))
+
+    assert exc.value.status_code == 400
+    assert calls == []
 
 
 def test_mem0_api_probe_reports_latency_and_error(monkeypatch):

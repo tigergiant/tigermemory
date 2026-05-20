@@ -4,6 +4,8 @@ import json
 import pathlib
 import sys
 
+import pytest
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
@@ -50,6 +52,142 @@ def test_write_memory_success_adds_verified_readback(monkeypatch):
     assert result["id"] == mem_id
     assert result["verified"]["direct_readback_ok"] is True
     assert result["verified"]["search_by_id_self_hit"] is True
+
+
+def test_light_write_skips_route_memory_and_adds_metadata(monkeypatch):
+    mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"
+    captured = {}
+
+    def fail_route(*_args, **_kwargs):
+        raise AssertionError("light=True must not call tm_route.route_memory")
+
+    def fake_mem0_write(agent, topic, text, metadata_extra=None, **kwargs):
+        captured.update({
+            "agent": agent,
+            "topic": topic,
+            "text": text,
+            "metadata_extra": metadata_extra,
+            "kwargs": kwargs,
+        })
+        return json.dumps({"id": mem_id})
+
+    monkeypatch.setattr(tm_memory_ops.tm_route, "route_memory", fail_route)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "mem0_write", fake_mem0_write)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "verify_memory_id", lambda _id: {"direct_readback_ok": True})
+    monkeypatch.setattr(tm_memory_ops, "schedule_digest_refresh", lambda: None)
+
+    result = tm_memory_ops.write_memory_with_review("codex", "systems", "daily-health pointer", light=True)
+
+    assert result["route"] == "mem0"
+    assert result["score"] == 50
+    assert result["light_bypass"] is True
+    assert result["light_deepseek_called"] is False
+    assert captured["metadata_extra"]["light_bypass"] is True
+    assert captured["metadata_extra"]["route_mode"] == "light_bypass"
+    assert captured["metadata_extra"]["light_sensitive_guard"] is False
+
+
+def test_light_sensitive_phone_id_and_bank_card_route_to_inbox(monkeypatch):
+    captured = {}
+
+    def fail_route(*_args, **_kwargs):
+        raise AssertionError("light=True must not call tm_route.route_memory")
+
+    def fake_write_and_commit_inbox(agent, topic, title, text, frontmatter_extra=None):
+        captured.update({
+            "agent": agent,
+            "topic": topic,
+            "title": title,
+            "text": text,
+            "frontmatter_extra": frontmatter_extra,
+        })
+        return "inbox/x.md", "abc123"
+
+    monkeypatch.setattr(tm_memory_ops.tm_route, "route_memory", fail_route)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "write_and_commit_inbox", fake_write_and_commit_inbox)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "git_remote_blob_url", lambda rel: f"https://example/{rel}")
+    monkeypatch.setattr(tm_memory_ops, "schedule_digest_refresh", lambda: None)
+
+    result = tm_memory_ops.write_memory_with_review(
+        "codex",
+        "systems",
+        "phone 13800138000 id 11010519491231002X card number 4111 1111 1111 1111",
+        light=True,
+    )
+
+    assert result["route"] == "inbox"
+    assert result["score"] == 0
+    assert result["light_sensitive_guard"] is True
+    assert set(result["light_sensitive_hit_types"]) == {"phone", "cn_id", "bank_card"}
+    assert captured["frontmatter_extra"]["route_score"] == 0
+    assert captured["frontmatter_extra"]["light_bypass"] is True
+    assert captured["frontmatter_extra"]["light_deepseek_called"] is False
+    assert captured["frontmatter_extra"]["light_sensitive_hit_types"] == ["phone", "cn_id", "bank_card"]
+
+
+def test_light_sensitive_credentials_route_to_inbox(monkeypatch):
+    captured = {}
+
+    def fail_route(*_args, **_kwargs):
+        raise AssertionError("light=True must not call tm_route.route_memory")
+
+    def fake_write_and_commit_inbox(agent, topic, title, text, frontmatter_extra=None):
+        captured.update({
+            "frontmatter_extra": frontmatter_extra,
+        })
+        return "inbox/x.md", "abc123"
+
+    monkeypatch.setattr(tm_memory_ops.tm_route, "route_memory", fail_route)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "write_and_commit_inbox", fake_write_and_commit_inbox)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "git_remote_blob_url", lambda rel: f"https://example/{rel}")
+    monkeypatch.setattr(tm_memory_ops, "schedule_digest_refresh", lambda: None)
+
+    result = tm_memory_ops.write_memory_with_review(
+        "codex",
+        "systems",
+        "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+        light=True,
+    )
+
+    assert result["route"] == "inbox"
+    assert result["score"] == 0
+    assert result["light_sensitive_hit_types"] == ["bearer_token"]
+    assert captured["frontmatter_extra"]["light_deepseek_called"] is False
+
+
+def test_light_sensitive_credential_patterns_match():
+    password_hits = tm_memory_ops._light_sensitive_hits("password=abcdefghijklmnop")
+    private_key_hits = tm_memory_ops._light_sensitive_hits(
+        "-----BEGIN PRIVATE KEY-----\nabcdefghi\n-----END PRIVATE KEY-----"
+    )
+
+    assert any(hit["kind"] == "credential" for hit in password_hits)
+    assert any(hit["kind"] == "private_key" for hit in private_key_hits)
+
+
+def test_bank_card_detector_accepts_luhn_candidate_lengths():
+    assert tm_memory_ops._bank_card_hits("银行卡号 4222 2222 2222 2") == [
+        {"kind": "bank_card", "pattern": "BANK_CARD_CONTEXT_RE"}
+    ]
+    assert tm_memory_ops._bank_card_hits("银行卡号 1234 5678 9012 3456") == []
+
+
+def test_light_sensitive_bank_card_false_positive_examples_do_not_match():
+    examples = [
+        "银行卡候选 13800138000",
+        "银行卡候选 11010519491231002X",
+        "银行卡候选 2026-05-20 13:45:00",
+        "银行卡候选 fd65b298-05bd-493c-83ce-e37d84447362",
+        "银行卡尾号 3815 / 维度 1024",
+    ]
+
+    for text in examples:
+        assert tm_memory_ops._bank_card_hits(text) == []
+
+
+def test_force_inbox_and_light_are_mutually_exclusive():
+    with pytest.raises(ValueError):
+        tm_memory_ops.write_memory_with_review("codex", "systems", "body", force_inbox=True, light=True)
 
 
 def test_write_memory_can_preserve_requested_topic_for_storage(monkeypatch):

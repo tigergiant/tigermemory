@@ -100,7 +100,13 @@ WRITE_MEMORY_TOTAL_BUDGET_S = int(os.environ.get("TM_WRITE_MEMORY_BUDGET_S", "25
 WRITE_MEMORY_MEM0_MIN_RESERVE_S = 5
 
 
-def _write_memory_with_review(agent: str, topic: str, text: str, force_inbox: bool = False) -> dict[str, Any]:
+def _write_memory_with_review(
+    agent: str,
+    topic: str,
+    text: str,
+    force_inbox: bool = False,
+    light: bool = False,
+) -> dict[str, Any]:
     def warn(event: str, detail: dict[str, Any]) -> None:
         log_json("warn", str(uuid.uuid4()), f"/_write_memory_{event}", 200, 0, **detail)
 
@@ -109,6 +115,7 @@ def _write_memory_with_review(agent: str, topic: str, text: str, force_inbox: bo
         topic,
         text,
         force_inbox=force_inbox,
+        light=light,
         total_budget_s=WRITE_MEMORY_TOTAL_BUDGET_S,
         mem0_min_reserve_s=WRITE_MEMORY_MEM0_MIN_RESERVE_S,
         include_readback=True,
@@ -179,6 +186,7 @@ class MemoryAnswerRequest(BaseModel):
     max_evidence: int = Field(default=6, ge=1, le=12)
     include_trace: bool = True
     run_id: str | None = Field(default=None, max_length=120)
+    evidence_char_budget: int = Field(default=2000, ge=1, le=20000)
 
 
 class MemoryAnswerClaim(BaseModel):
@@ -240,6 +248,7 @@ class WriteMemoryRequest(BaseModel):
     topic: str = Field(..., pattern=r"^(brand|investment|operations|production|systems|person|cross)$")
     text: str = Field(..., min_length=1, max_length=10000)
     force_inbox: bool = False
+    light: bool = False
 
 
 class WriteInboxRequest(BaseModel):
@@ -549,6 +558,7 @@ async def memory_answer(req: MemoryAnswerRequest):
             max_evidence=req.max_evidence,
             include_trace=req.include_trace,
             run_id=req.run_id,
+            evidence_char_budget=req.evidence_char_budget,
         )
         return result
     except Exception as e:
@@ -616,7 +626,14 @@ async def write_memory(req: WriteMemoryRequest):
     trace_id = str(uuid.uuid4())
     start = time.time()
     try:
-        return _write_memory_with_review(req.agent, req.topic, req.text, force_inbox=req.force_inbox)
+        if req.force_inbox and req.light:
+            raise HTTPException(status_code=400, detail="force_inbox and light are mutually exclusive")
+        return _write_memory_with_review(req.agent, req.topic, req.text, force_inbox=req.force_inbox, light=req.light)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        log_json("error", trace_id, "/write_memory", 400, (time.time() - start) * 1000, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         log_json("error", trace_id, "/write_memory", 502, (time.time() - start) * 1000, detail=str(e))
         raise HTTPException(status_code=502, detail=f"write_memory failed: {e}")

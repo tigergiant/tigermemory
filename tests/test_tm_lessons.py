@@ -19,4 +19,47 @@ def test_configure_stdio_backslashreplaces_unencodable_stdout(monkeypatch):
     print("git \u2194 WSL", file=tm_lessons.sys.stdout)
     tm_lessons.sys.stdout.flush()
 
-    assert raw.getvalue().decode("cp936") == r"git \u2194 WSL" + "\n"
+    assert raw.getvalue().decode("cp936").replace("\r\n", "\n") == r"git \u2194 WSL" + "\n"
+
+
+def test_score_lesson_returns_four_tuple_without_breakdown_by_default():
+    text = """---
+title: Commit Push Discipline
+aliases: ["commit push"]
+---
+
+# Commit Push Discipline
+
+Body mentions hooks once.
+"""
+
+    score, title, aliases, breakdown = tm_lessons._score_lesson(text, ["commit", "hooks"])
+
+    assert score > 0
+    assert title == "Commit Push Discipline"
+    assert aliases == ["commit push"]
+    assert breakdown is None
+
+
+def test_score_lesson_explain_counts_title_alias_and_body_hits():
+    text = """---
+title: Commit Push Discipline
+aliases: ["hook safety"]
+---
+
+hook body body
+"""
+
+    score, _title, _aliases, breakdown = tm_lessons._score_lesson(
+        text,
+        ["commit", "hook", "body"],
+        explain=True,
+    )
+
+    assert breakdown == {
+        "title_hits": 1,
+        "alias_hits": 1,
+        "body_hits": 3,
+        "matched_terms": ["commit", "hook", "body"],
+        "final_score": score,
+    }
