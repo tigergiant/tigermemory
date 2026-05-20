@@ -34,7 +34,7 @@ def _result(status: str = "ok") -> dict:
 def test_cli_answer_json_delegates_to_core(monkeypatch, capsys):
     captured = {}
 
-    def fake_core(query, scope, top_k, max_evidence, include_trace, run_id):
+    def fake_core(query, scope, top_k, max_evidence, include_trace, run_id, write_trace):
         captured.update({
             "query": query,
             "scope": scope,
@@ -42,6 +42,7 @@ def test_cli_answer_json_delegates_to_core(monkeypatch, capsys):
             "max_evidence": max_evidence,
             "include_trace": include_trace,
             "run_id": run_id,
+            "write_trace": write_trace,
         })
         return _result()
 
@@ -73,6 +74,7 @@ def test_cli_answer_json_delegates_to_core(monkeypatch, capsys):
         "max_evidence": 2,
         "include_trace": False,
         "run_id": "cli-run-1",
+        "write_trace": True,
     }
 
 
