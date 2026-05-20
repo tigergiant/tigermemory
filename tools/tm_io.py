@@ -19,6 +19,8 @@ Usage:
   tm_io.py cron-reject DATE --proposal <id> --reason "..."
   tm_io.py cron-status DATE
   tm_io.py cron-rollback COMMIT_SHA
+  tm_io.py cron-daily-report [--date YYYY-MM-DD]
+  tm_io.py cron-weekly-report [--date YYYY-MM-DD]
   tm_io.py agent-doctor    [--json]
   tm_io.py lint-page    <path>
   tm_io.py status       [--json]
@@ -341,6 +343,22 @@ def cmd_cron_rollback(args: argparse.Namespace) -> None:
         sys.exit(code)
 
 
+def cmd_cron_daily_report(args: argparse.Namespace) -> None:
+    import tm_memory_reflection
+
+    code = tm_memory_reflection.cmd_daily(args)
+    if code:
+        sys.exit(code)
+
+
+def cmd_cron_weekly_report(args: argparse.Namespace) -> None:
+    import tm_memory_reflection
+
+    code = tm_memory_reflection.cmd_weekly(args)
+    if code:
+        sys.exit(code)
+
+
 def _run_cron_apply(tm_cron_apply, func, args: argparse.Namespace) -> int:
     try:
         return int(func(args))
@@ -472,6 +490,14 @@ def main() -> None:
     cb.add_argument("commit_sha")
     cb.add_argument("--reason", default="manual request")
     cb.set_defaults(func=cmd_cron_rollback)
+
+    cdr = sub.add_parser("cron-daily-report", help="render the daily memory route reflection report")
+    cdr.add_argument("--date")
+    cdr.set_defaults(func=cmd_cron_daily_report)
+
+    cwr = sub.add_parser("cron-weekly-report", help="render the weekly memory route reflection report")
+    cwr.add_argument("--date")
+    cwr.set_defaults(func=cmd_cron_weekly_report)
 
     ad = sub.add_parser("agent-doctor", help="read-only agent connect / doctor checks")
     ad.add_argument("--query", default="retention dry-run agent doctor connect mem0 audit")
