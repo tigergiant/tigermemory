@@ -120,3 +120,81 @@ def test_raw_github_daily_list_can_still_be_discarded_as_transient(monkeypatch):
     )
 
     assert decision.route == "discard"
+
+
+def test_durable_development_closeout_is_not_discarded_as_transient(monkeypatch):
+    def fake_call(prompt, content, **kwargs):
+        return True, {
+            "score": 88,
+            "topic_inferred": "systems",
+            "is_transient": True,
+            "is_sensitive": False,
+            "needs_human_review": False,
+            "issues": ["contains current worktree state"],
+            "reasons": "implementation closeout with commit and validation",
+        }
+
+    monkeypatch.setattr(tm_route.tm_core, "_call_deepseek_json", fake_call)
+
+    decision = tm_route.route_memory(
+        "本轮开发已经完成并推到远端 master。实现范围：Retention dry-run audit 和 "
+        "tm_agent_doctor。关键文件：tools/tm_retention_audit.py、tools/tm_agent_doctor.py、"
+        "tests/test_tm_retention_audit.py。验证已跑：py -m pytest tests/test_tm_retention_audit.py "
+        "tests/test_tm_agent_doctor.py -q，结果 6 passed, 2 skipped。Commit：b91d10d。"
+        "Push：已推到 origin/master。",
+        "systems",
+        "codex",
+    )
+
+    assert decision.route == "mem0"
+    assert decision.is_transient is False
+    assert "durable development closeout" in decision.reasons
+
+
+def test_durable_development_closeout_needing_review_routes_to_inbox(monkeypatch):
+    def fake_call(prompt, content, **kwargs):
+        return True, {
+            "score": 58,
+            "topic_inferred": "systems",
+            "is_transient": True,
+            "is_sensitive": False,
+            "needs_human_review": True,
+            "issues": ["worktree blocker needs owner review"],
+            "reasons": "closeout includes unresolved blocker",
+        }
+
+    monkeypatch.setattr(tm_route.tm_core, "_call_deepseek_json", fake_call)
+
+    decision = tm_route.route_memory(
+        "本轮开发完成。关键文件：tools/tm_route.py、tests/test_tm_route.py。"
+        "验证已跑：pytest tests/test_tm_route.py -q，结果 passed。"
+        "Commit：abc1234，Push：已推到 origin/master，但 WSL worktree 有 blocker。",
+        "systems",
+        "codex",
+    )
+
+    assert decision.route == "inbox"
+    assert decision.is_transient is False
+
+
+def test_vague_development_progress_can_still_be_discarded_as_transient(monkeypatch):
+    def fake_call(prompt, content, **kwargs):
+        return True, {
+            "score": 80,
+            "topic_inferred": "systems",
+            "is_transient": True,
+            "is_sensitive": False,
+            "needs_human_review": False,
+            "issues": ["progress only"],
+            "reasons": "no commit, files, or validation",
+        }
+
+    monkeypatch.setattr(tm_route.tm_core, "_call_deepseek_json", fake_call)
+
+    decision = tm_route.route_memory(
+        "今天继续开发 agent doctor，感觉差不多完成了，后面再看。",
+        "systems",
+        "codex",
+    )
+
+    assert decision.route == "discard"
