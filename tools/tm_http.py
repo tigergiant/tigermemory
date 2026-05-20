@@ -10,6 +10,8 @@ Exposes tigermemory HTTP endpoints for OpenClaw context-engine plugin and local 
 - POST /list_partition
 - POST /write_memory
 - POST /write_inbox
+- POST /agent/doctor
+- POST /retention/audit
 - POST /review_draft
 - POST /expense_record
 - POST /expense_batch_record
@@ -40,6 +42,8 @@ import tm_answer
 import tm_expense
 import tm_memory_ops
 import tm_review
+import tm_agent_doctor
+import tm_retention_audit
 
 _INDEX_ITEM_RE = re.compile(r"^\s*-\s*\[([^\]]+)\]\(([^)]+)\)(?:\s*[—\-]\s*(.+))?$")
 _PARTITIONS = ("brand", "investment", "operations", "production", "systems", "person", "self-evolution")
@@ -261,6 +265,17 @@ class WriteInboxRequest(BaseModel):
 
 class ReviewDraftRequest(BaseModel):
     body: str = Field(..., min_length=1, max_length=20000)
+
+
+class AgentDoctorRequest(BaseModel):
+    query: str = Field(default=tm_agent_doctor.DEFAULT_QUERY, min_length=1, max_length=1000)
+    include_l2: bool = True
+    http_url: str | None = Field(default=None, max_length=300)
+
+
+class RetentionAuditRequest(BaseModel):
+    max_items: int = Field(default=200, ge=1, le=1000)
+    page_size: int = Field(default=100, ge=1, le=500)
 
 
 class ExpenseRecordRequest(BaseModel):
@@ -491,6 +506,39 @@ async def health():
         )
     finally:
         log_json("info", trace_id, "/health", 200, (time.time() - start) * 1000)
+
+
+@app.post("/agent/doctor")
+async def agent_doctor(req: AgentDoctorRequest):
+    trace_id = str(uuid.uuid4())
+    start = time.time()
+    try:
+        return tm_agent_doctor.run_agent_doctor(
+            query=req.query,
+            include_l2=req.include_l2,
+            http_url=req.http_url,
+        )
+    except Exception as e:
+        log_json("error", trace_id, "/agent/doctor", 500, (time.time() - start) * 1000, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"agent doctor failed: {e}")
+    finally:
+        log_json("info", trace_id, "/agent/doctor", 200, (time.time() - start) * 1000)
+
+
+@app.post("/retention/audit")
+async def retention_audit(req: RetentionAuditRequest):
+    trace_id = str(uuid.uuid4())
+    start = time.time()
+    try:
+        return tm_retention_audit.run_retention_audit(
+            max_items=req.max_items,
+            page_size=req.page_size,
+        )
+    except Exception as e:
+        log_json("error", trace_id, "/retention/audit", 502, (time.time() - start) * 1000, detail=str(e))
+        raise HTTPException(status_code=502, detail=f"retention audit failed: {e}")
+    finally:
+        log_json("info", trace_id, "/retention/audit", 200, (time.time() - start) * 1000)
 
 
 def _normalize_mem0_item(item: dict) -> dict:

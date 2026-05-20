@@ -6,6 +6,8 @@ Exposes 26 tools for remote agents (laptop MCP clients):
 
 Read tools (callable in both writer and reader roles):
 - check_worktree            — git/worktree preflight snapshot
+- agent_doctor              — combined agent connect / health diagnostics
+- retention_audit           — read-only Mem0 retention dry-run audit
 - close_session             — session-close blocker check
 - search_memories           — Mem0 atomic event memory search
 - search_wiki               — wiki/sources file-based search
@@ -76,6 +78,8 @@ import tm_expense
 import tm_search
 import tm_deep_dive_jobs
 import tm_stability_eval
+import tm_agent_doctor
+import tm_retention_audit
 
 
 # ---------- MCP Server ----------
@@ -171,6 +175,29 @@ def check_worktree() -> dict[str, Any]:
         "blockers": blockers,
         "recommended_action": action,
     }
+
+
+@mcp.tool()
+def agent_doctor(
+    query: str = tm_agent_doctor.DEFAULT_QUERY,
+    include_l2: bool = True,
+    http_url: str | None = None,
+) -> dict[str, Any]:
+    """Read-only agent connect / doctor checks for Codex, Cascade, web agents, and OpenClaw.
+
+    Combines worktree/preflight state, tm-http health, Mem0 reachability, L2
+    review reachability, and lessons-hit evidence into one diagnostic response.
+    """
+    return tm_agent_doctor.run_agent_doctor(query=query, include_l2=include_l2, http_url=http_url)
+
+
+@mcp.tool()
+def retention_audit(max_items: int = 200, page_size: int = 100) -> dict[str, Any]:
+    """Read-only Mem0 retention dry-run audit.
+
+    Returns scored candidates and reasons. It never deletes or updates records.
+    """
+    return tm_retention_audit.run_retention_audit(max_items=max_items, page_size=page_size)
 
 
 @mcp.tool()

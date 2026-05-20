@@ -168,3 +168,39 @@ def test_mem0_api_probe_reports_latency_and_error(monkeypatch):
 
     assert fail["reachable"] is False
     assert "timed out" in fail["error"]
+
+
+def test_agent_doctor_endpoint_delegates(monkeypatch):
+    captured = {}
+
+    def fake_doctor(**kwargs):
+        captured.update(kwargs)
+        return {"status": "ok", "checks": []}
+
+    monkeypatch.setattr(tm_http.tm_agent_doctor, "run_agent_doctor", fake_doctor)
+
+    req = tm_http.AgentDoctorRequest(query="connect", include_l2=False, http_url="http://127.0.0.1:8790")
+    result = asyncio.run(tm_http.agent_doctor(req))
+
+    assert result["status"] == "ok"
+    assert captured == {
+        "query": "connect",
+        "include_l2": False,
+        "http_url": "http://127.0.0.1:8790",
+    }
+
+
+def test_retention_audit_endpoint_delegates(monkeypatch):
+    captured = {}
+
+    def fake_audit(**kwargs):
+        captured.update(kwargs)
+        return {"dry_run": True, "candidates": []}
+
+    monkeypatch.setattr(tm_http.tm_retention_audit, "run_retention_audit", fake_audit)
+
+    req = tm_http.RetentionAuditRequest(max_items=12, page_size=6)
+    result = asyncio.run(tm_http.retention_audit(req))
+
+    assert result["dry_run"] is True
+    assert captured == {"max_items": 12, "page_size": 6}

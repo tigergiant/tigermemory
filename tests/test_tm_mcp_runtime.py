@@ -467,3 +467,15 @@ def test_reader_role_allows_search_tigermemory(monkeypatch):
         assert any(path.endswith("2026-04-23-commit-push-same-turn.md") for path in paths)
     finally:
         tm_mcp._ROLE = old
+
+
+def test_reader_role_allows_agent_doctor_and_retention_audit(monkeypatch):
+    monkeypatch.setattr(tm_mcp.tm_agent_doctor, "run_agent_doctor", lambda **_kwargs: {"status": "ok"})
+    monkeypatch.setattr(tm_mcp.tm_retention_audit, "run_retention_audit", lambda **_kwargs: {"dry_run": True})
+    old = tm_mcp._ROLE
+    try:
+        tm_mcp._ROLE = "reader"
+        assert tm_mcp.agent_doctor(include_l2=False)["status"] == "ok"
+        assert tm_mcp.retention_audit(max_items=1)["dry_run"] is True
+    finally:
+        tm_mcp._ROLE = old

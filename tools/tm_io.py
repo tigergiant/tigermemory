@@ -13,6 +13,8 @@ Usage:
   tm_io.py mem0-write   --agent <name> --topic <topic>                   # text  on stdin
   tm_io.py mem0-search  --query <q> [--size N]
   tm_io.py mem0-update-content --id <uuid>                               # content on stdin
+  tm_io.py retention-audit [--json]
+  tm_io.py agent-doctor    [--json]
   tm_io.py lint-page    <path>
   tm_io.py status       [--json]
   tm_io.py preflight    [--json]
@@ -286,6 +288,22 @@ def cmd_preflight(args: argparse.Namespace) -> None:
         sys.exit(6)
 
 
+def cmd_retention_audit(args: argparse.Namespace) -> None:
+    import tm_retention_audit
+
+    code = tm_retention_audit.cmd_audit(args)
+    if code:
+        sys.exit(code)
+
+
+def cmd_agent_doctor(args: argparse.Namespace) -> None:
+    import tm_agent_doctor
+
+    code = tm_agent_doctor.cmd_doctor(args)
+    if code:
+        sys.exit(code)
+
+
 # ---------- guard (called by commit-msg hook) ----------
 
 def cmd_guard(args: argparse.Namespace) -> None:
@@ -367,6 +385,27 @@ def main() -> None:
     pf = sub.add_parser("preflight", help="fail if the session cannot safely start or end")
     pf.add_argument("--json", action="store_true")
     pf.set_defaults(func=cmd_preflight)
+
+    ra = sub.add_parser("retention-audit", help="read-only Mem0 retention dry-run audit")
+    ra.add_argument("--max-items", type=int, default=200)
+    ra.add_argument("--page-size", type=int, default=100)
+    ra.add_argument("--limit", type=int, default=30, help="markdown rows to print")
+    ra.add_argument("--json", action="store_true", help="emit JSON instead of markdown")
+    ra.set_defaults(func=cmd_retention_audit)
+
+    ad = sub.add_parser("agent-doctor", help="read-only agent connect / doctor checks")
+    ad.add_argument("--query", default="retention dry-run agent doctor connect mem0 audit")
+    ad.add_argument("--http-url", default=None)
+    ad.add_argument("--skip-l2", action="store_true", help="skip live DeepSeek/L2 probe")
+    ad.add_argument("--json", action="store_true")
+    ad.set_defaults(func=cmd_agent_doctor)
+
+    ac = sub.add_parser("agent-connect", help="alias for agent-doctor")
+    ac.add_argument("--query", default="retention dry-run agent doctor connect mem0 audit")
+    ac.add_argument("--http-url", default=None)
+    ac.add_argument("--skip-l2", action="store_true", help="skip live DeepSeek/L2 probe")
+    ac.add_argument("--json", action="store_true")
+    ac.set_defaults(func=cmd_agent_doctor)
 
     g = sub.add_parser(
         "guard",
