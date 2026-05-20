@@ -45,6 +45,12 @@ def test_route_memory_passes_requested_topic_and_taxonomy_context(monkeypatch):
     assert "IPFB、品牌、文案、企划、商品、波段、公众号、微信图文、营销活动属于 brand" in captured["prompt"]
     assert "production 只用于 Doodiu ERP、生产、供应链、订单、采购、库存、工厂/生产系统" in captured["prompt"]
     assert "Memory Answer、MCP、HTTP、CLI、trace、eval、daily-health 工具" in captured["prompt"]
+    # 2026-05-21: markers removed; closeout judgment is now LLM-only via prompt.
+    assert "开发收尾记录例外" in captured["prompt"]
+    assert "判定条件（必须同时满足三项）" in captured["prompt"]
+    assert "含具体版本签名" in captured["prompt"]
+    assert "含具体文件路径" in captured["prompt"]
+    assert "含具体验证证据" in captured["prompt"]
 
 
 def test_curated_workflow_radar_summary_is_not_discarded_as_transient(monkeypatch):
@@ -122,15 +128,21 @@ def test_raw_github_daily_list_can_still_be_discarded_as_transient(monkeypatch):
     assert decision.route == "discard"
 
 
-def test_durable_development_closeout_is_not_discarded_as_transient(monkeypatch):
+def test_closeout_with_full_evidence_routes_to_mem0(monkeypatch):
+    """After 2026-05-21 marker removal, closeout judgment is LLM-only via prompt.
+
+    With three pieces of evidence (commit + files + validation) the prompt
+    instructs the LLM to set is_transient=false. Score 70+ then routes to mem0
+    via the standard high-score branch.
+    """
     def fake_call(prompt, content, **kwargs):
         return True, {
             "score": 88,
             "topic_inferred": "systems",
-            "is_transient": True,
+            "is_transient": False,
             "is_sensitive": False,
             "needs_human_review": False,
-            "issues": ["contains current worktree state"],
+            "issues": [],
             "reasons": "implementation closeout with commit and validation",
         }
 
@@ -148,15 +160,18 @@ def test_durable_development_closeout_is_not_discarded_as_transient(monkeypatch)
 
     assert decision.route == "mem0"
     assert decision.is_transient is False
-    assert "durable development closeout" in decision.reasons
+    assert "high score (88)" in decision.reasons
 
 
-def test_durable_development_closeout_needing_review_routes_to_inbox(monkeypatch):
+def test_closeout_with_blocker_routes_to_inbox(monkeypatch):
+    """Closeout with unresolved blocker → LLM should set needs_human_review=true,
+    which routes to inbox via the medium-score branch even with is_transient=false.
+    """
     def fake_call(prompt, content, **kwargs):
         return True, {
             "score": 58,
             "topic_inferred": "systems",
-            "is_transient": True,
+            "is_transient": False,
             "is_sensitive": False,
             "needs_human_review": True,
             "issues": ["worktree blocker needs owner review"],
@@ -175,9 +190,14 @@ def test_durable_development_closeout_needing_review_routes_to_inbox(monkeypatch
 
     assert decision.route == "inbox"
     assert decision.is_transient is False
+    assert "medium score (58) or needs review" in decision.reasons
 
 
-def test_vague_development_progress_can_still_be_discarded_as_transient(monkeypatch):
+def test_vague_progress_without_evidence_is_discarded_as_transient(monkeypatch):
+    """Vague progress with no commit/files/validation → LLM should set
+    is_transient=true → routes to discard. Prompt explicitly tells LLM that
+    "本轮开发"/"Goal 完成" alone are not enough.
+    """
     def fake_call(prompt, content, **kwargs):
         return True, {
             "score": 80,
@@ -198,3 +218,4 @@ def test_vague_development_progress_can_still_be_discarded_as_transient(monkeypa
     )
 
     assert decision.route == "discard"
+    assert decision.is_transient is True
