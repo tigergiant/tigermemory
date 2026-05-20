@@ -15,6 +15,10 @@ Usage:
   tm_io.py mem0-update-content --id <uuid>                               # content on stdin
   tm_io.py retention-audit [--json]
   tm_io.py discard-audit   [--json]
+  tm_io.py cron-apply DATE [--proposal <id>]
+  tm_io.py cron-reject DATE --proposal <id> --reason "..."
+  tm_io.py cron-status DATE
+  tm_io.py cron-rollback COMMIT_SHA
   tm_io.py agent-doctor    [--json]
   tm_io.py lint-page    <path>
   tm_io.py status       [--json]
@@ -305,6 +309,46 @@ def cmd_discard_audit(args: argparse.Namespace) -> None:
         sys.exit(code)
 
 
+def cmd_cron_apply(args: argparse.Namespace) -> None:
+    import tm_cron_apply
+
+    code = _run_cron_apply(tm_cron_apply, tm_cron_apply.cmd_apply, args)
+    if code:
+        sys.exit(code)
+
+
+def cmd_cron_reject(args: argparse.Namespace) -> None:
+    import tm_cron_apply
+
+    code = _run_cron_apply(tm_cron_apply, tm_cron_apply.cmd_reject, args)
+    if code:
+        sys.exit(code)
+
+
+def cmd_cron_status(args: argparse.Namespace) -> None:
+    import tm_cron_apply
+
+    code = _run_cron_apply(tm_cron_apply, tm_cron_apply.cmd_status, args)
+    if code:
+        sys.exit(code)
+
+
+def cmd_cron_rollback(args: argparse.Namespace) -> None:
+    import tm_cron_apply
+
+    code = _run_cron_apply(tm_cron_apply, tm_cron_apply.cmd_rollback, args)
+    if code:
+        sys.exit(code)
+
+
+def _run_cron_apply(tm_cron_apply, func, args: argparse.Namespace) -> int:
+    try:
+        return int(func(args))
+    except tm_cron_apply.CronApplyError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+
 def cmd_agent_doctor(args: argparse.Namespace) -> None:
     import tm_agent_doctor
 
@@ -408,6 +452,26 @@ def main() -> None:
     da.add_argument("--limit", type=int, default=80)
     da.add_argument("--json", action="store_true")
     da.set_defaults(func=cmd_discard_audit)
+
+    ca = sub.add_parser("cron-apply", help="apply checked cron proposal(s) from a daily memory digest")
+    ca.add_argument("date")
+    ca.add_argument("--proposal")
+    ca.set_defaults(func=cmd_cron_apply)
+
+    cr = sub.add_parser("cron-reject", help="record rejection for cron proposal(s)")
+    cr.add_argument("date")
+    cr.add_argument("--proposal")
+    cr.add_argument("--reason", required=True)
+    cr.set_defaults(func=cmd_cron_reject)
+
+    cs = sub.add_parser("cron-status", help="show cron proposal status for a date")
+    cs.add_argument("date")
+    cs.set_defaults(func=cmd_cron_status)
+
+    cb = sub.add_parser("cron-rollback", help="rollback a cron-apply commit")
+    cb.add_argument("commit_sha")
+    cb.add_argument("--reason", default="manual request")
+    cb.set_defaults(func=cmd_cron_rollback)
 
     ad = sub.add_parser("agent-doctor", help="read-only agent connect / doctor checks")
     ad.add_argument("--query", default="retention dry-run agent doctor connect mem0 audit")
