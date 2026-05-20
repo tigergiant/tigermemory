@@ -14,6 +14,7 @@ Usage:
   tm_io.py mem0-search  --query <q> [--size N]
   tm_io.py mem0-update-content --id <uuid>                               # content on stdin
   tm_io.py retention-audit [--json]
+  tm_io.py discard-audit   [--json]
   tm_io.py agent-doctor    [--json]
   tm_io.py lint-page    <path>
   tm_io.py status       [--json]
@@ -296,6 +297,14 @@ def cmd_retention_audit(args: argparse.Namespace) -> None:
         sys.exit(code)
 
 
+def cmd_discard_audit(args: argparse.Namespace) -> None:
+    import tm_route_audit
+
+    code = tm_route_audit.cmd_summary(args)
+    if code:
+        sys.exit(code)
+
+
 def cmd_agent_doctor(args: argparse.Namespace) -> None:
     import tm_agent_doctor
 
@@ -392,6 +401,13 @@ def main() -> None:
     ra.add_argument("--limit", type=int, default=30, help="markdown rows to print")
     ra.add_argument("--json", action="store_true", help="emit JSON instead of markdown")
     ra.set_defaults(func=cmd_retention_audit)
+
+    da = sub.add_parser("discard-audit", help="summarize local write_memory discard quarantine")
+    da.add_argument("--date")
+    da.add_argument("--root")
+    da.add_argument("--limit", type=int, default=80)
+    da.add_argument("--json", action="store_true")
+    da.set_defaults(func=cmd_discard_audit)
 
     ad = sub.add_parser("agent-doctor", help="read-only agent connect / doctor checks")
     ad.add_argument("--query", default="retention dry-run agent doctor connect mem0 audit")

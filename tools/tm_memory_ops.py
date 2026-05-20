@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 import tm_core
 import tm_route
+import tm_route_audit
 
 
 DIGEST_DEBOUNCE_SECONDS = int(os.environ.get("TM_DIGEST_DEBOUNCE_SECONDS", "180"))
@@ -303,6 +304,38 @@ def _topic_warnings(
     )]
 
 
+def _record_discard_audit(
+    *,
+    agent: str,
+    requested_topic: str,
+    text: str,
+    decision: tm_route.RouteDecision,
+    warn: Callable[[str, dict[str, Any]], None] | None,
+) -> dict[str, Any]:
+    try:
+        return tm_route_audit.record_discard_event(
+            agent=agent,
+            requested_topic=requested_topic,
+            text=text,
+            decision=decision,
+            source="write_memory",
+        )
+    except Exception as exc:
+        if warn:
+            warn("route_audit_failed", {
+                "agent": agent,
+                "topic": requested_topic,
+                "route": "discard",
+                "error": str(exc),
+            })
+        return {"ok": False, "error": str(exc)[:240]}
+
+
+def _attach_discard_audit(result: dict[str, Any], audit: dict[str, Any]) -> dict[str, Any]:
+    result["discard_audit"] = audit
+    return result
+
+
 def write_memory_with_review(
     agent: str,
     topic: str,
@@ -384,7 +417,7 @@ def write_memory_with_review(
         )
 
     if decision.route == "discard":
-        return {
+        result = {
             "route": "discard",
             "score": decision.score,
             "topic": _storage_topic(topic, decision, preserve_requested_topic=preserve_requested_topic),
@@ -392,6 +425,14 @@ def write_memory_with_review(
             "issues": decision.issues,
             "reasons": decision.reasons,
         }
+        audit = _record_discard_audit(
+            agent=agent,
+            requested_topic=topic,
+            text=text,
+            decision=decision,
+            warn=warn,
+        )
+        return _attach_discard_audit(result, audit)
 
     storage_topic = _storage_topic(
         topic,
