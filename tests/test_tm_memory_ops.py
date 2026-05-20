@@ -166,10 +166,14 @@ def test_light_sensitive_credential_patterns_match():
 
 
 def test_bank_card_detector_accepts_luhn_candidate_lengths():
-    assert tm_memory_ops._bank_card_hits("银行卡号 4222 2222 2222 2") == [
+    # 16-digit Luhn-valid Visa test number with bank keyword context
+    assert tm_memory_ops._bank_card_hits("银行卡号 4111 1111 1111 1111") == [
         {"kind": "bank_card", "pattern": "BANK_CARD_CONTEXT_RE"}
     ]
+    # 16-digit Luhn-invalid number should not match
     assert tm_memory_ops._bank_card_hits("银行卡号 1234 5678 9012 3456") == []
+    # 13-digit number should no longer match (16-19 range)
+    assert tm_memory_ops._bank_card_hits("银行卡号 4222 2222 2222 2") == []
 
 
 def test_light_sensitive_bank_card_false_positive_examples_do_not_match():

@@ -35,7 +35,7 @@ BANK_KEYWORD = (
     r"card\s*(?:no\.?|number)|account\s*(?:no\.?|number))"
 )
 BANK_KEYWORD_RE = re.compile(BANK_KEYWORD, re.IGNORECASE)
-BANK_DIGITS = r"(?<![\dA-Fa-f])(?:\d[ -]?){13,19}(?![\dA-Fa-f])"
+BANK_DIGITS = r"(?<![\dA-Fa-f])(?:\d[ -]?){16,19}(?![\dA-Fa-f])"
 BANK_DIGITS_RE = re.compile(BANK_DIGITS)
 BANK_CARD_CONTEXT_RE = re.compile(
     rf"(?is)(?:{BANK_KEYWORD}.{{0,24}}{BANK_DIGITS}|{BANK_DIGITS}.{{0,24}}{BANK_KEYWORD})"
@@ -186,7 +186,7 @@ def _light_sensitive_hits(text: str) -> list[dict[str, str]]:
 
 
 def _luhn_valid(digits: str) -> bool:
-    if not re.fullmatch(r"\d{13,19}", digits):
+    if not re.fullmatch(r"\d{16,19}", digits):
         return False
     total = 0
     parity = len(digits) % 2
