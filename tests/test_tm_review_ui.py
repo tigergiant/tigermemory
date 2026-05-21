@@ -298,6 +298,50 @@ def test_health_page_uses_real_template_not_json_page(tmp_path, monkeypatch):
     assert "bg-black" not in response.text
 
 
+def test_dashboard_pages_share_identical_header(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    _write_digest(tmp_path)
+    monkeypatch.setattr(
+        tm_review_ui,
+        "dashboard_health_summary",
+        lambda: {
+            "ok": True,
+            "generated_at": "2026-05-21T20:30:15+08:00",
+            "dashboard": {"version": "0.2.0", "git_sha": "abc123", "port": 1998},
+            "services": [],
+            "agent_doctor": {"checks": [], "summary": {"ok_count": 0}},
+            "recent_commits": [],
+            "daily_digest": {"date": "2026-05-21", "path": "wiki/operations/daily-memory-digest-2026-05-21.md", "exists": True},
+        },
+    )
+    monkeypatch.setattr(tm_review_ui, "dashboard_memory_quality", lambda date=None: {"ok": True, "date": date or "2026-05-21"})
+    monkeypatch.setattr(tm_review_ui, "get_user_preferences", lambda: {"ok": True, "preferences": {}})
+    monkeypatch.setattr(tm_review_ui, "git_sha", lambda: "abc123")
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    responses = {
+        "daily": client.get("/digest/2026-05-21", headers=HOST),
+        "health": client.get("/health", headers=HOST),
+        "quality": client.get("/quality", headers=HOST),
+        "settings": client.get("/settings", headers=HOST),
+    }
+
+    def shared_header(html: str) -> str:
+        start = html.index("<header")
+        end = html.index("</script>", html.index("</header>")) + len("</script>")
+        return html[start:end]
+
+    headers = {page: shared_header(response.text) for page, response in responses.items()}
+    assert len(set(headers.values())) == 1
+    for page, response in responses.items():
+        assert response.status_code == 200
+        assert f'data-page="{page}"' in response.text
+        assert 'id="lang-toggle"' in response.text
+        assert 'id="last-refresh"' in response.text
+        assert 'id="sha-pill"' in response.text
+
+
 def test_quality_and_settings_no_longer_use_raw_json_page(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "dashboard_memory_quality", lambda date=None: {"ok": True, "date": date})
     monkeypatch.setattr(tm_review_ui, "get_user_preferences", lambda: {"ok": True, "preferences": {}})
