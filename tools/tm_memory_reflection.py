@@ -23,11 +23,17 @@ try:
 except Exception:  # pragma: no cover - degraded local runtime
     tm_retention_audit = None  # type: ignore[assignment]
 
+try:
+    import tm_mem0_audit
+except Exception:  # pragma: no cover - degraded local runtime
+    tm_mem0_audit = None  # type: ignore[assignment]
+
 REPO_ROOT = tm_core.REPO_ROOT
 INBOX_DIR = REPO_ROOT / "inbox"
 OPERATIONS_DIR = REPO_ROOT / "wiki" / "operations"
 PROPOSAL_ROOT = REPO_ROOT / ".tmp" / "cron-proposals"
 DISCARD_ROOT = tm_route_audit.DEFAULT_AUDIT_ROOT
+MEM0_AUDIT_ROOT = REPO_ROOT / ".tmp" / "mem0-audit"
 MAX_PREVIEW_CHARS = 160
 STALE_INBOX_DAYS = 14
 MISSING_SUMMARY_PREFIX = "未提供中文摘要"
@@ -439,6 +445,27 @@ def _append_inbox_row(lines: list[str], row: InboxAuditRow) -> None:
     ])
 
 
+def _load_mem0_dedup_candidates(date: str, *, audit_root: pathlib.Path = MEM0_AUDIT_ROOT) -> list[dict[str, Any]]:
+    if tm_mem0_audit is not None:
+        return tm_mem0_audit.load_dedup_candidates(date, audit_root=audit_root)
+    path = audit_root / date / "dedup_candidates.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _append_mem0_dedup_row(lines: list[str], row: dict[str, Any]) -> None:
+    lines.extend([
+        f"- `{row.get('candidate_id')}` :: agent={row.get('agent')} topic={row.get('topic')} dist={row.get('signature_distance')}",
+        f"  - canonical: `{row.get('canonical_id')}`",
+        f"  - 内容预览：{row.get('preview') or ''}",
+        "  - 建议动作：dedup_to_canonical",
+        "  - 虎哥裁决：[ ] confirm  [ ] reject",
+    ])
+
+
 def _details_block(summary: str, body: list[str]) -> list[str]:
     return ["<details>", f"<summary>{summary}</summary>", "", *body, "", "</details>"]
 
@@ -450,6 +477,7 @@ def render_daily_report(
     mem0_items: list[dict[str, Any]] | None = None,
     inbox_dir: pathlib.Path = INBOX_DIR,
     audit_root: pathlib.Path = DISCARD_ROOT,
+    mem0_audit_root: pathlib.Path = MEM0_AUDIT_ROOT,
     proposal_root: pathlib.Path = PROPOSAL_ROOT,
 ) -> str:
     now_iso = now_iso or dt.datetime.now(tm_core.TZ_CN).isoformat()
@@ -458,6 +486,7 @@ def render_daily_report(
     inbox_today = [row for row in inbox_all if row.created_date == date]
     discard_events = discard_events_for_dates([date], audit_root=audit_root)
     candidates = discard_review_candidates(discard_events)
+    mem0_dedup_candidates = _load_mem0_dedup_candidates(date, audit_root=mem0_audit_root)
     proposals = load_proposals(date, proposal_root=proposal_root)
     applied = [row for row in _applied_rows(proposal_root=proposal_root) if str(row.get("applied_at") or "").startswith(date)]
     archive_rows, promote_rows, keep_rows = _inbox_action_groups(inbox_all)
@@ -480,6 +509,7 @@ def render_daily_report(
         f"applied_count: {len(applied)}",
         f"stale_archive_count: {stale_count}",
         f"promote_candidate_count: {promote_count}",
+        f"mem0_audit_candidate_count: {len(mem0_dedup_candidates)}",
         "---",
         "",
         f"# Memory Digest {date}",
@@ -489,6 +519,7 @@ def render_daily_report(
         f"- 🔴 14 天兜底 archive 候选：{stale_count} 条 → 见下方 §inbox 决策区",
         f"- 🟡 promote_to_mem0 / promote_to_wiki 候选：{promote_count} 条 → 见下方 §inbox 决策区",
         f"- 🔵 Proposed Changes：{len(proposals)} 条 → 见下方 §Proposed Changes",
+        f"- 🟢 Mem0 重复 / 误判候选：{len(mem0_dedup_candidates)} 条 → 见下方 §Mem0 重复 / 误判候选",
         f"- ⚪ discard 误判候选：{len(candidates)} 条 → 见下方 §discard 误判候选",
         "",
         "## 摘要",
@@ -542,6 +573,29 @@ def render_daily_report(
         keep_body.append("- none")
     lines.extend(["", "### ⚪ 仅观察 keep_in_inbox", ""])
     lines.extend(_details_block(f"展开 {len(keep_rows)} 条 keep_in_inbox", keep_body))
+
+    lines.extend([
+        "",
+        "## 🟢 Mem0 重复 / 误判候选",
+        "",
+        "### 🟢 重复候选 (dedup)",
+        "",
+    ])
+    if mem0_dedup_candidates:
+        for row in mem0_dedup_candidates:
+            _append_mem0_dedup_row(lines, row)
+    else:
+        lines.append("- none")
+    lines.extend([
+        "",
+        "### 🟠 主题误判候选 (topic)",
+        "",
+        "- none",
+        "",
+        "### 🟡 低密度候选 (low-density)",
+        "",
+        "- none",
+    ])
 
     lines.extend(["", "## 🧠 Proposed Changes", ""])
     if proposals:
@@ -629,6 +683,7 @@ def render_daily_report(
         "## 来源",
         "",
         "- `tools/tm_route_audit.py`",
+        "- `tools/tm_mem0_audit.py`",
         "- `tools/tm_route_replay.py`",
         "- `tools/tm_cron_apply.py`",
         "- `wiki/operations/cron-daily-report.md`",

@@ -66,13 +66,52 @@ def test_daily_digest_decision_block_and_frontmatter_counts(tmp_path):
 
     assert "stale_archive_count: 1" in report
     assert "promote_candidate_count: 0" in report
+    assert "mem0_audit_candidate_count: 0" in report
     frontmatter_end = report.splitlines().index("---", 1)
     first_30 = "\n".join(report.splitlines()[frontmatter_end + 1 : frontmatter_end + 31])
     assert "## ⚡ 今日要决策" in first_30
     assert "🔴 14 天兜底 archive 候选：1 条" in first_30
     assert "🟡 promote_to_mem0 / promote_to_wiki 候选：0 条" in first_30
     assert "🔵 Proposed Changes：1 条" in first_30
+    assert "🟢 Mem0 重复 / 误判候选：0 条" in first_30
     assert "⚪ discard 误判候选：0 条" in first_30
+
+
+def test_daily_digest_renders_mem0_audit_candidates(tmp_path):
+    audit_dir = tmp_path / "mem0-audit" / "2026-05-15"
+    audit_dir.mkdir(parents=True)
+    (audit_dir / "dedup_candidates.json").write_text(
+        json.dumps([
+            {
+                "candidate_id": "mem-old",
+                "canonical_id": "mem-new",
+                "agent": "cascade",
+                "topic": "systems",
+                "created_at": "2026-05-15T08:00:00+08:00",
+                "signature_distance": 3,
+                "preview": "重复的 Cascade closeout 摘要",
+                "reason": "signature_cluster_distance=3; canonical=mem-new",
+            }
+        ], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    report = tm_memory_reflection.render_daily_report(
+        date="2026-05-15",
+        now_iso="2026-05-15T23:55:00+08:00",
+        mem0_items=[],
+        inbox_dir=tmp_path / "inbox",
+        audit_root=tmp_path / "discard-root",
+        mem0_audit_root=tmp_path / "mem0-audit",
+        proposal_root=tmp_path / "cron-proposals",
+    )
+
+    assert "mem0_audit_candidate_count: 1" in report
+    assert "## 🟢 Mem0 重复 / 误判候选" in report
+    assert "### 🟢 重复候选 (dedup)" in report
+    assert "`mem-old` :: agent=cascade topic=systems dist=3" in report
+    assert "canonical: `mem-new`" in report
+    assert "虎哥裁决：[ ] confirm  [ ] reject" in report
 
 
 def test_daily_digest_groups_inbox_actions_and_wraps_keep_rows(tmp_path):
