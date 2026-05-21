@@ -222,6 +222,57 @@ def test_health_summary_endpoint_uses_agent_doctor(tmp_path, monkeypatch):
     assert data["ok"] is True
     assert data["dashboard"]["port"] == tm_review_ui.PORT
     assert data["dashboard"]["git_sha"] == "abc123"
+    assert [service["name"] for service in data["services"]] == ["Dashboard", "tm-http", "tm-mcp", "Mem0", "OpenClaw"]
+
+
+def test_health_page_uses_real_template_not_json_page(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        tm_review_ui,
+        "dashboard_health_summary",
+        lambda: {
+            "ok": True,
+            "generated_at": "2026-05-21T20:30:15+08:00",
+            "dashboard": {"version": "0.2.0", "git_sha": "abc123", "port": 1998},
+            "services": [
+                {"name": "Dashboard", "icon": "layout-dashboard", "port": ":1998", "status": "ok", "status_label": "正常", "detail": "v0.2.0"},
+                {"name": "tm-http", "icon": "server", "port": ":8790", "status": "ok", "status_label": "正常", "latency_ms": 514},
+                {"name": "tm-mcp", "icon": "network", "port": ":9766", "status": "ok", "status_label": "正常"},
+                {"name": "Mem0", "icon": "database", "port": ":8765", "status": "ok", "status_label": "正常"},
+                {"name": "OpenClaw", "icon": "message-square", "port": "socket", "status": "warn", "status_label": "待接入"},
+            ],
+            "agent_doctor": {"checks": [], "summary": {"ok_count": 5, "warn_count": 0, "fail_count": 0}},
+            "recent_commits": ["abc123 [codex] update: fixture"],
+            "daily_digest": {"date": "2026-05-21", "path": "wiki/operations/daily-memory-digest-2026-05-21.md", "exists": True},
+        },
+    )
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/health", headers=HOST)
+
+    assert response.status_code == 200
+    assert "health-data" in response.text
+    assert "系统健康" in response.text
+    assert "#f7f2e6" in response.text
+    assert "#c8a560" in response.text
+    assert "<pre" not in response.text
+    assert "bg-zinc-950" not in response.text
+    assert "bg-black" not in response.text
+
+
+def test_quality_and_settings_no_longer_use_raw_json_page(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "dashboard_memory_quality", lambda date=None: {"ok": True, "date": date})
+    monkeypatch.setattr(tm_review_ui, "get_user_preferences", lambda: {"ok": True, "preferences": {}})
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    quality = client.get("/quality", headers=HOST)
+    settings = client.get("/settings", headers=HOST)
+
+    assert "阶段 2 占位" in quality.text
+    assert "阶段 2 占位" in settings.text
+    assert "bg-zinc-950" not in quality.text + settings.text
+    assert "bg-black" not in quality.text + settings.text
 
 
 def test_quality_memory_endpoint_reports_trace_latency(tmp_path, monkeypatch):
