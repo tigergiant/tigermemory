@@ -120,9 +120,31 @@ def test_legacy_inbox_extracts_existing_chinese_line(tmp_path):
     assert "中文摘要：这条历史 inbox 已经自带中文说明。" in report
 
 
-def test_preview_is_capped_at_eighty_characters():
-    text = "a" * 120
-    assert len(tm_memory_reflection._preview(text)) == 80
+def test_legacy_inbox_without_chinese_uses_raw_preview_instead_of_placeholder(tmp_path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    body = "Routed closeout pushed commit and passed pytest with enough English details for review."
+    _write_inbox(inbox / "2026-05-01-1200-codex-systems.md", body)
+
+    report = tm_memory_reflection.render_daily_report(
+        date="2026-05-15",
+        now_iso="2026-05-15T23:55:00+08:00",
+        mem0_items=[],
+        inbox_dir=inbox,
+        audit_root=tmp_path / "discard-root",
+        proposal_root=tmp_path / "cron-proposals",
+    )
+
+    assert "未提供中文摘要" not in report
+    assert "中文摘要：Routed closeout pushed commit" in report
+
+
+def test_preview_is_capped_at_one_hundred_sixty_characters():
+    text = "a" * 200
+    preview = tm_memory_reflection._preview(text)
+
+    assert len(preview) == 160
+    assert len(preview) >= 100
 
 
 def test_daily_digest_raw_lists_are_in_appendix_details(tmp_path):

@@ -225,6 +225,136 @@ def test_inbox_action_invalid_path_returns_error(tmp_path, monkeypatch):
     assert response.json()["ok"] is False
 
 
+def test_batch_inbox_archive_selected_commits_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)
+    first = _write_inbox(tmp_path, "2026-05-01-1200-codex-systems.md")
+    second = _write_inbox(tmp_path, "2026-05-02-1200-codex-systems.md")
+    commits: list[list[str]] = []
+
+    def fake_commit(paths, _message):
+        commits.append(paths)
+        return "abc123"
+
+    monkeypatch.setattr(tm_review_ui, "commit_and_push_paths", fake_commit)
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.post(
+        "/api/inbox/batch-action",
+        headers=HOST,
+        json={"paths": [f"inbox/{first.name}", f"inbox/{second.name}"], "action": "archive"},
+    )
+
+    data = response.json()
+    assert data["ok"] is True
+    assert data["success_count"] == 2
+    assert data["failure_count"] == 0
+    assert data["commit_sha"] == "abc123"
+    assert len(commits) == 1
+    assert not first.exists()
+    assert not second.exists()
+
+
+def test_batch_inbox_promote_mem0_archives_selected(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)
+    first = _write_inbox(tmp_path, "2026-05-01-1200-codex-systems.md")
+    second = _write_inbox(tmp_path, "2026-05-02-1200-codex-systems.md")
+    promoted: list[str] = []
+
+    def fake_promote(fact, topic=None):
+        promoted.append(fact["source_id"])
+        return {"ok": True, "memory_id": f"mem-{len(promoted)}", "topic": topic or fact["topic"]}
+
+    monkeypatch.setattr(tm_review_tools, "execute_promote_mem0", fake_promote)
+    monkeypatch.setattr(tm_review_ui, "commit_and_push_paths", lambda _paths, _message: "abc123")
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.post(
+        "/api/inbox/batch-action",
+        headers=HOST,
+        json={"paths": [f"inbox/{first.name}", f"inbox/{second.name}"], "action": "promote_mem0"},
+    )
+
+    data = response.json()
+    assert data["ok"] is True
+    assert data["success_count"] == 2
+    assert promoted == [f"inbox/{first.name}", f"inbox/{second.name}"]
+    assert not first.exists()
+    assert not second.exists()
+
+
+def test_batch_inbox_promote_wiki_generates_slugs_and_archives(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)
+    first = _write_inbox(tmp_path, "2026-05-01-1200-codex-systems.md")
+    second = _write_inbox(tmp_path, "2026-05-02-1200-codex-systems.md")
+    promoted: list[tuple[str, str, str]] = []
+
+    def fake_promote(fact, partition, slug):
+        promoted.append((fact["source_id"], partition, slug))
+        return {"ok": True, "wiki_path": f"wiki/{partition}/{slug}.md", "commit_sha": f"wiki-{len(promoted)}"}
+
+    monkeypatch.setattr(tm_review_tools, "execute_promote", fake_promote)
+    monkeypatch.setattr(tm_review_ui, "commit_and_push_paths", lambda _paths, _message: "archive123")
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.post(
+        "/api/inbox/batch-action",
+        headers=HOST,
+        json={
+            "paths": [f"inbox/{first.name}", f"inbox/{second.name}"],
+            "action": "promote_wiki",
+            "partition": "systems",
+            "slug_prefix": "daily-review-note",
+        },
+    )
+
+    data = response.json()
+    assert data["ok"] is True
+    assert data["success_count"] == 2
+    assert promoted[0][1] == "systems"
+    assert promoted[0][2].startswith("daily-review-note-1-")
+    assert promoted[1][2].startswith("daily-review-note-2-")
+    assert not first.exists()
+    assert not second.exists()
+
+
+def test_batch_inbox_action_rejects_invalid_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.post(
+        "/api/inbox/batch-action",
+        headers=HOST,
+        json={"paths": ["../x.md"], "action": "archive"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is False
+    assert "inside repo" in data["error"]
+
+
+def test_review_html_contains_batch_controls_and_status_copy(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    _write_digest(tmp_path)
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/digest/2026-05-21", headers=HOST)
+
+    assert response.status_code == 200
+    assert "批量归档" in response.text
+    assert "批量写入 Mem0" in response.text
+    assert "data-row-status" in response.text
+    assert "展开原文预览（至少 100 字）" in response.text
+
+
 def test_proposal_apply_calls_tm_cron_apply(tmp_path, monkeypatch):
     called: dict[str, str] = {}
     monkeypatch.setattr(tm_cron_apply, "load_report_proposals", lambda _date: {

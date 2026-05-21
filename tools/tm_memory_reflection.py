@@ -28,8 +28,9 @@ INBOX_DIR = REPO_ROOT / "inbox"
 OPERATIONS_DIR = REPO_ROOT / "wiki" / "operations"
 PROPOSAL_ROOT = REPO_ROOT / ".tmp" / "cron-proposals"
 DISCARD_ROOT = tm_route_audit.DEFAULT_AUDIT_ROOT
-MAX_PREVIEW_CHARS = 80
+MAX_PREVIEW_CHARS = 160
 STALE_INBOX_DAYS = 14
+MISSING_SUMMARY_PREFIX = "未提供中文摘要"
 
 INBOX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-\d{4}-([^-]+)-([^.]+)\.md$")
 
@@ -169,6 +170,8 @@ def inbox_records(*, inbox_dir: pathlib.Path = INBOX_DIR) -> list[dict[str, Any]
         summary_cn = fm.get("summary_cn")
         if not summary_cn:
             summary_cn, _source = tm_core.derive_inbox_summary_cn(fm.get("title") or path.stem, body)
+        if str(summary_cn).startswith(MISSING_SUMMARY_PREFIX):
+            summary_cn = _preview(body) or fm.get("title") or path.stem
         rows.append({
             "path": _relpath(path),
             "created_date": match.group(1),
