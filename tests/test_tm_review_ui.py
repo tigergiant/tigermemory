@@ -162,6 +162,9 @@ def test_digest_with_cookie_returns_html_and_embedded_json(tmp_path, monkeypatch
 def test_api_digest_parses_expected_sections(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_digest(tmp_path)
+    similar = tmp_path / "wiki" / "systems" / "review-ui-approval.md"
+    similar.parent.mkdir(parents=True, exist_ok=True)
+    similar.write_text("审批界面需要快速判断 inbox 是否归档，并提供中文预览。", encoding="utf-8")
     client = _client(tmp_path, monkeypatch)
     client.get("/", headers=HOST, follow_redirects=False)
 
@@ -176,6 +179,9 @@ def test_api_digest_parses_expected_sections(tmp_path, monkeypatch):
     assert data["digest"]["inbox_rows"][0]["raw_summary"] == "commit pushed pytest passed"
     assert data["digest"]["inbox_rows"][0]["codex_recommended_action"] == "归档"
     assert "日常审阅队列" in data["digest"]["inbox_rows"][0]["codex_recommended_reason"]
+    assert data["digest"]["inbox_rows"][0]["wiki_target"]["partition"] == "systems"
+    assert data["digest"]["inbox_rows"][0]["wiki_target"]["path"].startswith("wiki/systems/")
+    assert data["digest"]["inbox_rows"][0]["wiki_target"]["similar"][0]["path"] == "wiki/systems/review-ui-approval.md"
     assert data["digest"]["proposals"][0]["id"] == "proposal-2026-05-21-001"
 
 
@@ -329,6 +335,34 @@ def test_batch_inbox_promote_wiki_generates_slugs_and_archives(tmp_path, monkeyp
     assert not second.exists()
 
 
+def test_batch_inbox_promote_wiki_uses_default_targets_without_prompt_fields(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)
+    inbox = _write_inbox(tmp_path, "2026-05-01-1200-codex-operations.md")
+    promoted: list[tuple[str, str, str]] = []
+
+    def fake_promote(fact, partition, slug):
+        promoted.append((fact["source_id"], partition, slug))
+        return {"ok": True, "wiki_path": f"wiki/{partition}/{slug}.md", "commit_sha": "wiki-1"}
+
+    monkeypatch.setattr(tm_review_tools, "execute_promote", fake_promote)
+    monkeypatch.setattr(tm_review_ui, "commit_and_push_paths", lambda _paths, _message: "archive123")
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.post(
+        "/api/inbox/batch-action",
+        headers=HOST,
+        json={"paths": [f"inbox/{inbox.name}"], "action": "promote_wiki"},
+    )
+
+    data = response.json()
+    assert data["ok"] is True
+    assert promoted[0][1] == "operations"
+    assert promoted[0][2]
+    assert not inbox.exists()
+
+
 def test_batch_inbox_action_rejects_invalid_path(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     client = _client(tmp_path, monkeypatch)
@@ -358,8 +392,12 @@ def test_review_html_contains_batch_controls_and_status_copy(tmp_path, monkeypat
     assert "批量归档" in response.text
     assert "批量写入 Mem0" in response.text
     assert "Codex 推荐" in response.text
+    assert "写入 Wiki 推荐" in response.text
+    assert "wiki-modal" in response.text
     assert "Mem0 是短期记忆库" in response.text
     assert "Wiki 是长期事实记忆库" in response.text
+    assert "目标 wiki 分区" not in response.text
+    assert "英文 slug 前缀" not in response.text
     assert "data-row-status" in response.text
     assert "展开中文预览（约 200 字）" in response.text
 
