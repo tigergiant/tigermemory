@@ -51,6 +51,8 @@ def _configure_stdio() -> None:
                 except Exception:
                     pass
 
+_configure_stdio()
+
 
 def print_title():
     """在控制台打印一个漂亮的大标题"""
@@ -88,6 +90,29 @@ def get_windows_appdata_from_wsl():
     return None
 
 
+def get_windows_userprofile_from_wsl():
+    """
+    当我们在 WSL 虚拟机内部运行时，获取 Windows 主机侧的 USERPROFILE 路径。
+    我们使用 Windows 的 cmd.exe 来查询环境变量 %USERPROFILE%，再通过 wslpath 转换回 Linux 路径。
+    """
+    try:
+        raw_userprofile = subprocess.check_output(
+            ["cmd.exe", "/c", "echo %USERPROFILE%"],
+            stderr=subprocess.DEVNULL,
+            text=True
+        ).strip()
+        if raw_userprofile:
+            wsl_path = subprocess.check_output(
+                ["wslpath", raw_userprofile],
+                stderr=subprocess.DEVNULL,
+                text=True
+            ).strip()
+            return Path(wsl_path)
+    except Exception:
+        pass
+    return None
+
+
 def detect_config_paths():
     """
     探测当前系统中 Claude Desktop 和 Cursor 的配置文件路径。
@@ -113,31 +138,40 @@ def detect_config_paths():
 
     # 2. 根据不同的操作系统类型定位配置文件路径
     if is_wsl:
-        # 如果是 WSL 环境，我们尝试去访问挂载的 Windows appdata 目录
+        # 如果是 WSL 环境，我们尝试去访问挂载的 Windows 目录
         win_appdata = get_windows_appdata_from_wsl()
         if win_appdata:
             paths["claude_desktop"] = win_appdata / "Claude" / "claude_desktop_config.json"
-            paths["cursor"] = win_appdata / "Cursor" / "User" / "settings.json"
         else:
-            # 备用方案：如果拿不到 Windows 的 APPDATA，则尝试找默认的 /mnt/c 挂载路径下的常规位置
-            # 例如通过默认用户名获取（但这通常不精确，所以优先使用前面的 cmd.exe 查询方式）
-            print("⚠️ 提示：在 WSL 中无法通过 cmd.exe 获取 Windows 的 APPDATA 路径，尝试使用默认路径...")
+            print("⚠️ 提示：在 WSL 中无法通过 cmd.exe 获取 Windows 的 APPDATA 路径，已跳过 Claude Desktop 路径探测。")
+
+        win_userprofile = get_windows_userprofile_from_wsl()
+        if win_userprofile:
+            paths["cursor"] = win_userprofile / ".cursor" / "mcp.json"
+        else:
+            paths["cursor"] = None
+            print("⚠️ 警告：在 WSL 中无法通过 cmd.exe 获取 Windows 的 USERPROFILE 路径，已将 Cursor 配置文件路径设为 None。")
+            print("   👉 提示：如果要在 WSL 桥接模式下配置 Cursor，请确保从 WSL 内能正确访问 cmd.exe。")
     elif OS_TYPE == "Windows":
-        # 在 Windows 环境下，直接通过环境变量 APPDATA 获取
+        # 在 Windows 环境下，直接通过环境变量 APPDATA 和 USERPROFILE 获取
         appdata = Path(os.environ.get("APPDATA", ""))
         if appdata:
             paths["claude_desktop"] = appdata / "Claude" / "claude_desktop_config.json"
-            paths["cursor"] = appdata / "Cursor" / "User" / "settings.json"
+        userprofile = os.environ.get("USERPROFILE")
+        if userprofile:
+            paths["cursor"] = Path(userprofile) / ".cursor" / "mcp.json"
+        else:
+            paths["cursor"] = Path.home() / ".cursor" / "mcp.json"
     elif OS_TYPE == "Darwin":
-        # 在 macOS (Darwin) 环境下，配置文件在用户的 Library 目录下
+        # 在 macOS (Darwin) 环境下，配置文件在用户的相应目录下
         home = Path.home()
         paths["claude_desktop"] = home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
-        paths["cursor"] = home / "Library" / "Application Support" / "Cursor" / "User" / "settings.json"
+        paths["cursor"] = home / ".cursor" / "mcp.json"
     else:
         # 常规 Linux 环境
         home = Path.home()
         paths["claude_desktop"] = home / ".config" / "Claude" / "claude_desktop_config.json"
-        paths["cursor"] = home / ".config" / "Cursor" / "User" / "settings.json"
+        paths["cursor"] = home / ".cursor" / "mcp.json"
 
     return paths
 
@@ -159,8 +193,21 @@ def generate_mcp_config(run_mode):
 
     if run_mode == "wsl":
         # WSL 桥接模式下，Windows 侧的 Claude 启动配置是调用 "wsl" 并运行 linux 里的 python3
-        # 我们假设用户在 WSL 中的代码仓是映射在 ~/tigermemory 里，或者我们可以用绝对路径
         wsl_script_path = script_path
+        if OS_TYPE == "Windows":
+            try:
+                # 调用 wsl.exe wslpath -a -u "<windows path>"
+                wsl_script_path = subprocess.check_output(
+                    ["wsl.exe", "wslpath", "-a", "-u", script_path],
+                    stderr=subprocess.DEVNULL,
+                    text=True
+                ).strip()
+            except Exception as e:
+                # 转换失败抛出清晰的中文错误
+                raise RuntimeError(
+                    "❌ 错误：在 Windows 上以 wsl 桥接模式运行，需要本机已安装 WSL 子系统 (wsl --install 安装)。"
+                ) from e
+
         return {
             "command": "wsl",
             "args": [

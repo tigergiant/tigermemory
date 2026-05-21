@@ -25,6 +25,7 @@ import datetime
 import hashlib
 import json
 import os
+import ipaddress
 import pathlib
 import re
 import socket
@@ -466,10 +467,28 @@ MEM0_UUID_RE = re.compile(
 )
 
 
+def _is_private_ip(host: str) -> bool:
+    """
+    [传输安全阻断器单兵辅助函数]
+    智能检测主机名/IP 是否属于安全的回环网络 (127.0.0.0/8, ::1)、
+    RFC 1918 私有局域网网段 (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+    或者 Tailscale 虚拟安全专网 IP (100.64.0.0/10)。
+    """
+    try:
+        ip = ipaddress.ip_address(host)
+        if ip.is_private or ip.is_loopback:
+            return True
+        if ip.version == 4 and ip in ipaddress.ip_network("100.64.0.0/10"):
+            return True
+    except ValueError:
+        pass
+    return False
+
+
 def check_transport_security(url: str) -> None:
     """
     [传输安全阻断器 - Network Transports Bearer Guard]
-    智能识别安全的回环地址 (localhost)、HTTPS 加密传输以及 Tailscale 虚拟安全专网 IP。
+    智能识别安全的回环地址 (localhost)、HTTPS 加密传输、局域网私有网段以及 Tailscale 虚拟安全专网 IP。
     防止零基础或初学者在不安全的外网环境中明文传输 API 凭证。
     """
     # 检查是否配置了强制豁免环境变量
@@ -484,22 +503,12 @@ def check_transport_security(url: str) -> None:
     if scheme == "https":
         return
 
-    # 2. 允许本机的安全回环连接 (localhost / 127.x.x.x)
-    if host in ("localhost", "127.0.0.1", "[::1]", "::1") or (host and host.startswith("127.")):
+    # 2. 允许安全的主机名或本地回环
+    if host in ("localhost", "[::1]", "::1"):
         return
 
-    # 3. 允许属于 Tailscale 的安全专网 IP (范围是 100.64.0.0 到 100.127.255.255)
-    is_tailscale = False
-    if host:
-        try:
-            parts = [int(p) for p in host.split(".")]
-            if len(parts) == 4:
-                if parts[0] == 100 and (64 <= parts[1] <= 127):
-                    is_tailscale = True
-        except ValueError:
-            pass
-
-    if is_tailscale:
+    # 3. 允许私有 IP 或 Tailscale/CGNAT 安全专网
+    if host and _is_private_ip(host):
         return
 
     # 若不满足任何安全通道条件，则抛出详细的中文指引阻断请求
@@ -510,11 +519,12 @@ def check_transport_security(url: str) -> None:
         "⚠️  安全阻断：未加密的外网明文 HTTP 请求可能导致 API 密钥在传输中泄露！\n"
         f"👉 目标地址: {url}\n\n"
         "💡 为什么被拦截？\n"
-        "   为避免初学者在外部网络明文发送 Bearer 令牌，本拦截器默认仅信任本地回环、HTTPS 或 Tailscale 私有内网。\n\n"
+        "   为避免初学者在外部网络明文发送 Bearer 令牌，本拦截器默认仅信任本地回环、HTTPS、局域网或 Tailscale 私有内网。\n\n"
         "🛠️ 如何解决？（满足以下任意一项即可自动放行）：\n"
         "   1️⃣ 升级为 HTTPS (例如 https://your-domain.com)；\n"
         "   2️⃣ 本地部署请确保使用的是 localhost 或 127.0.0.1 端口；\n"
-        "   3️⃣ 如果两端都在外网，推荐免费安装并使用 Tailscale 异地组网，利用其提供的 100.x.y.z 网段 IP 即可自动放行。\n\n"
+        "   3️⃣ 如果两端都在外网，推荐免费安装并使用 Tailscale 异地组网，利用其提供的 100.x.y.z 网段 IP 即可自动放行；\n"
+        "   4️⃣ 局域网部署 (家用 NAS / 公司内网) 也会自动放行：192.168.x.x / 10.x.x.x / 172.16-31.x.x。\n\n"
         "🚨 临时豁免方式 (仅限安全隔离的开发调试环境)：\n"
         "   - Windows PowerShell 执行: $env:TM_ALLOW_UNSECURE_HTTP=\"1\"\n"
         "   - WSL2 / Linux / macOS 执行: export TM_ALLOW_UNSECURE_HTTP=1\n"

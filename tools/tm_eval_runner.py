@@ -28,6 +28,31 @@ except ImportError:
     sys.exit(1)
 
 
+def _visual_width(s: str) -> int:
+    """估算字符串在等宽字体下的视觉占用宽度。CJK 占 2 cell，其余占 1。"""
+    width = 0
+    for ch in s:
+        code = ord(ch)
+        # CJK Unified Ideographs, Hiragana, Katakana, Hangul, Full-width punctuation
+        if (
+            0x1100 <= code <= 0x115F      # Hangul Jamo
+            or 0x2E80 <= code <= 0x9FFF   # CJK
+            or 0xA000 <= code <= 0xA4CF   # Yi syllables
+            or 0xAC00 <= code <= 0xD7A3   # Hangul syllables
+            or 0xF900 <= code <= 0xFAFF   # CJK compat
+            or 0xFE30 <= code <= 0xFE4F   # CJK compat forms
+            or 0xFF00 <= code <= 0xFF60   # Full-width forms (part)
+            or 0xFFE0 <= code <= 0xFFE6   # Full-width signs
+        ):
+            width += 2
+        else:
+            width += 1
+    return width
+ 
+def _pad_visual(s: str, target: int) -> str:
+    return s + " " * max(0, target - _visual_width(s))
+
+
 def _configure_stdio() -> None:
     """避免在 Windows 控制台环境下输出中文字符时发生 GBK 编码崩溃"""
     if sys.version_info >= (3, 7):
@@ -39,6 +64,8 @@ def _configure_stdio() -> None:
                     stream.reconfigure(errors="backslashreplace")
                 except Exception:
                     pass
+
+_configure_stdio()
 
 
 def load_or_create_eval_suite() -> list[dict]:
@@ -52,6 +79,31 @@ def load_or_create_eval_suite() -> list[dict]:
 
     # 如果数据集不存在，我们自动生成一个结构清晰、内容饱满的默认评测集
     if not suite_file.exists():
+        # 智能动态检测并挑取 3 个新分区的真实用例文件作为 demo
+        brand_path = "wiki/brand/ipfb-copywriting-skill.md"
+        if not (REPO_ROOT / brand_path).exists():
+            brand_dir = REPO_ROOT / "wiki" / "brand"
+            if brand_dir.exists():
+                files = [f for f in os.listdir(brand_dir) if f.endswith(".md") and f != "index.md"]
+                if files:
+                    brand_path = f"wiki/brand/{files[0]}"
+        
+        ops_path = "wiki/operations/cron-daily-report.md"
+        if not (REPO_ROOT / ops_path).exists():
+            ops_dir = REPO_ROOT / "wiki" / "operations"
+            if ops_dir.exists():
+                files = [f for f in os.listdir(ops_dir) if f.endswith(".md") and f != "index.md"]
+                if files:
+                    ops_path = f"wiki/operations/{files[0]}"
+
+        sys_path = "wiki/systems/mem0-audit.md"
+        if not (REPO_ROOT / sys_path).exists():
+            sys_dir = REPO_ROOT / "wiki" / "systems"
+            if sys_dir.exists():
+                files = [f for f in os.listdir(sys_dir) if f.endswith(".md") and f != "index.md" and not f.startswith("lessons")]
+                if files:
+                    sys_path = f"wiki/systems/{files[0]}"
+
         default_suite = [
             {
                 "id": 1,
@@ -87,6 +139,27 @@ def load_or_create_eval_suite() -> list[dict]:
                 "expected_path": "wiki/self-evolution/lessons/2026-04-22-no-verify-bypass.md",
                 "expected_terms": ["bypass", "commit"],
                 "description": "Git绕过风险与Hook拦截"
+            },
+            {
+                "id": 6,
+                "query": "IPFB 文案 准则",
+                "expected_path": brand_path,
+                "expected_terms": ["ipfb", "文案", "准则"],
+                "description": "IPFB品牌文案撰写规范"
+            },
+            {
+                "id": 7,
+                "query": "cron 日报 流程",
+                "expected_path": ops_path,
+                "expected_terms": ["cron", "日报", "流程"],
+                "description": "定时任务日报归档流程"
+            },
+            {
+                "id": 8,
+                "query": "Mem0 重复 候选",
+                "expected_path": sys_path,
+                "expected_terms": ["mem0", "重复", "候选"],
+                "description": "Mem0记忆重复实体审核"
             }
         ]
         try:
@@ -230,8 +303,16 @@ def main():
     mem0_active = True
 
     # 漂亮的控制台 ASCII 表格头
-    print(f"{'ID':<4} | {'测试问题描述':<22} | {'Wiki召回排名':<12} | {'Wiki时延':<10} | {'Mem0匹配':<8} | {'Mem0时延':<10}")
-    print("-" * 84)
+    TABLE_WIDTH = 81
+    header_id = _pad_visual("ID", 4)
+    header_desc = _pad_visual("测试问题描述", 22)
+    header_wiki_rank = _pad_visual("Wiki召回排名", 12)
+    header_wiki_time = _pad_visual("Wiki时延", 10)
+    header_mem0_match = _pad_visual("Mem0匹配", 8)
+    header_mem0_time = _pad_visual("Mem0时延", 10)
+    
+    print(f"{header_id} | {header_desc} | {header_wiki_rank} | {header_wiki_time} | {header_mem0_match} | {header_mem0_time}")
+    print("-" * TABLE_WIDTH)
 
     for case in cases:
         cid = case["id"]
@@ -259,13 +340,16 @@ def main():
         else:
             mem0_time_str = f"{mem0_ms:.1f}ms"
 
-        # 针对中文对齐的特殊处理，保持表格美观
-        padding_len = 22 - len(desc.encode('utf-8')) + len(desc)
-        desc_padded = desc + " " * max(0, padding_len)
+        col_id = _pad_visual(str(cid), 4)
+        col_desc = _pad_visual(desc, 22)
+        col_wiki_rank = _pad_visual(rank_str, 12)
+        col_wiki_time = _pad_visual(wiki_time_str, 10)
+        col_mem0_match = _pad_visual(mem0_match_str, 8)
+        col_mem0_time = _pad_visual(mem0_time_str, 10)
 
-        print(f"{cid:<4} | {desc_padded} | {rank_str:<12} | {wiki_time_str:<10} | {mem0_match_str:<8} | {mem0_time_str:<10}")
+        print(f"{col_id} | {col_desc} | {col_wiki_rank} | {col_wiki_time} | {col_mem0_match} | {col_mem0_time}")
 
-    print("-" * 84)
+    print("-" * TABLE_WIDTH)
 
     # 2. 计算并汇总核心评估指标
     total = len(cases)
