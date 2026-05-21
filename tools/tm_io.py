@@ -407,6 +407,7 @@ def cmd_guard(args: argparse.Namespace) -> None:
 # ---------- entrypoint ----------
 
 def main() -> None:
+    tm_core.configure_stdio()
     p = argparse.ArgumentParser(prog="tm_io.py", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
 

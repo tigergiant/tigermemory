@@ -68,17 +68,36 @@ def _configure_stdio() -> None:
 _configure_stdio()
 
 
-def load_or_create_eval_suite() -> list[dict]:
+def load_or_create_eval_suite(suite_type: str = "default") -> list[dict]:
     """
     加载或自动生成演示评测数据集。
-    数据集保存在 data/eval_suites.json，作为官方的开箱即用演示。
+    支持 default 与 custom 模式。
     """
     data_dir = REPO_ROOT / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    suite_file = data_dir / "eval_suites.json"
 
-    # 如果数据集不存在，我们自动生成一个结构清晰、内容饱满的默认评测集
-    if not suite_file.exists():
+    if suite_type == "custom":
+        suite_file = data_dir / "eval_suites_custom.json"
+        if not suite_file.exists():
+            print("❌ 错误：未找到自定义评测集文件！")
+            print(f"   👉 建议：请在以下路径创建您的自定义评测 JSON 文件：\n      {suite_file}")
+            print("   👉 文件格式示例：")
+            demo_format = [
+                {
+                    "id": 1,
+                    "query": "自定义搜索词",
+                    "expected_path": "wiki/partition/your-file.md",
+                    "expected_terms": ["核心词1", "核心词2"],
+                    "description": "自定义用例描述"
+                }
+            ]
+            print(json.dumps(demo_format, ensure_ascii=False, indent=2))
+            return []
+    else:
+        suite_file = data_dir / "eval_suites.json"
+
+    # 如果默认数据集不存在，我们自动生成一个结构清晰、内容饱满的默认评测集
+    if suite_type != "custom" and not suite_file.exists():
         # 智能动态检测并挑取 3 个新分区的真实用例文件作为 demo
         brand_path = "wiki/brand/ipfb-copywriting-skill.md"
         if not (REPO_ROOT / brand_path).exists():
@@ -231,7 +250,8 @@ def run_mem0_eval(case: dict) -> tuple[bool, float]:
     # 简单分析：返回的记忆内容文本里，是否包含我们预期的任意一个关键字
     matched = False
     for item in results:
-        text = str(item.get("text") or "").lower()
+        # 兼容读取 content, memory, text 字段
+        text = str(item.get("content") or item.get("memory") or item.get("text") or "").lower()
         if any(term.lower() in text for term in expected_terms):
             matched = True
             break
@@ -257,38 +277,77 @@ def print_scientific_explanations():
     print("=" * 60 + "\n")
 
 
-def print_suggestions(wiki_recall_1, wiki_latency, mem0_active):
+def print_suggestions(wiki_recall_1, wiki_latency, mem0_active, mem0_accuracy=0.0):
     """根据测试结果给开发者提供针对性的 Obsidian 或数据治理优化建议"""
     print("💡 【数据治理与调优建议】：")
-    if wiki_recall_1 < 0.6:
-        print("   📌 【Wiki 优化建议】：当前 Recall@1 第一精确命中率较低。")
-        print("     👉 原因：Wiki Markdown 文件名和别名不够丰富。")
-        print("     👉 解决：建议在 Markdown 正文顶部 frontmatter 增加 `aliases: [别名1, 别名2]` 字段，并确保文件首级 H1 标题包含核心关键词！")
-    else:
-        print("   📌 【Wiki 表现优秀】：第一精确命中率表现良好，继续保持高质量的 Markdown 知识归档！")
 
+    # Wiki 召回率精确评定
+    if wiki_recall_1 < 0.6:
+        print("   📌 【Wiki 优化建议】：当前 Recall@1 第一精确命中率较低 (低于 60%)。")
+        print("     👉 原因：Wiki Markdown 文件名和别名不够丰富，或没有针对性覆盖。")
+        print("     👉 解决：建议在 Markdown 正文顶部 frontmatter 增加 `aliases: [别名1, 别名2]` 字段，并确保文件首级 H1 标题包含核心关键词！")
+    elif wiki_recall_1 < 0.8:
+        print("   📌 【Wiki 优化建议】：当前 Recall@1 第一精确命中率属于中等水平 (60%~80%)。")
+        print("     👉 解决：建议针对个别失败问题，在对应 Wiki 文件名、aliases 或开篇首段补充测试词的同义词。")
+    else:
+        print("   📌 【Wiki 表现优秀】：第一精确命中率极佳 (80%以上)，继续保持高质量的 Markdown 知识归档！")
+
+    # Wiki 时延评价
     if wiki_latency > 200.0:
-        print("   📌 【时延预警】：本地 Wiki 检索平均耗时较长。")
+        print("   📌 【Wiki 时延预警】：本地 Wiki 检索平均耗时较长。")
         print("     👉 解决：清理 .tmp/ 隔离区中冗余的大型文本残余，或者减少一次性全文搜索文件的大小预算。")
 
+    # Mem0 评价 (区分服务在线状态与检索有效性)
     if not mem0_active:
         print("   📌 【Mem0 提醒】：检测到 Mem0 记忆引擎处于离线或异常状态。")
         print("     👉 说明：当前主要依靠本地 Wiki FTS 静态索引提供查询支持。")
-        print("     👉 解决：在后台开启 openmemory 服务，能够获得动态、实时的对话对话级记忆能力。")
+        print("     👉 解决：在后台开启 openmemory 服务，能够获得动态、实时的对话级记忆能力。")
     else:
-        print("   📌 【Mem0 表现正常】：Mem0 动态事件记忆已接入，双路检索系统状态良好！")
+        if mem0_accuracy == 0.0:
+            print("   📌 【Mem0 检索异常预警】：Mem0 服务在线，但 Keyword 命中率为 0%！")
+            print("     👉 原因：可能存在以下情况之一：")
+            print("        1. 本地 Mem0/OpenMemory 中尚未注入该评测集对应的近期事实记忆；")
+            print("        2. 检索结果中的内容提取字段 (content/memory/text) 发生漂移；")
+            print("        3. 检索召回策略或阈值设置过高。")
+            print("     👉 解决：建议先通过 'py tools/tm_agent_doctor.py' 诊断 Mem0 基础连通性，并使用 write_memory 注入对应测试事实。")
+        elif mem0_accuracy < 0.6:
+            print("   📌 【Mem0 表现中等】：Mem0 检索命中率较低 (低于 60%)。可通过添加更精确的事件描述来增强召回。")
+        else:
+            print("   📌 【Mem0 表现正常】：Mem0 动态事件记忆已接入，且 Keyword 召回表现良好，双路检索系统状态极佳！")
     print("-" * 60)
 
 
 def main():
     _configure_stdio()
 
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="🐅 tigermemory 检索与时延双路评测器 (Eval Runner) 🐅"
+    )
+    parser.add_argument(
+        "--suite",
+        choices=["default", "custom"],
+        default="default",
+        help="选择评测样本集类型 (default 或 custom)"
+    )
+    parser.add_argument(
+        "--skip-mem0",
+        action="store_true",
+        help="跳过 Mem0 动态事件通道评测 (强制为离线模式)"
+    )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="跳过 Mem0 动态事件通道评测 (强制为离线模式，等价于 --skip-mem0)"
+    )
+    args = parser.parse_args()
+
     print("=" * 60)
     print("      🐅 tigermemory 检索与时延双路评测器 (Eval Runner) 🐅      ")
     print("=" * 60)
 
     # 1. 载入评测样本集
-    cases = load_or_create_eval_suite()
+    cases = load_or_create_eval_suite(args.suite)
     if not cases:
         print("❌ 错误：评测样本集为空，无法继续。")
         return
@@ -300,7 +359,7 @@ def main():
     wiki_durations = []
     mem0_matches = []
     mem0_durations = []
-    mem0_active = True
+    mem0_active = not (args.skip_mem0 or args.offline)
 
     # 漂亮的控制台 ASCII 表格头
     TABLE_WIDTH = 81
@@ -324,9 +383,12 @@ def main():
         wiki_durations.append(wiki_ms)
 
         # 运行 Mem0 语义/局部测试
-        matched, mem0_ms = run_mem0_eval(case)
-        if mem0_ms == 0.0:
-            mem0_active = False
+        if mem0_active:
+            matched, mem0_ms = run_mem0_eval(case)
+            if mem0_ms == 0.0:
+                mem0_active = False
+        else:
+            matched, mem0_ms = False, 0.0
         mem0_matches.append(matched)
         mem0_durations.append(mem0_ms)
 
@@ -382,7 +444,7 @@ def main():
     print("=" * 60 + "\n")
 
     # 3. 打印科普建议与治理指南
-    print_suggestions(recall_1, avg_wiki_latency, mem0_active)
+    print_suggestions(recall_1, avg_wiki_latency, mem0_active, mem0_accuracy)
     print_scientific_explanations()
 
 

@@ -14,12 +14,21 @@ tools/tm_agent_connect.py — tigermemory 一键 IDE 连接向导工具。
 import os
 import sys
 import json
+import shlex
 import shutil
 import platform
 import argparse
 import subprocess
 from datetime import datetime
 from pathlib import Path
+
+# 引入核心组件进行编码鲁棒性重配置
+try:
+    import tm_core
+    tm_core.configure_stdio()
+except ImportError:
+    pass
+
 
 # ==========================================
 # 辅助说明：帮助零基础的小白开发者理解 MCP 基础概念
@@ -208,12 +217,13 @@ def generate_mcp_config(run_mode):
                     "❌ 错误：在 Windows 上以 wsl 桥接模式运行，需要本机已安装 WSL 子系统 (wsl --install 安装)。"
                 ) from e
 
+        quoted_path = shlex.quote(wsl_script_path)
         return {
             "command": "wsl",
             "args": [
                 "bash",
                 "-c",
-                f"export TM_AGENT=claude-code && python3 {wsl_script_path} --stdio"
+                f"export TM_AGENT=claude-code && python3 {quoted_path} --stdio"
             ]
         }
     else:
@@ -246,7 +256,7 @@ def backup_file(file_path: Path):
         return None
 
 
-def patch_json_config(file_path: Path, server_name: str, server_config: dict, dry_run: bool, force: bool):
+def patch_json_config(file_path: Path, server_name: str, server_config: dict, dry_run: bool, force: bool, force_without_backup: bool = False):
     """
     读取、解析并把 MCP 配置安全地“打补丁”注入到目标的 JSON 配置文件中。
     支持优雅的自动创建父文件夹、自动处理 JSON 语法、支持强制写入与提示确认。
@@ -295,7 +305,9 @@ def patch_json_config(file_path: Path, server_name: str, server_config: dict, dr
                     print("🚫 【已取消】保留原有配置，未作任何修改。")
                     return False
             else:
-                print("📝 【静默覆盖】未检测到 TTY 终端交互，已按照安全原则自动覆盖并备份。")
+                print("❌ 错误：检测到非交互式环境 (Non-TTY) 且已存在同名配置。为了配置安全，已自动拒绝覆盖。")
+                print("   👉 提示：如需在静默脚本中强制覆盖已有配置，请添加 '--force' 参数。")
+                return False
 
     # 4. 将我们的 MCP 配置项写入到 mcpServers 字典中
     config_data["mcpServers"][server_name] = server_config
@@ -312,22 +324,42 @@ def patch_json_config(file_path: Path, server_name: str, server_config: dict, dr
     file_path.parent.mkdir(parents=True, exist_ok=True)
     
     # 备份原文件
-    backup_file(file_path)
+    if file_path.exists():
+        backup_path = backup_file(file_path)
+        if not backup_path and not force_without_backup:
+            print("❌ 【安全中止】无法为已有配置创建备份，已自动取消写入以防丢失原始配置。")
+            print("   👉 提示：如果确定不需要备份，可添加 '--force-without-backup' 参数跳过此安全检查。")
+            return False
 
+    # 原子写入：写同目录 tmp 临时文件 -> flush & fsync -> os.replace 覆盖替换
+    tmp_file = file_path.with_name(f"{file_path.name}.tmp_{os.getpid()}")
     try:
-        with open(file_path, "w", encoding="utf-8") as f:
+        with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(config_data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        # 原子替换
+        os.replace(tmp_file, file_path)
         print("🎉 【配置注入成功！】已成功将 tigermemory 写入您的编辑器配置文件中！")
         print("-" * 60)
         return True
     except Exception as e:
         print(f"❌ 【写入失败】写入文件时出错，原因：{e}")
+        if tmp_file.exists():
+            try:
+                tmp_file.unlink()
+            except Exception:
+                pass
         return False
 
 
 def main():
-    # 配置终端输入输出流
-    _configure_stdio()
+    # 使用共享编码鲁棒性配置器，并在 main 第一行显式调用
+    try:
+        import tm_core
+        tm_core.configure_stdio()
+    except ImportError:
+        pass
 
     # 配置命令行解析器，对命令行开发者极其友好！
     parser = argparse.ArgumentParser(
@@ -343,6 +375,11 @@ def main():
         "--force",
         action="store_true",
         help="如果发现已有同名配置，强制直接覆盖，跳过交互式二次确认（适合脚本静默运行）"
+    )
+    parser.add_argument(
+        "--force-without-backup",
+        action="store_true",
+        help="即使为已有配置备份失败，也强制写入配置文件（高风险，仅在备份机制被系统限制时使用）"
     )
     parser.add_argument(
         "--mode",
@@ -386,13 +423,13 @@ def main():
 
     # 4. 对 Claude Desktop 执行注入操作
     if claude_path:
-        patch_json_config(claude_path, server_name, server_config, args.dry_run, args.force)
+        patch_json_config(claude_path, server_name, server_config, args.dry_run, args.force, args.force_without_backup)
     else:
         print("❓ 未找到 Claude Desktop 配置文件默认路径，已自动跳过 Claude 配置。")
 
     # 5. 对 Cursor 执行注入操作
     if cursor_path:
-        patch_json_config(cursor_path, server_name, server_config, args.dry_run, args.force)
+        patch_json_config(cursor_path, server_name, server_config, args.dry_run, args.force, args.force_without_backup)
     else:
         print("❓ 未找到 Cursor 配置文件默认路径，已自动跳过 Cursor 配置。")
 

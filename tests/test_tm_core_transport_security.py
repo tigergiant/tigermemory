@@ -75,6 +75,10 @@ class TestTransportSecurity(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             tm_core.check_transport_security("http://api.openai.com:9000")
 
+        # 5. 伪装回环域名绕过防御 (Bug 2: 127.0.0.1.evil.test 曾经被 127. 前缀过滤放行)
+        with self.assertRaises(RuntimeError):
+            tm_core.check_transport_security("http://127.0.0.1.evil.test:8000")
+
     def test_env_exempt_passes_all(self):
         # 当配置了 TM_ALLOW_UNSECURE_HTTP=1 环境变量时，所有请求必须无条件放行
         os.environ["TM_ALLOW_UNSECURE_HTTP"] = "1"
