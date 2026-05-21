@@ -188,6 +188,7 @@ def test_digest_with_cookie_returns_html_and_embedded_json(tmp_path, monkeypatch
     response = client.get("/digest/2026-05-21", headers=HOST)
 
     assert response.status_code == 200
+    assert "TigerMemory 每日审批" in response.text
     assert "今日要决策" in response.text
     assert "https://cdn.tailwindcss.com" in response.text
     assert "digest-data" in response.text
@@ -236,7 +237,7 @@ def test_pwa_manifest_is_public_and_uses_memory_ops(tmp_path, monkeypatch):
     response = client.get("/manifest.webmanifest", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory Memory Ops" in response.text
+    assert '"name": "TigerMemory"' in response.text
     assert "/daily" in response.text
     assert "/static/tiger/tigermemory_tiger_logo_192.png" in response.text
     assert "/static/tiger/tigermemory_tiger_logo_512.png" in response.text
@@ -289,6 +290,8 @@ def test_health_page_uses_real_template_not_json_page(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert "health-data" in response.text
     assert "系统健康" in response.text
+    assert "记忆运维台" in response.text
+    assert "可视化脑海" in response.text
     assert "#f7f2e6" in response.text
     assert "#c8a560" in response.text
     assert "/static/tiger/tigerlogo.png" in response.text
@@ -355,6 +358,10 @@ def test_quality_and_settings_no_longer_use_raw_json_page(tmp_path, monkeypatch)
     assert "settings-data" in settings.text
     assert "记忆系统质量" in quality.text
     assert "沟通深度档位" in settings.text
+    assert "记忆运维台" in quality.text
+    assert "记忆运维台" in settings.text
+    assert "思考路径耗时" in quality.text
+    assert "本地数据库" in settings.text
     combined = quality.text + settings.text
     assert "阶段 2 占位" not in combined
     assert "bg-zinc-950" not in combined
@@ -630,16 +637,17 @@ def test_review_html_contains_batch_controls_and_status_copy(tmp_path, monkeypat
 
     assert response.status_code == 200
     assert "批量归档" in response.text
-    assert "批量写入 Mem0" in response.text
-    assert "Codex 推荐" in response.text
+    assert "批量进入短期记忆" in response.text
+    assert "Codex 推荐操作" in response.text
     assert "写入 Wiki 推荐" in response.text
     assert "wiki-modal" in response.text
-    assert "Mem0 是短期记忆库" in response.text
-    assert "Wiki 是长期事实记忆库" in response.text
+    assert "短期记忆库：适合近期偏好" in response.text
+    assert "写入长期事实记忆" in response.text
     assert "目标 wiki 分区" not in response.text
     assert "英文 slug 前缀" not in response.text
     assert "data-row-status" in response.text
-    assert "展开中文预览（约 200 字）" in response.text
+    assert "展开原文预览（约 200 字）" in response.text
+    assert "AI 想改这些" in response.text
 
 
 def test_proposal_apply_calls_tm_cron_apply(tmp_path, monkeypatch):
