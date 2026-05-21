@@ -237,6 +237,34 @@ def test_inbox_action_invalid_path_returns_error(tmp_path, monkeypatch):
     assert response.json()["ok"] is False
 
 
+def test_keep_action_hides_row_from_digest_decision_area(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    _write_digest(tmp_path)
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.post(
+        "/api/inbox/action",
+        headers=HOST,
+        json={
+            "path": "inbox/2026-05-01-1200-codex-systems.md",
+            "action": "keep",
+            "date": "2026-05-21",
+        },
+    )
+
+    data = response.json()
+    assert data["ok"] is True
+    assert data["hidden"] is True
+    marker = tmp_path / ".tmp" / "review-ui-decisions" / "2026-05-21" / "kept.json"
+    assert marker.exists()
+
+    digest = client.get("/api/digest/2026-05-21", headers=HOST).json()["digest"]
+    assert digest["inbox_rows"] == []
+    assert digest["hidden_inbox_rows"][0]["path"] == "inbox/2026-05-01-1200-codex-systems.md"
+    assert digest["counts"]["review_hidden"] == 1
+
+
 def test_batch_inbox_archive_selected_commits_once(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)
