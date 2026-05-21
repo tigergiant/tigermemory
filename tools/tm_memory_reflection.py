@@ -48,6 +48,8 @@ class InboxAuditRow:
     summary: str
     action: str
     reason: str
+    codex_recommended_action: str
+    codex_recommended_reason: str
     stale_archive: bool = False
     already_applied: bool = False
 
@@ -252,6 +254,13 @@ def audit_inbox(
             action = "keep_in_inbox"
             reason = "not older than 14 days; keep for daily review"
             stale = False
+        recommended_action, recommended_reason = _codex_recommendation(
+            record,
+            action=action,
+            reason=reason,
+            age_days=age,
+            stale=stale,
+        )
         rows.append(InboxAuditRow(
             path=str(record["path"]),
             created_date=str(record["created_date"]),
@@ -264,6 +273,8 @@ def audit_inbox(
             summary=str(record["summary"]),
             action=action,
             reason=reason,
+            codex_recommended_action=recommended_action,
+            codex_recommended_reason=recommended_reason,
             stale_archive=stale,
             already_applied=already_applied,
         ))
@@ -383,6 +394,28 @@ def _score_quality(mem0_count: int, inbox_count: int, discard_count: int, candid
     return max(0, min(100, score))
 
 
+def _codex_recommendation(record: dict[str, Any], *, action: str, reason: str, age_days: int, stale: bool) -> tuple[str, str]:
+    title = str(record.get("title_cn") or "")
+    preview = str(record.get("preview_cn") or "")
+    raw = str(record.get("summary") or "")
+    route_reason = str(record.get("route_decision_reason") or "")
+    text = " ".join([title, preview, raw, route_reason]).lower()
+
+    if action == "archive" or stale:
+        return "归档", f"已停留 {age_days} 天且没有 apply 记录，超过 14 天兜底线；建议先隐藏出日常审阅队列。"
+    if action == "promote_to_mem0":
+        return "写入 Mem0", "这条更像近期偏好、反馈或会话结论，适合放进短期记忆库供最近任务调用。"
+    if action == "promote_to_wiki":
+        return "写入 Wiki", "这条包含长期规则、流程或稳定事实，适合沉淀进长期事实记忆库。"
+    if any(keyword in text for keyword in ("规则", "契约", "长期", "policy", "runbook", "prompt", "边界", "流程", "标准")):
+        return "写入 Wiki", "内容像规则、流程或系统边界；若确认不是临时状态，建议升格到 Wiki 长期事实库。"
+    if any(keyword in text for keyword in ("偏好", "反馈", "近期", "本次", "会话", "closeout", "commit", "push", "测试通过", "完成")):
+        return "写入 Mem0", "内容像近期反馈或开发收尾结论；若仍有复用价值，建议写入 Mem0 短期记忆库。"
+    if any(keyword in text for keyword in ("lint", "l4", "巡检", "日报", "报表")):
+        return "保留观察", "这是巡检/报表型待处理项，未到 14 天兜底时先保留给每日审阅或等待对应修复。"
+    return "保留观察", "暂未看到足够证据可以直接归档或升格，建议继续留在 inbox 每日复审。"
+
+
 def _inbox_action_groups(rows: list[InboxAuditRow]) -> tuple[list[InboxAuditRow], list[InboxAuditRow], list[InboxAuditRow]]:
     archive_rows = [row for row in rows if row.action == "archive"]
     promote_rows = [row for row in rows if row.action in {"promote_to_mem0", "promote_to_wiki"}]
@@ -398,6 +431,8 @@ def _append_inbox_row(lines: list[str], row: InboxAuditRow) -> None:
         f"  - 中文标题：{row.title_cn}",
         f"  - 中文预览：{row.preview_cn}",
         f"  - 原文预览：{row.summary}",
+        f"  - Codex 推荐操作：{row.codex_recommended_action}",
+        f"  - Codex 推荐理由：{row.codex_recommended_reason}",
         f"  - cron 建议动作：{row.action}",
         f"  - 建议理由：{row.reason}",
         "  - 虎哥裁决：[ ] apply  [ ] reject",

@@ -100,6 +100,8 @@ def test_daily_digest_groups_inbox_actions_and_wraps_keep_rows(tmp_path):
     assert "中文标题：这是一条测试用的中文摘要。" in report
     assert "中文预览：这是一条测试用的中文摘要。" in report
     assert "原文预览：old" in report
+    assert "Codex 推荐操作：归档" in report
+    assert "Codex 推荐理由：已停留 14 天且没有 apply 记录" in report
     assert "<summary>展开 1 条 keep_in_inbox</summary>" in report
     assert "2026-05-01-1200-codex-systems.md` **高亮：14 天兜底 archive**" in report
 

@@ -61,6 +61,8 @@ def _write_digest(root: pathlib.Path, date: str = "2026-05-21") -> pathlib.Path:
             "  - 中文标题：审批界面归档判断",
             "  - 中文预览：审批界面需要能快速判断这条开发收尾记录是否应归档。这里放入较长的中文预览，用于折叠区展示真正摘要。",
             "  - 原文预览：commit pushed pytest passed",
+            "  - Codex 推荐操作：归档",
+            "  - Codex 推荐理由：已超过 14 天且没有 apply 记录，建议隐藏出日常审阅队列。",
             "  - cron 建议动作：archive",
             "  - 建议理由：14-day fallback",
             "  - 虎哥裁决：[ ] apply  [ ] reject",
@@ -172,6 +174,8 @@ def test_api_digest_parses_expected_sections(tmp_path, monkeypatch):
     assert data["digest"]["inbox_rows"][0]["title_cn"] == "审批界面归档判断"
     assert "快速判断" in data["digest"]["inbox_rows"][0]["preview_cn"]
     assert data["digest"]["inbox_rows"][0]["raw_summary"] == "commit pushed pytest passed"
+    assert data["digest"]["inbox_rows"][0]["codex_recommended_action"] == "归档"
+    assert "日常审阅队列" in data["digest"]["inbox_rows"][0]["codex_recommended_reason"]
     assert data["digest"]["proposals"][0]["id"] == "proposal-2026-05-21-001"
 
 
@@ -353,6 +357,9 @@ def test_review_html_contains_batch_controls_and_status_copy(tmp_path, monkeypat
     assert response.status_code == 200
     assert "批量归档" in response.text
     assert "批量写入 Mem0" in response.text
+    assert "Codex 推荐" in response.text
+    assert "Mem0 是短期记忆库" in response.text
+    assert "Wiki 是长期事实记忆库" in response.text
     assert "data-row-status" in response.text
     assert "展开中文预览（约 200 字）" in response.text
 
