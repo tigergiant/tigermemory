@@ -291,8 +291,8 @@ def test_health_page_uses_real_template_not_json_page(tmp_path, monkeypatch):
     assert "系统健康" in response.text
     assert "#f7f2e6" in response.text
     assert "#c8a560" in response.text
-    assert "/static/tiger/tigermemory_tiger_logo.svg" in response.text
-    assert "/static/tiger/tigermemory_dashboard_motif.svg" in response.text
+    assert "/static/tiger/tigerlogo.png" in response.text
+    assert "dashboard-motif" in response.text
     assert "<pre" not in response.text
     assert "bg-zinc-950" not in response.text
     assert "bg-black" not in response.text
