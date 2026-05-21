@@ -11,13 +11,15 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 import tm_memory_reflection  # type: ignore[import-not-found]
 
 
-def _write_inbox(path: pathlib.Path, body: str) -> None:
+def _write_inbox(path: pathlib.Path, body: str, summary_cn: str | None = None) -> None:
+    summary_line = f"summary_cn: {summary_cn}" if summary_cn else None
     text = "\n".join([
         "---",
         "owner: codex",
         "status: active",
         "updated: 2026-05-01",
         "topic: systems",
+        *(line for line in [summary_line] if line),
         "---",
         "",
         body,
@@ -76,7 +78,11 @@ def test_daily_digest_decision_block_and_frontmatter_counts(tmp_path):
 def test_daily_digest_groups_inbox_actions_and_wraps_keep_rows(tmp_path):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
-    _write_inbox(inbox / "2026-05-01-1200-codex-systems.md", "old")
+    _write_inbox(
+        inbox / "2026-05-01-1200-codex-systems.md",
+        "old",
+        summary_cn="这是一条测试用的中文摘要。",
+    )
     _write_inbox(inbox / "2026-05-14-1200-codex-systems.md", "new")
 
     report = tm_memory_reflection.render_daily_report(
@@ -91,8 +97,27 @@ def test_daily_digest_groups_inbox_actions_and_wraps_keep_rows(tmp_path):
     assert "### 🔴 建议 archive" in report
     assert "### 🟡 建议 promote" in report
     assert "### ⚪ 仅观察 keep_in_inbox" in report
+    assert "中文摘要：这是一条测试用的中文摘要。" in report
+    assert "原文预览：old" in report
     assert "<summary>展开 1 条 keep_in_inbox</summary>" in report
     assert "2026-05-01-1200-codex-systems.md` **高亮：14 天兜底 archive**" in report
+
+
+def test_legacy_inbox_extracts_existing_chinese_line(tmp_path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    _write_inbox(inbox / "2026-05-01-1200-codex-systems.md", "# Routed memory 80\n这条历史 inbox 已经自带中文说明。")
+
+    report = tm_memory_reflection.render_daily_report(
+        date="2026-05-15",
+        now_iso="2026-05-15T23:55:00+08:00",
+        mem0_items=[],
+        inbox_dir=inbox,
+        audit_root=tmp_path / "discard-root",
+        proposal_root=tmp_path / "cron-proposals",
+    )
+
+    assert "中文摘要：这条历史 inbox 已经自带中文说明。" in report
 
 
 def test_preview_is_capped_at_eighty_characters():

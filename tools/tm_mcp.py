@@ -659,10 +659,15 @@ def write_memory(agent: str, topic: str, text: str, force_inbox: bool = False, l
     _require_writer()
     """Single canonical entry for agent memory writes. Server-side LLM routes to mem0 / inbox / discard.
 
+    If the text may need human review, start it with one concise Chinese sentence
+    summarizing the item. Inbox files store that sentence as summary_cn for the
+    daily digest review UI; if omitted, the inbox record is marked as missing a
+    Chinese summary instead of being translated later by cron.
+
     Args:
         agent: Agent name
         topic: Topic name
-        text: Memory text content
+        text: Memory text content; first Chinese line becomes inbox summary_cn
         force_inbox: If True, bypass routing and write directly to inbox (agent requests human review)
         light: If True, skip DeepSeek routing for allowlisted low-risk pointer writes
 

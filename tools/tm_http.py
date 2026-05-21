@@ -34,7 +34,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 import tm_core
@@ -164,12 +164,12 @@ PORT = int(os.getenv("TM_HTTP_PORT", "8790"))
 class HealthResponse(BaseModel):
     ok: bool
     version: str
-    tm_core_version: str | None = None
+    tm_core_version: Optional[str] = None
     mem0_reachable: bool
-    mem0_api_reachable: bool | None = None
-    mem0_api_latency_ms: float | None = None
-    mem0_api_error: str | None = None
-    deepseek_reachable: bool | None = None
+    mem0_api_reachable: Optional[bool] = None
+    mem0_api_latency_ms: Optional[float] = None
+    mem0_api_error: Optional[str] = None
+    deepseek_reachable: Optional[bool] = None
     uptime_seconds: float
 
 
@@ -180,7 +180,7 @@ class SearchMemoriesRequest(BaseModel):
 
 class SearchMemoriesResponse(BaseModel):
     count: int
-    results: list[dict] | None = None
+    results: Optional[list[dict]] = None
 
 
 class MemoryAnswerRequest(BaseModel):
@@ -189,7 +189,7 @@ class MemoryAnswerRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=10)
     max_evidence: int = Field(default=6, ge=1, le=12)
     include_trace: bool = True
-    run_id: str | None = Field(default=None, max_length=120)
+    run_id: Optional[str] = Field(default=None, max_length=120)
     evidence_char_budget: int = Field(default=2000, ge=1, le=20000)
 
 
@@ -207,11 +207,11 @@ class MemoryAnswerEvidence(BaseModel):
     title: str
     excerpt: str
     score: float
-    authority: float | None = None
-    relevance: float | None = None
-    topic: str | None = None
-    source_role: str | None = None
-    created_at: str | None = None
+    authority: Optional[float] = None
+    relevance: Optional[float] = None
+    topic: Optional[str] = None
+    source_role: Optional[str] = None
+    created_at: Optional[str] = None
 
 
 class MemoryAnswerResponse(BaseModel):
@@ -221,9 +221,9 @@ class MemoryAnswerResponse(BaseModel):
     claims: list[MemoryAnswerClaim]
     evidence: list[MemoryAnswerEvidence]
     warnings: list[str]
-    run_id: str | None = None
+    run_id: Optional[str] = None
     trace_id: str
-    trace: dict[str, Any] | None = None
+    trace: Optional[dict[str, Any]] = None
 
 
 class ReadWikiRequest(BaseModel):
@@ -250,7 +250,12 @@ class ListPartitionResponse(BaseModel):
 class WriteMemoryRequest(BaseModel):
     agent: str = Field(..., pattern=r"^(claude-code|codex|openclaw|hermes|deerflow|human|linter|mem0|tigermemory-ce|kimi|dsa-cron)$")
     topic: str = Field(..., pattern=r"^(brand|investment|operations|production|systems|person|cross)$")
-    text: str = Field(..., min_length=1, max_length=10000)
+    text: str = Field(
+        ...,
+        min_length=1,
+        max_length=10000,
+        description="Memory text. If routed to inbox, the first Chinese line is stored as summary_cn.",
+    )
     force_inbox: bool = False
     light: bool = False
 
@@ -258,8 +263,13 @@ class WriteMemoryRequest(BaseModel):
 class WriteInboxRequest(BaseModel):
     agent: str = Field(..., pattern=r"^(claude-code|codex|openclaw|hermes|deerflow|human|linter|mem0|tigermemory-ce|kimi|dsa-cron)$")
     topic: str = Field(..., pattern=r"^(brand|investment|operations|production|systems|person|cross)$")
-    title: str = Field(..., min_length=1, max_length=80)
-    body: str = Field(..., min_length=1, max_length=50000)
+    title: str = Field(..., min_length=1, max_length=80, description="Prefer a concise Chinese review title.")
+    body: str = Field(
+        ...,
+        min_length=1,
+        max_length=50000,
+        description="Body text. The first Chinese line is stored as summary_cn for review.",
+    )
     reason: str = Field(..., min_length=1, max_length=200)
 
 
@@ -270,7 +280,7 @@ class ReviewDraftRequest(BaseModel):
 class AgentDoctorRequest(BaseModel):
     query: str = Field(default=tm_agent_doctor.DEFAULT_QUERY, min_length=1, max_length=1000)
     include_l2: bool = True
-    http_url: str | None = Field(default=None, max_length=300)
+    http_url: Optional[str] = Field(default=None, max_length=300)
 
 
 class RetentionAuditRequest(BaseModel):
@@ -282,13 +292,13 @@ class ExpenseRecordRequest(BaseModel):
     kind: str = Field(..., pattern=r"^(expense|income)$")
     amount: float = Field(..., ge=0)
     category: str = Field(..., min_length=1, max_length=80)
-    occurred_at: str | None = Field(default=None, max_length=40)
+    occurred_at: Optional[str] = Field(default=None, max_length=40)
     currency: str = Field(default="CNY", max_length=8)
-    merchant: str | None = Field(default=None, max_length=200)
-    note: str | None = Field(default=None, max_length=2000)
-    payment_method: str | None = Field(default=None, max_length=80)
+    merchant: Optional[str] = Field(default=None, max_length=200)
+    note: Optional[str] = Field(default=None, max_length=2000)
+    payment_method: Optional[str] = Field(default=None, max_length=80)
     source_agent: str = Field(default="openclaw", max_length=80)
-    source_text: str | None = Field(default=None, max_length=4000)
+    source_text: Optional[str] = Field(default=None, max_length=4000)
 
 
 class ExpenseBatchRecordRequest(BaseModel):
@@ -299,7 +309,7 @@ class ExpenseBatchRecordRequest(BaseModel):
 class RefineFactsRequest(BaseModel):
     summary: str = Field(..., min_length=30, max_length=50000)
     max_facts: int = Field(default=3, ge=1, le=10)
-    session_key: str | None = Field(default=None, max_length=200)
+    session_key: Optional[str] = Field(default=None, max_length=200)
 
 
 class RefinedFact(BaseModel):
@@ -337,7 +347,7 @@ class WikiPatchItem(BaseModel):
 class SuggestPatchesResponse(BaseModel):
     count: int
     patches: list[WikiPatchItem]
-    inbox_path: str | None = None
+    inbox_path: Optional[str] = None
 
 
 # ---------- Error Response ----------
@@ -345,7 +355,7 @@ class SuggestPatchesResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: str
-    detail: str | None = None
+    detail: Optional[str] = None
     trace_id: str
 
 

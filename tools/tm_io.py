@@ -410,7 +410,10 @@ def main() -> None:
     p = argparse.ArgumentParser(prog="tm_io.py", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    w = sub.add_parser("write-inbox", help="write a new inbox file (routed via tm_route by default)")
+    w = sub.add_parser(
+        "write-inbox",
+        help="write a new inbox file; put a concise Chinese summary on the first body line",
+    )
     w.add_argument("--agent", required=True)
     w.add_argument("--topic", required=True)
     w.add_argument("--title", required=True)

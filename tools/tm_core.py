@@ -1782,6 +1782,35 @@ def inbox_rel_path(agent: str, topic: str, stamp: str | None = None) -> str:
     return f"inbox/{stamp}-{agent}-{topic}.md"
 
 
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_SUMMARY_CN_MISSING = "未提供中文摘要：请写入 agent 在正文首行补一句中文概括。"
+
+
+def _clean_inbox_summary(value: str, limit: int = 120) -> str:
+    text = re.sub(r"\s+", " ", value).strip()
+    text = text.lstrip("#").strip()
+    text = text.replace(":", "：")
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return text
+
+
+def derive_inbox_summary_cn(title: str, body: str) -> tuple[str, str]:
+    """Return (summary_cn, source) for inbox review metadata.
+
+    The desired source is the writing agent's own Chinese first line. We only
+    fall back to a missing-summary marker instead of guessing a translation.
+    """
+    for raw in body.splitlines()[:8]:
+        clean = _clean_inbox_summary(raw)
+        if clean and _CJK_RE.search(clean):
+            return clean, "body_first_chinese_line"
+    clean_title = _clean_inbox_summary(title)
+    if clean_title and _CJK_RE.search(clean_title):
+        return clean_title, "title"
+    return _SUMMARY_CN_MISSING, "missing"
+
+
 def render_inbox_body(
     agent: str,
     title: str,
@@ -1793,8 +1822,13 @@ def render_inbox_body(
     if date is None:
         date = now("%Y-%m-%d")
     extra_lines = ""
-    if frontmatter_extra:
-        for k, v in frontmatter_extra.items():
+    extra: dict[str, Any] = dict(frontmatter_extra or {})
+    if not extra.get("summary_cn"):
+        summary_cn, source = derive_inbox_summary_cn(title, body)
+        extra["summary_cn"] = summary_cn
+        extra.setdefault("summary_cn_source", source)
+    if extra:
+        for k, v in extra.items():
             if isinstance(v, bool):
                 extra_lines += f"{k}: {'true' if v else 'false'}\n"
             else:

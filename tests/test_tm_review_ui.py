@@ -58,7 +58,8 @@ def _write_digest(root: pathlib.Path, date: str = "2026-05-21") -> pathlib.Path:
             "",
             "- `inbox/2026-05-01-1200-codex-systems.md` **高亮：14 天兜底 archive**",
             "  - 入库时间：2026-05-01，已停留 20 天",
-            "  - 内容摘要：fixture inbox",
+            "  - 中文摘要：审批界面需要能快速判断这条开发收尾记录是否应归档。",
+            "  - 原文预览：commit pushed pytest passed",
             "  - cron 建议动作：archive",
             "  - 建议理由：14-day fallback",
             "  - 虎哥裁决：[ ] apply  [ ] reject",
@@ -120,14 +121,25 @@ def test_session_token_cookie_flow(tmp_path, monkeypatch):
     assert "tm_review_session" in response.headers["set-cookie"]
 
 
-def test_digest_requires_cookie_after_session_exists(tmp_path, monkeypatch):
+def test_api_digest_requires_cookie_after_session_exists(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     client.get("/", headers=HOST, follow_redirects=False)
     fresh = TestClient(tm_review_ui.app)
 
-    response = fresh.get("/digest/2026-05-21", headers=HOST)
+    response = fresh.get("/api/digest/2026-05-21", headers=HOST)
 
     assert response.status_code == 401
+
+
+def test_direct_digest_sets_cookie_for_browser(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    _write_digest(tmp_path)
+    client = _client(tmp_path, monkeypatch)
+
+    response = client.get("/digest/2026-05-21", headers=HOST)
+
+    assert response.status_code == 200
+    assert "tm_review_session" in response.headers["set-cookie"]
 
 
 def test_digest_with_cookie_returns_html_and_embedded_json(tmp_path, monkeypatch):
@@ -156,6 +168,8 @@ def test_api_digest_parses_expected_sections(tmp_path, monkeypatch):
     assert data["ok"] is True
     assert data["digest"]["counts"]["mem0"] == 2
     assert data["digest"]["inbox_rows"][0]["stale_archive"] is True
+    assert "快速判断" in data["digest"]["inbox_rows"][0]["cn_summary"]
+    assert data["digest"]["inbox_rows"][0]["raw_summary"] == "commit pushed pytest passed"
     assert data["digest"]["proposals"][0]["id"] == "proposal-2026-05-21-001"
 
 

@@ -41,6 +41,7 @@ class InboxAuditRow:
     age_days: int
     agent: str
     topic: str
+    summary_cn: str
     summary: str
     action: str
     reason: str
@@ -165,11 +166,15 @@ def inbox_records(*, inbox_dir: pathlib.Path = INBOX_DIR) -> list[dict[str, Any]
         except OSError:
             continue
         fm, body = _frontmatter(text)
+        summary_cn = fm.get("summary_cn")
+        if not summary_cn:
+            summary_cn, _source = tm_core.derive_inbox_summary_cn(fm.get("title") or path.stem, body)
         rows.append({
             "path": _relpath(path),
             "created_date": match.group(1),
             "agent": fm.get("agent") or fm.get("owner") or match.group(2),
             "topic": fm.get("topic") or match.group(3),
+            "summary_cn": summary_cn,
             "summary": _preview(body),
             "route_score": fm.get("route_score"),
             "route_decision_reason": fm.get("route_decision_reason"),
@@ -234,6 +239,7 @@ def audit_inbox(
             age_days=age,
             agent=str(record["agent"]),
             topic=str(record["topic"]),
+            summary_cn=str(record["summary_cn"]),
             summary=str(record["summary"]),
             action=action,
             reason=reason,
@@ -368,7 +374,8 @@ def _append_inbox_row(lines: list[str], row: InboxAuditRow) -> None:
     lines.extend([
         f"- `{row.path}`{flag}",
         f"  - 入库时间：{row.created_date}，已停留 {row.age_days} 天",
-        f"  - 内容摘要：{row.summary}",
+        f"  - 中文摘要：{row.summary_cn}",
+        f"  - 原文预览：{row.summary}",
         f"  - cron 建议动作：{row.action}",
         f"  - 建议理由：{row.reason}",
         "  - 虎哥裁决：[ ] apply  [ ] reject",
