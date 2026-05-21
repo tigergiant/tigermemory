@@ -360,6 +360,53 @@ def test_reader_role_allows_memory_answer(monkeypatch):
         tm_mcp._ROLE = old
 
 
+def test_reader_role_allows_get_user_preferences(monkeypatch):
+    monkeypatch.setattr(
+        tm_mcp.tm_dashboard_prefs,
+        "get_user_preferences",
+        lambda: {"ok": True, "preferences": {"communication_depth": "A"}},
+    )
+    old = tm_mcp._ROLE
+    try:
+        tm_mcp._ROLE = "reader"
+        result = tm_mcp.get_user_preferences()
+        assert result["preferences"]["communication_depth"] == "A"
+    finally:
+        tm_mcp._ROLE = old
+
+
+def test_update_user_preference_requires_writer(monkeypatch):
+    monkeypatch.setattr(
+        tm_mcp.tm_dashboard_prefs,
+        "update_user_preferences",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not write")),
+    )
+    old = tm_mcp._ROLE
+    try:
+        tm_mcp._ROLE = "reader"
+        with pytest.raises(PermissionError):
+            tm_mcp.update_user_preference("communication_depth", "C")
+    finally:
+        tm_mcp._ROLE = old
+
+
+def test_writer_role_updates_user_preference(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        tm_mcp.tm_dashboard_prefs,
+        "update_user_preferences",
+        lambda updates: calls.append(updates) or {"ok": True, "updated": list(updates), "preferences": updates},
+    )
+    old = tm_mcp._ROLE
+    try:
+        tm_mcp._ROLE = "writer"
+        result = tm_mcp.update_user_preference("communication_depth", "C", propose_wiki=False)
+        assert result["ok"] is True
+        assert calls == [{"communication_depth": "C"}]
+    finally:
+        tm_mcp._ROLE = old
+
+
 # ------------------------------------------------------------------
 # Writer role sanity — default path, no rejection
 # ------------------------------------------------------------------

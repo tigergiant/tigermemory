@@ -43,3 +43,8 @@ data/expense_import/logs/
 data/expense_import/reports/2026/audit_replay/*.sqlite
 data/expense_import/reports/2026/audit_replay/**/*.sqlite
 data/expense_import/reports/2026/audit_replay/40_shadow_workdir/
+
+# Dashboard local state (preferences are proposed back to wiki/person via review)
+data/dashboard/*.sqlite
+data/dashboard/*.sqlite-shm
+data/dashboard/*.sqlite-wal

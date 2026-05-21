@@ -185,6 +185,81 @@ def test_api_digest_parses_expected_sections(tmp_path, monkeypatch):
     assert data["digest"]["proposals"][0]["id"] == "proposal-2026-05-21-001"
 
 
+def test_daily_route_redirects_to_today(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "today", lambda: "2026-05-21")
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/daily", headers=HOST, follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/digest/2026-05-21"
+
+
+def test_pwa_manifest_is_public_and_uses_memory_ops(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+
+    response = client.get("/manifest.webmanifest", headers=HOST)
+
+    assert response.status_code == 200
+    assert "tigermemory Memory Ops" in response.text
+    assert "/daily" in response.text
+
+
+def test_health_summary_endpoint_uses_agent_doctor(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        tm_review_ui.tm_agent_doctor,
+        "run_agent_doctor",
+        lambda **_kwargs: {"status": "ok", "checks": [], "summary": {"ok_count": 0}},
+    )
+    monkeypatch.setattr(tm_review_ui, "git_sha", lambda: "abc123")
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/api/health/summary", headers=HOST)
+
+    data = response.json()
+    assert data["ok"] is True
+    assert data["dashboard"]["port"] == tm_review_ui.PORT
+    assert data["dashboard"]["git_sha"] == "abc123"
+
+
+def test_quality_memory_endpoint_reports_trace_latency(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    _write_digest(tmp_path)
+    monkeypatch.setattr(tm_review_ui.tm_answer_trace, "load_trace_rows", lambda **_kwargs: ([{"status": "ok"}], []))
+    monkeypatch.setattr(
+        tm_review_ui.tm_answer_trace,
+        "summarize_rows",
+        lambda rows, invalid, latest=10: {"row_count": len(rows), "duration_ms": {"p50": 10, "p95": 20}},
+    )
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/api/quality/memory?date=2026-05-21", headers=HOST)
+
+    data = response.json()
+    assert data["ok"] is True
+    assert data["trace_latency_supported"] is True
+    assert data["trace_summary"]["duration_ms"]["p95"] == 20
+
+
+def test_settings_preferences_round_trip_uses_sqlite(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "PREFS_DB", tmp_path / "prefs.sqlite")
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    update = client.post(
+        "/api/settings/preferences",
+        headers=HOST,
+        json={"preferences": {"communication_depth": "C"}, "propose_wiki": False},
+    )
+    readback = client.get("/api/settings/preferences", headers=HOST)
+
+    assert update.json()["ok"] is True
+    assert readback.json()["preferences"]["communication_depth"] == "C"
+
+
 def test_inbox_archive_moves_file_and_returns_commit(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)
@@ -512,4 +587,4 @@ def test_proposal_failure_returns_ok_false(tmp_path, monkeypatch):
 
 
 def test_main_rejects_non_local_bind():
-    assert tm_review_ui.main(["--host", "0.0.0.0"]) == 2
+    assert tm_review_ui.main(["--host", "example.com"]) == 2

@@ -2,11 +2,12 @@
 """
 tools/tm_mcp.py — tigermemory MCP server (thin adapter over tm_core).
 
-Exposes 26 tools for remote agents (laptop MCP clients):
+Exposes 28 tools for remote agents (laptop MCP clients):
 
 Read tools (callable in both writer and reader roles):
 - check_worktree            — git/worktree preflight snapshot
 - agent_doctor              — combined agent connect / health diagnostics
+- get_user_preferences      — dashboard/user communication preferences
 - retention_audit           — read-only Mem0 retention dry-run audit
 - close_session             — session-close blocker check
 - search_memories           — Mem0 atomic event memory search
@@ -35,6 +36,7 @@ Write tools (writer role only):
 - propose_wiki_page         — wiki page draft with L2 review + inbox fallback
 - write_sources             — sources/<subdir>/<slug>.md ingest with provenance frontmatter
 - write_memory              — single canonical memory write (LLM-routed)
+- update_user_preference    — update dashboard preference SQLite + person-page proposal
 - approve_fact              — daily-digest fact approval
 - minimax_image / video / speech / music — generative media (external, writer-gated)
 
@@ -80,6 +82,7 @@ import tm_deep_dive_jobs
 import tm_stability_eval
 import tm_agent_doctor
 import tm_retention_audit
+import tm_dashboard_prefs
 
 
 # ---------- MCP Server ----------
@@ -189,6 +192,16 @@ def agent_doctor(
     review reachability, and lessons-hit evidence into one diagnostic response.
     """
     return tm_agent_doctor.run_agent_doctor(query=query, include_l2=include_l2, http_url=http_url)
+
+
+@mcp.tool()
+def get_user_preferences() -> dict[str, Any]:
+    """Return dashboard-managed user communication preferences.
+
+    The canonical local store is data/dashboard/user_prefs.sqlite. A reviewed
+    wiki/person mirror is proposed asynchronously through update_user_preference.
+    """
+    return tm_dashboard_prefs.get_user_preferences()
 
 
 @mcp.tool()
@@ -437,6 +450,25 @@ def propose_wiki_page(
     except Exception as exc:
         result["warnings"] = [f"embed refresh scheduling failed: {exc}"]
     return result
+
+
+@mcp.tool()
+def update_user_preference(key: str, value: Any, propose_wiki: bool = True) -> dict[str, Any]:
+    """Update one dashboard preference and optionally propose the person-page mirror.
+
+    This tool writes the local SQLite preference store. When propose_wiki is
+    true, it proposes wiki/person/tiger-preferences.md through the same
+    L2/inbox fallback path as propose_wiki_page; it never directly commits
+    wiki/person as codex/cascade.
+    """
+    _require_writer()
+    if not isinstance(key, str) or not key.strip():
+        raise ValueError("key is required")
+    result = tm_dashboard_prefs.update_user_preferences({key.strip(): value})
+    proposal = None
+    if propose_wiki:
+        proposal = propose_wiki_page(**tm_dashboard_prefs.preference_page_payload(result["preferences"]))
+    return {**result, "wiki_proposal": proposal}
 
 
 @mcp.tool()
