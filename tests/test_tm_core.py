@@ -39,13 +39,19 @@ def test_render_inbox_body_adds_summary_cn_from_agent_chinese_line():
 
     rendered = tm_core.render_inbox_body("codex", "Routed memory 50", body, date="2026-05-21")
 
+    assert "title_cn: 这条待审记忆说明：日报审批 UI 需要直接显示中文摘要。" in rendered
+    assert "preview_cn: 这条待审记忆说明：日报审批 UI 需要直接显示中文摘要。" in rendered
+    assert "review_cn_source: body_chinese_lines" in rendered
     assert "summary_cn: 这条待审记忆说明：日报审批 UI 需要直接显示中文摘要。" in rendered
-    assert "summary_cn_source: body_first_chinese_line" in rendered
+    assert "summary_cn_source: title_cn" in rendered
 
 
 def test_render_inbox_body_marks_missing_chinese_summary():
     rendered = tm_core.render_inbox_body("codex", "Routed memory 50", "English only details.", date="2026-05-21")
 
+    assert "title_cn: 未提供中文摘要" in rendered
+    assert "preview_cn: 未提供中文摘要" in rendered
+    assert "review_cn_source: missing" in rendered
     assert "summary_cn: 未提供中文摘要" in rendered
     assert "summary_cn_source: missing" in rendered
 

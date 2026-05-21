@@ -58,7 +58,8 @@ def _write_digest(root: pathlib.Path, date: str = "2026-05-21") -> pathlib.Path:
             "",
             "- `inbox/2026-05-01-1200-codex-systems.md` **高亮：14 天兜底 archive**",
             "  - 入库时间：2026-05-01，已停留 20 天",
-            "  - 中文摘要：审批界面需要能快速判断这条开发收尾记录是否应归档。",
+            "  - 中文标题：审批界面归档判断",
+            "  - 中文预览：审批界面需要能快速判断这条开发收尾记录是否应归档。这里放入较长的中文预览，用于折叠区展示真正摘要。",
             "  - 原文预览：commit pushed pytest passed",
             "  - cron 建议动作：archive",
             "  - 建议理由：14-day fallback",
@@ -168,7 +169,8 @@ def test_api_digest_parses_expected_sections(tmp_path, monkeypatch):
     assert data["ok"] is True
     assert data["digest"]["counts"]["mem0"] == 2
     assert data["digest"]["inbox_rows"][0]["stale_archive"] is True
-    assert "快速判断" in data["digest"]["inbox_rows"][0]["cn_summary"]
+    assert data["digest"]["inbox_rows"][0]["title_cn"] == "审批界面归档判断"
+    assert "快速判断" in data["digest"]["inbox_rows"][0]["preview_cn"]
     assert data["digest"]["inbox_rows"][0]["raw_summary"] == "commit pushed pytest passed"
     assert data["digest"]["proposals"][0]["id"] == "proposal-2026-05-21-001"
 
@@ -352,7 +354,7 @@ def test_review_html_contains_batch_controls_and_status_copy(tmp_path, monkeypat
     assert "批量归档" in response.text
     assert "批量写入 Mem0" in response.text
     assert "data-row-status" in response.text
-    assert "展开原文预览（至少 100 字）" in response.text
+    assert "展开中文预览（约 200 字）" in response.text
 
 
 def test_proposal_apply_calls_tm_cron_apply(tmp_path, monkeypatch):

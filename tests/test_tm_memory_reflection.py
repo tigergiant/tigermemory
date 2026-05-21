@@ -97,7 +97,8 @@ def test_daily_digest_groups_inbox_actions_and_wraps_keep_rows(tmp_path):
     assert "### 🔴 建议 archive" in report
     assert "### 🟡 建议 promote" in report
     assert "### ⚪ 仅观察 keep_in_inbox" in report
-    assert "中文摘要：这是一条测试用的中文摘要。" in report
+    assert "中文标题：这是一条测试用的中文摘要。" in report
+    assert "中文预览：这是一条测试用的中文摘要。" in report
     assert "原文预览：old" in report
     assert "<summary>展开 1 条 keep_in_inbox</summary>" in report
     assert "2026-05-01-1200-codex-systems.md` **高亮：14 天兜底 archive**" in report
@@ -117,7 +118,7 @@ def test_legacy_inbox_extracts_existing_chinese_line(tmp_path):
         proposal_root=tmp_path / "cron-proposals",
     )
 
-    assert "中文摘要：这条历史 inbox 已经自带中文说明。" in report
+    assert "中文标题：这条历史 inbox 已经自带中文说明。" in report
 
 
 def test_legacy_inbox_without_chinese_uses_raw_preview_instead_of_placeholder(tmp_path):
@@ -136,7 +137,7 @@ def test_legacy_inbox_without_chinese_uses_raw_preview_instead_of_placeholder(tm
     )
 
     assert "未提供中文摘要" not in report
-    assert "中文摘要：Routed closeout pushed commit" in report
+    assert "中文标题：Routed closeout pushed commit" in report
 
 
 def test_preview_is_capped_at_one_hundred_sixty_characters():

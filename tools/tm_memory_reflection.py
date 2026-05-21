@@ -42,6 +42,8 @@ class InboxAuditRow:
     age_days: int
     agent: str
     topic: str
+    title_cn: str
+    preview_cn: str
     summary_cn: str
     summary: str
     action: str
@@ -167,16 +169,30 @@ def inbox_records(*, inbox_dir: pathlib.Path = INBOX_DIR) -> list[dict[str, Any]
         except OSError:
             continue
         fm, body = _frontmatter(text)
-        summary_cn = fm.get("summary_cn")
-        if not summary_cn:
-            summary_cn, _source = tm_core.derive_inbox_summary_cn(fm.get("title") or path.stem, body)
+        title_cn = fm.get("title_cn") or fm.get("summary_cn")
+        preview_cn = fm.get("preview_cn") or fm.get("summary_cn")
+        if preview_cn:
+            preview_cn = tm_core._clean_inbox_preview(preview_cn)
+        if not title_cn or not preview_cn or str(title_cn).startswith(MISSING_SUMMARY_PREFIX):
+            derived_title, derived_preview, _source = tm_core.derive_inbox_review_cn(fm.get("title") or path.stem, body)
+            if not title_cn or str(title_cn).startswith(MISSING_SUMMARY_PREFIX):
+                title_cn = derived_title
+            if not preview_cn:
+                preview_cn = derived_preview
+        summary_cn = fm.get("summary_cn") or title_cn
         if str(summary_cn).startswith(MISSING_SUMMARY_PREFIX):
-            summary_cn = _preview(body) or fm.get("title") or path.stem
+            summary_cn = title_cn
+        if str(title_cn).startswith(MISSING_SUMMARY_PREFIX):
+            title_cn = _preview(body) or fm.get("title") or path.stem
+        if str(preview_cn).startswith(MISSING_SUMMARY_PREFIX):
+            preview_cn = _preview(body)
         rows.append({
             "path": _relpath(path),
             "created_date": match.group(1),
             "agent": fm.get("agent") or fm.get("owner") or match.group(2),
             "topic": fm.get("topic") or match.group(3),
+            "title_cn": title_cn,
+            "preview_cn": preview_cn,
             "summary_cn": summary_cn,
             "summary": _preview(body),
             "route_score": fm.get("route_score"),
@@ -242,6 +258,8 @@ def audit_inbox(
             age_days=age,
             agent=str(record["agent"]),
             topic=str(record["topic"]),
+            title_cn=str(record["title_cn"]),
+            preview_cn=str(record["preview_cn"]),
             summary_cn=str(record["summary_cn"]),
             summary=str(record["summary"]),
             action=action,
@@ -377,7 +395,8 @@ def _append_inbox_row(lines: list[str], row: InboxAuditRow) -> None:
     lines.extend([
         f"- `{row.path}`{flag}",
         f"  - 入库时间：{row.created_date}，已停留 {row.age_days} 天",
-        f"  - 中文摘要：{row.summary_cn}",
+        f"  - 中文标题：{row.title_cn}",
+        f"  - 中文预览：{row.preview_cn}",
         f"  - 原文预览：{row.summary}",
         f"  - cron 建议动作：{row.action}",
         f"  - 建议理由：{row.reason}",

@@ -1795,6 +1795,15 @@ def _clean_inbox_summary(value: str, limit: int = 120) -> str:
     return text
 
 
+def _clean_inbox_preview(value: str, limit: int = 200) -> str:
+    text = re.sub(r"\s+", " ", value).strip()
+    text = text.lstrip("#").strip()
+    text = text.replace(":", "：")
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return text
+
+
 def derive_inbox_summary_cn(title: str, body: str) -> tuple[str, str]:
     """Return (summary_cn, source) for inbox review metadata.
 
@@ -1811,6 +1820,23 @@ def derive_inbox_summary_cn(title: str, body: str) -> tuple[str, str]:
     return _SUMMARY_CN_MISSING, "missing"
 
 
+def derive_inbox_review_cn(title: str, body: str) -> tuple[str, str, str]:
+    """Return (title_cn, preview_cn, source) for inbox review UI metadata."""
+    chinese_lines: list[str] = []
+    for raw in body.splitlines()[:16]:
+        clean = _clean_inbox_preview(raw)
+        if clean and _CJK_RE.search(clean):
+            chinese_lines.append(clean)
+    if chinese_lines:
+        title_cn = _clean_inbox_summary(chinese_lines[0], limit=42)
+        preview_cn = _clean_inbox_preview(" ".join(chinese_lines[:4]), limit=200)
+        return title_cn, preview_cn, "body_chinese_lines"
+    clean_title = _clean_inbox_summary(title, limit=42)
+    if clean_title and _CJK_RE.search(clean_title):
+        return clean_title, clean_title, "title"
+    return _SUMMARY_CN_MISSING, _SUMMARY_CN_MISSING, "missing"
+
+
 def render_inbox_body(
     agent: str,
     title: str,
@@ -1823,10 +1849,20 @@ def render_inbox_body(
         date = now("%Y-%m-%d")
     extra_lines = ""
     extra: dict[str, Any] = dict(frontmatter_extra or {})
+    title_cn, preview_cn, review_source = derive_inbox_review_cn(title, body)
+    if not extra.get("title_cn"):
+        extra["title_cn"] = title_cn
+    if not extra.get("preview_cn"):
+        extra["preview_cn"] = preview_cn
+    extra.setdefault("review_cn_source", review_source)
     if not extra.get("summary_cn"):
-        summary_cn, source = derive_inbox_summary_cn(title, body)
-        extra["summary_cn"] = summary_cn
-        extra.setdefault("summary_cn_source", source)
+        if str(extra.get("title_cn") or "").strip() and not str(extra.get("title_cn")).startswith(_SUMMARY_CN_MISSING):
+            extra["summary_cn"] = extra["title_cn"]
+            extra.setdefault("summary_cn_source", "title_cn")
+        else:
+            summary_cn, source = derive_inbox_summary_cn(title, body)
+            extra["summary_cn"] = summary_cn
+            extra.setdefault("summary_cn_source", source)
     if extra:
         for k, v in extra.items():
             if isinstance(v, bool):
