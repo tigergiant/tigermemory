@@ -204,6 +204,8 @@ def test_pwa_manifest_is_public_and_uses_memory_ops(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert "tigermemory Memory Ops" in response.text
     assert "/daily" in response.text
+    assert "/static/tiger/tigermemory_tiger_logo_192.png" in response.text
+    assert "/static/tiger/tigermemory_tiger_logo_512.png" in response.text
 
 
 def test_health_summary_endpoint_uses_agent_doctor(tmp_path, monkeypatch):
@@ -255,6 +257,8 @@ def test_health_page_uses_real_template_not_json_page(tmp_path, monkeypatch):
     assert "系统健康" in response.text
     assert "#f7f2e6" in response.text
     assert "#c8a560" in response.text
+    assert "/static/tiger/tigermemory_tiger_logo.svg" in response.text
+    assert "/static/tiger/tigermemory_dashboard_motif.svg" in response.text
     assert "<pre" not in response.text
     assert "bg-zinc-950" not in response.text
     assert "bg-black" not in response.text
