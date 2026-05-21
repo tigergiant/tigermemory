@@ -21,6 +21,7 @@ PREFS_DB = REPO_ROOT / "data" / "dashboard" / "user_prefs.sqlite"
 DEFAULT_PREFERENCES: dict[str, Any] = {
     "communication_depth": "A",
     "exemptions": ["git", "ai", "tigermemory", "agent", "data-format"],
+    "custom_terms": [],
     "progressive_term_frequency": False,
     "agents": ["cascade", "claude-code", "codex", "chatgpt", "kimi", "hermes", "openclaw"],
     "model_workflow": "开发任务交给 codex；Claude 4.7 仅做监督 / 仲裁 / 设计。",

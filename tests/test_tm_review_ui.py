@@ -145,6 +145,40 @@ def test_direct_digest_sets_cookie_for_browser(tmp_path, monkeypatch):
     assert "tm_review_session" in response.headers["set-cookie"]
 
 
+def test_non_local_dashboard_requires_token_for_browser_bootstrap(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+
+    response = client.get("/health", headers={"Host": "tigermemory-wsl:1998"})
+
+    assert response.status_code == 401
+
+
+def test_non_local_query_token_sets_session_cookie(tmp_path, monkeypatch):
+    monkeypatch.setenv("TM_DASHBOARD_TOKEN", "secret-token")
+    client = _client(tmp_path, monkeypatch)
+
+    response = client.get("/health?token=secret-token", headers={"Host": "tigermemory-wsl:1998"}, follow_redirects=False)
+
+    assert response.status_code == 302
+    assert "tm_review_session" in response.headers["set-cookie"]
+    assert "token=" not in response.headers["location"]
+
+
+def test_bearer_token_allows_api_access_without_cookie(tmp_path, monkeypatch):
+    monkeypatch.setenv("TM_DASHBOARD_TOKEN", "secret-token")
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    _write_digest(tmp_path)
+    client = _client(tmp_path, monkeypatch)
+
+    response = client.get(
+        "/api/digest/2026-05-21",
+        headers={"Host": "tigermemory-wsl:1998", "Authorization": "Bearer secret-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+
+
 def test_digest_with_cookie_returns_html_and_embedded_json(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_digest(tmp_path)
@@ -273,10 +307,14 @@ def test_quality_and_settings_no_longer_use_raw_json_page(tmp_path, monkeypatch)
     quality = client.get("/quality", headers=HOST)
     settings = client.get("/settings", headers=HOST)
 
-    assert "阶段 2 占位" in quality.text
-    assert "阶段 2 占位" in settings.text
-    assert "bg-zinc-950" not in quality.text + settings.text
-    assert "bg-black" not in quality.text + settings.text
+    assert "quality-data" in quality.text
+    assert "settings-data" in settings.text
+    assert "记忆系统质量" in quality.text
+    assert "沟通深度档位" in settings.text
+    combined = quality.text + settings.text
+    assert "阶段 2 占位" not in combined
+    assert "bg-zinc-950" not in combined
+    assert "bg-black" not in combined
 
 
 def test_quality_memory_endpoint_reports_trace_latency(tmp_path, monkeypatch):
