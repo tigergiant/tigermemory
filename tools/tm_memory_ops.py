@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from typing import Any, Callable
 
 import tm_core
@@ -154,6 +155,84 @@ def extract_mem0_id(data: dict[str, Any]) -> str:
                 return candidate
 
     raise RuntimeError("Mem0 write response did not include a memory id")
+
+
+def fetch_mem0_page(page: int = 1, page_size: int = 100) -> dict[str, Any]:
+    """Read one Mem0 list page through the canonical OpenMemory HTTP surface."""
+    params = urllib.parse.urlencode({
+        "user_id": "tiger",
+        "page": page,
+        "size": page_size,
+    })
+    raw = tm_core.mem0_request(
+        f"{tm_core.mem0_base().rstrip('/')}/api/v1/memories/?{params}",
+        timeout=tm_core.MEM0_READ_TIMEOUT,
+    )
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise RuntimeError("Mem0 list returned a non-object response")
+    return data
+
+
+def fetch_mem0_items(max_items: int = 500, page_size: int = 100) -> list[dict[str, Any]]:
+    """Read Mem0 entries without mutating them."""
+    out: list[dict[str, Any]] = []
+    page = 1
+    while len(out) < max_items:
+        data = fetch_mem0_page(page=page, page_size=page_size)
+        items = data.get("items") or data.get("results") or []
+        if not isinstance(items, list) or not items:
+            break
+        for item in items:
+            if isinstance(item, dict):
+                out.append(item)
+                if len(out) >= max_items:
+                    break
+        if not data.get("next") and len(items) < page_size:
+            break
+        page += 1
+    return out
+
+
+def _parse_mem0_dt(value: Any) -> datetime.datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return datetime.datetime.fromtimestamp(value, tm_core.TZ_CN)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=tm_core.TZ_CN)
+    return parsed.astimezone(tm_core.TZ_CN)
+
+
+def fetch_mem0_items_by_date_range(
+    start_local: datetime.datetime,
+    end_local: datetime.datetime,
+    *,
+    max_items: int = 1000,
+    page_size: int = 100,
+) -> list[dict[str, Any]]:
+    """Read Mem0 entries whose created_at falls in [start_local, end_local)."""
+    if start_local.tzinfo is None:
+        start_local = start_local.replace(tzinfo=tm_core.TZ_CN)
+    if end_local.tzinfo is None:
+        end_local = end_local.replace(tzinfo=tm_core.TZ_CN)
+    start_local = start_local.astimezone(tm_core.TZ_CN)
+    end_local = end_local.astimezone(tm_core.TZ_CN)
+    rows: list[dict[str, Any]] = []
+    for item in fetch_mem0_items(max_items=max_items, page_size=page_size):
+        created = _parse_mem0_dt(item.get("created_at"))
+        if created is None:
+            continue
+        if start_local <= created < end_local:
+            rows.append(item)
+    return rows
 
 
 def _verified_summary(memory_id: str, *, include_readback: bool) -> dict[str, Any]:
