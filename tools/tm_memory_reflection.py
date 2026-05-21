@@ -28,7 +28,7 @@ INBOX_DIR = REPO_ROOT / "inbox"
 OPERATIONS_DIR = REPO_ROOT / "wiki" / "operations"
 PROPOSAL_ROOT = REPO_ROOT / ".tmp" / "cron-proposals"
 DISCARD_ROOT = tm_route_audit.DEFAULT_AUDIT_ROOT
-MAX_PREVIEW_CHARS = 220
+MAX_PREVIEW_CHARS = 80
 STALE_INBOX_DAYS = 14
 
 INBOX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-\d{4}-([^-]+)-([^.]+)\.md$")
@@ -100,7 +100,7 @@ def _frontmatter(text: str) -> tuple[dict[str, str], str]:
 
 def _preview(text: str, limit: int = MAX_PREVIEW_CHARS) -> str:
     compact = re.sub(r"\s+", " ", tm_route_audit._redact(text)).strip()
-    return compact[:limit]
+    return compact[:limit].rstrip()
 
 
 def _item_text(item: dict[str, Any]) -> str:
@@ -356,6 +356,29 @@ def _score_quality(mem0_count: int, inbox_count: int, discard_count: int, candid
     return max(0, min(100, score))
 
 
+def _inbox_action_groups(rows: list[InboxAuditRow]) -> tuple[list[InboxAuditRow], list[InboxAuditRow], list[InboxAuditRow]]:
+    archive_rows = [row for row in rows if row.action == "archive"]
+    promote_rows = [row for row in rows if row.action in {"promote_to_mem0", "promote_to_wiki"}]
+    keep_rows = [row for row in rows if row.action not in {"archive", "promote_to_mem0", "promote_to_wiki"}]
+    return archive_rows, promote_rows, keep_rows
+
+
+def _append_inbox_row(lines: list[str], row: InboxAuditRow) -> None:
+    flag = " **高亮：14 天兜底 archive**" if row.stale_archive else ""
+    lines.extend([
+        f"- `{row.path}`{flag}",
+        f"  - 入库时间：{row.created_date}，已停留 {row.age_days} 天",
+        f"  - 内容摘要：{row.summary}",
+        f"  - cron 建议动作：{row.action}",
+        f"  - 建议理由：{row.reason}",
+        "  - 虎哥裁决：[ ] apply  [ ] reject",
+    ])
+
+
+def _details_block(summary: str, body: list[str]) -> list[str]:
+    return ["<details>", f"<summary>{summary}</summary>", "", *body, "", "</details>"]
+
+
 def render_daily_report(
     *,
     date: str,
@@ -373,7 +396,9 @@ def render_daily_report(
     candidates = discard_review_candidates(discard_events)
     proposals = load_proposals(date, proposal_root=proposal_root)
     applied = [row for row in _applied_rows(proposal_root=proposal_root) if str(row.get("applied_at") or "").startswith(date)]
-    stale_count = sum(1 for row in inbox_all if row.stale_archive)
+    archive_rows, promote_rows, keep_rows = _inbox_action_groups(inbox_all)
+    stale_count = sum(1 for row in archive_rows if row.stale_archive)
+    promote_count = len(promote_rows)
     quality_score = _score_quality(len(mem0_rows), len(inbox_today), len(discard_events), len(candidates), stale_count)
 
     lines: list[str] = [
@@ -389,9 +414,18 @@ def render_daily_report(
         f"discard_count: {len(discard_events)}",
         f"proposal_count: {len(proposals)}",
         f"applied_count: {len(applied)}",
+        f"stale_archive_count: {stale_count}",
+        f"promote_candidate_count: {promote_count}",
         "---",
         "",
         f"# Memory Digest {date}",
+        "",
+        "## ⚡ 今日要决策",
+        "",
+        f"- 🔴 14 天兜底 archive 候选：{stale_count} 条 → 见下方 §inbox 决策区",
+        f"- 🟡 promote_to_mem0 / promote_to_wiki 候选：{promote_count} 条 → 见下方 §inbox 决策区",
+        f"- 🔵 Proposed Changes：{len(proposals)} 条 → 见下方 §Proposed Changes",
+        f"- ⚪ discard 误判候选：{len(candidates)} 条 → 见下方 §discard 误判候选",
         "",
         "## 摘要",
         "",
@@ -401,40 +435,17 @@ def render_daily_report(
             f"路由质量自评分 {quality_score}/100，Proposed Changes {len(proposals)} 条。"
         ),
         "",
-        "## 当日三源汇总",
+        "## 📊 当日三源汇总",
         "",
         "| 源 | count | 链接 |",
         "|---|---:|---|",
-        f"| Mem0 当日正式写入 | {len(mem0_rows)} | 见下方 Mem0 列表 |",
-        f"| inbox 当日新增 | {len(inbox_today)} | 见下方 inbox 列表 |",
-        f"| discard quarantine | {len(discard_events)} | `.tmp/memory-discard-quarantine/{date}/discard/events.jsonl` |",
+        f"| Mem0 当日正式写入 | {len(mem0_rows)} | 见 §附录 / Mem0 当日正式写入 |",
+        f"| inbox 当日新增 | {len(inbox_today)} | 见 §附录 / inbox 当日新增 |",
+        f"| discard quarantine | {len(discard_events)} | 见 §附录 / discard quarantine |",
         "",
-        "### Mem0 当日正式写入",
+        "## 🔍 discard 误判候选",
         "",
     ]
-    if mem0_rows:
-        for row in mem0_rows[:40]:
-            lines.append(f"- `{row.get('id')}` topic={row['topic']} agent={row['agent']} :: {row['summary']}")
-    else:
-        lines.append("- none")
-    lines.extend(["", "### inbox 当日新增", ""])
-    if inbox_today:
-        for row in inbox_today[:40]:
-            lines.append(f"- `{row.path}` topic={row.topic} agent={row.agent} :: {row.summary}")
-    else:
-        lines.append("- none")
-    lines.extend(["", "### discard quarantine", ""])
-    if discard_events:
-        for row in discard_events[:40]:
-            lines.append(
-                f"- event_id={row.get('event_id')} score={row.get('score')} "
-                f"topic={row.get('requested_topic')} agent={row.get('agent')} :: "
-                f"{_preview(str(row.get('text_excerpt') or ''))}"
-            )
-    else:
-        lines.append("- none")
-
-    lines.extend(["", "## discard 误判候选", ""])
     if candidates:
         for idx, row in enumerate(candidates[:20], 1):
             lines.extend([
@@ -447,22 +458,28 @@ def render_daily_report(
     else:
         lines.append("- none")
 
-    lines.extend(["", "## inbox audit", ""])
-    if inbox_all:
-        for row in inbox_all:
-            flag = " **高亮：14 天兜底 archive**" if row.stale_archive else ""
-            lines.extend([
-                f"- `{row.path}`{flag}",
-                f"  - 入库时间：{row.created_date}，已停留 {row.age_days} 天",
-                f"  - 内容摘要：{row.summary}",
-                f"  - cron 建议动作：{row.action}",
-                f"  - 建议理由：{row.reason}",
-                "  - 虎哥裁决：[ ] apply  [ ] reject",
-            ])
+    lines.extend(["", "## 📝 inbox 决策区", "", "### 🔴 建议 archive", ""])
+    if archive_rows:
+        for row in archive_rows:
+            _append_inbox_row(lines, row)
     else:
         lines.append("- none")
+    lines.extend(["", "### 🟡 建议 promote", ""])
+    if promote_rows:
+        for row in promote_rows:
+            _append_inbox_row(lines, row)
+    else:
+        lines.append("- none")
+    keep_body: list[str] = []
+    if keep_rows:
+        for row in keep_rows:
+            _append_inbox_row(keep_body, row)
+    else:
+        keep_body.append("- none")
+    lines.extend(["", "### ⚪ 仅观察 keep_in_inbox", ""])
+    lines.extend(_details_block(f"展开 {len(keep_rows)} 条 keep_in_inbox", keep_body))
 
-    lines.extend(["", "## Proposed Changes", ""])
+    lines.extend(["", "## 🧠 Proposed Changes", ""])
     if proposals:
         for proposal in proposals:
             replay = proposal.get("replay") or {}
@@ -497,7 +514,7 @@ def render_daily_report(
     else:
         lines.append("- none")
 
-    lines.extend(["", "## 已生效改动", ""])
+    lines.extend(["", "## ✅ 已生效改动", ""])
     if applied:
         for row in applied:
             lines.append(f"- commit `{row.get('commit')}` proposal_id={row.get('proposal_id')} paths={row.get('paths')}")
@@ -506,12 +523,44 @@ def render_daily_report(
 
     lines.extend([
         "",
-        "## 自评指标",
+        "## 📈 自评指标",
         "",
         f"- 当日自评：{quality_score}",
         "- 7 天移动平均：not_available",
         "- 上周同日：not_available",
         f"- 主要 issue：discard 候选 {len(candidates)} 条；14 天 inbox 兜底 {stale_count} 条",
+        "",
+        "## 📚 附录",
+        "",
+    ])
+    mem0_body: list[str] = []
+    if mem0_rows:
+        for row in mem0_rows[:40]:
+            mem0_body.append(f"- `{row.get('id')}` topic={row['topic']} agent={row['agent']} :: {row['summary']}")
+    else:
+        mem0_body.append("- none")
+    lines.extend(_details_block(f"Mem0 当日正式写入（{len(mem0_rows)} 条，最多显示 40 条）", mem0_body))
+    inbox_body: list[str] = []
+    if inbox_today:
+        for row in inbox_today[:40]:
+            inbox_body.append(f"- `{row.path}` topic={row.topic} agent={row.agent} :: {row.summary}")
+    else:
+        inbox_body.append("- none")
+    lines.extend([""])
+    lines.extend(_details_block(f"inbox 当日新增（{len(inbox_today)} 条，最多显示 40 条）", inbox_body))
+    discard_body: list[str] = []
+    if discard_events:
+        for row in discard_events[:40]:
+            discard_body.append(
+                f"- event_id={row.get('event_id')} score={row.get('score')} "
+                f"topic={row.get('requested_topic')} agent={row.get('agent')} :: "
+                f"{_preview(str(row.get('text_excerpt') or ''))}"
+            )
+    else:
+        discard_body.append("- none")
+    lines.extend([""])
+    lines.extend(_details_block(f"discard quarantine（{len(discard_events)} 条，最多显示 40 条）", discard_body))
+    lines.extend([
         "",
         "## 来源",
         "",

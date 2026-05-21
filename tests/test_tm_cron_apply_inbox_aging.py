@@ -116,13 +116,15 @@ def test_daily_report_renders_proposals_and_required_sections(tmp_path):
     )
 
     for section in (
+        "## ⚡ 今日要决策",
         "## 摘要",
-        "## 当日三源汇总",
-        "## discard 误判候选",
-        "## inbox audit",
-        "## Proposed Changes",
-        "## 已生效改动",
-        "## 自评指标",
+        "## 📊 当日三源汇总",
+        "## 🔍 discard 误判候选",
+        "## 📝 inbox 决策区",
+        "## 🧠 Proposed Changes",
+        "## ✅ 已生效改动",
+        "## 📈 自评指标",
+        "## 📚 附录",
         "## 来源",
     ):
         assert section in report
