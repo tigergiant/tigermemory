@@ -466,6 +466,63 @@ MEM0_UUID_RE = re.compile(
 )
 
 
+def check_transport_security(url: str) -> None:
+    """
+    [传输安全阻断器 - Network Transports Bearer Guard]
+    智能识别安全的回环地址 (localhost)、HTTPS 加密传输以及 Tailscale 虚拟安全专网 IP。
+    防止零基础或初学者在不安全的外网环境中明文传输 API 凭证。
+    """
+    # 检查是否配置了强制豁免环境变量
+    if os.environ.get("TM_ALLOW_UNSECURE_HTTP") == "1":
+        return
+
+    parsed = urllib.parse.urlparse(url)
+    scheme = parsed.scheme.lower()
+    host = parsed.hostname
+
+    # 1. 允许安全的加密连接
+    if scheme == "https":
+        return
+
+    # 2. 允许本机的安全回环连接 (localhost / 127.x.x.x)
+    if host in ("localhost", "127.0.0.1", "[::1]", "::1") or (host and host.startswith("127.")):
+        return
+
+    # 3. 允许属于 Tailscale 的安全专网 IP (范围是 100.64.0.0 到 100.127.255.255)
+    is_tailscale = False
+    if host:
+        try:
+            parts = [int(p) for p in host.split(".")]
+            if len(parts) == 4:
+                if parts[0] == 100 and (64 <= parts[1] <= 127):
+                    is_tailscale = True
+        except ValueError:
+            pass
+
+    if is_tailscale:
+        return
+
+    # 若不满足任何安全通道条件，则抛出详细的中文指引阻断请求
+    block_msg = (
+        "\n"
+        "🛡️【Tigermemory 传输安全阻断警报 - Bearer Guard】🛡️\n"
+        "============================================================\n"
+        "⚠️  安全阻断：未加密的外网明文 HTTP 请求可能导致 API 密钥在传输中泄露！\n"
+        f"👉 目标地址: {url}\n\n"
+        "💡 为什么被拦截？\n"
+        "   为避免初学者在外部网络明文发送 Bearer 令牌，本拦截器默认仅信任本地回环、HTTPS 或 Tailscale 私有内网。\n\n"
+        "🛠️ 如何解决？（满足以下任意一项即可自动放行）：\n"
+        "   1️⃣ 升级为 HTTPS (例如 https://your-domain.com)；\n"
+        "   2️⃣ 本地部署请确保使用的是 localhost 或 127.0.0.1 端口；\n"
+        "   3️⃣ 如果两端都在外网，推荐免费安装并使用 Tailscale 异地组网，利用其提供的 100.x.y.z 网段 IP 即可自动放行。\n\n"
+        "🚨 临时豁免方式 (仅限安全隔离的开发调试环境)：\n"
+        "   - Windows PowerShell 执行: $env:TM_ALLOW_UNSECURE_HTTP=\"1\"\n"
+        "   - WSL2 / Linux / macOS 执行: export TM_ALLOW_UNSECURE_HTTP=1\n"
+        "============================================================\n"
+    )
+    raise RuntimeError(block_msg)
+
+
 def mem0_request(
     url: str,
     data: bytes | None = None,
@@ -478,6 +535,7 @@ def mem0_request(
     Raises RuntimeError("Mem0 timeout: ...") specifically on socket timeout so
     callers can distinguish transient slowness from hard failures and degrade.
     """
+    check_transport_security(url)
     key = mem0_key()
     headers = {"Authorization": f"Bearer {key}"}
     if data is not None:

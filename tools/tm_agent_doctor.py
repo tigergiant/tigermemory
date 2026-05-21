@@ -267,7 +267,21 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0 if report["status"] != "fail" else 6
 
 
+def _configure_stdio() -> None:
+    """避免在 Windows 控制台环境下输出中文字符时发生 GBK 编码崩溃"""
+    if sys.version_info >= (3, 7):
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                try:
+                    stream.reconfigure(errors="backslashreplace")
+                except Exception:
+                    pass
+
+
 def main() -> None:
+    _configure_stdio()
     parser = argparse.ArgumentParser(prog="tm_agent_doctor.py", description=__doc__)
     parser.add_argument("--query", default=DEFAULT_QUERY)
     parser.add_argument("--http-url", default=None)
@@ -279,3 +293,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
