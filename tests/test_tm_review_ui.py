@@ -647,7 +647,7 @@ def test_review_html_contains_batch_controls_and_status_copy(tmp_path, monkeypat
     assert "英文 slug 前缀" not in response.text
     assert "data-row-status" in response.text
     assert "展开原文预览（约 200 字）" in response.text
-    assert "AI 想改这些" in response.text
+    assert "AI 修改建议" in response.text
 
 
 def test_proposal_apply_calls_tm_cron_apply(tmp_path, monkeypatch):
