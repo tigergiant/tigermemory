@@ -387,8 +387,54 @@ def main():
         default="auto",
         help="配置注入模式：'windows' 为 Windows 直接运行模式；'wsl' 为通过 Windows 启动 wsl 桥接模式。'auto' 会自动根据当前系统智能判断。"
     )
+    parser.add_argument(
+        "--client",
+        choices=["all", "claude-desktop", "cursor", "generic"],
+        default="all",
+        help="目标 AI 客户端类型。配置 'generic' 仅做控制台指引而不修改任何物理文件，'all' 会同时配置 Claude Desktop 和 Cursor (默认: all)"
+    )
+    parser.add_argument(
+        "--print-config",
+        choices=["stdio", "http"],
+        help="以指定格式在控制台仅打印生成的 MCP 配置 JSON 片段。启用此项将自动开启只读模式，不执行任何写操作，方便管道读取"
+    )
     
     args = parser.parse_args()
+
+    # 处理只读干净 JSON 输出模式
+    if args.print_config:
+        paths = detect_config_paths()
+        is_wsl = paths["wsl_detected"]
+
+        run_mode = "windows"
+        if args.mode == "auto":
+            if is_wsl:
+                run_mode = "wsl"
+            else:
+                run_mode = "windows"
+        else:
+            run_mode = args.mode
+
+        if args.print_config == "http":
+            output_dict = {
+                "mcpServers": {
+                    "tigermemory": {
+                        "url": "https://tm.doodiu.cloud/mcp",
+                        "headers": {
+                            "Authorization": "Bearer <TM_MCP_API_KEY>"
+                        }
+                    }
+                }
+            }
+        else:  # stdio
+            server_config = generate_mcp_config(run_mode)
+            output_dict = {
+                "mcpServers": {
+                    "tigermemory": server_config
+                }
+            }
+        print(json.dumps(output_dict, ensure_ascii=False, indent=2))
+        sys.exit(0)
 
     print_title()
     
@@ -421,22 +467,33 @@ def main():
     print(json.dumps(server_config, ensure_ascii=False, indent=2))
     print()
 
-    # 4. 对 Claude Desktop 执行注入操作
-    if claude_path:
-        patch_json_config(claude_path, server_name, server_config, args.dry_run, args.force, args.force_without_backup)
+    # 根据 --client 选择性处理注入逻辑
+    if args.client == "generic":
+        print("💡 【通用模式引导说明】您指定了 --client generic，脚本将跳过对本地 IDE 配置文件的物理自动注入。")
+        print("如果您需要手动配置其他智能体客户端（如 Aider, Windsurf, Cline 等），请复制以上生成的 MCP 配置文件块，")
+        print("手动将其粘入您对应客户端的配置文件中。详细配置教程请参考：D:\\tigermemory\\tools\\skills\\mcp-client-setup.md")
     else:
-        print("❓ 未找到 Claude Desktop 配置文件默认路径，已自动跳过 Claude 配置。")
+        # 4. 对 Claude Desktop 执行注入操作
+        if args.client in ("all", "claude-desktop"):
+            if claude_path:
+                patch_json_config(claude_path, server_name, server_config, args.dry_run, args.force, args.force_without_backup)
+            else:
+                print("❓ 未找到 Claude Desktop 配置文件默认路径，已自动跳过 Claude 配置。")
 
-    # 5. 对 Cursor 执行注入操作
-    if cursor_path:
-        patch_json_config(cursor_path, server_name, server_config, args.dry_run, args.force, args.force_without_backup)
-    else:
-        print("❓ 未找到 Cursor 配置文件默认路径，已自动跳过 Cursor 配置。")
+        # 5. 对 Cursor 执行注入操作
+        if args.client in ("all", "cursor"):
+            if cursor_path:
+                patch_json_config(cursor_path, server_name, server_config, args.dry_run, args.force, args.force_without_backup)
+            else:
+                print("❓ 未找到 Cursor 配置文件默认路径，已自动跳过 Cursor 配置。")
 
     # 6. 结束成功引导
     print("\n" + "=" * 60)
     if args.dry_run:
         print("🏁 【预览结束】以上为预览内容。如果您确认无误，可去掉 --dry-run 运行以正式写入！")
+    elif args.client == "generic":
+        print("🏁 【指引生成完毕！】")
+        print("📢 您可以根据上述呈现的配置块及说明指引，前往对应客户端完成 MCP 连接。")
     else:
         print("🏁 【配置向导全部完成！】")
         print("📢 接下来您需要做的是：")
