@@ -585,6 +585,47 @@ def test_inbox_archive_uses_deepseek_for_low_quality_fallback(tmp_path, monkeypa
     assert "**摘要**：2026-05-07 写入了一条餐饮类午饭测试记账记录" in page_text
 
 
+def test_inbox_archive_uses_deepseek_for_placeholder_preview(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)
+    inbox = tmp_path / "inbox" / "2026-05-21-1832-codex-systems.md"
+    inbox.parent.mkdir(parents=True, exist_ok=True)
+    inbox.write_text(
+        "\n".join(
+            [
+                "---",
+                "owner: codex",
+                "status: draft",
+                "updated: 2026-05-21",
+                "title_cn: 未提供中文摘要：请写入 agent 在正文首行补一句中文概括。",
+                "preview_cn: 未提供中文摘要：请写入 agent 在正文首行补一句中文概括。",
+                "routed_by: tigermemory",
+                "---",
+                "",
+                "# Dashboard PWA 验收",
+                "",
+                "Dashboard PWA 已完成本地首屏安装验证，healthz 返回 git_sha，下一步等待手机端 Tailscale 验证。",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_deepseek(_system, _user, **_kwargs):
+        return True, {
+            "title": "Dashboard PWA 本地验收完成",
+            "summary": "2026-05-21 记录 Dashboard PWA 的本地验收结果：首屏安装可用，healthz 能返回当前 git_sha，后续还需要手机端通过 Tailscale 做访问验证。",
+        }
+
+    monkeypatch.setattr(tm_review_tools.tm_core, "_call_deepseek_json", fake_deepseek)
+
+    result = tm_review_tools.archive_inbox_file_to_summary(str(inbox))
+
+    assert result["ok"] is True
+    assert result["summary_source"] == "deepseek"
+    page_text = (tmp_path / "wiki" / "operations" / "inbox-archive" / "2026-05-21.md").read_text(encoding="utf-8")
+    assert "未提供中文摘要" not in page_text
+    assert "### Dashboard PWA 本地验收完成" in page_text
+
+
 def test_inbox_archive_commit_paths_exclude_raw_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)
