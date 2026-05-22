@@ -493,10 +493,23 @@ def test_dashboard_pages_share_identical_header(tmp_path, monkeypatch):
         assert 'id="lang-toggle"' in response.text
         assert 'id="last-refresh"' in response.text
         assert 'id="sha-pill"' in response.text
+        assert "tm-page-leaving" in response.text
+        assert "is-navigating" in response.text
+        assert "window.location.href = target.href" in response.text
         assert "/static/assets/tailwindcss.min.js" in response.text, f"{page} missing local tailwind"
         assert "/static/assets/lucide.min.js" in response.text, f"{page} missing local lucide"
         assert "https://cdn.tailwindcss.com" not in response.text, f"{page} still references cdn.tailwindcss"
         assert "https://unpkg.com" not in response.text, f"{page} still references unpkg"
+
+
+def test_dashboard_transition_css_is_shared():
+    css = (tm_review_ui.STATIC_DIR / "_components" / "style.css").read_text(encoding="utf-8")
+
+    assert "body.tm-page-ready main" in css
+    assert "body.tm-page-leaving main" in css
+    assert "@view-transition" in css
+    assert "view-transition-name: tm-dashboard-main" in css
+    assert "prefers-reduced-motion: reduce" in css
 
 
 def test_quality_and_settings_no_longer_use_raw_json_page(tmp_path, monkeypatch):
