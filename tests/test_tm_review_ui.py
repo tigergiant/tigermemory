@@ -497,9 +497,9 @@ def test_inbox_archive_moves_file_and_returns_commit(tmp_path, monkeypatch):
     assert data["ok"] is True
     assert data["commit_sha"] == "abc123"
     assert not inbox.exists()
-    assert data["archived_to"] == "wiki/operations/inbox-archive-2026-05-01.md"
+    assert data["archived_to"] == "wiki/operations/inbox-archive/2026-05-01.md"
     assert data["source_cache_to"] == f".tmp/inbox-archive-sources/2026-05-01/{inbox.name}"
-    archive_page = tmp_path / "wiki" / "operations" / "inbox-archive-2026-05-01.md"
+    archive_page = tmp_path / "wiki" / "operations" / "inbox-archive" / "2026-05-01.md"
     assert archive_page.exists()
     page_text = archive_page.read_text(encoding="utf-8")
     assert "测试归档标题" in page_text
@@ -525,7 +525,7 @@ def test_inbox_archive_commit_paths_exclude_raw_cache(tmp_path, monkeypatch):
     response = client.post("/api/inbox/action", headers=HOST, json={"path": f"inbox/{inbox.name}", "action": "archive"})
 
     assert response.json()["ok"] is True
-    assert commits == [[f"inbox/{inbox.name}", "wiki/operations/inbox-archive-2026-05-01.md"]]
+    assert commits == [[f"inbox/{inbox.name}", "wiki/operations/inbox-archive/2026-05-01.md"]]
     assert all(".tmp/inbox-archive-sources" not in path for path in commits[0])
 
 
@@ -541,7 +541,7 @@ def test_inbox_archive_upserts_duplicate_source_entry(tmp_path, monkeypatch):
     second = _write_inbox(tmp_path)
     assert client.post("/api/inbox/action", headers=HOST, json={"path": f"inbox/{second.name}", "action": "archive"}).json()["ok"] is True
 
-    page_text = (tmp_path / "wiki" / "operations" / "inbox-archive-2026-05-01.md").read_text(encoding="utf-8")
+    page_text = (tmp_path / "wiki" / "operations" / "inbox-archive" / "2026-05-01.md").read_text(encoding="utf-8")
     assert page_text.count(f"<!-- inbox-archive-entry: inbox/{first.name} -->") == 1
 
 
@@ -568,7 +568,7 @@ def test_inbox_promote_mem0_uses_review_tool_and_archives(tmp_path, monkeypatch)
     assert calls["fact"]["topic"] == "systems"
     assert calls["topic"] is None
     assert not inbox.exists()
-    page_text = (tmp_path / "wiki" / "operations" / "inbox-archive-2026-05-01.md").read_text(encoding="utf-8")
+    page_text = (tmp_path / "wiki" / "operations" / "inbox-archive" / "2026-05-01.md").read_text(encoding="utf-8")
     assert "- 实际动作：promote_mem0" in page_text
 
 
@@ -658,7 +658,7 @@ def test_batch_inbox_archive_same_day_appends_to_one_summary_page(tmp_path, monk
     )
 
     assert response.json()["ok"] is True
-    page_text = (tmp_path / "wiki" / "operations" / "inbox-archive-2026-05-01.md").read_text(encoding="utf-8")
+    page_text = (tmp_path / "wiki" / "operations" / "inbox-archive" / "2026-05-01.md").read_text(encoding="utf-8")
     assert f"<!-- inbox-archive-entry: inbox/{first.name} -->" in page_text
     assert f"<!-- inbox-archive-entry: inbox/{second.name} -->" in page_text
 
