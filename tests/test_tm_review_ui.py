@@ -345,6 +345,7 @@ def test_dashboard_pages_share_identical_header(tmp_path, monkeypatch):
         "daily": client.get("/digest/2026-05-21", headers=HOST),
         "health": client.get("/health", headers=HOST),
         "quality": client.get("/quality", headers=HOST),
+        "agent-tools": client.get("/agent-tools", headers=HOST),
         "settings": client.get("/settings", headers=HOST),
     }
 
@@ -361,6 +362,10 @@ def test_dashboard_pages_share_identical_header(tmp_path, monkeypatch):
         assert 'id="lang-toggle"' in response.text
         assert 'id="last-refresh"' in response.text
         assert 'id="sha-pill"' in response.text
+        assert "/static/assets/tailwindcss.min.js" in response.text, f"{page} missing local tailwind"
+        assert "/static/assets/lucide.min.js" in response.text, f"{page} missing local lucide"
+        assert "https://cdn.tailwindcss.com" not in response.text, f"{page} still references cdn.tailwindcss"
+        assert "https://unpkg.com" not in response.text, f"{page} still references unpkg"
 
 
 def test_quality_and_settings_no_longer_use_raw_json_page(tmp_path, monkeypatch):
