@@ -392,6 +392,44 @@ def test_digest_html_and_api_are_no_store(tmp_path, monkeypatch):
     assert api.headers["Cache-Control"].startswith("no-store")
 
 
+def test_digest_page_returns_shell_and_loads_live_data_via_api(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    _write_digest(tmp_path)
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    page = client.get("/digest/2026-05-21", headers=HOST)
+    api = client.get("/api/digest/2026-05-21", headers=HOST)
+
+    assert '"loading": true' in page.text
+    assert "正在加载每日审批数据" in page.text
+    assert "fetchDigest()" in page.text
+    assert api.json()["digest"]["counts"]["mem0"] == 2
+    assert api.json()["digest"].get("loading") is not True
+
+
+def test_dashboard_data_pages_return_fast_shells(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "dashboard_health_summary", lambda: (_ for _ in ()).throw(RuntimeError("slow health should be api-only")))
+    monkeypatch.setattr(tm_review_ui, "dashboard_memory_quality", lambda date=None: (_ for _ in ()).throw(RuntimeError("slow quality should be api-only")))
+    monkeypatch.setattr(tm_review_ui, "get_user_preferences", lambda: (_ for _ in ()).throw(RuntimeError("slow prefs should be api-only")))
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    health = client.get("/health", headers=HOST)
+    quality = client.get("/quality", headers=HOST)
+    settings = client.get("/settings", headers=HOST)
+
+    assert health.status_code == 200
+    assert '"loading": true' in health.text
+    assert "fetchHealth()" in health.text
+    assert quality.status_code == 200
+    assert '"loading": true' in quality.text
+    assert "fetchQuality()" in quality.text
+    assert settings.status_code == 200
+    assert '"loading": true' in settings.text
+    assert "fetchSettings()" in settings.text
+
+
 def test_review_write_ready_allows_unstaged_foreign_dirty():
     status = "\n".join(
         [
