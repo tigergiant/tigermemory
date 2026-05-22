@@ -69,3 +69,19 @@ for f in $staged_inbox; do
     exit 1
   fi
 done
+
+# Dashboard static files: reject external CDN references.
+# Mirrors dashboard-ui-v2-brief.md P1 goal: zero external CDN in dashboard.
+# Only scans tools/static/ files (HTML/JS/CSS). [human] --no-verify bypasses.
+staged_dashboard=$(git diff --cached --name-only | grep -E '^tools/static/.*\.(html|js|css)$' || true)
+for f in $staged_dashboard; do
+  if grep -qE 'cdn\.tailwindcss\.com|unpkg\.com|cdnjs\.cloudflare\.com' "$ROOT/$f"; then
+    echo "[tigermemory pre-commit] external CDN detected in $f" >&2
+    echo "  dashboard files must not reference external CDN (tailwindcss, unpkg, cdnjs)." >&2
+    echo "  inline the styles/icons or use local static assets." >&2
+    echo "  see: wiki/systems/dashboard-ui-v2-brief.md (去 CDN P1 target)" >&2
+    $PY "$ROOT/tools/tm_reject_log.py" append --guard cdn --file "$f" --msg "external CDN in dashboard static file" 2>/dev/null || true
+    exit 1
+  fi
+done
+
