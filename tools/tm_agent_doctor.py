@@ -195,6 +195,52 @@ def recent_lessons_log(path: pathlib.Path = tm_lessons.LOG_FILE, *, max_rows: in
     }
 
 
+def check_retention() -> dict[str, Any]:
+    start = time.time()
+    try:
+        import tm_retention_audit
+        # 1. 运行 sample 模式，验证工具完全可用
+        report = tm_retention_audit.run_retention_audit(source="sample", max_items=3)
+        if not report.get("ok"):
+            raise ValueError(report.get("error") or "run_retention_audit failed")
+
+        # 2. 静态检查 tools/tm_retention_audit.py 确实为纯离线，且不含在线 choices
+        audit_file = pathlib.Path(tm_retention_audit.__file__)
+        code = audit_file.read_text(encoding="utf-8")
+        offline_violations = [
+            kw for kw in ("mem0_request", "fetch_mem0", "urllib")
+            if kw in code
+        ]
+
+        # 确认 argparse choices 里没有 "api" Choice
+        has_api_source = "choices=[" in code and "api" in code.split("choices=[")[1].split("]")[0]
+
+        if offline_violations:
+            raise ValueError(f"Retention audit violated offline boundaries: found {offline_violations}")
+        if has_api_source:
+            raise ValueError("Retention audit contains forbidden 'api' source choice")
+
+        return {
+            "name": "retention_audit",
+            "status": "ok",
+            "ok": True,
+            "dry_run": True,
+            "latency_ms": round((time.time() - start) * 1000, 1),
+            "item_count": report.get("item_count"),
+            "action_counts": report.get("action_counts"),
+            "offline_only": True,
+        }
+    except Exception as exc:
+        return {
+            "name": "retention_audit",
+            "status": "fail",
+            "ok": False,
+            "latency_ms": round((time.time() - start) * 1000, 1),
+            "error": str(exc),
+            "offline_only": True,
+        }
+
+
 def run_agent_doctor(
     *,
     query: str = DEFAULT_QUERY,
@@ -207,6 +253,7 @@ def run_agent_doctor(
         check_mem0(),
         search_lessons(query),
         recent_lessons_log(),
+        check_retention(),
     ]
     if include_l2:
         checks.append(check_l2_review())
@@ -246,7 +293,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     ]
     for check in report["checks"]:
         evidence_bits = []
-        for key in ("head", "branch", "dirty_count", "ahead", "behind", "latency_ms", "hit_count", "score", "error", "reason"):
+        for key in ("head", "branch", "dirty_count", "ahead", "behind", "latency_ms", "hit_count", "score", "error", "reason", "item_count", "action_counts", "offline_only"):
             if check.get(key) not in (None, "", []):
                 evidence_bits.append(f"{key}={check[key]}")
         evidence = "; ".join(str(bit) for bit in evidence_bits).replace("|", "\\|")
