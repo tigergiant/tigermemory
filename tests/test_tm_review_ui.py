@@ -190,7 +190,9 @@ def test_digest_with_cookie_returns_html_and_embedded_json(tmp_path, monkeypatch
     assert response.status_code == 200
     assert "TigerMemory 每日审批" in response.text
     assert "今日要决策" in response.text
-    assert "https://cdn.tailwindcss.com" in response.text
+    assert "/static/assets/tailwindcss.min.js" in response.text
+    assert "/static/assets/lucide.min.js" in response.text
+    assert "https://cdn.tailwindcss.com" not in response.text
     assert "digest-data" in response.text
 
 
