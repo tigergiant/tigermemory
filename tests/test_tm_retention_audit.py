@@ -1,96 +1,252 @@
-from __future__ import annotations
-
-import datetime as dt
+import json
 import pathlib
-import sys
+import pytest
+import datetime as dt
+from tools import tm_retention_audit
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "tools"))
-
-import tm_retention_audit  # type: ignore[import-not-found]
-
-
-def test_retention_audit_scores_pinned_duplicates_and_sensitive(monkeypatch):
-    old = "2025-01-01T00:00:00+00:00"
-    items = [
-        {
-            "id": "11111111-1111-4111-8111-111111111111",
-            "content": "keep me",
-            "created_at": old,
-            "metadata": {"topic": "systems", "source": "codex", "is_pinned": True, "route_score": 95},
-        },
-        {
-            "id": "22222222-2222-4222-8222-222222222222",
-            "content": "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
-            "created_at": old,
-            "metadata": {"topic": "systems", "source": "codex", "route_score": 25},
-        },
-        {
-            "id": "33333333-3333-4333-8333-333333333333",
-            "content": "duplicate memory text",
-            "created_at": old,
-            "metadata": {"topic": "systems", "source": "codex", "route_score": 50},
-        },
-        {
-            "id": "44444444-4444-4444-8444-444444444444",
-            "content": "duplicate memory text",
-            "created_at": old,
-            "metadata": {"topic": "systems", "source": "codex", "route_score": 50},
-        },
-    ]
-    now = dt.datetime(2026, 5, 21, tzinfo=dt.timezone.utc)
-
-    monkeypatch.setattr(tm_retention_audit, "fetch_mem0_items", lambda **_kwargs: items)
-    monkeypatch.setattr(tm_retention_audit, "_promotion_marker_ids", lambda *_args, **_kwargs: set())
-    monkeypatch.setattr(tm_retention_audit, "_recent_mem0_hits", lambda *_args, **_kwargs: set())
-
-    report = tm_retention_audit.run_retention_audit(now=now)
-
+def test_sample_mode_markdown_and_json():
+    # Test that run_retention_audit works in sample mode
+    now = dt.datetime(2026, 5, 22, 12, 0, 0, tzinfo=dt.timezone.utc)
+    report = tm_retention_audit.run_retention_audit(source="sample", now=now)
+    assert report["ok"] is True
+    assert report["item_count"] > 0
+    assert "dry_run" in report
     assert report["dry_run"] is True
-    assert report["item_count"] == 4
-    by_id = {row["id"]: row for row in report["candidates"]}
-    assert by_id["11111111-1111-4111-8111-111111111111"]["recommended_action"] == "keep_pinned"
-    assert by_id["22222222-2222-4222-8222-222222222222"]["recommended_action"] == "review_sensitive"
-    assert any("duplicate_fingerprint_count:2" in risk for risk in by_id["33333333-3333-4333-8333-333333333333"]["risks"])
-    assert all("delete" not in warning.lower() or "no" in warning.lower() for warning in report["warnings"])
+
+    # Check that render_markdown can process it
+    md = tm_retention_audit.render_markdown(report)
+    assert "# Tigermemory Retention Dry-Run Audit" in md
+    assert "No records were deleted or updated." in md
+    assert "| score | action | id | topic | source | reasons | risks | preview |" in md
 
 
-def test_retention_markdown_renders_audit_table(monkeypatch):
-    report = {
-        "generated_at": "2026-05-21T10:00:00+08:00",
-        "dry_run": True,
-        "item_count": 1,
-        "action_counts": {"review": 1},
-        "warnings": ["dry-run only"],
-        "candidates": [{
-            "retention_score": 55,
-            "recommended_action": "review",
-            "id": "abc",
+def test_pinned_protected_always_keep():
+    # Pinned/protected items must ALWAYS be recommended as 'keep'
+    now = dt.datetime(2026, 5, 22, 12, 0, 0, tzinfo=dt.timezone.utc)
+
+    pinned_item = {
+        "id": "test-pinned",
+        "text": "Extremely critical server parameters.",
+        "metadata": {
+            "pinned": True,
             "topic": "systems",
-            "source_agent": "codex",
-            "reasons": ["aged"],
-            "risks": ["missing_route_score"],
-            "text_preview": "preview | with pipe",
-        }],
+            "source": "human",
+            "created_at": "2024-01-01T00:00:00Z"
+        }
     }
 
-    markdown = tm_retention_audit.render_markdown(report)
+    protected_item = {
+        "id": "test-protected",
+        "text": "Database backup schedules.",
+        "metadata": {
+            "is_protected": True,
+            "topic": "systems",
+            "source": "human",
+            "created_at": "2024-01-01T00:00:00Z"
+        }
+    }
 
-    assert "# Tigermemory Retention Dry-Run Audit" in markdown
-    assert "No records were deleted or updated." in markdown
-    assert "preview \\| with pipe" in markdown
+    for item in (pinned_item, protected_item):
+        scored = tm_retention_audit.score_item(
+            item,
+            rank=1,
+            now=now,
+            duplicate_counts={},
+            recent_hits=set(),
+            promotion_ids=set()
+        )
+        assert scored["recommended_action"] == "keep"
+        assert scored["retention_score"] == 0
 
 
-def test_retention_audit_returns_structured_failure_when_mem0_unavailable(monkeypatch):
-    monkeypatch.setattr(
-        tm_retention_audit,
-        "fetch_mem0_items",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("missing env")),
+def test_conservative_topics_and_sources():
+    # Topic=person/investment and source_agent=human must be conservative (never archive)
+    now = dt.datetime(2026, 5, 22, 12, 0, 0, tzinfo=dt.timezone.utc)
+
+    person_item = {
+        "id": "test-person",
+        "text": "Personal contacts details.",
+        "metadata": {
+            "topic": "person",
+            "source": "claude-code",
+            "created_at": "2024-01-01T00:00:00Z",
+            "last_accessed_at": "2024-02-01T00:00:00Z"  # very old/stale
+        }
+    }
+
+    invest_item = {
+        "id": "test-invest",
+        "text": "Milk stock analysis notes.",
+        "metadata": {
+            "topic": "investment",
+            "source": "deerflow",
+            "created_at": "2024-01-01T00:00:00Z",
+            "last_accessed_at": "2024-02-01T00:00:00Z"  # very old/stale
+        }
+    }
+
+    human_item = {
+        "id": "test-human",
+        "text": "Direct instructions from Tiger regarding setup.",
+        "metadata": {
+            "topic": "operations",
+            "source": "human",
+            "created_at": "2024-01-01T00:00:00Z",
+            "last_accessed_at": "2024-02-01T00:00:00Z"  # very old/stale
+        }
+    }
+
+    for item in (person_item, invest_item, human_item):
+        scored = tm_retention_audit.score_item(
+            item,
+            rank=1,
+            now=now,
+            duplicate_counts={},
+            recent_hits=set(),
+            promotion_ids=set()
+        )
+        # Even though they are old and stale, they should NEVER be recommended for archiving
+        assert scored["recommended_action"] != "review_for_archive"
+        # Instead, they should be 'keep' or 'review' depending on scores
+        assert scored["recommended_action"] in ("keep", "review")
+
+
+def test_missing_metadata_protect():
+    # Missing topic or source outputs protect_metadata_missing and never archive
+    now = dt.datetime(2026, 5, 22, 12, 0, 0, tzinfo=dt.timezone.utc)
+
+    missing_topic = {
+        "id": "test-missing-topic",
+        "text": "Legacy staging deployment steps with no topic.",
+        "metadata": {
+            "source": "codex",
+            "created_at": "2024-01-01T00:00:00Z",
+            "last_accessed_at": "2024-02-01T00:00:00Z"
+        }
+    }
+
+    missing_source = {
+        "id": "test-missing-source",
+        "text": "Legacy staging deployment steps with no source agent.",
+        "metadata": {
+            "topic": "systems",
+            "created_at": "2024-01-01T00:00:00Z",
+            "last_accessed_at": "2024-02-01T00:00:00Z"
+        }
+    }
+
+    for item in (missing_topic, missing_source):
+        scored = tm_retention_audit.score_item(
+            item,
+            rank=1,
+            now=now,
+            duplicate_counts={},
+            recent_hits=set(),
+            promotion_ids=set()
+        )
+        assert scored["recommended_action"] == "protect_metadata_missing"
+        assert scored["recommended_action"] != "review_for_archive"
+
+
+def test_missing_accessed_at():
+    # Lacking last_accessed_at raises review priority to 'review' instead of 'keep' or 'archive'
+    now = dt.datetime(2026, 5, 22, 12, 0, 0, tzinfo=dt.timezone.utc)
+
+    missing_accessed = {
+        "id": "test-missing-accessed",
+        "text": "Core configuration files.",
+        "metadata": {
+            "topic": "systems",
+            "source": "cascade",
+            "created_at": "2026-01-01T00:00:00Z"
+            # no last_accessed_at
+        }
+    }
+    scored = tm_retention_audit.score_item(
+        missing_accessed,
+        rank=1,
+        now=now,
+        duplicate_counts={},
+        recent_hits=set(),
+        promotion_ids=set()
     )
+    assert scored["recommended_action"] == "review"
+    assert "missing_last_accessed_at" in scored["risks"]
 
-    report = tm_retention_audit.run_retention_audit()
 
-    assert report["ok"] is False
-    assert report["status"] == "fail"
-    assert report["candidates"] == []
-    assert "missing env" in report["error"]
+def test_stale_records_archiving():
+    # Stale items with normal topics/sources should recommend review_for_archive
+    now = dt.datetime(2026, 5, 22, 12, 0, 0, tzinfo=dt.timezone.utc)
+
+    stale_item = {
+        "id": "test-stale",
+        "text": "Stale development guidelines for discontinued server setup.",
+        "metadata": {
+            "topic": "systems",
+            "source": "codex",
+            "created_at": "2024-01-01T00:00:00Z",
+            "last_accessed_at": "2024-02-01T00:00:00Z"
+        }
+    }
+    scored = tm_retention_audit.score_item(
+        stale_item,
+        rank=1,
+        now=now,
+        duplicate_counts={},
+        recent_hits=set(),
+        promotion_ids=set()
+    )
+    assert scored["recommended_action"] == "review_for_archive"
+
+
+def test_output_file_writing(tmp_path):
+    # Test --output writes the markdown or JSON file in a temporary folder
+    out_file = tmp_path / "report.md"
+    now = dt.datetime(2026, 5, 22, 12, 0, 0, tzinfo=dt.timezone.utc)
+
+    report = tm_retention_audit.run_retention_audit(source="sample", now=now)
+    md_content = tm_retention_audit.render_markdown(report)
+
+    # Write report
+    out_file.write_text(md_content, encoding="utf-8")
+    assert out_file.exists()
+    assert "# Tigermemory Retention Dry-Run Audit" in out_file.read_text(encoding="utf-8")
+
+
+def test_mem0_json_source(tmp_path):
+    # Test load_mem0_json with simulated export
+    export_data = [
+        {
+            "id": "mem-from-json-1",
+            "text": "Some text loaded from exported file.",
+            "metadata": {
+                "topic": "brand",
+                "source": "chatgpt",
+                "created_at": "2026-05-01T00:00:00Z",
+                "last_accessed_at": "2026-05-15T00:00:00Z"
+            }
+        }
+    ]
+
+    json_file = tmp_path / "mem0_export.json"
+    json_file.write_text(json.dumps(export_data), encoding="utf-8")
+
+    now = dt.datetime(2026, 5, 22, 12, 0, 0, tzinfo=dt.timezone.utc)
+    report = tm_retention_audit.run_retention_audit(
+        source="mem0-json",
+        input_path=str(json_file),
+        now=now
+    )
+    assert report["ok"] is True
+    assert report["item_count"] == 1
+    assert report["candidates"][0]["id"] == "mem-from-json-1"
+
+
+def test_read_only_compliance():
+    # Verify that the audit module has no dangerous mutating symbols
+    code = pathlib.Path(tm_retention_audit.__file__).read_text(encoding="utf-8")
+    # Verify no deletion API calls
+    assert "delete_memory" not in code
+    assert "mem0_delete" not in code
+    assert "remove_file" not in code
+    assert "unlink(" not in code

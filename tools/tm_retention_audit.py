@@ -25,6 +25,108 @@ DEFAULT_PAGE_SIZE = 100
 DEFAULT_MAX_ITEMS = 200
 DEFAULT_DOGFOOD_LOG = REPO_ROOT / ".tmp" / "search-tigermemory.jsonl"
 
+# Diagnostic offline sample data testing all scoring combinations
+SAMPLE_DATA = [
+    {
+        "id": "mem-pinned-1",
+        "text": "Core security protocols and tiger-mainmachine configuration parameters.",
+        "metadata": {
+            "is_pinned": True,
+            "topic": "systems",
+            "source": "human",
+            "created_at": "2026-01-01T00:00:00Z",
+            "last_accessed_at": "2026-05-20T00:00:00Z"
+        }
+    },
+    {
+        "id": "mem-person-1",
+        "text": "Personal profile information regarding user preferences, dietary restrictions, and emergency contact numbers.",
+        "metadata": {
+            "topic": "person",
+            "source": "claude-code",
+            "created_at": "2025-01-01T00:00:00Z",
+            "last_accessed_at": "2025-02-01T00:00:00Z"
+        }
+    },
+    {
+        "id": "mem-invest-1",
+        "text": "Conservative investment analysis and portfolio scanning logic for 600887.SH milk industry analysis.",
+        "metadata": {
+            "topic": "investment",
+            "source": "deerflow",
+            "created_at": "2025-01-01T00:00:00Z",
+            "last_accessed_at": "2025-02-01T00:00:00Z"
+        }
+    },
+    {
+        "id": "mem-human-1",
+        "text": "🐯 Tiger explicitly instructed to keep local Obsidian environment in sync with remote worktree F4.",
+        "metadata": {
+            "topic": "operations",
+            "source": "human",
+            "created_at": "2025-05-01T00:00:00Z",
+            "last_accessed_at": "2025-06-01T00:00:00Z"
+        }
+    },
+    {
+        "id": "mem-missing-topic",
+        "text": "A temporary deployment record for server settings.",
+        "metadata": {
+            "source": "codex",
+            "created_at": "2026-01-01T00:00:00Z",
+            "last_accessed_at": "2026-05-01T00:00:00Z"
+        }
+    },
+    {
+        "id": "mem-missing-source",
+        "text": "Systems integration notes with no clear author agent defined.",
+        "metadata": {
+            "topic": "systems",
+            "created_at": "2026-01-01T00:00:00Z",
+            "last_accessed_at": "2026-05-01T00:00:00Z"
+        }
+    },
+    {
+        "id": "mem-missing-accessed",
+        "text": "Highly detailed guide for IPFB copywriting standards and white shirt features.",
+        "metadata": {
+            "topic": "brand",
+            "source": "cascade",
+            "created_at": "2026-01-01T00:00:00Z"
+        }
+    },
+    {
+        "id": "mem-placeholder-1",
+        "text": "test",
+        "metadata": {
+            "topic": "brand",
+            "source": "chatgpt",
+            "created_at": "2026-04-01T00:00:00Z",
+            "last_accessed_at": "2026-05-01T00:00:00Z"
+        }
+    },
+    {
+        "id": "mem-stale-1",
+        "text": "Legacy deployment steps for old staging server at IP address 192.168.1.100. Superceded by production cloud setup.",
+        "metadata": {
+            "topic": "systems",
+            "source": "codex",
+            "created_at": "2025-01-01T00:00:00Z",
+            "last_accessed_at": "2025-02-01T00:00:00Z"
+        }
+    },
+    {
+        "id": "mem-recent-1",
+        "text": "Newly added database connection pool configuration, utilizing redis cluster endpoints.",
+        "metadata": {
+            "topic": "systems",
+            "source": "gemini",
+            "created_at": "2026-05-20T00:00:00Z",
+            "last_accessed_at": "2026-05-22T00:00:00Z"
+        }
+    }
+]
+
 
 def _now_utc() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
@@ -66,7 +168,7 @@ def _boolish(value: Any) -> bool:
         return value
     if value is None:
         return False
-    return str(value).strip().lower() in {"1", "true", "yes", "y", "pinned", "keep"}
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "pinned", "keep", "protected"}
 
 
 def _number(value: Any) -> float | None:
@@ -115,6 +217,23 @@ def fetch_mem0_items(max_items: int = DEFAULT_MAX_ITEMS, page_size: int = DEFAUL
             break
         page += 1
     return out
+
+
+def load_mem0_json(path: str) -> list[dict[str, Any]]:
+    p = pathlib.Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Input file not found: {path}")
+    raw = p.read_text(encoding="utf-8")
+    data = json.loads(raw)
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("items", "results", "candidates", "memories"):
+            if isinstance(data.get(key), list):
+                return data[key]
+        if "content" in data or "text" in data or "memory" in data:
+            return [data]
+    raise ValueError("JSON must be a list of records or a dictionary containing an 'items', 'results' or 'candidates' list.")
 
 
 def _normalized_fingerprint(text: str) -> str:
@@ -184,13 +303,22 @@ def score_item(
     mem_id = _memory_id(item, rank)
     text = _item_text(item)
     meta = _item_meta(item)
-    created_days = _age_days(item.get("created_at"), now=now)
-    updated_days = _age_days(item.get("updated_at"), now=now)
+    created_days = _age_days(item.get("created_at") or meta.get("created_at"), now=now)
+    updated_days = _age_days(item.get("updated_at") or meta.get("updated_at"), now=now)
+
+    last_accessed = meta.get("last_accessed_at") or meta.get("last_accessed")
+    accessed_days = _age_days(last_accessed, now=now)
+
     route_score = _number(meta.get("route_score"))
     review_score = _number(meta.get("llm_review_score"))
-    source_agent = str(meta.get("source") or meta.get("source_agent") or "")
-    topic = str(meta.get("topic") or "")
-    pinned = any(_boolish(meta.get(key)) for key in ("is_pinned", "pinned", "retention_pin"))
+    source_agent = str(meta.get("source") or meta.get("source_agent") or "").strip()
+    topic = str(meta.get("topic") or "").strip()
+
+    pinned = any(
+        _boolish(meta.get(key))
+        for key in ("is_pinned", "pinned", "retention_pin", "is_protected", "protected")
+    ) or _boolish(item.get("pinned")) or _boolish(item.get("protected"))
+
     promoted = bool(
         mem_id in promotion_ids
         or any(meta.get(key) for key in ("promoted_to", "promoted_path", "wiki_path", "source_path"))
@@ -200,82 +328,111 @@ def score_item(
     duplicate_count = duplicate_counts.get(fingerprint, 0) if fingerprint else 0
     sensitive_hits = tm_memory_ops._light_sensitive_hits(text)
 
-    score = 45
+    score = 50
     reasons: list[str] = []
     risks: list[str] = []
     keep_signals: list[str] = []
 
     if pinned:
-        score -= 80
-        keep_signals.append("pinned")
-    if promoted:
-        score -= 35
-        keep_signals.append("promoted_to_wiki_or_sources")
-    if recent_hit:
-        score -= 25
-        keep_signals.append("recent_search_hit")
-    if route_score is not None:
-        if route_score >= 85:
-            score -= 12
-            keep_signals.append(f"high_route_score:{route_score:g}")
-        elif route_score < 30:
-            score += 25
-            risks.append(f"low_route_score:{route_score:g}")
-        elif route_score < 70:
-            score += 8
-            risks.append(f"medium_route_score:{route_score:g}")
+        score = 0
+        keep_signals.append("pinned_or_protected")
     else:
-        score += 8
-        risks.append("missing_route_score")
-    if review_score is not None:
-        if review_score >= 70:
-            score -= 8
-            keep_signals.append(f"high_l2_review_score:{review_score:g}")
-        elif review_score < 30:
-            score += 18
-            risks.append(f"low_l2_review_score:{review_score:g}")
-    if created_days is None:
-        score += 8
-        risks.append("missing_created_at")
-    elif created_days > 365:
-        score += 20
-        reasons.append(f"old_created_at:{created_days}d")
-    elif created_days > 180:
-        score += 10
-        reasons.append(f"aged_created_at:{created_days}d")
-    elif created_days <= 30:
-        score -= 8
-        keep_signals.append(f"recent_created_at:{created_days}d")
-    if updated_days is not None and updated_days <= 30:
-        score -= 8
-        keep_signals.append(f"recent_updated_at:{updated_days}d")
-    if not source_agent:
-        score += 8
-        risks.append("missing_source_agent")
-    if not topic:
-        score += 6
-        risks.append("missing_topic")
-    if duplicate_count > 1:
-        score += min(25, 10 + duplicate_count * 3)
-        risks.append(f"duplicate_fingerprint_count:{duplicate_count}")
-    if sensitive_hits:
-        score += 40
-        risks.extend(f"sensitive:{hit['kind']}" for hit in sensitive_hits)
-    if len(text.strip()) < 30:
-        score += 10
-        risks.append("very_short_text")
+        if promoted:
+            score -= 20
+            keep_signals.append("promoted_to_wiki_or_sources")
+        if recent_hit:
+            score -= 15
+            keep_signals.append("recent_search_hit")
+
+        if created_days is None:
+            score += 10
+            risks.append("missing_created_at")
+        elif created_days > 365:
+            score += 20
+            reasons.append(f"old_created_at:{created_days}d")
+        elif created_days > 180:
+            score += 10
+            reasons.append(f"aged_created_at:{created_days}d")
+        elif created_days <= 30:
+            score -= 10
+            keep_signals.append(f"recent_created_at:{created_days}d")
+
+        if last_accessed is None:
+            score += 15
+            risks.append("missing_last_accessed_at")
+        else:
+            if accessed_days is not None:
+                if accessed_days > 180:
+                    score += 20
+                    reasons.append(f"stale_last_accessed:{accessed_days}d")
+                elif accessed_days <= 30:
+                    score -= 20
+                    keep_signals.append(f"recent_last_accessed:{accessed_days}d")
+            else:
+                score += 10
+                risks.append("invalid_last_accessed_at")
+
+        if not topic:
+            score += 15
+            risks.append("missing_topic")
+        if not source_agent:
+            score += 15
+            risks.append("missing_source_agent")
+
+        text_len = len(text.strip())
+        if text_len < 20:
+            score += 20
+            risks.append("very_short_text")
+        elif text_len < 50:
+            score += 10
+            risks.append("short_text")
+
+        if re.search(r"(?i)\b(?:placeholder|test|temp|asdf|foo|bar)\b", text):
+            score += 15
+            risks.append("low_quality_placeholder")
+
+        if duplicate_count > 1:
+            score += min(25, 10 + duplicate_count * 3)
+            risks.append(f"duplicate_fingerprint_count:{duplicate_count}")
+
+        if sensitive_hits:
+            score += 30
+            risks.extend(f"sensitive:{hit['kind']}" for hit in sensitive_hits)
+
+        is_conservative = topic in ("person", "investment") or source_agent == "human"
+        if is_conservative:
+            if topic == "person":
+                score -= 20
+                keep_signals.append("topic:person")
+            if topic == "investment":
+                score -= 20
+                keep_signals.append("topic:investment")
+            if source_agent == "human":
+                score -= 25
+                keep_signals.append("source:human")
 
     score = max(0, min(100, int(round(score))))
+
     if pinned:
-        action = "keep_pinned"
-    elif sensitive_hits:
-        action = "review_sensitive"
-    elif score >= 70:
-        action = "review_for_archive"
-    elif score >= 50:
-        action = "review"
-    else:
         action = "keep"
+    elif not topic or not source_agent:
+        action = "protect_metadata_missing"
+    else:
+        is_conservative = topic in ("person", "investment") or source_agent == "human"
+        if is_conservative:
+            if score >= 60:
+                action = "review"
+            else:
+                action = "keep"
+        else:
+            if last_accessed is None:
+                action = "review"
+            elif score >= 75:
+                action = "review_for_archive"
+            elif score >= 50:
+                action = "review"
+            else:
+                action = "keep"
 
     if not reasons and not risks:
         reasons.append("no_archive_pressure")
@@ -287,12 +444,12 @@ def score_item(
         "topic": topic or None,
         "source_agent": source_agent or None,
         "state": item.get("state"),
-        "created_at": item.get("created_at"),
-        "updated_at": item.get("updated_at"),
+        "created_at": item.get("created_at") or meta.get("created_at"),
+        "updated_at": item.get("updated_at") or meta.get("updated_at"),
+        "last_accessed_at": last_accessed,
         "created_age_days": created_days,
         "updated_age_days": updated_days,
-        "route_score": route_score,
-        "llm_review_score": review_score,
+        "last_accessed_age_days": accessed_days,
         "pinned": pinned,
         "promoted": promoted,
         "recent_search_hit": recent_hit,
@@ -307,14 +464,33 @@ def score_item(
 
 def run_retention_audit(
     *,
+    source: str = "sample",
+    input_path: str | None = None,
     max_items: int = DEFAULT_MAX_ITEMS,
     page_size: int = DEFAULT_PAGE_SIZE,
     now: dt.datetime | None = None,
     dogfood_log: pathlib.Path = DEFAULT_DOGFOOD_LOG,
 ) -> dict[str, Any]:
     now = now or _now_utc()
+    items: list[dict[str, Any]] = []
+    warnings: list[str] = [
+        "dry-run only: no Mem0 records were deleted or updated",
+    ]
+
     try:
-        items = fetch_mem0_items(max_items=max_items, page_size=page_size)
+        if source == "sample":
+            items = SAMPLE_DATA
+            warnings.append("using local SAMPLE_DATA for offline review simulation")
+        elif source == "mem0-json":
+            if not input_path:
+                raise ValueError("source='mem0-json' requires --input parameter")
+            items = load_mem0_json(input_path)
+            warnings.append(f"loaded records from local file: {input_path}")
+        elif source == "api":
+            items = fetch_mem0_items(max_items=max_items, page_size=page_size)
+            warnings.append("fetched records directly from live Mem0 API")
+        else:
+            raise ValueError(f"unknown source: {source}")
     except Exception as exc:
         return {
             "schema_version": "tm-retention-audit-v1",
@@ -329,12 +505,24 @@ def run_retention_audit(
             "error": str(exc)[:500],
             "warnings": [
                 "dry-run only: no Mem0 records were deleted or updated",
-                "Mem0 records could not be listed; retention candidates are not available",
+                "retention candidates could not be loaded",
             ],
         }
+
     duplicate_counts = _duplicate_groups(items)
-    recent_hits = _recent_mem0_hits(dogfood_log, now=now)
-    promotion_ids = _promotion_marker_ids(REPO_ROOT)
+
+    recent_hits = set()
+    try:
+        recent_hits = _recent_mem0_hits(dogfood_log, now=now)
+    except Exception:
+        pass
+
+    promotion_ids = set()
+    try:
+        promotion_ids = _promotion_marker_ids(REPO_ROOT)
+    except Exception:
+        pass
+
     scored = [
         score_item(
             item,
@@ -346,11 +534,14 @@ def run_retention_audit(
         )
         for index, item in enumerate(items, 1)
     ]
+
     scored.sort(key=lambda row: (-row["retention_score"], row["id"]))
+
     action_counts: dict[str, int] = {}
     for row in scored:
         action = str(row["recommended_action"])
         action_counts[action] = action_counts.get(action, 0) + 1
+
     return {
         "schema_version": "tm-retention-audit-v1",
         "dry_run": True,
@@ -365,10 +556,7 @@ def run_retention_audit(
             "promotion_marker_count": len(promotion_ids),
         },
         "candidates": scored,
-        "warnings": [
-            "dry-run only: no Mem0 records were deleted or updated",
-            "route and review scores are advisory signals, not deletion authority",
-        ],
+        "warnings": warnings,
     }
 
 
@@ -405,21 +593,65 @@ def render_markdown(report: dict[str, Any], *, limit: int = 30) -> str:
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
-    report = run_retention_audit(max_items=args.max_items, page_size=args.page_size)
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+    report = run_retention_audit(
+        source=args.source,
+        input_path=args.input,
+        max_items=args.max_items,
+        page_size=args.page_size,
+    )
+    if not report.get("ok"):
+        sys.stderr.write(f"Error: {report.get('error')}\n")
+        return 1
+
     if args.json:
-        sys.stdout.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+        output_content = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     else:
-        sys.stdout.write(render_markdown(report, limit=args.limit))
+        output_content = render_markdown(report, limit=args.limit)
+
+    if args.output:
+        out_path = pathlib.Path(args.output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(output_content, encoding="utf-8")
+        sys.stdout.write(f"Retention report written to: {args.output}\n")
+    else:
+        sys.stdout.write(output_content)
+
     return 0
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="tm_retention_audit.py", description=__doc__)
+    parser.add_argument(
+        "--source",
+        choices=["sample", "mem0-json", "api"],
+        default="sample",
+        help="Data source: 'sample' (offline built-in), 'mem0-json' (local file), or 'api' (live Mem0)"
+    )
+    parser.add_argument(
+        "--input",
+        type=str,
+        help="Path to input JSON file (required when --source is 'mem0-json')"
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        help="Path to output markdown or json file instead of writing to stdout"
+    )
     parser.add_argument("--max-items", type=int, default=DEFAULT_MAX_ITEMS)
     parser.add_argument("--page-size", type=int, default=DEFAULT_PAGE_SIZE)
     parser.add_argument("--limit", type=int, default=30, help="markdown rows to print")
     parser.add_argument("--json", action="store_true", help="emit JSON instead of markdown")
     args = parser.parse_args()
+
+    if args.source == "mem0-json" and not args.input:
+        parser.error("--input is required when --source is 'mem0-json'")
+
     sys.exit(cmd_audit(args))
 
 
