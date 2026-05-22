@@ -503,6 +503,8 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "updateRefreshIndicator(" in common_js
     assert "fetchBackground(" in common_js
     assert "tm-lang-change" in common_js
+    assert "urlObj.pathname + urlObj.search" in common_js
+    assert "currentUrlObj.pathname + currentUrlObj.search" in common_js
 
     # 7. i18n.json 中存在刚刚缓存和正在刷新的翻译字典键值对
     i18n_json = (tm_review_ui.STATIC_DIR / "i18n.json").read_text(encoding="utf-8")
