@@ -48,7 +48,7 @@ def _visual_width(s: str) -> int:
         else:
             width += 1
     return width
- 
+
 def _pad_visual(s: str, target: int) -> str:
     return s + " " * max(0, target - _visual_width(s))
 
@@ -106,7 +106,7 @@ def load_or_create_eval_suite(suite_type: str = "default") -> list[dict]:
                 files = [f for f in os.listdir(brand_dir) if f.endswith(".md") and f != "index.md"]
                 if files:
                     brand_path = f"wiki/brand/{files[0]}"
-        
+
         ops_path = "wiki/operations/cron-daily-report.md"
         if not (REPO_ROOT / ops_path).exists():
             ops_dir = REPO_ROOT / "wiki" / "operations"
@@ -198,23 +198,42 @@ def load_or_create_eval_suite(suite_type: str = "default") -> list[dict]:
         return []
 
 
-def run_wiki_eval(case: dict) -> tuple[int, float]:
+def run_wiki_eval(case: dict, mode: str = "lexical") -> tuple[int, float, bool]:
     """
     对本地 Wiki Markdown 全文检索进行评估。
-    返回: (命中排名 Rank, 检索用时毫秒数)
+    mode 支持: "lexical" 或 "hybrid"
+    返回: (命中排名 Rank, 检索用时毫秒数, 是否降级 degraded)
     Rank 说明：1 表示排第1命中，3 表示前3命中，5 表示前5命中，-1 表示未命中。
+    degraded 说明：在 hybrid 模式下，如果 embedding index 或服务不可用导致降级，则为 True；lexical 模式下固定为 False。
     """
     query = case["query"]
     expected = case["expected_path"].replace("\\", "/").lower()
 
     start_time = time.perf_counter()
+    degraded = False
     try:
-        # 扫描本地 Wiki 目录，这里调用核心 search_wiki 方法
-        # 默认只扫 wiki/ 和 sources/，不包含未审核的 inbox
-        results = tm_core.search_wiki(query, size=5, include_sources=True, include_inbox=False)
+        if mode == "hybrid":
+            # 扫描本地 Wiki 目录，调用 search_wiki_hybrid 方法
+            results = tm_core.search_wiki_hybrid(query, size=5, include_sources=True, include_inbox=False, explain=True)
+            # 检查是否有 degraded 为 True 的命中项
+            if results:
+                for item in results:
+                    breakdown = item.get("score_breakdown")
+                    if isinstance(breakdown, dict) and breakdown.get("degraded") is True:
+                        degraded = True
+                        break
+            else:
+                # 结果为空时辅助检查是否退化
+                try:
+                    import tm_embed_index
+                except Exception:
+                    degraded = True
+        else:
+            # 默认调用词法 search_wiki 方法
+            results = tm_core.search_wiki(query, size=5, include_sources=True, include_inbox=False)
     except Exception as e:
-        print(f"⚠️ 警告：Wiki 检索执行失败 (Query: {query})，原因：{e}")
-        return -1, 0.0
+        print(f"⚠️ 警告：Wiki 检索执行失败 (Query: {query}, Mode: {mode})，原因：{e}")
+        return -1, 0.0, (mode == "hybrid")
     duration_ms = (time.perf_counter() - start_time) * 1000.0
 
     # 判断预期文件在结果列表中的索引位置（排在第几名被召回）
@@ -225,7 +244,7 @@ def run_wiki_eval(case: dict) -> tuple[int, float]:
             rank = index + 1
             break
 
-    return rank, duration_ms
+    return rank, duration_ms, degraded
 
 
 def run_mem0_eval(case: dict) -> tuple[bool, float]:
@@ -340,6 +359,12 @@ def main():
         action="store_true",
         help="跳过 Mem0 动态事件通道评测 (强制为离线模式，等价于 --skip-mem0)"
     )
+    parser.add_argument(
+        "--recall",
+        choices=["lexical", "hybrid", "both"],
+        default="lexical",
+        help="选择 Wiki 检索召回模式 (lexical, hybrid, both)"
+    )
     args = parser.parse_args()
 
     print("=" * 60)
@@ -352,35 +377,68 @@ def main():
         print("❌ 错误：评测样本集为空，无法继续。")
         return
 
-    print(f"📊 成功载入 {len(cases)} 个评测样本，正在对 Wiki FTS 和 Mem0 双通道执行评测...\n")
+    print(f"📊 成功载入 {len(cases)} 个评测样本，正在对 Wiki FTS ({args.recall}) 和 Mem0 双通道执行评测...\n")
 
     # 记录评测结果数据
-    wiki_ranks = []
-    wiki_durations = []
+    wiki_lex_ranks = []
+    wiki_lex_durations = []
+    wiki_hyb_ranks = []
+    wiki_hyb_durations = []
+    hyb_degraded_flags = []
+
     mem0_matches = []
     mem0_durations = []
     mem0_active = not (args.skip_mem0 or args.offline)
 
-    # 漂亮的控制台 ASCII 表格头
-    TABLE_WIDTH = 81
+    # 动态确定表格列
+    is_both = args.recall == "both"
+    is_hybrid = args.recall == "hybrid"
+    is_lexical = args.recall == "lexical"
+
     header_id = _pad_visual("ID", 4)
     header_desc = _pad_visual("测试问题描述", 22)
-    header_wiki_rank = _pad_visual("Wiki召回排名", 12)
-    header_wiki_time = _pad_visual("Wiki时延", 10)
     header_mem0_match = _pad_visual("Mem0匹配", 8)
     header_mem0_time = _pad_visual("Mem0时延", 10)
-    
-    print(f"{header_id} | {header_desc} | {header_wiki_rank} | {header_wiki_time} | {header_mem0_match} | {header_mem0_time}")
-    print("-" * TABLE_WIDTH)
+
+    if is_both:
+        header_lex_rank = _pad_visual("WikiLex排名", 12)
+        header_lex_time = _pad_visual("Lex时延", 10)
+        header_hyb_rank = _pad_visual("WikiHyb排名", 12)
+        header_hyb_time = _pad_visual("Hyb时延", 10)
+        cols = [header_id, header_desc, header_lex_rank, header_lex_time, header_hyb_rank, header_hyb_time, header_mem0_match, header_mem0_time]
+    else:
+        rank_title = "WikiHyb排名" if is_hybrid else "Wiki召回排名"
+        time_title = "Hyb时延" if is_hybrid else "Wiki时延"
+        header_wiki_rank = _pad_visual(rank_title, 12)
+        header_wiki_time = _pad_visual(time_title, 10)
+        cols = [header_id, header_desc, header_wiki_rank, header_wiki_time, header_mem0_match, header_mem0_time]
+
+    table_header_str = " | ".join(cols)
+    print(table_header_str)
+    print("-" * len(table_header_str))
 
     for case in cases:
         cid = case["id"]
         desc = case["description"]
-        
+
         # 运行本地 Wiki FTS 全文搜索测试
-        rank, wiki_ms = run_wiki_eval(case)
-        wiki_ranks.append(rank)
-        wiki_durations.append(wiki_ms)
+        if is_both:
+            lex_rank, lex_ms, _ = run_wiki_eval(case, mode="lexical")
+            hyb_rank, hyb_ms, hyb_degraded = run_wiki_eval(case, mode="hybrid")
+            wiki_lex_ranks.append(lex_rank)
+            wiki_lex_durations.append(lex_ms)
+            wiki_hyb_ranks.append(hyb_rank)
+            wiki_hyb_durations.append(hyb_ms)
+            hyb_degraded_flags.append(hyb_degraded)
+        elif is_hybrid:
+            hyb_rank, hyb_ms, hyb_degraded = run_wiki_eval(case, mode="hybrid")
+            wiki_hyb_ranks.append(hyb_rank)
+            wiki_hyb_durations.append(hyb_ms)
+            hyb_degraded_flags.append(hyb_degraded)
+        else:
+            lex_rank, lex_ms, _ = run_wiki_eval(case, mode="lexical")
+            wiki_lex_ranks.append(lex_rank)
+            wiki_lex_durations.append(lex_ms)
 
         # 运行 Mem0 语义/局部测试
         if mem0_active:
@@ -393,34 +451,58 @@ def main():
         mem0_durations.append(mem0_ms)
 
         # 格式化打印每一行的数据
-        rank_str = f"Rank {rank}" if rank > 0 else "Not Found"
-        wiki_time_str = f"{wiki_ms:.1f}ms"
+        col_id = _pad_visual(str(cid), 4)
+        col_desc = _pad_visual(desc, 22)
+
         mem0_match_str = "SUCCESS" if matched else "FAILED"
         if not mem0_active:
             mem0_match_str = "OFFLINE"
             mem0_time_str = "--"
         else:
             mem0_time_str = f"{mem0_ms:.1f}ms"
-
-        col_id = _pad_visual(str(cid), 4)
-        col_desc = _pad_visual(desc, 22)
-        col_wiki_rank = _pad_visual(rank_str, 12)
-        col_wiki_time = _pad_visual(wiki_time_str, 10)
         col_mem0_match = _pad_visual(mem0_match_str, 8)
         col_mem0_time = _pad_visual(mem0_time_str, 10)
 
-        print(f"{col_id} | {col_desc} | {col_wiki_rank} | {col_wiki_time} | {col_mem0_match} | {col_mem0_time}")
+        if is_both:
+            lex_rank_str = f"Rank {lex_rank}" if lex_rank > 0 else "Not Found"
+            lex_time_str = f"{lex_ms:.1f}ms"
+            hyb_rank_str = f"Rank {hyb_rank}" if hyb_rank > 0 else "Not Found"
+            if hyb_degraded:
+                hyb_rank_str += "*"
+            hyb_time_str = f"{hyb_ms:.1f}ms"
 
-    print("-" * TABLE_WIDTH)
+            col_lex_rank = _pad_visual(lex_rank_str, 12)
+            col_lex_time = _pad_visual(lex_time_str, 10)
+            col_hyb_rank = _pad_visual(hyb_rank_str, 12)
+            col_hyb_time = _pad_visual(hyb_time_str, 10)
+
+            print(f"{col_id} | {col_desc} | {col_lex_rank} | {col_lex_time} | {col_hyb_rank} | {col_hyb_time} | {col_mem0_match} | {col_mem0_time}")
+        else:
+            current_rank = hyb_rank if is_hybrid else lex_rank
+            current_ms = hyb_ms if is_hybrid else lex_ms
+            rank_str = f"Rank {current_rank}" if current_rank > 0 else "Not Found"
+            if is_hybrid and hyb_degraded:
+                rank_str += "*"
+            time_str = f"{current_ms:.1f}ms"
+
+            col_wiki_rank = _pad_visual(rank_str, 12)
+            col_wiki_time = _pad_visual(time_str, 10)
+
+            print(f"{col_id} | {col_desc} | {col_wiki_rank} | {col_wiki_time} | {col_mem0_match} | {col_mem0_time}")
+
+    print("-" * len(table_header_str))
+    if is_hybrid or is_both:
+        print("* 注：带有 * 号的 Rank 代表 Hybrid 检索在运行时由于索引缺失或服务不可用，已优雅降级为词法检索。")
 
     # 2. 计算并汇总核心评估指标
     total = len(cases)
-    
-    # Wiki Recall 计算
-    recall_1 = sum(1 for r in wiki_ranks if r == 1) / total
-    recall_3 = sum(1 for r in wiki_ranks if 0 < r <= 3) / total
-    recall_5 = sum(1 for r in wiki_ranks if 0 < r <= 5) / total
-    avg_wiki_latency = sum(wiki_durations) / total
+
+    def calc_metrics(ranks, durations):
+        r1 = sum(1 for r in ranks if r == 1) / total
+        r3 = sum(1 for r in ranks if 0 < r <= 3) / total
+        r5 = sum(1 for r in ranks if 0 < r <= 5) / total
+        avg_lat = sum(durations) / total
+        return r1, r3, r5, avg_lat
 
     # Mem0 Recall 计算
     mem0_accuracy = sum(1 for m in mem0_matches if m) / total if mem0_active else 0.0
@@ -429,11 +511,47 @@ def main():
     # 打印最终统计看板
     print("\n🏆 【最终测试统计看板 - Summary Dashboard】 🏆")
     print("=" * 60)
-    print(f"📖 【本地 Wiki 静态长文检索】：")
-    print(f"   👉 🎯 Recall@1 (精确定位率) : {recall_1 * 100:.1f}%")
-    print(f"   👉 🎯 Recall@3 (前3召回率)  : {recall_3 * 100:.1f}%")
-    print(f"   👉 🎯 Recall@5 (前5召回率)  : {recall_5 * 100:.1f}%")
-    print(f"   👉 ⚡ Average Latency (时延) : {avg_wiki_latency:.1f} 毫秒")
+
+    if is_both:
+        r1_lex, r3_lex, r5_lex, lat_lex = calc_metrics(wiki_lex_ranks, wiki_lex_durations)
+        r1_hyb, r3_hyb, r5_hyb, lat_hyb = calc_metrics(wiki_hyb_ranks, wiki_hyb_durations)
+        degraded_count = sum(1 for d in hyb_degraded_flags if d)
+
+        print(f"📖 【本地 Wiki 静态长文检索 - 双路对比】：")
+        print(f"   📊 1. Lexical 词法召回：")
+        print(f"      👉 🎯 Recall@1 (精确定位率) : {r1_lex * 100:.1f}%")
+        print(f"      👉 🎯 Recall@3 (前3召回率)  : {r3_lex * 100:.1f}%")
+        print(f"      👉 🎯 Recall@5 (前5召回率)  : {r5_lex * 100:.1f}%")
+        print(f"      👉 ⚡ Average Latency (时延) : {lat_lex:.1f} 毫秒")
+        print(f"   📊 2. Hybrid 混合召回：")
+        print(f"      👉 🎯 Recall@1 (精确定位率) : {r1_hyb * 100:.1f}%")
+        print(f"      👉 🎯 Recall@3 (前3召回率)  : {r3_hyb * 100:.1f}%")
+        print(f"      👉 🎯 Recall@5 (前5召回率)  : {r5_hyb * 100:.1f}%")
+        print(f"      👉 ⚡ Average Latency (时延) : {lat_hyb:.1f} 毫秒")
+        print(f"      👉 ⚠️ Degraded count (降级数) : {degraded_count} (共 {total} 个用例)")
+
+        target_recall_1 = r1_hyb
+        target_latency = lat_hyb
+    else:
+        if is_hybrid:
+            r1, r3, r5, lat = calc_metrics(wiki_hyb_ranks, wiki_hyb_durations)
+            degraded_count = sum(1 for d in hyb_degraded_flags if d)
+            mode_name = "Hybrid 混合召回"
+        else:
+            r1, r3, r5, lat = calc_metrics(wiki_lex_ranks, wiki_lex_durations)
+            mode_name = "Lexical 词法召回"
+
+        print(f"📖 【本地 Wiki 静态长文检索 - {mode_name}】：")
+        print(f"   👉 🎯 Recall@1 (精确定位率) : {r1 * 100:.1f}%")
+        print(f"   👉 🎯 Recall@3 (前3召回率)  : {r3 * 100:.1f}%")
+        print(f"   👉 🎯 Recall@5 (前5召回率)  : {r5 * 100:.1f}%")
+        print(f"   👉 ⚡ Average Latency (时延) : {lat:.1f} 毫秒")
+        if is_hybrid:
+            print(f"   👉 ⚠️ Degraded count (降级数) : {degraded_count} (共 {total} 个用例)")
+
+        target_recall_1 = r1
+        target_latency = lat
+
     print("-" * 60)
     print(f"🧠 【Mem0 动态事件记忆层】：")
     if mem0_active:
@@ -444,7 +562,7 @@ def main():
     print("=" * 60 + "\n")
 
     # 3. 打印科普建议与治理指南
-    print_suggestions(recall_1, avg_wiki_latency, mem0_active, mem0_accuracy)
+    print_suggestions(target_recall_1, target_latency, mem0_active, mem0_accuracy)
     print_scientific_explanations()
 
 

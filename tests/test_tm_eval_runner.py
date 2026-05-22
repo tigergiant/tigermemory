@@ -11,6 +11,10 @@ import shutil
 from pathlib import Path
 from unittest.mock import patch
 
+# 动态将 tools/ 放入 sys.path 以支持直接调用 pytest
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.append(str(REPO_ROOT / "tools"))
+
 # 导入待测核心函数
 import tm_eval_runner
 
@@ -61,3 +65,50 @@ class TestEvalRunner(unittest.TestCase):
         finally:
             if tmp_dir.exists():
                 shutil.rmtree(tmp_dir)
+
+    @patch("tm_core.search_wiki")
+    def test_run_wiki_eval_lexical(self, mock_search_wiki):
+        mock_search_wiki.return_value = [
+            {"path": "wiki/self-evolution/lessons/2026-04-23-powershell-gbk-mojibake.md"}
+        ]
+        case = {
+            "query": "mojibake gbk",
+            "expected_path": "wiki/self-evolution/lessons/2026-04-23-powershell-gbk-mojibake.md"
+        }
+        rank, duration, degraded = tm_eval_runner.run_wiki_eval(case, mode="lexical")
+        self.assertEqual(rank, 1)
+        self.assertFalse(degraded)
+        mock_search_wiki.assert_called_once_with("mojibake gbk", size=5, include_sources=True, include_inbox=False)
+
+    @patch("tm_core.search_wiki_hybrid")
+    def test_run_wiki_eval_hybrid(self, mock_search_wiki_hybrid):
+        mock_search_wiki_hybrid.return_value = [
+            {
+                "path": "wiki/self-evolution/lessons/2026-04-23-powershell-gbk-mojibake.md",
+                "score_breakdown": {"degraded": False}
+            }
+        ]
+        case = {
+            "query": "mojibake gbk",
+            "expected_path": "wiki/self-evolution/lessons/2026-04-23-powershell-gbk-mojibake.md"
+        }
+        rank, duration, degraded = tm_eval_runner.run_wiki_eval(case, mode="hybrid")
+        self.assertEqual(rank, 1)
+        self.assertFalse(degraded)
+        mock_search_wiki_hybrid.assert_called_once_with("mojibake gbk", size=5, include_sources=True, include_inbox=False, explain=True)
+
+    @patch("tm_core.search_wiki_hybrid")
+    def test_run_wiki_eval_hybrid_degraded(self, mock_search_wiki_hybrid):
+        mock_search_wiki_hybrid.return_value = [
+            {
+                "path": "wiki/self-evolution/lessons/2026-04-23-powershell-gbk-mojibake.md",
+                "score_breakdown": {"degraded": True}
+            }
+        ]
+        case = {
+            "query": "mojibake gbk",
+            "expected_path": "wiki/self-evolution/lessons/2026-04-23-powershell-gbk-mojibake.md"
+        }
+        rank, duration, degraded = tm_eval_runner.run_wiki_eval(case, mode="hybrid")
+        self.assertEqual(rank, 1)
+        self.assertTrue(degraded)
