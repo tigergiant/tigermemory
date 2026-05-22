@@ -756,3 +756,101 @@ def test_proposal_failure_returns_ok_false(tmp_path, monkeypatch):
 
 def test_main_rejects_non_local_bind():
     assert tm_review_ui.main(["--host", "example.com"]) == 2
+
+
+def test_agent_tools_page_returns_correct_html(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/agent-tools", headers=HOST)
+
+    assert response.status_code == 200
+    assert "智能体" in response.text or "Agent" in response.text
+    assert "/static/assets/tailwindcss.min.js" in response.text
+    assert "/static/assets/lucide.min.js" in response.text
+    assert "https://cdn.tailwindcss.com" not in response.text
+    assert "https://unpkg.com" not in response.text
+
+
+def test_api_agent_status_endpoint(tmp_path, monkeypatch):
+    import tm_agent_connect
+
+    class FakePath:
+        def __init__(self, exists=True):
+            self._exists = exists
+
+        def exists(self):
+            return self._exists
+
+        def read_text(self, encoding="utf-8"):
+            return '{"mcpServers": {"tigermemory": {}}}'
+
+        def __str__(self):
+            return "/fake/path"
+
+    monkeypatch.setattr(
+        tm_agent_connect,
+        "detect_config_paths",
+        lambda: {"cursor": FakePath(True), "claude_desktop": FakePath(False)},
+    )
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/api/agent/status", headers=HOST)
+
+    data = response.json()
+    assert data["ok"] is True
+    assert data["cursor"]["exists"] is True
+    assert data["cursor"]["connected"] is True
+    assert data["claude"]["exists"] is False
+    assert data["claude"]["connected"] is False
+
+
+def test_api_agent_doctor_endpoint(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        tm_review_ui.tm_agent_doctor,
+        "run_agent_doctor",
+        lambda **_kwargs: {"status": "ok", "checks": [{"name": "worktree", "ok": True, "status": "ok"}], "recommended_action": "Keep clean"},
+    )
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/api/agent/doctor", headers=HOST)
+
+    data = response.json()
+    assert data["ok"] is True
+    assert data["report"]["status"] == "ok"
+    assert data["report"]["checks"][0]["name"] == "worktree"
+
+
+def test_api_agent_eval_endpoint(tmp_path, monkeypatch):
+    import tm_eval_runner
+    monkeypatch.setattr(
+        tm_eval_runner,
+        "load_or_create_eval_suite",
+        lambda _name: [{"id": "case-1", "description": "Test wiki", "query": "test"}],
+    )
+    monkeypatch.setattr(
+        tm_eval_runner,
+        "run_wiki_eval",
+        lambda _case: (1, 15.5),
+    )
+    monkeypatch.setattr(
+        tm_eval_runner,
+        "run_mem0_eval",
+        lambda _case: (True, 50.0),
+    )
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/api/agent/eval?skip_mem0=false", headers=HOST)
+
+    data = response.json()
+    assert data["ok"] is True
+    assert data["total_cases"] == 1
+    assert data["wiki"]["recall_1"] == 1.0
+    assert data["wiki"]["avg_latency_ms"] == 15.5
+    assert data["mem0"]["active"] is True
+    assert data["mem0"]["accuracy"] == 1.0
+    assert data["mem0"]["avg_latency_ms"] == 50.0
+
