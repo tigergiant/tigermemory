@@ -450,15 +450,17 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
         # 1. dashboard-common.js 被 5 页引用
         assert "/static/dashboard-common.js" in res.text
 
-    # 2. dashboard-pages.js 被 digest / health / quality / settings 引用
+    # 2. dashboard-pages.js 被 digest / health / quality / settings / agent-tools 引用
     digest = client.get("/digest/2026-05-21", headers=HOST)
     health = client.get("/health", headers=HOST)
     quality = client.get("/quality", headers=HOST)
     settings = client.get("/settings", headers=HOST)
+    agent_tools = client.get("/agent-tools", headers=HOST)
     assert "/static/dashboard-pages.js" in digest.text
     assert "/static/dashboard-pages.js" in health.text
     assert "/static/dashboard-pages.js" in quality.text
     assert "/static/dashboard-pages.js" in settings.text
+    assert "/static/dashboard-pages.js" in agent_tools.text
 
     # 3. service-worker.js 缓存新增 JS
     sw_res = client.get("/service-worker.js", headers=HOST)
@@ -466,7 +468,7 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "/static/dashboard-common.js" in sw_res.text
     assert "/static/dashboard-pages.js" in sw_res.text
 
-    # 4. health/quality/settings/digest 页面不再直接出现 inline 定义，且 digest 使用 init
+    # 4. health/quality/settings/digest/agent-tools 页面不再直接出现 inline 定义，且 digest 使用 init
     assert "window.tmPages.daily.init" in digest.text
     assert "function renderInbox" not in digest.text
     assert "function openWikiModal" not in digest.text
@@ -476,12 +478,17 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "function renderDepth" not in settings.text
     assert "function renderChips" not in settings.text
     assert "async function fetchSettings" not in settings.text
+    assert "window.tmPages.agentTools.init" in agent_tools.text
+    assert "async function checkAgentStatus" not in agent_tools.text
+    assert "async function runDoctor" not in agent_tools.text
+    assert "async function runEval" not in agent_tools.text
 
-    # 5. dashboard-pages.js 中存在 window.tmPages.settings 和 window.tmPages.daily，以及 AbortController 事件清理机制
+    # 5. dashboard-pages.js 中存在 window.tmPages.settings, window.tmPages.daily, window.tmPages.agentTools，以及 AbortController 事件清理机制
     js_content = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
     assert "clearInterval" in js_content
     assert "window.tmPages.settings" in js_content
     assert "window.tmPages.daily" in js_content
+    assert "window.tmPages.agentTools" in js_content
     assert "AbortController" in js_content
     assert "this.abortController.abort()" in js_content
 
