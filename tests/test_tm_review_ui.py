@@ -508,6 +508,83 @@ def test_inbox_archive_moves_file_and_returns_commit(tmp_path, monkeypatch):
     assert (tmp_path / ".tmp" / "inbox-archive-sources" / "2026-05-01" / inbox.name).exists()
 
 
+def test_inbox_archive_body_fallback_extracts_clean_summary_section(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)
+    inbox = tmp_path / "inbox" / "2026-05-06-0046-claude-code-systems.md"
+    inbox.parent.mkdir(parents=True, exist_ok=True)
+    inbox.write_text(
+        "\n".join(
+            [
+                "---",
+                "owner: claude-code",
+                "status: draft",
+                "updated: 2026-05-06",
+                "routed_by: tigermemory",
+                "---",
+                "",
+                "# OpenClaw 版本更新 2026.4.15 -> 2026.5.4",
+                "",
+                "## 摘要",
+                "",
+                "OpenClaw Gateway 从 2026.4.15 更新至最新稳定版 2026.5.4，服务已正常重启并验证通过。",
+                "",
+                "## 已验证现状",
+                "",
+                "- **更新前版本**: 2026.4.15",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = tm_review_tools.archive_inbox_file_to_summary(str(inbox))
+
+    assert result["ok"] is True
+    assert result["summary_source"] == "body_summary_section"
+    page_text = (tmp_path / "wiki" / "operations" / "inbox-archive" / "2026-05-06.md").read_text(encoding="utf-8")
+    assert "### OpenClaw 版本更新 2026.4.15 -> 2026.5.4" in page_text
+    assert "**摘要**：OpenClaw Gateway 从 2026.4.15 更新至最新稳定版 2026.5.4，服务已正常重启并验证通过。" in page_text
+    assert "# OpenClaw 版本更新 2026.4.15 -> 2026.5.4 ## 摘要" not in page_text
+
+
+def test_inbox_archive_uses_deepseek_for_low_quality_fallback(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)
+    inbox = tmp_path / "inbox" / "2026-05-07-1530-codex-systems.md"
+    inbox.parent.mkdir(parents=True, exist_ok=True)
+    inbox.write_text(
+        "\n".join(
+            [
+                "---",
+                "owner: codex",
+                "status: draft",
+                "updated: 2026-05-07",
+                "routed_by: tigermemory",
+                "---",
+                "",
+                "# Routed memory 20",
+                "",
+                '{"id": 1, "type": "expense_tracker_record", "amount": 35, "category": "餐饮", "desc": "午饭测试", "date": "2026-05-07"}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_deepseek(_system, _user, **_kwargs):
+        return True, {
+            "title": "午饭测试记账记录",
+            "summary": "2026-05-07 写入了一条餐饮类午饭测试记账记录，金额 35 元。该条目属于开发或数据链路测试信息，归档后保留标题和摘要即可。",
+        }
+
+    monkeypatch.setattr(tm_review_tools.tm_core, "_call_deepseek_json", fake_deepseek)
+
+    result = tm_review_tools.archive_inbox_file_to_summary(str(inbox))
+
+    assert result["ok"] is True
+    assert result["summary_source"] == "deepseek"
+    page_text = (tmp_path / "wiki" / "operations" / "inbox-archive" / "2026-05-07.md").read_text(encoding="utf-8")
+    assert "### 午饭测试记账记录" in page_text
+    assert "**摘要**：2026-05-07 写入了一条餐饮类午饭测试记账记录" in page_text
+
+
 def test_inbox_archive_commit_paths_exclude_raw_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)
