@@ -492,6 +492,14 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "AbortController" in js_content
     assert "this.abortController.abort()" in js_content
 
+    # 6. dashboard-common.js 中存在 window.tmDashboardRouter 及其初始化和导航拦截逻辑
+    common_js = (tm_review_ui.STATIC_DIR / "dashboard-common.js").read_text(encoding="utf-8")
+    assert "window.tmDashboardRouter" in common_js
+    assert "tmDashboardRouter = {" in common_js
+    assert "navigateTo(" in common_js
+    assert "window.history.pushState" in common_js
+
+
 
 
 def test_review_write_ready_allows_unstaged_foreign_dirty():
