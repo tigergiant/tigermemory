@@ -103,7 +103,26 @@ def _write_digest(root: pathlib.Path, date: str = "2026-05-21") -> pathlib.Path:
 def _write_inbox(root: pathlib.Path, name: str = "2026-05-01-1200-codex-systems.md") -> pathlib.Path:
     path = root / "inbox" / name
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("inbox fixture", encoding="utf-8")
+    path.write_text(
+        "\n".join(
+            [
+                "---",
+                "owner: codex",
+                "status: draft",
+                "updated: 2026-05-21",
+                "title_cn: 测试归档标题",
+                "preview_cn: 这是一条用于验证归档摘要页的中文摘要，不应把完整 inbox 原文提交进 Git。",
+                "summary_cn: 测试归档标题",
+                "routed_by: tigermemory",
+                "---",
+                "",
+                "# Inbox Fixture",
+                "",
+                "full raw inbox body should only be cached under .tmp.",
+            ]
+        ),
+        encoding="utf-8",
+    )
     return path
 
 
@@ -478,6 +497,52 @@ def test_inbox_archive_moves_file_and_returns_commit(tmp_path, monkeypatch):
     assert data["ok"] is True
     assert data["commit_sha"] == "abc123"
     assert not inbox.exists()
+    assert data["archived_to"] == "wiki/operations/inbox-archive-2026-05-01.md"
+    assert data["source_cache_to"] == f".tmp/inbox-archive-sources/2026-05-01/{inbox.name}"
+    archive_page = tmp_path / "wiki" / "operations" / "inbox-archive-2026-05-01.md"
+    assert archive_page.exists()
+    page_text = archive_page.read_text(encoding="utf-8")
+    assert "测试归档标题" in page_text
+    assert "这是一条用于验证归档摘要页的中文摘要" in page_text
+    assert f"<!-- inbox-archive-entry: inbox/{inbox.name} -->" in page_text
+    assert (tmp_path / ".tmp" / "inbox-archive-sources" / "2026-05-01" / inbox.name).exists()
+
+
+def test_inbox_archive_commit_paths_exclude_raw_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)
+    inbox = _write_inbox(tmp_path)
+    commits: list[list[str]] = []
+
+    def fake_commit(paths, _message):
+        commits.append(paths)
+        return "abc123"
+
+    monkeypatch.setattr(tm_review_ui, "commit_and_push_paths", fake_commit)
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.post("/api/inbox/action", headers=HOST, json={"path": f"inbox/{inbox.name}", "action": "archive"})
+
+    assert response.json()["ok"] is True
+    assert commits == [[f"inbox/{inbox.name}", "wiki/operations/inbox-archive-2026-05-01.md"]]
+    assert all(".tmp/inbox-archive-sources" not in path for path in commits[0])
+
+
+def test_inbox_archive_upserts_duplicate_source_entry(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)
+    first = _write_inbox(tmp_path)
+    monkeypatch.setattr(tm_review_ui, "commit_and_push_paths", lambda _paths, _message: "abc123")
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    assert client.post("/api/inbox/action", headers=HOST, json={"path": f"inbox/{first.name}", "action": "archive"}).json()["ok"] is True
+    second = _write_inbox(tmp_path)
+    assert client.post("/api/inbox/action", headers=HOST, json={"path": f"inbox/{second.name}", "action": "archive"}).json()["ok"] is True
+
+    page_text = (tmp_path / "wiki" / "operations" / "inbox-archive-2026-05-01.md").read_text(encoding="utf-8")
+    assert page_text.count(f"<!-- inbox-archive-entry: inbox/{first.name} -->") == 1
 
 
 def test_inbox_promote_mem0_uses_review_tool_and_archives(tmp_path, monkeypatch):
@@ -503,6 +568,8 @@ def test_inbox_promote_mem0_uses_review_tool_and_archives(tmp_path, monkeypatch)
     assert calls["fact"]["topic"] == "systems"
     assert calls["topic"] is None
     assert not inbox.exists()
+    page_text = (tmp_path / "wiki" / "operations" / "inbox-archive-2026-05-01.md").read_text(encoding="utf-8")
+    assert "- 实际动作：promote_mem0" in page_text
 
 
 def test_inbox_action_invalid_path_returns_error(tmp_path, monkeypatch):
@@ -573,6 +640,27 @@ def test_batch_inbox_archive_selected_commits_once(tmp_path, monkeypatch):
     assert len(commits) == 1
     assert not first.exists()
     assert not second.exists()
+
+
+def test_batch_inbox_archive_same_day_appends_to_one_summary_page(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)
+    first = _write_inbox(tmp_path, "2026-05-01-1200-codex-systems.md")
+    second = _write_inbox(tmp_path, "2026-05-01-1210-codex-systems.md")
+    monkeypatch.setattr(tm_review_ui, "commit_and_push_paths", lambda _paths, _message: "abc123")
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.post(
+        "/api/inbox/batch-action",
+        headers=HOST,
+        json={"paths": [f"inbox/{first.name}", f"inbox/{second.name}"], "action": "archive"},
+    )
+
+    assert response.json()["ok"] is True
+    page_text = (tmp_path / "wiki" / "operations" / "inbox-archive-2026-05-01.md").read_text(encoding="utf-8")
+    assert f"<!-- inbox-archive-entry: inbox/{first.name} -->" in page_text
+    assert f"<!-- inbox-archive-entry: inbox/{second.name} -->" in page_text
 
 
 def test_batch_inbox_promote_mem0_archives_selected(tmp_path, monkeypatch):
