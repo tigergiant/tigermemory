@@ -194,6 +194,7 @@ def test_digest_with_cookie_returns_html_and_embedded_json(tmp_path, monkeypatch
     assert "/static/assets/lucide.min.js" in response.text
     assert "/static/i18n.js" in response.text
     assert 'onclick="window.tmI18n' in response.text
+    assert "@keyframes fadeIn" in response.text
     assert "https://cdn.tailwindcss.com" not in response.text
     assert "digest-data" in response.text
 
