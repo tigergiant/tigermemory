@@ -403,7 +403,7 @@ def test_digest_page_returns_shell_and_loads_live_data_via_api(tmp_path, monkeyp
 
     assert '"loading": true' in page.text
     assert "正在加载每日审批数据" in page.text
-    assert "fetchDigest()" in page.text
+    assert "window.tmPages.daily.init" in page.text
     assert api.json()["digest"]["counts"]["mem0"] == 2
     assert api.json()["digest"].get("loading") is not True
 
@@ -450,10 +450,12 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
         # 1. dashboard-common.js 被 5 页引用
         assert "/static/dashboard-common.js" in res.text
 
-    # 2. dashboard-pages.js 被 health / quality / settings 引用
+    # 2. dashboard-pages.js 被 digest / health / quality / settings 引用
+    digest = client.get("/digest/2026-05-21", headers=HOST)
     health = client.get("/health", headers=HOST)
     quality = client.get("/quality", headers=HOST)
     settings = client.get("/settings", headers=HOST)
+    assert "/static/dashboard-pages.js" in digest.text
     assert "/static/dashboard-pages.js" in health.text
     assert "/static/dashboard-pages.js" in quality.text
     assert "/static/dashboard-pages.js" in settings.text
@@ -464,19 +466,25 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "/static/dashboard-common.js" in sw_res.text
     assert "/static/dashboard-pages.js" in sw_res.text
 
-    # 4. health/quality/settings 页面不再直接出现 inline 定义
+    # 4. health/quality/settings/digest 页面不再直接出现 inline 定义，且 digest 使用 init
+    assert "window.tmPages.daily.init" in digest.text
+    assert "function renderInbox" not in digest.text
+    assert "function openWikiModal" not in digest.text
+    assert "async function fetchDigest" not in digest.text
     assert "setInterval(fetchHealth" not in health.text
     assert "setInterval(fetchQuality" not in quality.text
     assert "function renderDepth" not in settings.text
     assert "function renderChips" not in settings.text
     assert "async function fetchSettings" not in settings.text
 
-    # 5. dashboard-pages.js 中存在 window.tmPages.settings，以及 AbortController 事件清理机制
+    # 5. dashboard-pages.js 中存在 window.tmPages.settings 和 window.tmPages.daily，以及 AbortController 事件清理机制
     js_content = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
     assert "clearInterval" in js_content
     assert "window.tmPages.settings" in js_content
+    assert "window.tmPages.daily" in js_content
     assert "AbortController" in js_content
     assert "this.abortController.abort()" in js_content
+
 
 
 def test_review_write_ready_allows_unstaged_foreign_dirty():
@@ -1105,16 +1113,20 @@ def test_review_html_contains_batch_controls_and_status_copy(tmp_path, monkeypat
     assert response.status_code == 200
     assert "批量归档" in response.text
     assert "批量进入短期记忆" in response.text
-    assert "Codex 推荐操作" in response.text
     assert "写入 Wiki 推荐" in response.text
     assert "wiki-modal" in response.text
-    assert "短期记忆库：适合近期偏好" in response.text
-    assert "写入长期事实记忆" in response.text
-    assert "目标 wiki 分区" not in response.text
-    assert "英文 slug 前缀" not in response.text
-    assert "data-row-status" in response.text
-    assert "展开原文预览（约 200 字）" in response.text
     assert "AI 修改建议" in response.text
+    assert "短期记忆库：适合近期偏好" in response.text  # 保留在 review.html 的 button title 属性中
+
+    # 动态及去内联文案在模块化后的 JS 文件中进行断言
+    js_content = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
+    assert "Codex 推荐操作" in js_content
+    assert "进入短期记忆：写入 Mem0" in js_content  # JS 内的 actionHelps
+    assert "写入长期事实记忆" in js_content
+    assert "data-row-status" in js_content
+    assert "展开原文预览（约 200 字）" in js_content
+
+
 
 
 def test_proposal_apply_calls_tm_cron_apply(tmp_path, monkeypatch):
