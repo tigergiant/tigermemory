@@ -498,6 +498,17 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "tmDashboardRouter = {" in common_js
     assert "navigateTo(" in common_js
     assert "window.history.pushState" in common_js
+    assert "cache: {" in common_js
+    assert "clearCache(" in common_js
+    assert "updateRefreshIndicator(" in common_js
+    assert "fetchBackground(" in common_js
+    assert "tm-lang-change" in common_js
+
+    # 7. i18n.json 中存在刚刚缓存和正在刷新的翻译字典键值对
+    i18n_json = (tm_review_ui.STATIC_DIR / "i18n.json").read_text(encoding="utf-8")
+    assert "header.cached" in i18n_json
+    assert "header.refreshing" in i18n_json
+
 
 
 
