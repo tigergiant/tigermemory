@@ -50,7 +50,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent  # tools/.. = repo ro
 
 # ---------- Enums (AGENTS.md §3, §4) ----------
 
-AGENTS = {"claude-code", "cascade", "codex", "chatgpt", "openclaw", "hermes", "deerflow", "human", "mem0", "linter", "tigermemory-ce", "kimi", "dsa-cron"}
+AGENTS = {"claude-code", "cascade", "codex", "chatgpt", "openclaw", "hermes", "deerflow", "human", "mem0", "linter", "tigermemory-ce", "kimi", "gemini", "dsa-cron"}
 ACTIONS = {"create", "update", "archive", "lint", "ingest", "compile"}
 # Topic enum used by inbox filenames + Mem0 metadata.topic.
 # Note: file-name regex INBOX_NAME_RE allows only [a-z]+ (no hyphens), so the
@@ -66,7 +66,7 @@ TOPICS = {"brand", "investment", "operations", "production", "systems", "person"
 # downstream guards (tm_guard_ci, lint partition-mismatch) keep working without
 # code churn — we just expanded the owner sets.
 _ALL_REGULAR_AGENTS: set[str] = {
-    "claude-code", "cascade", "codex", "chatgpt", "openclaw", "hermes", "deerflow", "kimi",
+    "claude-code", "cascade", "codex", "chatgpt", "openclaw", "hermes", "deerflow", "kimi", "gemini",
 }
 PARTITION_OWNERS: dict[str, set[str]] = {
     "brand":          set(_ALL_REGULAR_AGENTS),
