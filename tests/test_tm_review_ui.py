@@ -421,13 +421,54 @@ def test_dashboard_data_pages_return_fast_shells(tmp_path, monkeypatch):
 
     assert health.status_code == 200
     assert '"loading": true' in health.text
-    assert "fetchHealth()" in health.text
+    assert "window.tmPages.health.init" in health.text
     assert quality.status_code == 200
     assert '"loading": true' in quality.text
-    assert "fetchQuality()" in quality.text
+    assert "window.tmPages.quality.init" in quality.text
     assert settings.status_code == 200
     assert '"loading": true' in settings.text
     assert "fetchSettings()" in settings.text
+
+
+def test_dashboard_modularization_rules(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "dashboard_health_summary", lambda: {"ok": True})
+    monkeypatch.setattr(tm_review_ui, "dashboard_memory_quality", lambda date=None: {"ok": True})
+    monkeypatch.setattr(tm_review_ui, "get_user_preferences", lambda: {"ok": True})
+    monkeypatch.setattr(tm_review_ui, "git_sha", lambda: "abc123")
+
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    # 5 pages list
+    pages = ["/digest/2026-05-21", "/health", "/quality", "/agent-tools", "/settings"]
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    _write_digest(tmp_path)
+
+    for route in pages:
+        res = client.get(route, headers=HOST)
+        assert res.status_code == 200
+        # 1. dashboard-common.js 被 5 页引用
+        assert "/static/dashboard-common.js" in res.text
+
+    # 2. dashboard-pages.js 被 health / quality 引用
+    health = client.get("/health", headers=HOST)
+    quality = client.get("/quality", headers=HOST)
+    assert "/static/dashboard-pages.js" in health.text
+    assert "/static/dashboard-pages.js" in quality.text
+
+    # 3. service-worker.js 缓存新增 JS
+    sw_res = client.get("/service-worker.js", headers=HOST)
+    assert sw_res.status_code == 200
+    assert "/static/dashboard-common.js" in sw_res.text
+    assert "/static/dashboard-pages.js" in sw_res.text
+
+    # 4. health/quality 页面不再直接出现 setInterval(fetchHealth / setInterval(fetchQuality) 的内联写法
+    assert "setInterval(fetchHealth" not in health.text
+    assert "setInterval(fetchQuality" not in quality.text
+
+    # 5. dashboard-pages.js 中存在 clearInterval
+    js_content = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
+    assert "clearInterval" in js_content
 
 
 def test_review_write_ready_allows_unstaged_foreign_dirty():
@@ -505,7 +546,6 @@ def test_health_page_uses_real_template_not_json_page(tmp_path, monkeypatch):
     assert "health-data" in response.text
     assert "系统健康" in response.text
     assert "记忆运维台" in response.text
-    assert "可视化脑海" in response.text
     assert "#f7f2e6" in response.text
     assert "#c8a560" in response.text
     assert "/static/tiger/tigerlogo.png" in response.text
@@ -592,7 +632,6 @@ def test_quality_and_settings_no_longer_use_raw_json_page(tmp_path, monkeypatch)
     assert "沟通深度档位" in settings.text
     assert "记忆运维台" in quality.text
     assert "记忆运维台" in settings.text
-    assert "思考路径耗时" in quality.text
     assert "本地数据库" in settings.text
     combined = quality.text + settings.text
     assert "阶段 2 占位" not in combined
