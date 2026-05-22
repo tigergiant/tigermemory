@@ -14,14 +14,12 @@ import json
 import pathlib
 import re
 import sys
-import urllib.parse
 from typing import Any
 
 import tm_core
 import tm_memory_ops
 
 REPO_ROOT = tm_core.REPO_ROOT
-DEFAULT_PAGE_SIZE = 100
 DEFAULT_MAX_ITEMS = 200
 DEFAULT_DOGFOOD_LOG = REPO_ROOT / ".tmp" / "search-tigermemory.jsonl"
 
@@ -182,41 +180,6 @@ def _number(value: Any) -> float | None:
 
 def _memory_id(item: dict[str, Any], rank: int) -> str:
     return str(item.get("id") or item.get("memory_id") or f"rank-{rank}")
-
-
-def fetch_mem0_page(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE) -> dict[str, Any]:
-    params = urllib.parse.urlencode({
-        "user_id": "tiger",
-        "page": page,
-        "size": page_size,
-    })
-    raw = tm_core.mem0_request(
-        f"{tm_core.mem0_base().rstrip('/')}/api/v1/memories/?{params}",
-        timeout=tm_core.MEM0_READ_TIMEOUT,
-    )
-    data = json.loads(raw)
-    if not isinstance(data, dict):
-        raise RuntimeError("Mem0 list returned a non-object response")
-    return data
-
-
-def fetch_mem0_items(max_items: int = DEFAULT_MAX_ITEMS, page_size: int = DEFAULT_PAGE_SIZE) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    page = 1
-    while len(out) < max_items:
-        data = fetch_mem0_page(page=page, page_size=page_size)
-        items = data.get("items") or data.get("results") or []
-        if not isinstance(items, list) or not items:
-            break
-        for item in items:
-            if isinstance(item, dict):
-                out.append(item)
-                if len(out) >= max_items:
-                    break
-        if not data.get("next") and len(items) < page_size:
-            break
-        page += 1
-    return out
 
 
 def load_mem0_json(path: str) -> list[dict[str, Any]]:
@@ -467,7 +430,6 @@ def run_retention_audit(
     source: str = "sample",
     input_path: str | None = None,
     max_items: int = DEFAULT_MAX_ITEMS,
-    page_size: int = DEFAULT_PAGE_SIZE,
     now: dt.datetime | None = None,
     dogfood_log: pathlib.Path = DEFAULT_DOGFOOD_LOG,
 ) -> dict[str, Any]:
@@ -486,11 +448,10 @@ def run_retention_audit(
                 raise ValueError("source='mem0-json' requires --input parameter")
             items = load_mem0_json(input_path)
             warnings.append(f"loaded records from local file: {input_path}")
-        elif source == "api":
-            items = fetch_mem0_items(max_items=max_items, page_size=page_size)
-            warnings.append("fetched records directly from live Mem0 API")
         else:
             raise ValueError(f"unknown source: {source}")
+        if max_items > 0:
+            items = items[:max_items]
     except Exception as exc:
         return {
             "schema_version": "tm-retention-audit-v1",
@@ -603,7 +564,6 @@ def cmd_audit(args: argparse.Namespace) -> int:
         source=args.source,
         input_path=args.input,
         max_items=args.max_items,
-        page_size=args.page_size,
     )
     if not report.get("ok"):
         sys.stderr.write(f"Error: {report.get('error')}\n")
@@ -629,9 +589,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="tm_retention_audit.py", description=__doc__)
     parser.add_argument(
         "--source",
-        choices=["sample", "mem0-json", "api"],
+        choices=["sample", "mem0-json"],
         default="sample",
-        help="Data source: 'sample' (offline built-in), 'mem0-json' (local file), or 'api' (live Mem0)"
+        help="Data source: 'sample' (offline built-in) or 'mem0-json' (local file)"
     )
     parser.add_argument(
         "--input",
@@ -644,7 +604,6 @@ def main() -> None:
         help="Path to output markdown or json file instead of writing to stdout"
     )
     parser.add_argument("--max-items", type=int, default=DEFAULT_MAX_ITEMS)
-    parser.add_argument("--page-size", type=int, default=DEFAULT_PAGE_SIZE)
     parser.add_argument("--limit", type=int, default=30, help="markdown rows to print")
     parser.add_argument("--json", action="store_true", help="emit JSON instead of markdown")
     args = parser.parse_args()

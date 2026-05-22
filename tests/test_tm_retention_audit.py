@@ -242,11 +242,21 @@ def test_mem0_json_source(tmp_path):
     assert report["candidates"][0]["id"] == "mem-from-json-1"
 
 
+def test_max_items_limits_loaded_records():
+    report = tm_retention_audit.run_retention_audit(source="sample", max_items=3)
+    assert report["ok"] is True
+    assert report["item_count"] == 3
+    assert len(report["candidates"]) == 3
+
+
 def test_read_only_compliance():
     # Verify that the audit module has no dangerous mutating symbols
     code = pathlib.Path(tm_retention_audit.__file__).read_text(encoding="utf-8")
     # Verify no deletion API calls
     assert "delete_memory" not in code
     assert "mem0_delete" not in code
+    assert "mem0_request" not in code
+    assert "fetch_mem0" not in code
+    assert "urllib" not in code
     assert "remove_file" not in code
     assert "unlink(" not in code
