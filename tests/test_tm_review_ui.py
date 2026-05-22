@@ -427,7 +427,7 @@ def test_dashboard_data_pages_return_fast_shells(tmp_path, monkeypatch):
     assert "window.tmPages.quality.init" in quality.text
     assert settings.status_code == 200
     assert '"loading": true' in settings.text
-    assert "fetchSettings()" in settings.text
+    assert "window.tmPages.settings.init" in settings.text
 
 
 def test_dashboard_modularization_rules(tmp_path, monkeypatch):
@@ -450,11 +450,13 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
         # 1. dashboard-common.js 被 5 页引用
         assert "/static/dashboard-common.js" in res.text
 
-    # 2. dashboard-pages.js 被 health / quality 引用
+    # 2. dashboard-pages.js 被 health / quality / settings 引用
     health = client.get("/health", headers=HOST)
     quality = client.get("/quality", headers=HOST)
+    settings = client.get("/settings", headers=HOST)
     assert "/static/dashboard-pages.js" in health.text
     assert "/static/dashboard-pages.js" in quality.text
+    assert "/static/dashboard-pages.js" in settings.text
 
     # 3. service-worker.js 缓存新增 JS
     sw_res = client.get("/service-worker.js", headers=HOST)
@@ -462,13 +464,19 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "/static/dashboard-common.js" in sw_res.text
     assert "/static/dashboard-pages.js" in sw_res.text
 
-    # 4. health/quality 页面不再直接出现 setInterval(fetchHealth / setInterval(fetchQuality) 的内联写法
+    # 4. health/quality/settings 页面不再直接出现 inline 定义
     assert "setInterval(fetchHealth" not in health.text
     assert "setInterval(fetchQuality" not in quality.text
+    assert "function renderDepth" not in settings.text
+    assert "function renderChips" not in settings.text
+    assert "async function fetchSettings" not in settings.text
 
-    # 5. dashboard-pages.js 中存在 clearInterval
+    # 5. dashboard-pages.js 中存在 window.tmPages.settings，以及 AbortController 事件清理机制
     js_content = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
     assert "clearInterval" in js_content
+    assert "window.tmPages.settings" in js_content
+    assert "AbortController" in js_content
+    assert "this.abortController.abort()" in js_content
 
 
 def test_review_write_ready_allows_unstaged_foreign_dirty():
