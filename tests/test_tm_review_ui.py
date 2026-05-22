@@ -1337,3 +1337,62 @@ def test_api_agent_eval_endpoint(tmp_path, monkeypatch):
     assert data["mem0"]["active"] is True
     assert data["mem0"]["accuracy"] == 1.0
     assert data["mem0"]["avg_latency_ms"] == 50.0
+
+
+def test_dashboard_smoke_script_execution(monkeypatch):
+    import tm_dashboard_smoke
+    import json
+
+    class FakeResponse:
+        def __init__(self, data, status=200):
+            self.data = data
+            self.status = status
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+        def read(self):
+            return self.data
+
+        def decode(self, encoding="utf-8"):
+            return self.data.decode(encoding)
+
+    def mock_open(req, timeout=5):
+        url = req.full_url if hasattr(req, "full_url") else req
+        if "healthz" in url:
+            return FakeResponse(json.dumps({"ok": True, "git_sha": "ea7f5b2", "version": "0.2.0"}).encode("utf-8"))
+        elif "digest" in url:
+            html = '<body data-page="daily"><header></header><a class="nav-tab" data-target-page="daily"></a><code id="sha-pill">ea7f5b2</code></body>'
+            return FakeResponse(html.encode("utf-8"))
+        elif "health" in url:
+            html = '<body data-page="health"><header></header><a class="nav-tab" data-target-page="health"></a><code id="sha-pill">ea7f5b2</code></body>'
+            return FakeResponse(html.encode("utf-8"))
+        elif "quality" in url:
+            html = '<body data-page="quality"><header></header><a class="nav-tab" data-target-page="quality"></a><code id="sha-pill">ea7f5b2</code></body>'
+            return FakeResponse(html.encode("utf-8"))
+        elif "agent-tools" in url:
+            html = '<body data-page="agent-tools"><header></header><a class="nav-tab" data-target-page="agent-tools"></a><code id="sha-pill">ea7f5b2</code></body>'
+            return FakeResponse(html.encode("utf-8"))
+        elif "settings" in url:
+            html = '<body data-page="settings"><header></header><a class="nav-tab" data-target-page="settings"></a><code id="sha-pill">ea7f5b2</code></body>'
+            return FakeResponse(html.encode("utf-8"))
+        return FakeResponse(b"")
+
+    class FakeOpener:
+        def open(self, req, timeout=5):
+            return mock_open(req, timeout)
+
+    monkeypatch.setattr(tm_dashboard_smoke.urllib.request, "build_opener", lambda *args, **kwargs: FakeOpener())
+
+    exited = []
+    monkeypatch.setattr(sys, "exit", lambda code: exited.append(code))
+
+    tm_dashboard_smoke.main(["--base-url", "http://127.0.0.1:1998"])
+    assert exited == [0]
+
+    exited.clear()
+    tm_dashboard_smoke.main(["--base-url", "http://127.0.0.1:1998", "--json"])
+    assert exited == [0]
