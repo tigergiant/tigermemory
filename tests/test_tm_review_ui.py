@@ -238,15 +238,52 @@ def test_api_digest_parses_expected_sections(tmp_path, monkeypatch):
     assert data["digest"]["proposals"][0]["id"] == "proposal-2026-05-21-001"
 
 
-def test_daily_route_redirects_to_today(tmp_path, monkeypatch):
-    monkeypatch.setattr(tm_review_ui, "today", lambda: "2026-05-21")
+def test_daily_route_redirects_to_digest_entry(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     client.get("/", headers=HOST, follow_redirects=False)
 
     response = client.get("/daily", headers=HOST, follow_redirects=False)
 
     assert response.status_code == 302
+    assert response.headers["location"] == "/digest"
+
+
+def test_digest_entry_falls_back_to_latest_existing_report(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_ui, "today", lambda: "2026-05-22")
+    _write_digest(tmp_path, "2026-05-21")
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/digest", headers=HOST, follow_redirects=False)
+
+    assert response.status_code == 302
     assert response.headers["location"] == "/digest/2026-05-21"
+
+
+def test_digest_entry_prefers_today_when_available(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_ui, "today", lambda: "2026-05-22")
+    _write_digest(tmp_path, "2026-05-21")
+    _write_digest(tmp_path, "2026-05-22")
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/digest", headers=HOST, follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/digest/2026-05-22"
+
+
+def test_digest_entry_returns_404_when_no_reports_exist(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/digest", headers=HOST, follow_redirects=False)
+
+    assert response.status_code == 404
+    assert "no daily digest reports found" in response.text
 
 
 def test_pwa_manifest_is_public_and_uses_memory_ops(tmp_path, monkeypatch):
@@ -256,7 +293,7 @@ def test_pwa_manifest_is_public_and_uses_memory_ops(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert '"name": "TigerMemory"' in response.text
-    assert "/daily" in response.text
+    assert "/digest" in response.text
     assert "/static/tiger/tigermemory_tiger_logo_192.png" in response.text
     assert "/static/tiger/tigermemory_tiger_logo_512.png" in response.text
 
@@ -853,4 +890,3 @@ def test_api_agent_eval_endpoint(tmp_path, monkeypatch):
     assert data["mem0"]["active"] is True
     assert data["mem0"]["accuracy"] == 1.0
     assert data["mem0"]["avg_latency_ms"] == 50.0
-
