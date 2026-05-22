@@ -354,6 +354,44 @@ def test_pwa_manifest_is_public_and_uses_memory_ops(tmp_path, monkeypatch):
     assert "/static/tiger/tigermemory_tiger_logo_512.png" in response.text
 
 
+def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+
+    response = client.get("/service-worker.js", headers=HOST)
+
+    assert response.status_code == 200
+    assert "tigermemory-memory-ops-v6" in response.text
+    assert "request.mode === 'navigate'" in response.text
+    assert "url.pathname.startsWith('/api/')" in response.text
+    assert "url.pathname.startsWith('/digest')" in response.text
+    assert response.headers["Cache-Control"].startswith("no-store")
+
+
+def test_sw_reset_page_clears_browser_cache(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+
+    response = client.get("/sw-reset", headers=HOST)
+
+    assert response.status_code == 200
+    assert "getRegistrations" in response.text
+    assert "caches.keys" in response.text
+    assert "location.replace('/digest')" in response.text
+    assert response.headers["Cache-Control"].startswith("no-store")
+
+
+def test_digest_html_and_api_are_no_store(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    _write_digest(tmp_path)
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    page = client.get("/digest/2026-05-21", headers=HOST)
+    api = client.get("/api/digest/2026-05-21", headers=HOST)
+
+    assert page.headers["Cache-Control"].startswith("no-store")
+    assert api.headers["Cache-Control"].startswith("no-store")
+
+
 def test_health_summary_endpoint_uses_agent_doctor(tmp_path, monkeypatch):
     monkeypatch.setattr(
         tm_review_ui.tm_agent_doctor,
