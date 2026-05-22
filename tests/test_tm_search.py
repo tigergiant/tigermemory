@@ -113,3 +113,28 @@ def test_search_tigermemory_propagates_wiki_breakdown(monkeypatch):
     result = tm_search.search_tigermemory("example", scope="wiki", dogfood_log=None)
 
     assert result["primary_results"][0]["score_breakdown"] == {"rrf_score": 0.1}
+
+
+def test_search_tigermemory_wiki_scope_calls_search_wiki_hybrid_with_explain(monkeypatch):
+    called_args = []
+    def fake_search_wiki_hybrid(*args, **kwargs):
+        called_args.append((args, kwargs))
+        return [{
+            "path": "wiki/systems/example.md",
+            "title": "Example",
+            "snippet": "body",
+            "score": 0.1,
+            "score_breakdown": {"degraded": True},
+        }]
+
+    monkeypatch.setattr(tm_search.tm_core, "primary_search_scope", lambda _q: "wiki")
+    monkeypatch.setattr(tm_search.tm_core, "search_wiki_hybrid", fake_search_wiki_hybrid)
+
+    result = tm_search.search_tigermemory("query text", scope="wiki", dogfood_log=None)
+
+    assert len(called_args) == 1
+    args, kwargs = called_args[0]
+    assert args[0] == "query text"
+    assert kwargs.get("explain") is True
+    assert kwargs.get("include_inbox") is False
+    assert result["primary_results"][0]["score_breakdown"]["degraded"] is True

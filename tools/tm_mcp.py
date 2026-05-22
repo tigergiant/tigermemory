@@ -621,9 +621,12 @@ def search_wiki(
     include_sources: bool = True,
     include_inbox: bool = False,
 ) -> list[dict[str, Any]]:
-    """[检索 Wiki / sources 长文知识] File-based search over wiki/ and sources/ markdown/text.
+    """[低层/兼容词法入口] File-based lexical AND search over wiki/ and sources/ markdown/text.
 
-    与 `search_memories` 互补：Mem0 存事件原子记忆，wiki/sources 存长文知识
+    ⚠️ 大场景不推荐直接调用本工具。它是低层兼容词法检索，仅支持 AND 词法子串匹配，不支持 Hybrid 混合检索。
+    若需要支持 Hybrid RRF 融合召回（向量 + 词法）、优雅退化以及多知识源聚合，请【必须优先使用推荐的默认入口 `search_tigermemory(scope="wiki")`】。
+
+    与 `search_memories` 互补：Mem0 仅存事件原子记忆，wiki/sources 存长文知识
     （品牌指南、IPFB 历史文案、系统架构、个人档案、研究报告）。
     **"回忆 / 历史 / 过去的 / 之前写过什么" 类问题：两个 search 工具都要调**。
 
@@ -642,7 +645,10 @@ def search_wiki(
 
 @mcp.tool()
 def search_tigermemory(query: str, scope: str = "auto", top_k: int = 5) -> dict[str, Any]:
-    """Grouped search across tigermemory knowledge surfaces.
+    """[推荐默认搜索入口] Grouped search across tigermemory knowledge surfaces.
+
+    🌟 它是推荐的默认搜索入口，并且在 `scope="wiki"`（或自动判断为 wiki 意图）的分支下支持 Hybrid RRF 混合检索
+    （融合了词法 AND 检索与向量 Embedding 检索），能够在向量索引不存在或服务离线时自动优雅降级 (degraded) 为纯词法检索。
 
     One call fans out to existing read paths and returns grouped results. It
     deliberately does not fuse all sources into one normalized ranking because
