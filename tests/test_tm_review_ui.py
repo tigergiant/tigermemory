@@ -234,6 +234,24 @@ def test_i18n_assets_are_public(tmp_path, monkeypatch):
 def test_api_digest_parses_expected_sections(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_digest(tmp_path)
+    live_inbox = tmp_path / "inbox" / "2026-05-01-1200-codex-systems.md"
+    live_inbox.parent.mkdir(parents=True, exist_ok=True)
+    live_inbox.write_text(
+        "\n".join([
+            "---",
+            "owner: codex",
+            "status: draft",
+            "updated: 2026-05-01",
+            "title_cn: 审批界面归档判断",
+            "preview_cn: 审批界面需要能快速判断这条开发收尾记录是否应归档。这里放入较长的中文预览，用于折叠区展示真正摘要。",
+            "summary_cn: 审批界面归档判断",
+            "routed_by: tigermemory",
+            "---",
+            "",
+            "commit pushed pytest passed",
+        ]),
+        encoding="utf-8",
+    )
     similar = tmp_path / "wiki" / "systems" / "review-ui-approval.md"
     similar.parent.mkdir(parents=True, exist_ok=True)
     similar.write_text("审批界面需要快速判断 inbox 是否归档，并提供中文预览。", encoding="utf-8")
@@ -245,6 +263,8 @@ def test_api_digest_parses_expected_sections(tmp_path, monkeypatch):
     data = response.json()
     assert data["ok"] is True
     assert data["digest"]["counts"]["mem0"] == 2
+    assert data["digest"]["counts"]["inbox"] == 1
+    assert data["digest"]["counts"]["report_inbox"] == 1
     assert data["digest"]["inbox_rows"][0]["stale_archive"] is True
     assert data["digest"]["inbox_rows"][0]["title_cn"] == "审批界面归档判断"
     assert "快速判断" in data["digest"]["inbox_rows"][0]["preview_cn"]
@@ -255,6 +275,23 @@ def test_api_digest_parses_expected_sections(tmp_path, monkeypatch):
     assert data["digest"]["inbox_rows"][0]["wiki_target"]["path"].startswith("wiki/systems/")
     assert data["digest"]["inbox_rows"][0]["wiki_target"]["similar"][0]["path"] == "wiki/systems/review-ui-approval.md"
     assert data["digest"]["proposals"][0]["id"] == "proposal-2026-05-21-001"
+
+
+def test_api_digest_uses_live_inbox_not_stale_report_rows(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    _write_digest(tmp_path)
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/api/digest/2026-05-21", headers=HOST)
+
+    data = response.json()
+    assert data["ok"] is True
+    assert data["digest"]["inbox_rows"] == []
+    assert data["digest"]["counts"]["inbox"] == 0
+    assert data["digest"]["counts"]["stale_archive"] == 0
+    assert data["digest"]["counts"]["report_inbox"] == 1
+    assert data["digest"]["report_inbox_rows"][0]["path"] == "inbox/2026-05-01-1200-codex-systems.md"
 
 
 def test_daily_route_redirects_to_digest_entry(tmp_path, monkeypatch):
@@ -704,6 +741,7 @@ def test_inbox_action_invalid_path_returns_error(tmp_path, monkeypatch):
 def test_keep_action_hides_row_from_digest_decision_area(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_digest(tmp_path)
+    _write_inbox(tmp_path)
     client = _client(tmp_path, monkeypatch)
     client.get("/", headers=HOST, follow_redirects=False)
 
