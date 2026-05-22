@@ -167,14 +167,9 @@ class TestAgentConnect(unittest.TestCase):
 
     @patch("tm_agent_connect.patch_json_config")
     @patch("tm_agent_connect.detect_config_paths")
-    def test_print_config_stdio(self, mock_detect_paths, mock_patch):
+    @patch("tm_agent_connect.is_wsl_runtime", return_value=False)
+    def test_print_config_stdio(self, mock_is_wsl, mock_detect_paths, mock_patch):
         # --print-config stdio 输出 JSON 且不调用 patch_json_config
-        mock_detect_paths.return_value = {
-            "claude_desktop": Path("/fake/claude.json"),
-            "cursor": Path("/fake/cursor.json"),
-            "wsl_detected": False
-        }
-
         import io
         import argparse
         captured_output = io.StringIO()
@@ -190,6 +185,8 @@ class TestAgentConnect(unittest.TestCase):
 
         # 验证完全没调用 patch_json_config
         mock_patch.assert_not_called()
+        mock_detect_paths.assert_not_called()
+        mock_is_wsl.assert_called_once()
 
         # 验证输出的是合法的 JSON
         output_str = captured_output.getvalue().strip()
@@ -201,14 +198,9 @@ class TestAgentConnect(unittest.TestCase):
 
     @patch("tm_agent_connect.patch_json_config")
     @patch("tm_agent_connect.detect_config_paths")
-    def test_print_config_http_placeholder_only(self, mock_detect_paths, mock_patch):
+    @patch("tm_agent_connect.is_wsl_runtime", return_value=False)
+    def test_print_config_http_placeholder_only(self, mock_is_wsl, mock_detect_paths, mock_patch):
         # --print-config http 输出占位 token 且不读取/打印真实 token
-        mock_detect_paths.return_value = {
-            "claude_desktop": Path("/fake/claude.json"),
-            "cursor": Path("/fake/cursor.json"),
-            "wsl_detected": False
-        }
-
         import io
         import argparse
         captured_output = io.StringIO()
@@ -223,6 +215,8 @@ class TestAgentConnect(unittest.TestCase):
                 self.assertEqual(cm.exception.code, 0)
 
         mock_patch.assert_not_called()
+        mock_detect_paths.assert_not_called()
+        mock_is_wsl.assert_not_called()
 
         output_str = captured_output.getvalue().strip()
         data = json.loads(output_str)

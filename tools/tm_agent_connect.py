@@ -43,6 +43,17 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 OS_TYPE = platform.system()
 
 
+def is_wsl_runtime() -> bool:
+    """Quietly detect WSL without probing Windows config paths or printing warnings."""
+    if OS_TYPE != "Linux":
+        return False
+    try:
+        version_text = Path("/proc/version").read_text(encoding="utf-8").lower()
+        return "microsoft" in version_text or "wsl" in version_text
+    except Exception:
+        return False
+
+
 def _configure_stdio() -> None:
     """
     避免在 Windows 系统的默认命令行环境 (GBK/cp936 编码) 下，
@@ -134,16 +145,8 @@ def detect_config_paths():
     }
 
     # 1. 检查我们是否在 WSL (Windows Subsystem for Linux) 内部运行
-    is_wsl = False
-    if OS_TYPE == "Linux":
-        # 如果 /proc/version 中含有 Microsoft 或 WSL 字符串，说明是 WSL 环境
-        try:
-            version_text = Path("/proc/version").read_text(encoding="utf-8").lower()
-            if "microsoft" in version_text or "wsl" in version_text:
-                is_wsl = True
-                paths["wsl_detected"] = True
-        except Exception:
-            pass
+    is_wsl = is_wsl_runtime()
+    paths["wsl_detected"] = is_wsl
 
     # 2. 根据不同的操作系统类型定位配置文件路径
     if is_wsl:
@@ -403,18 +406,6 @@ def main():
 
     # 处理只读干净 JSON 输出模式
     if args.print_config:
-        paths = detect_config_paths()
-        is_wsl = paths["wsl_detected"]
-
-        run_mode = "windows"
-        if args.mode == "auto":
-            if is_wsl:
-                run_mode = "wsl"
-            else:
-                run_mode = "windows"
-        else:
-            run_mode = args.mode
-
         if args.print_config == "http":
             output_dict = {
                 "mcpServers": {
@@ -427,6 +418,15 @@ def main():
                 }
             }
         else:  # stdio
+            run_mode = "windows"
+            if args.mode == "auto":
+                if is_wsl_runtime():
+                    run_mode = "wsl"
+                else:
+                    run_mode = "windows"
+            else:
+                run_mode = args.mode
+
             server_config = generate_mcp_config(run_mode)
             output_dict = {
                 "mcpServers": {
