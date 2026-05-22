@@ -18,7 +18,7 @@ HOST = {"Host": "127.0.0.1:9777"}
 
 def _client(tmp_path: pathlib.Path, monkeypatch) -> TestClient:
     monkeypatch.setattr(tm_review_ui, "SESSION_FILE", tmp_path / "session.json")
-    monkeypatch.setattr(tm_review_ui, "ensure_write_ready", lambda: None)
+    monkeypatch.setattr(tm_review_ui, "ensure_write_ready", lambda *_args, **_kwargs: None)
     return TestClient(tm_review_ui.app)
 
 
@@ -392,6 +392,33 @@ def test_digest_html_and_api_are_no_store(tmp_path, monkeypatch):
     assert api.headers["Cache-Control"].startswith("no-store")
 
 
+def test_review_write_ready_allows_unstaged_foreign_dirty():
+    status = "\n".join(
+        [
+            " M wiki/investment/decision-log/600887.SH-2026-05.md",
+            "?? wiki/investment/decision-log/portfolio-fast-scan-2026-05-22.md",
+        ]
+    )
+
+    assert tm_review_ui._blocking_dirty_paths(status) == []
+
+
+def test_review_write_ready_blocks_staged_or_meta_dirty():
+    status = "\n".join(
+        [
+            "M  tools/tm_review_ui.py",
+            " M AGENTS.md",
+            "UU wiki/operations/inbox-archive/2026-05-22.md",
+        ]
+    )
+
+    blocked = tm_review_ui._blocking_dirty_paths(status)
+
+    assert "M  tools/tm_review_ui.py" in blocked
+    assert " M AGENTS.md" in blocked
+    assert "UU wiki/operations/inbox-archive/2026-05-22.md" in blocked
+
+
 def test_health_summary_endpoint_uses_agent_doctor(tmp_path, monkeypatch):
     monkeypatch.setattr(
         tm_review_ui.tm_agent_doctor,
@@ -493,9 +520,8 @@ def test_dashboard_pages_share_identical_header(tmp_path, monkeypatch):
         assert 'id="lang-toggle"' in response.text
         assert 'id="last-refresh"' in response.text
         assert 'id="sha-pill"' in response.text
-        assert "tm-page-leaving" in response.text
-        assert "is-navigating" in response.text
-        assert "window.location.href = target.href" in response.text
+        assert "tm-page-ready" in response.text
+        assert "setTimeout" not in response.text
         assert "/static/assets/tailwindcss.min.js" in response.text, f"{page} missing local tailwind"
         assert "/static/assets/lucide.min.js" in response.text, f"{page} missing local lucide"
         assert "https://cdn.tailwindcss.com" not in response.text, f"{page} still references cdn.tailwindcss"
