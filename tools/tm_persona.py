@@ -28,6 +28,7 @@ SOURCE_PATHS = [
     "wiki/systems/tigermemory-agent-access.md",
     "wiki/systems/agent-write-toolkit.md",
     "wiki/self-evolution/lessons/index.md",
+    "wiki/systems/services-inventory.md",
 ]
 SNAPSHOT_PAGE = "wiki/systems/agent-onboarding.md"
 SNAPSHOT_PAGE_REQUIRED_PHRASES = [
@@ -103,6 +104,29 @@ def _bullet_lines(items: Iterable[str]) -> str:
     return "\n".join(f"- {item}" for item in items)
 
 
+def _load_services_inventory() -> str:
+    """Return the 生产服务清单 + 端口快查 sections of services-inventory.md.
+
+    These two sections are what an onboarding agent needs to know on day 1:
+    which services are running and on which ports. The full inventory page
+    (timer detail, compile rules, etc.) is one link away.
+
+    The page is auto-compiled by tools/tm_compile_systemd_inventory.py from
+    deploy/mcp/*.service so it cannot drift from systemd ground truth.
+    Failure to read raises FileNotFoundError, which compile_snapshot()
+    surfaces early via the SOURCE_PATHS guard.
+    """
+    text = _read_source("wiki/systems/services-inventory.md")
+    services = _section(text, "生产服务清单")
+    port_lookup = _section(text, "端口快查")
+    parts: list[str] = []
+    if services:
+        parts.append(services)
+    if port_lookup:
+        parts.append("**端口快查**\n\n" + port_lookup)
+    return "\n\n".join(parts).strip() or "（services-inventory.md 解析失败，请人工核查）"
+
+
 def render_30s() -> str:
     return """# tigermemory Agent Onboarding Snapshot (30s)
 
@@ -170,6 +194,7 @@ def render_5min(lessons: list[Lesson]) -> str:
         ]
     )
     lesson_entries = _bullet_lines(lesson_lines)
+    services_inventory = _load_services_inventory()
     return f"""# tigermemory Agent Onboarding Snapshot (5min)
 
 ## 1. 开工顺序
@@ -188,11 +213,17 @@ def render_5min(lessons: list[Lesson]) -> str:
 
 {agent_ecosystem}
 
-## 5. Live-state 优先原则
+## 5. 生产服务清单（live runtime services）
+
+下表自动从 `deploy/mcp/*.service` 编译（`tools/tm_compile_systemd_inventory.py`），是 tigermemory 当前实际跑在 WSL2 / VPS 上的长驻服务与端口的事实源。完整页含 timer / oneshot / 编译规则：`wiki/systems/services-inventory.md`。
+
+{services_inventory}
+
+## 6. Live-state 优先原则
 
 {live_state_rules}
 
-## 6. 必须避免的 lesson
+## 7. 必须避免的 lesson
 
 {lesson_entries}
 """
@@ -220,15 +251,15 @@ def render_full(lessons: list[Lesson]) -> str:
     source_lines = _bullet_lines(SOURCE_PATHS)
     return f"""{render_5min(lessons).rstrip()}
 
-## 7. Agent 接入边界
+## 8. Agent 接入边界
 
 {access_boundaries}
 
-## 8. 完整 lesson 清单
+## 9. 完整 lesson 清单
 
 {lesson_catalog}
 
-## 9. v0.2 范围
+## 10. v0.2 范围
 
 {v02_scope}
 

@@ -46,29 +46,36 @@ def test_compile_snapshot_5min():
     assert "## 2. 写入权限边界" in out
     assert "## 3. 工具入口" in out
     assert "## 4. Agent 生态地图（一句话定位）" in out
-    assert "## 5. Live-state 优先原则" in out
-    assert "## 6. 必须避免的 lesson" in out
+    assert "## 5. 生产服务清单（live runtime services）" in out
+    assert "## 6. Live-state 优先原则" in out
+    assert "## 7. 必须避免的 lesson" in out
     # Agent ecosystem must mention the major systems by name
     for token in ("OpenClaw", "Hermes", "DeerFlow", "Mem0", "OpenSpace", "search_tigermemory"):
         assert token in out, f"agent ecosystem section missing {token!r}"
+    # Live runtime services section must surface the systemd-tracked services
+    # so a fresh agent reading the 5min snapshot sees dashboard / tm-http /
+    # tm-mcp / OpenAI MCP / OpenMemory ports without further searching.
+    for token in ("tm-dashboard", "1998", "tm-http", "8790", "tm-mcp", "9766", "8765", "OpenMemory"):
+        assert token in out, f"services-inventory section missing {token!r}"
     # Must still mention core keywords
     assert "git pull --ff-only origin master" in out
     assert "tm_lessons.py search" in out
     assert 'get_agent_onboarding("30s")' in out
     assert "selfevolution" in out
-    # 5min should be longer than 30s
+    # 5min should be longer than 30s; embedded inventory adds ~2KB so the
+    # ceiling is now 10KB (was 8KB). Keep the guard as drift detector.
     assert len(out) > 1500, f"5min length {len(out)} suspiciously short"
-    assert len(out) < 8000, f"5min length {len(out)} suspiciously long"
+    assert len(out) < 10000, f"5min length {len(out)} suspiciously long"
 
 
 def test_compile_snapshot_full():
     out = tm_persona.compile_snapshot("full")
     assert isinstance(out, str)
     assert out.startswith("# tigermemory Agent Onboarding Snapshot (5min)")
-    # full is 5min superset
-    assert "## 7. Agent 接入边界" in out
-    assert "## 8. 完整 lesson 清单" in out
-    assert "## 9. v0.2 范围" in out
+    # full is 5min superset (sections 8/9/10 + 来源)
+    assert "## 8. Agent 接入边界" in out
+    assert "## 9. 完整 lesson 清单" in out
+    assert "## 10. v0.2 范围" in out
     assert "## 来源" in out
     # Must contain source path list (the contract footer)
     assert "AGENTS.md" in out
