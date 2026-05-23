@@ -164,12 +164,21 @@ def test_direct_digest_sets_cookie_for_browser(tmp_path, monkeypatch):
     assert "tm_review_session" in response.headers["set-cookie"]
 
 
-def test_non_local_dashboard_requires_token_for_browser_bootstrap(tmp_path, monkeypatch):
+def test_tailscale_dashboard_bootstraps_browser_cookie(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
 
     response = client.get("/health", headers={"Host": "tigermemory-wsl:1998"})
 
-    assert response.status_code == 401
+    assert response.status_code == 200
+    assert "tm_review_session" in response.headers["set-cookie"]
+
+
+def test_unknown_non_local_dashboard_requires_token_for_browser_bootstrap(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+
+    response = client.get("/health", headers={"Host": "192.0.2.10:1998"})
+
+    assert response.status_code == 403
 
 
 def test_non_local_query_token_sets_session_cookie(tmp_path, monkeypatch):
