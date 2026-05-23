@@ -25,4 +25,13 @@ if [ "$ahead" -gt 0 ]; then
   printf '             close the loop:  git push\n\n'
 fi
 
+# T1-T4 progress card reminder (added 2026-05-23 P0-C.1).
+# Per AGENTS.md §5.1 and wiki/systems/tigermemory-product-vision.md §阶段收尾汇报机制:
+# every cascade / codex / claude-code commit must be followed by a 5-row markdown
+# progress card (P0-P4) in the next chat reply. This prints a one-shot reminder
+# right after `git commit` finishes, so the agent does not silently skip it.
+printf 'tigermemory: next chat reply must append the 5-phase progress card\n'
+printf '             (table format, icons: 🟢 已完成 / 🟡 进行中 / ⚪ 待开工 / 🔴 阻塞)\n'
+printf '             see AGENTS.md §5.1 and wiki/systems/tigermemory-product-vision.md\n\n'
+
 exit 0
