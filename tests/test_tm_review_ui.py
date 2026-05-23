@@ -322,8 +322,9 @@ def test_digest_entry_falls_back_to_latest_existing_report(tmp_path, monkeypatch
 
     response = client.get("/digest", headers=HOST, follow_redirects=False)
 
-    assert response.status_code == 302
-    assert response.headers["location"] == "/digest/2026-05-21"
+    assert response.status_code == 200
+    assert '"date": "2026-05-21"' in response.text
+    assert "TigerMemory 每日审批" in response.text
 
 
 def test_digest_entry_prefers_today_when_available(tmp_path, monkeypatch):
@@ -336,19 +337,39 @@ def test_digest_entry_prefers_today_when_available(tmp_path, monkeypatch):
 
     response = client.get("/digest", headers=HOST, follow_redirects=False)
 
-    assert response.status_code == 302
-    assert response.headers["location"] == "/digest/2026-05-22"
+    assert response.status_code == 200
+    assert '"date": "2026-05-22"' in response.text
 
 
-def test_digest_entry_returns_404_when_no_reports_exist(tmp_path, monkeypatch):
+def test_digest_entry_returns_live_inbox_when_no_reports_exist(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_ui, "today", lambda: "2026-05-22")
+    inbox = tmp_path / "inbox" / "2026-05-22-1200-codex-systems.md"
+    inbox.parent.mkdir(parents=True, exist_ok=True)
+    inbox.write_text(
+        "\n".join([
+            "---",
+            "owner: codex",
+            "status: draft",
+            "updated: 2026-05-22",
+            "title_cn: 没有日报时也显示待审",
+            "preview_cn: 每日审批页面不应该依赖日报文件，日报缺失时也要直接读取当前 inbox 文件。",
+            "summary_cn: 没有日报时也显示待审",
+            "routed_by: tigermemory",
+            "---",
+            "",
+            "live inbox fallback",
+        ]),
+        encoding="utf-8",
+    )
     client = _client(tmp_path, monkeypatch)
     client.get("/", headers=HOST, follow_redirects=False)
 
     response = client.get("/digest", headers=HOST, follow_redirects=False)
 
-    assert response.status_code == 404
-    assert "no daily digest reports found" in response.text
+    assert response.status_code == 200
+    assert "没有日报时也显示待审" in response.text
+    assert '"live_fallback": true' in response.text
 
 
 def test_pwa_manifest_is_public_and_uses_memory_ops(tmp_path, monkeypatch):
@@ -369,7 +390,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v6" in response.text
+    assert "tigermemory-memory-ops-v7" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -401,7 +422,7 @@ def test_digest_html_and_api_are_no_store(tmp_path, monkeypatch):
     assert api.headers["Cache-Control"].startswith("no-store")
 
 
-def test_digest_page_returns_shell_and_loads_live_data_via_api(tmp_path, monkeypatch):
+def test_digest_page_embeds_live_data_without_empty_shell(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_digest(tmp_path)
     client = _client(tmp_path, monkeypatch)
@@ -410,8 +431,9 @@ def test_digest_page_returns_shell_and_loads_live_data_via_api(tmp_path, monkeyp
     page = client.get("/digest/2026-05-21", headers=HOST)
     api = client.get("/api/digest/2026-05-21", headers=HOST)
 
-    assert '"loading": true' in page.text
-    assert "正在加载每日审批数据" in page.text
+    assert '"loading": true' not in page.text
+    assert "正在加载每日审批数据" not in page.text
+    assert '"mem0": 2' in page.text
     assert "window.tmPages.daily.init" in page.text
     assert api.json()["digest"]["counts"]["mem0"] == 2
     assert api.json()["digest"].get("loading") is not True
