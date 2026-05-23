@@ -313,7 +313,7 @@ def test_daily_route_redirects_to_digest_entry(tmp_path, monkeypatch):
     assert response.headers["location"] == "/digest"
 
 
-def test_digest_entry_falls_back_to_latest_existing_report(tmp_path, monkeypatch):
+def test_digest_entry_uses_today_even_when_only_old_report_exists(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(tm_review_ui, "today", lambda: "2026-05-22")
     _write_digest(tmp_path, "2026-05-21")
@@ -323,7 +323,8 @@ def test_digest_entry_falls_back_to_latest_existing_report(tmp_path, monkeypatch
     response = client.get("/digest", headers=HOST, follow_redirects=False)
 
     assert response.status_code == 200
-    assert '"date": "2026-05-21"' in response.text
+    assert '"date": "2026-05-22"' in response.text
+    assert '"live_fallback": true' in response.text
     assert "TigerMemory 每日审批" in response.text
 
 
@@ -370,6 +371,52 @@ def test_digest_entry_returns_live_inbox_when_no_reports_exist(tmp_path, monkeyp
     assert response.status_code == 200
     assert "没有日报时也显示待审" in response.text
     assert '"live_fallback": true' in response.text
+
+
+def test_api_digest_uses_deepseek_for_low_quality_live_inbox_metadata(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_ui.tm_memory_reflection, "INBOX_REVIEW_CACHE", tmp_path / ".tmp" / "inbox-review-cache.json")
+    inbox = tmp_path / "inbox" / "2026-05-22-2246-cascade-production.md"
+    inbox.parent.mkdir(parents=True, exist_ok=True)
+    inbox.write_text(
+        "\n".join([
+            "---",
+            "owner: cascade",
+            "status: draft",
+            "updated: 2026-05-22",
+            "title_cn: 标题",
+            "preview_cn: 标题 中转API配置说明：Claude Opus 4.5 保真满血版，客户端与 Claude Code 接入 元数据",
+            "routed_by: tigermemory",
+            "---",
+            "",
+            "# Routed memory 35",
+            "2026-05-22 Windsurf Cascade post-response closeout summary. Topic: production",
+            "Sanitized Cascade response: Rules used for this response.",
+            "中转API配置说明：Claude Opus 4.5 保真满血版，客户端与 Claude Code 接入教程，包含充值、令牌、模型分组和配置步骤。",
+        ]),
+        encoding="utf-8",
+    )
+
+    def fake_deepseek(_system, _user, **_kwargs):
+        return True, {
+            "title_cn": "中转 API 配置教程待审",
+            "preview_cn": "这条收件箱记录整理了 Claude Opus 4.5 中转 API 的接入教程，包括充值、令牌创建、模型分组和 Claude Code 客户端配置。内容偏长期教程，审批时可考虑写入 Wiki。",
+        }
+
+    monkeypatch.setattr(tm_review_ui.tm_memory_reflection.tm_core, "_call_deepseek_json", fake_deepseek)
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/api/digest/2026-05-22", headers=HOST)
+
+    data = response.json()
+    assert data["ok"] is True
+    row = data["digest"]["inbox_rows"][0]
+    assert row["title_cn"] == "中转 API 配置教程待审"
+    assert "Claude Opus 4.5 中转 API" in row["preview_cn"]
+    assert row["cn_summary"] == "中转 API 配置教程待审"
+    assert row["raw_summary"].startswith("# Routed memory 35")
+    assert (tmp_path / ".tmp" / "inbox-review-cache.json").exists()
 
 
 def test_pwa_manifest_is_public_and_uses_memory_ops(tmp_path, monkeypatch):

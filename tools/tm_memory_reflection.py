@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import pathlib
 import re
@@ -34,6 +35,7 @@ OPERATIONS_DIR = REPO_ROOT / "wiki" / "operations"
 PROPOSAL_ROOT = REPO_ROOT / ".tmp" / "cron-proposals"
 DISCARD_ROOT = tm_route_audit.DEFAULT_AUDIT_ROOT
 MEM0_AUDIT_ROOT = REPO_ROOT / ".tmp" / "mem0-audit"
+INBOX_REVIEW_CACHE = REPO_ROOT / ".tmp" / "inbox-review-metadata-cache.json"
 MAX_PREVIEW_CHARS = 160
 STALE_INBOX_DAYS = 14
 MISSING_SUMMARY_PREFIX = "未提供中文摘要"
@@ -175,10 +177,98 @@ def mem0_records_for_dates(dates: set[str], *, items: list[dict[str, Any]] | Non
     return rows
 
 
-def inbox_records(*, inbox_dir: pathlib.Path = INBOX_DIR) -> list[dict[str, Any]]:
+def _review_cache_key(path: pathlib.Path, text: str) -> str:
+    raw = f"{_relpath(path)}\n{hashlib.sha256(text.encode('utf-8')).hexdigest()}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _load_review_cache(cache_path: pathlib.Path | None = None) -> dict[str, Any]:
+    cache_path = cache_path or INBOX_REVIEW_CACHE
+    if not cache_path.exists():
+        return {}
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_review_cache(cache: dict[str, Any], cache_path: pathlib.Path | None = None) -> None:
+    cache_path = cache_path or INBOX_REVIEW_CACHE
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except OSError:
+        return
+
+
+def _needs_live_review_llm(title_cn: str, preview_cn: str, body: str) -> bool:
+    if not _valid_review_cn(title_cn, preview_cn):
+        return True
+    title = str(title_cn or "").strip()
+    preview = str(preview_cn or "").strip()
+    surface = f"{title}\n{preview}".lower()
+    noisy_markers = (
+        "routed memory",
+        "post-response closeout summary",
+        "sanitized cascade response",
+        "rules used for this response",
+        "file://",
+        "](file",
+    )
+    if any(marker in surface for marker in noisy_markers):
+        return True
+    if re.search(r"^\s*(以下是|先做|好的|我会|我先|这里是|收到|数据出来了)", title):
+        return True
+    body_low = body[:800].lower()
+    if (
+        ("post-response closeout summary" in body_low or "sanitized cascade response" in body_low)
+        and ("…" in title or "元数据" in preview or title == preview or len(preview) < 100)
+    ):
+        return True
+    if ("[" in title and "](" in title) or "`" in title:
+        return True
+    if title == preview and len(preview) < 80:
+        return True
+    if len(preview) < 70 and len(body.strip()) > 300:
+        return True
+    return False
+
+
+def _cached_deepseek_review_cn(
+    path: pathlib.Path,
+    title: str,
+    body: str,
+    text: str,
+    cache: dict[str, Any],
+) -> tuple[str, str, str] | None:
+    key = _review_cache_key(path, text)
+    cached = cache.get(key)
+    if isinstance(cached, dict):
+        title_cn = str(cached.get("title_cn") or "")
+        preview_cn = str(cached.get("preview_cn") or "")
+        if _valid_review_cn(title_cn, preview_cn):
+            return title_cn, preview_cn, str(cached.get("source") or "deepseek_cache")
+    try:
+        title_cn, preview_cn, source = _deepseek_review_cn(path, title, body)
+    except Exception:
+        return None
+    cache[key] = {
+        "path": _relpath(path),
+        "title_cn": title_cn,
+        "preview_cn": preview_cn,
+        "source": source,
+        "updated": today_local(),
+    }
+    return title_cn, preview_cn, f"{source}_runtime"
+
+
+def inbox_records(*, inbox_dir: pathlib.Path = INBOX_DIR, use_llm: bool = False) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     if not inbox_dir.exists():
         return rows
+    cache = _load_review_cache() if use_llm else {}
+    cache_changed = False
     for path in sorted(inbox_dir.glob("*.md")):
         match = INBOX_RE.match(path.name)
         if not match:
@@ -216,6 +306,13 @@ def inbox_records(*, inbox_dir: pathlib.Path = INBOX_DIR) -> list[dict[str, Any]
             title_cn = _preview(body) or fm.get("title") or path.stem
         if tm_core.inbox_review_cn_is_low_quality(preview_cn):
             preview_cn = _preview(body)
+        review_source = str(fm.get("review_cn_source") or "")
+        if use_llm and _needs_live_review_llm(str(title_cn), str(preview_cn), body):
+            llm_review = _cached_deepseek_review_cn(path, fm.get("title") or path.stem, body, text, cache)
+            if llm_review:
+                title_cn, preview_cn, review_source = llm_review
+                summary_cn = title_cn
+                cache_changed = True
         rows.append({
             "path": _relpath(path),
             "created_date": match.group(1),
@@ -225,9 +322,12 @@ def inbox_records(*, inbox_dir: pathlib.Path = INBOX_DIR) -> list[dict[str, Any]
             "preview_cn": preview_cn,
             "summary_cn": summary_cn,
             "summary": _preview(body),
+            "review_cn_source": review_source,
             "route_score": fm.get("route_score"),
             "route_decision_reason": fm.get("route_decision_reason"),
         })
+    if use_llm and cache_changed:
+        _save_review_cache(cache)
     return rows
 
 
@@ -377,11 +477,12 @@ def audit_inbox(
     date: str,
     inbox_dir: pathlib.Path = INBOX_DIR,
     proposal_root: pathlib.Path = PROPOSAL_ROOT,
+    use_llm: bool = False,
 ) -> list[InboxAuditRow]:
     today = _parse_date(date)
     applied = applied_inbox_paths(proposal_root=proposal_root)
     rows: list[InboxAuditRow] = []
-    for record in inbox_records(inbox_dir=inbox_dir):
+    for record in inbox_records(inbox_dir=inbox_dir, use_llm=use_llm):
         created = _parse_date(str(record["created_date"]))
         age = max(0, (today - created).days)
         record_path = str(record["path"]).replace("\\", "/")
