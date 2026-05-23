@@ -117,11 +117,32 @@ def check_D_format_drift() -> list[str]:
 
 MD_PAGE_LINK_RE = re.compile(r"\]\(([^)#?]+\.md)(?:#[^)]+)?\)")
 
+# Auto-generated / archival page prefixes that should not be linted as orphans.
+# These pages are not meant to be manually linked from other wiki pages:
+# - decision-log/**: TradingAgents auto-written per-ticker per-date analysis reports.
+# - inbox-archive/**: Time-based inbox archives organized by date, not by topic links.
+ORPHAN_AUTO_GENERATED_PREFIXES: tuple[str, ...] = (
+    "wiki/investment/decision-log/",
+    "wiki/operations/inbox-archive/",
+)
+
+
+def _is_orphan_excluded(rel_path: str) -> bool:
+    """Return True if a wiki page should be excluded from E orphan check."""
+    return any(rel_path.startswith(prefix) for prefix in ORPHAN_AUTO_GENERATED_PREFIXES)
+
 
 def check_E_orphan_pages() -> list[str]:
-    """Wiki pages not referenced by any other wiki page via relative link."""
-    all_pages = {p.relative_to(REPO).as_posix() for p in REPO.glob("wiki/**/*.md")
-                 if p.name != "index.md"}
+    """Wiki pages not referenced by any other wiki page via relative link.
+
+    Auto-generated and archival pages (see ORPHAN_AUTO_GENERATED_PREFIXES) are
+    excluded because they are not meant to be linked manually.
+    """
+    all_pages = {
+        p.relative_to(REPO).as_posix() for p in REPO.glob("wiki/**/*.md")
+        if p.name != "index.md"
+        and not _is_orphan_excluded(p.relative_to(REPO).as_posix())
+    }
     linked = set()
     for src in REPO.glob("wiki/**/*.md"):
         src_text = src.read_text(encoding="utf-8", errors="ignore")
