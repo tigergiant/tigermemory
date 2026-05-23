@@ -260,3 +260,35 @@ def test_read_only_compliance():
     assert "urllib" not in code
     assert "remove_file" not in code
     assert "unlink(" not in code
+
+
+def test_parse_dt_handles_unix_int():
+    """Regression test: Mem0 may return created_at as Unix int, not ISO string.
+
+    Bug: previous _parse_dt only used dt.datetime.fromisoformat, which fails on int.
+    Fix: detect int/float type and digit-only strings, route through fromtimestamp.
+    """
+    # Unix int (seconds since epoch). 1716465600 = 2024-05-23 12:00:00 UTC.
+    parsed_int = tm_retention_audit._parse_dt(1716465600)
+    assert parsed_int is not None
+    assert parsed_int.year == 2024 and parsed_int.month == 5 and parsed_int.day == 23
+
+    # Unix float (sub-second precision)
+    parsed_float = tm_retention_audit._parse_dt(1716465600.5)
+    assert parsed_float is not None
+    assert parsed_float.year == 2024
+
+    # Unix int as digit string
+    parsed_str = tm_retention_audit._parse_dt("1716465600")
+    assert parsed_str is not None
+    assert parsed_str == parsed_int
+
+    # ISO string still works (existing behavior preserved)
+    parsed_iso = tm_retention_audit._parse_dt("2024-05-23T12:00:00Z")
+    assert parsed_iso is not None
+    assert parsed_iso == parsed_int
+
+    # Edge cases: None / empty / garbage all return None
+    assert tm_retention_audit._parse_dt(None) is None
+    assert tm_retention_audit._parse_dt("") is None
+    assert tm_retention_audit._parse_dt("garbage") is None

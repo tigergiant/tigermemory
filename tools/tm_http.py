@@ -285,7 +285,6 @@ class AgentDoctorRequest(BaseModel):
 
 class RetentionAuditRequest(BaseModel):
     max_items: int = Field(default=200, ge=1, le=1000)
-    page_size: int = Field(default=100, ge=1, le=500)
 
 
 class ExpenseRecordRequest(BaseModel):
@@ -542,7 +541,6 @@ async def retention_audit(req: RetentionAuditRequest):
     try:
         return tm_retention_audit.run_retention_audit(
             max_items=req.max_items,
-            page_size=req.page_size,
         )
     except Exception as e:
         log_json("error", trace_id, "/retention/audit", 502, (time.time() - start) * 1000, detail=str(e))

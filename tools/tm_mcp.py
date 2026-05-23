@@ -205,12 +205,12 @@ def get_user_preferences() -> dict[str, Any]:
 
 
 @mcp.tool()
-def retention_audit(max_items: int = 200, page_size: int = 100) -> dict[str, Any]:
+def retention_audit(max_items: int = 200) -> dict[str, Any]:
     """Read-only Mem0 retention dry-run audit.
 
     Returns scored candidates and reasons. It never deletes or updates records.
     """
-    return tm_retention_audit.run_retention_audit(max_items=max_items, page_size=page_size)
+    return tm_retention_audit.run_retention_audit(max_items=max_items)
 
 
 @mcp.tool()

@@ -199,8 +199,8 @@ def test_retention_audit_endpoint_delegates(monkeypatch):
 
     monkeypatch.setattr(tm_http.tm_retention_audit, "run_retention_audit", fake_audit)
 
-    req = tm_http.RetentionAuditRequest(max_items=12, page_size=6)
+    req = tm_http.RetentionAuditRequest(max_items=12)
     result = asyncio.run(tm_http.retention_audit(req))
 
     assert result["dry_run"] is True
-    assert captured == {"max_items": 12, "page_size": 6}
+    assert captured == {"max_items": 12}

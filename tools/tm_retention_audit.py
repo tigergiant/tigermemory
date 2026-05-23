@@ -133,9 +133,19 @@ def _now_utc() -> dt.datetime:
 def _parse_dt(value: Any) -> dt.datetime | None:
     if value is None:
         return None
+    if isinstance(value, (int, float)):
+        try:
+            return dt.datetime.fromtimestamp(value, tz=dt.timezone.utc)
+        except (OverflowError, ValueError, OSError):
+            return None
     text = str(value).strip()
     if not text:
         return None
+    if text.isdigit():
+        try:
+            return dt.datetime.fromtimestamp(int(text), tz=dt.timezone.utc)
+        except (OverflowError, ValueError, OSError):
+            return None
     try:
         parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
