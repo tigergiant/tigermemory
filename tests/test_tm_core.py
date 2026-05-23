@@ -56,6 +56,27 @@ def test_render_inbox_body_marks_missing_chinese_summary():
     assert "summary_cn_source: missing" in rendered
 
 
+def test_render_inbox_body_skips_generic_routed_memory_headings():
+    body = "\n".join([
+        "# Routed memory 35",
+        "",
+        "# 标题",
+        "中转API配置说明：Claude Opus 4.5 保真满血版，客户端与 Claude Code 接入",
+        "",
+        "# 元数据",
+        "- 文档时间：未标注（API配置教程）",
+        "",
+        "# 摘要",
+        "该文档是中转 API 配置说明，主打 Claude Opus 4.5 保真满血版。",
+    ])
+
+    rendered = tm_core.render_inbox_body("codex", "Routed memory 35", body, date="2026-05-21")
+
+    assert "title_cn: 中转API配置说明：Claude Opus 4.5 保真满血版" in rendered
+    assert "title_cn: 标题" not in rendered
+    assert "preview_cn: 该文档是中转 API 配置说明" in rendered
+
+
 def test_mem0_request_bypasses_default_proxy_opener(monkeypatch):
     fake_opener = _FakeOpener()
 

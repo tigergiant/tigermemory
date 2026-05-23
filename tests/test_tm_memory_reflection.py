@@ -162,6 +162,44 @@ def test_legacy_inbox_extracts_existing_chinese_line(tmp_path):
     assert "中文标题：这条历史 inbox 已经自带中文说明。" in report
 
 
+def test_inbox_audit_replaces_generic_title_frontmatter(tmp_path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "2026-05-01-1200-codex-systems.md").write_text(
+        "\n".join([
+            "---",
+            "owner: codex",
+            "status: draft",
+            "updated: 2026-05-01",
+            "title_cn: 标题",
+            "preview_cn: 标题 中转API配置说明：Claude Opus 4.5 保真满血版，客户端与 Claude Code 接入",
+            "summary_cn: 标题",
+            "routed_by: tigermemory",
+            "---",
+            "",
+            "# Routed memory 35",
+            "",
+            "# 标题",
+            "中转API配置说明：Claude Opus 4.5 保真满血版，客户端与 Claude Code 接入",
+            "",
+            "# 摘要",
+            "该文档是中转 API 配置说明，主打 Claude Opus 4.5 保真满血版。",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+
+    rows = tm_memory_reflection.audit_inbox(
+        date="2026-05-15",
+        inbox_dir=inbox,
+        proposal_root=tmp_path / "cron-proposals",
+    )
+
+    assert rows[0].title_cn.startswith("中转API配置说明")
+    assert rows[0].title_cn != "标题"
+    assert rows[0].preview_cn.startswith("该文档是中转 API 配置说明")
+
+
 def test_legacy_inbox_without_chinese_uses_raw_preview_instead_of_placeholder(tmp_path):
     inbox = tmp_path / "inbox"
     inbox.mkdir()

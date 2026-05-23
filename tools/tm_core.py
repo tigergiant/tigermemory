@@ -1877,6 +1877,8 @@ def inbox_rel_path(agent: str, topic: str, stamp: str | None = None) -> str:
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _SUMMARY_CN_MISSING = "未提供中文摘要：请写入 agent 在正文首行补一句中文概括。"
+_INBOX_REVIEW_GENERIC_CN = {"标题", "摘要", "元数据", "原文", "标签", "正文", "内容"}
+_INBOX_REVIEW_META_RE = re.compile(r"^[-*]?\s*(文档时间|最近访问|链接|类型|作者|标签|来源)\s*[：:].*")
 
 
 def _clean_inbox_summary(value: str, limit: int = 120) -> str:
@@ -1897,6 +1899,28 @@ def _clean_inbox_preview(value: str, limit: int = 200) -> str:
     return text
 
 
+def _strip_inbox_review_label(value: str) -> str:
+    text = re.sub(r"\s+", " ", value).strip()
+    text = text.lstrip("#").strip()
+    text = re.sub(r"^Routed memory\s+\d+\s*", "", text, flags=re.I).strip()
+    text = re.sub(r"^(中文标题|中文预览|中文摘要|内容摘要|原文预览|标题|摘要)\s*[：:]\s*", "", text).strip()
+    text = re.sub(r"^(标题|摘要)\s+", "", text).strip()
+    return text
+
+
+def inbox_review_cn_is_low_quality(value: str | None) -> bool:
+    text = _strip_inbox_review_label(str(value or ""))
+    if not text:
+        return True
+    if text.startswith(_SUMMARY_CN_MISSING):
+        return True
+    if text in _INBOX_REVIEW_GENERIC_CN:
+        return True
+    if re.fullmatch(r"Routed memory\s+\d+", text, flags=re.I):
+        return True
+    return False
+
+
 def derive_inbox_summary_cn(title: str, body: str) -> tuple[str, str]:
     """Return (summary_cn, source) for inbox review metadata.
 
@@ -1915,16 +1939,31 @@ def derive_inbox_summary_cn(title: str, body: str) -> tuple[str, str]:
 
 def derive_inbox_review_cn(title: str, body: str) -> tuple[str, str, str]:
     """Return (title_cn, preview_cn, source) for inbox review UI metadata."""
-    chinese_lines: list[str] = []
-    for raw in body.splitlines()[:16]:
+    title_lines: list[str] = []
+    summary_lines: list[str] = []
+    in_summary = False
+    for raw in body.splitlines()[:48]:
         clean = _clean_inbox_preview(raw)
         if clean and _CJK_RE.search(clean):
-            chinese_lines.append(clean)
-    if chinese_lines:
-        title_cn = _clean_inbox_summary(chinese_lines[0], limit=42)
-        preview_cn = _clean_inbox_preview(" ".join(chinese_lines[:4]), limit=200)
+            clean = _strip_inbox_review_label(clean)
+            if not clean:
+                continue
+            if clean == "摘要":
+                in_summary = True
+                continue
+            if inbox_review_cn_is_low_quality(clean) or _INBOX_REVIEW_META_RE.match(clean):
+                continue
+            if in_summary:
+                summary_lines.append(clean)
+            else:
+                title_lines.append(clean)
+    candidate_lines = title_lines or summary_lines
+    if candidate_lines:
+        title_cn = _clean_inbox_summary(candidate_lines[0], limit=42)
+        preview_source = summary_lines or candidate_lines
+        preview_cn = _clean_inbox_preview(" ".join(preview_source[:4]), limit=200)
         return title_cn, preview_cn, "body_chinese_lines"
-    clean_title = _clean_inbox_summary(title, limit=42)
+    clean_title = _clean_inbox_summary(_strip_inbox_review_label(title), limit=42)
     if clean_title and _CJK_RE.search(clean_title):
         return clean_title, clean_title, "title"
     return _SUMMARY_CN_MISSING, _SUMMARY_CN_MISSING, "missing"

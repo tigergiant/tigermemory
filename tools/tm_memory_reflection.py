@@ -179,20 +179,31 @@ def inbox_records(*, inbox_dir: pathlib.Path = INBOX_DIR) -> list[dict[str, Any]
         fm, body = _frontmatter(text)
         title_cn = fm.get("title_cn") or fm.get("summary_cn")
         preview_cn = fm.get("preview_cn") or fm.get("summary_cn")
+        if title_cn:
+            title_cn = tm_core._strip_inbox_review_label(str(title_cn))
         if preview_cn:
-            preview_cn = tm_core._clean_inbox_preview(preview_cn)
-        if not title_cn or not preview_cn or str(title_cn).startswith(MISSING_SUMMARY_PREFIX):
+            preview_clean = tm_core._clean_inbox_preview(preview_cn)
+            preview_stripped = tm_core._strip_inbox_review_label(preview_clean)
+            # A preview copied from the generic "标题 ..." line is usually not
+            # a real summary. Re-derive it from the body, preferably the 摘要
+            # section, instead of showing the heading line twice in the UI.
+            preview_cn = "" if preview_clean != preview_stripped and preview_clean.startswith("标题") else preview_stripped
+        if tm_core.inbox_review_cn_is_low_quality(title_cn):
+            title_cn = ""
+        if tm_core.inbox_review_cn_is_low_quality(preview_cn):
+            preview_cn = ""
+        if not title_cn or not preview_cn:
             derived_title, derived_preview, _source = tm_core.derive_inbox_review_cn(fm.get("title") or path.stem, body)
-            if not title_cn or str(title_cn).startswith(MISSING_SUMMARY_PREFIX):
+            if not title_cn:
                 title_cn = derived_title
             if not preview_cn:
                 preview_cn = derived_preview
         summary_cn = fm.get("summary_cn") or title_cn
-        if str(summary_cn).startswith(MISSING_SUMMARY_PREFIX):
+        if tm_core.inbox_review_cn_is_low_quality(summary_cn):
             summary_cn = title_cn
-        if str(title_cn).startswith(MISSING_SUMMARY_PREFIX):
+        if tm_core.inbox_review_cn_is_low_quality(title_cn):
             title_cn = _preview(body) or fm.get("title") or path.stem
-        if str(preview_cn).startswith(MISSING_SUMMARY_PREFIX):
+        if tm_core.inbox_review_cn_is_low_quality(preview_cn):
             preview_cn = _preview(body)
         rows.append({
             "path": _relpath(path),
