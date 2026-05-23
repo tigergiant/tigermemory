@@ -39,6 +39,17 @@ STALE_INBOX_DAYS = 14
 MISSING_SUMMARY_PREFIX = "未提供中文摘要"
 
 INBOX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-\d{4}-([^-]+)-([^.]+)\.md$")
+INBOX_REVIEW_PROMPT = """你是 tigermemory 的 inbox 审批摘要助手。
+任务：把一个待审 inbox 文件提炼成给虎哥看的中文标题和中文预览。
+
+要求：
+- 只基于输入内容，不编造不存在的事实。
+- title_cn：8-42 个中文字符左右，一句话说明这条 inbox 是什么。
+- preview_cn：80-220 个中文字符，说明核心事实、为什么需要审批、可能动作。
+- 不要输出“标题”“摘要”“元数据”“Routed memory”等空泛词。
+- 不要包含 API key、token、私钥、密码、身份证、银行卡等敏感信息。
+- 输出严格 JSON：{"title_cn":"...","preview_cn":"..."}。
+"""
 
 
 @dataclass(frozen=True)
@@ -218,6 +229,123 @@ def inbox_records(*, inbox_dir: pathlib.Path = INBOX_DIR) -> list[dict[str, Any]
             "route_decision_reason": fm.get("route_decision_reason"),
         })
     return rows
+
+
+def _frontmatter_lines(fm: dict[str, str], keys_order: list[str] | None = None) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for key in keys_order or []:
+        if key in fm:
+            ordered.append(f"{key}: {fm[key]}")
+            seen.add(key)
+    for key, value in fm.items():
+        if key not in seen:
+            ordered.append(f"{key}: {value}")
+    return ordered
+
+
+def _write_frontmatter(path: pathlib.Path, fm: dict[str, str], body: str, keys_order: list[str] | None = None) -> None:
+    text = "\n".join(["---", *_frontmatter_lines(fm, keys_order), "---", body.lstrip("\n")])
+    path.write_text(text.rstrip() + "\n", encoding="utf-8", newline="\n")
+
+
+def _valid_review_cn(title_cn: str, preview_cn: str) -> bool:
+    if tm_core.inbox_review_cn_is_low_quality(title_cn):
+        return False
+    if tm_core.inbox_review_cn_is_low_quality(preview_cn):
+        return False
+    if not re.search(r"[\u4e00-\u9fff]", title_cn + preview_cn):
+        return False
+    if len(title_cn.strip()) < 4 or len(preview_cn.strip()) < 30:
+        return False
+    return True
+
+
+def _deepseek_review_cn(path: pathlib.Path, title: str, body: str, *, timeout: int = 12) -> tuple[str, str, str]:
+    user_msg = (
+        "请输出 JSON 对象，结构为 {\"title_cn\":\"...\",\"preview_cn\":\"...\"}。\n\n"
+        f"文件：{_relpath(path)}\n"
+        f"原始标题：{title}\n\n"
+        f"正文：\n{tm_route_audit._redact(body)[:7000]}"
+    )
+    ok, parsed = tm_core._call_deepseek_json(
+        INBOX_REVIEW_PROMPT,
+        user_msg,
+        timeout=timeout,
+        temperature=0.1,
+        max_tokens=900,
+        purpose="inbox_review_summary",
+    )
+    if not ok or not isinstance(parsed, dict):
+        raise RuntimeError(str(parsed))
+    title_cn = tm_core._clean_inbox_summary(str(parsed.get("title_cn") or ""), limit=42)
+    preview_cn = tm_core._clean_inbox_preview(str(parsed.get("preview_cn") or ""), limit=220)
+    if not _valid_review_cn(title_cn, preview_cn):
+        raise RuntimeError("DeepSeek returned low quality inbox review metadata")
+    return title_cn, preview_cn, "deepseek"
+
+
+def repair_inbox_review_metadata(
+    *,
+    inbox_dir: pathlib.Path = INBOX_DIR,
+    limit: int = 20,
+    use_llm: bool = True,
+    dry_run: bool = False,
+) -> list[dict[str, Any]]:
+    changed: list[dict[str, Any]] = []
+    for path in sorted(inbox_dir.glob("*.md")):
+        if len(changed) >= limit:
+            break
+        if not INBOX_RE.match(path.name):
+            continue
+        text = path.read_text(encoding="utf-8")
+        fm, body = _frontmatter(text)
+        current_title = str(fm.get("title_cn") or fm.get("summary_cn") or "")
+        current_preview = str(fm.get("preview_cn") or fm.get("summary_cn") or "")
+        derived_title, derived_preview, source = tm_core.derive_inbox_review_cn(fm.get("title") or path.stem, body)
+        new_title = current_title
+        new_preview = current_preview
+        new_source = str(fm.get("review_cn_source") or "")
+
+        if not _valid_review_cn(current_title, current_preview):
+            new_title, new_preview, new_source = derived_title, derived_preview, source
+        if use_llm and not _valid_review_cn(new_title, new_preview):
+            try:
+                new_title, new_preview, new_source = _deepseek_review_cn(path, fm.get("title") or path.stem, body)
+            except Exception as exc:
+                changed.append({
+                    "path": _relpath(path),
+                    "changed": False,
+                    "error": str(exc),
+                    "source": "deepseek_failed",
+                })
+                continue
+        if not _valid_review_cn(new_title, new_preview):
+            continue
+        if current_title == new_title and current_preview == new_preview:
+            continue
+
+        fm["title_cn"] = new_title
+        fm["preview_cn"] = new_preview
+        fm["review_cn_source"] = new_source
+        fm["summary_cn"] = new_title
+        fm["summary_cn_source"] = "title_cn"
+        if not dry_run:
+            _write_frontmatter(path, fm, body, keys_order=[
+                "owner", "status", "updated", "route_decision", "route_score",
+                "route_topic_inferred", "route_requested_topic", "stored_topic",
+                "routed_by", "route_decision_reason", "title_cn", "preview_cn",
+                "review_cn_source", "summary_cn", "summary_cn_source",
+            ])
+        changed.append({
+            "path": _relpath(path),
+            "changed": not dry_run,
+            "dry_run": dry_run,
+            "source": new_source,
+            "title_cn": new_title,
+            "preview_chars": len(new_preview),
+        })
+    return changed
 
 
 def applied_inbox_paths(*, proposal_root: pathlib.Path = PROPOSAL_ROOT) -> set[str]:
@@ -983,6 +1111,17 @@ def cmd_weekly(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_enrich_inbox(args: argparse.Namespace) -> int:
+    rows = repair_inbox_review_metadata(
+        inbox_dir=pathlib.Path(args.inbox_dir),
+        limit=args.limit,
+        use_llm=not args.no_llm,
+        dry_run=args.dry_run,
+    )
+    print(json.dumps({"ok": True, "count": len(rows), "items": rows}, ensure_ascii=False, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Render memory route reflection reports")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -994,6 +1133,13 @@ def build_parser() -> argparse.ArgumentParser:
     weekly = sub.add_parser("weekly")
     weekly.add_argument("--date")
     weekly.set_defaults(func=cmd_weekly)
+
+    enrich = sub.add_parser("enrich-inbox", help="Backfill low-quality inbox title_cn/preview_cn metadata")
+    enrich.add_argument("--inbox-dir", default=str(INBOX_DIR))
+    enrich.add_argument("--limit", type=int, default=20)
+    enrich.add_argument("--dry-run", action="store_true")
+    enrich.add_argument("--no-llm", action="store_true", help="Only use deterministic extraction; skip DeepSeek fallback")
+    enrich.set_defaults(func=cmd_enrich_inbox)
     return parser
 
 

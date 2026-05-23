@@ -77,6 +77,22 @@ def test_render_inbox_body_skips_generic_routed_memory_headings():
     assert "preview_cn: 该文档是中转 API 配置说明" in rendered
 
 
+def test_render_inbox_body_overrides_bad_frontmatter_title():
+    body = "# 标题\n中转API配置说明：Claude Opus 4.5 保真满血版\n\n# 摘要\n该文档是中转 API 配置说明。"
+
+    rendered = tm_core.render_inbox_body(
+        "codex",
+        "Routed memory 35",
+        body,
+        date="2026-05-21",
+        frontmatter_extra={"title_cn": "标题", "preview_cn": "标题", "summary_cn": "标题"},
+    )
+
+    assert "title_cn: 中转API配置说明：Claude Opus 4.5 保真满血版" in rendered
+    assert "title_cn: 标题" not in rendered
+    assert "preview_cn: 该文档是中转 API 配置说明。" in rendered
+
+
 def test_mem0_request_bypasses_default_proxy_opener(monkeypatch):
     fake_opener = _FakeOpener()
 

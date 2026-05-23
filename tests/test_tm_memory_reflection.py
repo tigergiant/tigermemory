@@ -200,6 +200,79 @@ def test_inbox_audit_replaces_generic_title_frontmatter(tmp_path):
     assert rows[0].preview_cn.startswith("该文档是中转 API 配置说明")
 
 
+def test_enrich_inbox_rewrites_bad_title_frontmatter_without_llm(tmp_path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    target = inbox / "2026-05-01-1200-codex-systems.md"
+    target.write_text(
+        "\n".join([
+            "---",
+            "owner: codex",
+            "status: draft",
+            "updated: 2026-05-01",
+            "title_cn: 标题",
+            "preview_cn: 标题",
+            "summary_cn: 标题",
+            "routed_by: tigermemory",
+            "---",
+            "",
+            "# 标题",
+            "中转API配置说明：Claude Opus 4.5 保真满血版，客户端与 Claude Code 接入",
+            "",
+            "# 摘要",
+            "该文档是中转 API 配置说明，主打 Claude Opus 4.5 保真满血版。",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+
+    rows = tm_memory_reflection.repair_inbox_review_metadata(inbox_dir=inbox, limit=5, use_llm=False)
+    updated = target.read_text(encoding="utf-8")
+
+    assert rows[0]["path"].endswith("2026-05-01-1200-codex-systems.md")
+    assert rows[0]["source"] == "body_chinese_lines"
+    assert "title_cn: 中转API配置说明：Claude Opus 4.5 保真满血版" in updated
+    assert "title_cn: 标题" not in updated
+
+
+def test_enrich_inbox_uses_deepseek_when_deterministic_metadata_is_missing(tmp_path, monkeypatch):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    target = inbox / "2026-05-01-1200-codex-systems.md"
+    target.write_text(
+        "\n".join([
+            "---",
+            "owner: codex",
+            "status: draft",
+            "updated: 2026-05-01",
+            "title_cn: 未提供中文摘要：请写入 agent 在正文首行补一句中文概括。",
+            "preview_cn: 未提供中文摘要：请写入 agent 在正文首行补一句中文概括。",
+            "routed_by: tigermemory",
+            "---",
+            "",
+            "English-only closeout with pytest passed and pushed commit abc123.",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        tm_memory_reflection.tm_core,
+        "_call_deepseek_json",
+        lambda *_args, **_kwargs: (True, {
+            "title_cn": "开发收尾记录补全",
+            "preview_cn": "这条 inbox 是英文开发收尾记录，包含测试通过、提交推送和后续复盘所需信息，需要补齐中文标题与摘要供每日审批快速判断。",
+        }),
+    )
+
+    rows = tm_memory_reflection.repair_inbox_review_metadata(inbox_dir=inbox, limit=5, use_llm=True)
+    updated = target.read_text(encoding="utf-8")
+
+    assert rows[0]["source"] == "deepseek"
+    assert "title_cn: 开发收尾记录补全" in updated
+    assert "preview_cn: 这条 inbox 是英文开发收尾记录" in updated
+
+
 def test_legacy_inbox_without_chinese_uses_raw_preview_instead_of_placeholder(tmp_path):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
