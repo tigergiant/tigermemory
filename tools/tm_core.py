@@ -1498,8 +1498,11 @@ def _rank_search_hit(
         score += 80
     if alias_text and all(_group_in_text(group, alias_text) for group in term_groups):
         score += 40
-    if rel.startswith("wiki/person/") and not rel.endswith("/index.md") and _is_person_profile_query(term_groups):
-        score += 80
+    if _is_person_profile_query(term_groups):
+        if rel.startswith("wiki/person/") and not rel.endswith("/index.md"):
+            score += 300
+        else:
+            score *= 0.2
 
     if rel in _SEARCH_AGGREGATE_REPORT_PATHS:
         score *= 0.05
@@ -1982,19 +1985,21 @@ def render_inbox_body(
     extra_lines = ""
     extra: dict[str, Any] = dict(frontmatter_extra or {})
     title_cn, preview_cn, review_source = derive_inbox_review_cn(title, body)
-    if not extra.get("title_cn"):
+    if inbox_review_cn_is_low_quality(extra.get("title_cn")):
         extra["title_cn"] = title_cn
-    if not extra.get("preview_cn"):
+        extra["review_cn_source"] = review_source
+    if inbox_review_cn_is_low_quality(extra.get("preview_cn")):
         extra["preview_cn"] = preview_cn
+        extra["review_cn_source"] = review_source
     extra.setdefault("review_cn_source", review_source)
-    if not extra.get("summary_cn"):
-        if str(extra.get("title_cn") or "").strip() and not str(extra.get("title_cn")).startswith(_SUMMARY_CN_MISSING):
+    if inbox_review_cn_is_low_quality(extra.get("summary_cn")):
+        if not inbox_review_cn_is_low_quality(extra.get("title_cn")):
             extra["summary_cn"] = extra["title_cn"]
-            extra.setdefault("summary_cn_source", "title_cn")
+            extra["summary_cn_source"] = "title_cn"
         else:
             summary_cn, source = derive_inbox_summary_cn(title, body)
             extra["summary_cn"] = summary_cn
-            extra.setdefault("summary_cn_source", source)
+            extra["summary_cn_source"] = source
     if extra:
         for k, v in extra.items():
             if isinstance(v, bool):
