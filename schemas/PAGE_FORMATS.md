@@ -37,6 +37,9 @@ updated: 2026-04-16
 | owner | 是 | 主要维护者（AGENTS.md §3 常规 agent 8 项）：claude-code / codex / openclaw / hermes / deerflow / human / linter / kimi |
 | status | 是 | active / draft / archived |
 | updated | 是 | 最后更新日期，YYYY-MM-DD |
+| subtopic | 否 | 可选，二级分类标签，字符串数组。partition 是第 1 层，subtopic 是第 2 层。命名建议用短语，例如 `["memory-engine", "retrieval"]`。可一页多 subtopic |
+
+**关于 subtopic（Memory Tree 第 2 层）**：partition 是分区，subtopic 是同分区内的子主题。同一页可以归多个 subtopic（用数组表达）。subtopic 不需要预定义词表；agent 写页面时按内容自由判断，由后续审计工具周期统一。落到磁盘时使用 YAML 数组，例如 `subtopic: ["memory-engine", "retrieval"]`。
 
 ### 正文分节
 
