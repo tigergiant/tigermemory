@@ -40,6 +40,19 @@ jobs:
             git commit -m "[linter] compile: regenerate wiki indexes (tm_compile_index)"
           fi
 
+      - name: Compile services inventory (deploy/mcp systemd ground truth)
+        run: |
+          python3 tools/tm_compile_systemd_inventory.py write
+
+      - name: Commit services-inventory drift if any
+        run: |
+          git add wiki/systems/services-inventory.md || true
+          if git diff --cached --quiet; then
+            echo "No services-inventory drift, skipping compile commit"
+          else
+            git commit -m "[linter] compile: regenerate services inventory (tm_compile_systemd_inventory)"
+          fi
+
       - name: Run L4 lint
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
