@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tigermemory-core"
+version = "0.1.0"
+description = "Tigermemory LLM Wiki core engine: git/wiki/mem0/search/lint primitives (Python stdlib only)"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "tigergiant" }]
+keywords = ["llm", "wiki", "git", "memory", "tigermemory"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "pytest-cov>=4"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
