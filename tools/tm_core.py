@@ -504,9 +504,8 @@ def mem0_user_id() -> str:
         return "tiger"
 
 
-DEFAULT_DEEPSEEK_HOST = "api." + "deepseek.com"
-DEFAULT_DEEPSEEK_ENDPOINT = f"https://{DEFAULT_DEEPSEEK_HOST}/v1/chat/completions"
-DEFAULT_DEEPSEEK_MODEL = "deepseek-v4" + "-flash"
+DEFAULT_DEEPSEEK_ENDPOINT = "https://api.deepseek.com/v1/chat/completions"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
 
 
 def deepseek_endpoint() -> str:
