@@ -9,6 +9,12 @@
 
 It does not call Git, Mem0, LLMs, or network services.
 
+Before copying files, the CLI audits the publish plan for high-confidence
+sensitive material such as private key blocks, long bearer/API tokens, Chinese
+ID numbers, and phone numbers in public wiki pages. Dry-run output includes
+`sensitive_findings`; non-dry-run publishing exits non-zero and copies nothing
+when findings are present.
+
 The package is extracted from `tools/tm_publish.py`. The legacy script remains as a compatibility shim:
 
 ```powershell

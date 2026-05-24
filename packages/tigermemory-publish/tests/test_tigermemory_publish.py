@@ -27,6 +27,25 @@ Sample public page body.
 - none
 """
 
+PUBLIC_SECRET_PAGE = """---
+owner: cascade
+status: active
+updated: 2026-05-24
+public: true
+title: "secret page"
+---
+
+# secret page
+
+## 摘要
+
+This page accidentally contains api_key: sk-1234567890abcdefghijklmnopqrstuvwxyz
+
+## 来源
+
+- none
+"""
+
 PUBLIC_FALSE_PAGE = """---
 owner: cascade
 status: active
@@ -74,6 +93,11 @@ def _build_fake_repo(root: pathlib.Path) -> None:
 
     (root / "tools").mkdir()
     (root / "tools" / "tm_dummy.py").write_text("# stub tool\n", encoding="utf-8")
+    (root / "tools" / "tm_phone_regex.py").write_text(
+        'PHONE_RE = r"(?<!\\\\d)1[3-9]\\\\d{9}(?!\\\\d)"\n'
+        "token = RefreshToken.model_validate(raw)\n",
+        encoding="utf-8",
+    )
 
     (root / "schemas").mkdir()
     (root / "schemas" / "PAGE_FORMATS.md").write_text("# schemas\n", encoding="utf-8")
@@ -128,6 +152,8 @@ def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
     assert plan["wiki_public_pages"] == ["wiki/systems/public-page.md"]
     expected_template = "runtime/openmemory/." + "env.example"
     assert plan["config_files"] == [expected_template]
+    findings = tigermemory_publish.audit_publish_plan(plan, tmp_path)
+    assert findings == []
 
 
 def test_collect_publish_plan_excludes_person_partition(tmp_path: pathlib.Path) -> None:
@@ -200,3 +226,34 @@ def test_detect_repo_root_honors_env(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("TIGERMEMORY_ROOT", str(tmp_path))
 
     assert tigermemory_publish._detect_repo_root() == tmp_path.resolve()
+
+
+def test_audit_publish_plan_flags_public_secret(tmp_path: pathlib.Path) -> None:
+    _build_fake_repo(tmp_path)
+    (tmp_path / "wiki" / "systems" / "secret-page.md").write_text(PUBLIC_SECRET_PAGE, encoding="utf-8")
+
+    plan = tigermemory_publish.collect_publish_plan(tmp_path)
+    findings = tigermemory_publish.audit_publish_plan(plan, tmp_path)
+
+    assert len(findings) == 1
+    assert findings[0]["path"] == "wiki/systems/secret-page.md"
+    assert findings[0]["kind"] == "api_key"
+    assert "abcdefghijklmnopqrstuvwxyz" not in findings[0]["preview"]
+    assert "[REDACTED]" in findings[0]["preview"]
+
+
+def test_main_blocks_write_when_sensitive_public_page_exists(tmp_path, monkeypatch, capsys) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _build_fake_repo(repo)
+    (repo / "wiki" / "systems" / "secret-page.md").write_text(PUBLIC_SECRET_PAGE, encoding="utf-8")
+    monkeypatch.setattr(tigermemory_publish, "REPO_ROOT", repo)
+
+    rc = tigermemory_publish.main(["--dest", str(tmp_path / "out"), "--json"])
+    summary = json.loads(capsys.readouterr().out)
+
+    assert rc == 3
+    assert summary["ok"] is False
+    assert summary["sensitive_counts"]["high"] == 1
+    assert summary["files_copied"] == 0
+    assert not (tmp_path / "out" / "wiki" / "systems" / "secret-page.md").exists()

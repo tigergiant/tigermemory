@@ -41,6 +41,41 @@ WIKI_PUBLISH_PARTITIONS = (
 )
 
 DEFAULT_DEST_DIRNAME = "dist"
+MAX_FINDINGS = 50
+
+PRIVATE_KEY_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
+BEARER_TOKEN_RE = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9._~+/=-]{24,})")
+SECRET_ASSIGNMENT_RE = re.compile(
+    r"""(?ix)
+    \b(api[_-]?key|secret|token|password|passwd)\b
+    \s*[:=]\s*
+    ["']?([A-Za-z0-9][A-Za-z0-9_./+=-]{23,})
+    """
+)
+CN_ID_RE = re.compile(
+    r"(?<!\d)[1-9]\d{5}(?:18|19|20)\d{2}"
+    r"(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx](?!\d)"
+)
+CN_PHONE_RE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
+TEXT_EXTENSIONS = {
+    ".bat",
+    ".cmd",
+    ".css",
+    ".example",
+    ".html",
+    ".ini",
+    ".js",
+    ".json",
+    ".md",
+    ".ps1",
+    ".py",
+    ".sh",
+    ".toml",
+    ".txt",
+    ".xml",
+    ".yaml",
+    ".yml",
+}
 
 
 def _detect_repo_root() -> pathlib.Path:
@@ -145,6 +180,168 @@ def collect_publish_plan(repo_root: pathlib.Path) -> dict[str, list[str]]:
     return plan
 
 
+def _looks_placeholder(value: str) -> bool:
+    if re.match(r"^[A-Z][A-Za-z0-9_]*\.", value):
+        return True
+    lowered = value.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "changeme",
+            "dummy",
+            "example",
+            "placeholder",
+            "redacted",
+            "sample",
+            "stub",
+            "test",
+            "your",
+            "xxxx",
+        )
+    )
+
+
+def _mask_secret(value: str) -> str:
+    if len(value) <= 8:
+        return "[REDACTED]"
+    return f"{value[:4]}...[REDACTED]...{value[-4:]}"
+
+
+def _redact_line(line: str) -> str:
+    line = PRIVATE_KEY_RE.sub("[REDACTED_PRIVATE_KEY]", line)
+    line = BEARER_TOKEN_RE.sub(lambda m: "Bearer " + _mask_secret(m.group(1)), line)
+    line = SECRET_ASSIGNMENT_RE.sub(lambda m: f"{m.group(1)}={_mask_secret(m.group(2))}", line)
+    line = CN_ID_RE.sub("[REDACTED_CN_ID]", line)
+    line = CN_PHONE_RE.sub("[REDACTED_PHONE]", line)
+    return line.strip()[:160]
+
+
+def _planned_text_files(plan: dict[str, list[str]], repo_root: pathlib.Path) -> list[tuple[str, str]]:
+    """Return (category, rel_path) pairs that should be scanned before publish."""
+    items: list[tuple[str, str]] = []
+    for category in ("top_files", "wiki_public_pages", "config_files"):
+        for rel in plan.get(category, []):
+            items.append((category, rel))
+    for rel_dir in plan.get("whole_dirs", []):
+        root = repo_root / rel_dir
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            if path.name.endswith(".pyc") or _BYTECODE_CACHE_DIRNAME in path.parts:
+                continue
+            rel = path.relative_to(repo_root).as_posix()
+            items.append(("whole_dirs", rel))
+    return items
+
+
+def _add_finding(
+    findings: list[dict[str, object]],
+    *,
+    category: str,
+    rel: str,
+    line_no: int,
+    kind: str,
+    severity: str,
+    line: str,
+) -> None:
+    if len(findings) >= MAX_FINDINGS:
+        return
+    findings.append(
+        {
+            "path": rel,
+            "category": category,
+            "line": line_no,
+            "kind": kind,
+            "severity": severity,
+            "preview": _redact_line(line),
+        }
+    )
+
+
+def _scan_text_for_sensitive(text: str, rel: str, category: str) -> list[dict[str, object]]:
+    findings: list[dict[str, object]] = []
+    scan_pii = category in {"wiki_public_pages", "top_files", "config_files"}
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        if PRIVATE_KEY_RE.search(line):
+            _add_finding(
+                findings,
+                category=category,
+                rel=rel,
+                line_no=line_no,
+                kind="private_key",
+                severity="high",
+                line=line,
+            )
+        bearer = BEARER_TOKEN_RE.search(line)
+        if bearer and not _looks_placeholder(bearer.group(1)):
+            _add_finding(
+                findings,
+                category=category,
+                rel=rel,
+                line_no=line_no,
+                kind="bearer_token",
+                severity="high",
+                line=line,
+            )
+        secret = SECRET_ASSIGNMENT_RE.search(line)
+        if secret and not _looks_placeholder(secret.group(2)):
+            _add_finding(
+                findings,
+                category=category,
+                rel=rel,
+                line_no=line_no,
+                kind=secret.group(1).lower(),
+                severity="high",
+                line=line,
+            )
+        if scan_pii and CN_ID_RE.search(line):
+            _add_finding(
+                findings,
+                category=category,
+                rel=rel,
+                line_no=line_no,
+                kind="cn_id",
+                severity="high",
+                line=line,
+            )
+        if scan_pii and CN_PHONE_RE.search(line):
+            _add_finding(
+                findings,
+                category=category,
+                rel=rel,
+                line_no=line_no,
+                kind="cn_phone",
+                severity="medium",
+                line=line,
+            )
+    return findings
+
+
+def audit_publish_plan(plan: dict[str, list[str]], repo_root: pathlib.Path) -> list[dict[str, object]]:
+    """Scan files in a publish plan for high-confidence sensitive material."""
+    findings: list[dict[str, object]] = []
+    for category, rel in _planned_text_files(plan, repo_root):
+        if len(findings) >= MAX_FINDINGS:
+            break
+        path = repo_root / rel
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in TEXT_EXTENSIONS and not path.name.endswith(".example"):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if "\x00" in text[:4096]:
+            continue
+        findings.extend(_scan_text_for_sensitive(text, rel, category))
+        if len(findings) > MAX_FINDINGS:
+            findings = findings[:MAX_FINDINGS]
+    return findings
+
+
 _BYTECODE_CACHE_DIRNAME = "__py" + "cache__"
 
 
@@ -222,18 +419,26 @@ def main(argv: list[str] | None = None) -> int:
     plan = collect_publish_plan(REPO_ROOT)
     counts = {k: len(v) for k, v in plan.items()}
 
+    sensitive_findings = audit_publish_plan(plan, REPO_ROOT)
+
     copied = 0
-    if not args.dry_run:
+    if not args.dry_run and not sensitive_findings:
         dest.mkdir(parents=True, exist_ok=True)
         copied = execute_plan(plan, REPO_ROOT, dest)
 
     summary = {
-        "ok": True,
+        "ok": not sensitive_findings,
         "dest": str(dest),
         "dry_run": args.dry_run,
         "counts": counts,
         "files_copied": copied,
         "plan": plan,
+        "sensitive_findings": sensitive_findings,
+        "sensitive_counts": {
+            "total": len(sensitive_findings),
+            "high": sum(1 for f in sensitive_findings if f["severity"] == "high"),
+            "medium": sum(1 for f in sensitive_findings if f["severity"] == "medium"),
+        },
     }
 
     if args.json:
@@ -254,7 +459,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  [{k}]")
                 for f in plan[k]:
                     print(f"    {f}")
-    return 0
+        if sensitive_findings:
+            print("sensitive findings:")
+            for finding in sensitive_findings:
+                print(
+                    f"  - {finding['severity']} {finding['kind']} "
+                    f"{finding['path']}:{finding['line']} {finding['preview']}"
+                )
+    return 3 if sensitive_findings and not args.dry_run else 0
 
 
 if __name__ == "__main__":
