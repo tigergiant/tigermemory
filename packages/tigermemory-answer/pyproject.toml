@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tigermemory-answer"
+version = "0.1.0"
+description = "Evidence-first memory answer and grouped search package for TigerMemory"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "tigergiant" }]
+keywords = ["agent", "memory", "answer", "search", "tigermemory"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "tigermemory-core",
+    "tigermemory-lessons",
+    "tigermemory-persona",
+]
+
+[project.scripts]
+tigermemory-answer = "tigermemory_answer:main"
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
