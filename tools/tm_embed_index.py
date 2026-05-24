@@ -18,6 +18,9 @@ use `search()` directly.
 Backend: respects EMBEDDING_BASE_URL / EMBEDDING_MODEL env (see tm_core).
 Default expectation in this repo is local Qwen3-Embedding-0.6B at
 http://localhost:19190/v1 (free, no rate limit, dim=1024).
+Inputs: CLI args, fixture cases, trace JSONL, wiki/Mem0 data, or local index files as selected by the command.
+Outputs: Search/eval/trace/index reports printed to stdout or written to the requested output path.
+Depends-on (must-have): tm_core search/memory helpers, local Markdown/JSONL files, and optional configured LLM or embedding providers.
 """
 from __future__ import annotations
 

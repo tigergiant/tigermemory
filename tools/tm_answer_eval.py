@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Run answer-level eval cases for tigermemory memory_answer."""
+"""Run answer-level eval cases for tigermemory memory_answer.
+Inputs: CLI args, fixture cases, trace JSONL, wiki/Mem0 data, or local index files as selected by the command.
+Outputs: Search/eval/trace/index reports printed to stdout or written to the requested output path.
+Depends-on (must-have): tm_core search/memory helpers, local Markdown/JSONL files, and optional configured LLM or embedding providers.
+"""
 from __future__ import annotations
 
 import argparse

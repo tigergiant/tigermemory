@@ -25,6 +25,9 @@ Text rules:
 
 Exclusions: skip OpenClaw documentation boilerplate, blank paragraphs, code blocks.
 No LLM calls: v1 uses rule-based extraction only.
+Inputs: CLI args, fixture cases, trace JSONL, wiki/Mem0 data, or local index files as selected by the command.
+Outputs: Search/eval/trace/index reports printed to stdout or written to the requested output path.
+Depends-on (must-have): tm_core search/memory helpers, local Markdown/JSONL files, and optional configured LLM or embedding providers.
 """
 from __future__ import annotations
 
