@@ -491,6 +491,19 @@ def mem0_base() -> str:
     return _env_value("MEM0_URL")
 
 
+def mem0_user_id() -> str:
+    """Return the configured Mem0 user_id.
+
+    Reads MEM0_USER_ID via _env_value(). Falls back to "tiger" for
+    backward compatibility with existing tigermemory deploys. Override
+    by setting MEM0_USER_ID in the runtime config file.
+    """
+    try:
+        return _env_value("MEM0_USER_ID")
+    except RuntimeError:
+        return "tiger"
+
+
 # 2026-04-30: tiered Mem0 timeouts. Hardcoded 30s used to mask slow LLM calls
 # inside Mem0 (fact-extract + categorize). With DeepSeek thinking disabled,
 # normal latency is 1-3s; 10/15s caps surface regressions early and let callers
@@ -668,7 +681,7 @@ def mem0_write(
     if metadata_extra:
         metadata.update(metadata_extra)
     payload = json.dumps({
-        "user_id": "tiger",
+        "user_id": mem0_user_id(),
         "text": text,
         "metadata": metadata,
         "infer": infer,
@@ -699,7 +712,7 @@ def mem0_delete(memory_ids: list[str]) -> str:
     bad = [mid for mid in ids if not MEM0_UUID_RE.fullmatch(mid)]
     if bad:
         raise ValueError(f"invalid memory UUID(s): {', '.join(bad)}")
-    payload = json.dumps({"user_id": "tiger", "memory_ids": ids}).encode("utf-8")
+    payload = json.dumps({"user_id": mem0_user_id(), "memory_ids": ids}).encode("utf-8")
     return mem0_request(
         f"{mem0_base().rstrip('/')}/api/v1/memories/",
         data=payload,
@@ -720,7 +733,7 @@ def mem0_update_content(memory_id: str, memory_content: str) -> str:
     if not memory_content.strip():
         raise ValueError("memory_content required")
     payload = json.dumps({
-        "user_id": "tiger",
+        "user_id": mem0_user_id(),
         "memory_content": memory_content,
     }).encode("utf-8")
     return mem0_request(
@@ -746,7 +759,7 @@ def mem0_search(
         # Older tigermemory docs and clients used query=; the router keeps that
         # as a compatibility alias, but tm_core should call the canonical param.
         {
-            "user_id": "tiger",
+            "user_id": mem0_user_id(),
             "search_query": query,
             "page": 1,
             "size": size,

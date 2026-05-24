@@ -681,3 +681,23 @@ def test_git_session_status_does_not_phantom_check_untracked(monkeypatch, tmp_pa
     # Verify no `git diff --quiet` was issued for untracked paths.
     diff_quiet_calls = [c for c in calls if c[:2] == ["git", "diff"] and "--quiet" in c]
     assert diff_quiet_calls == []
+
+
+def test_mem0_user_id_default_when_env_missing(monkeypatch, tmp_path):
+    # Runtime config file omits MEM0_USER_ID; helper falls back to "tiger".
+    env_path = tmp_path / "runtime" / "openmemory" / ".env"
+    env_path.parent.mkdir(parents=True)
+    env_path.write_text("MEM0_API_KEY=stub\n", encoding="utf-8")
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+
+    assert tm_core.mem0_user_id() == "tiger"
+
+
+def test_mem0_user_id_reads_env_when_set(monkeypatch, tmp_path):
+    # Runtime config file sets MEM0_USER_ID=alice; helper returns the override.
+    env_path = tmp_path / "runtime" / "openmemory" / ".env"
+    env_path.parent.mkdir(parents=True)
+    env_path.write_text("MEM0_USER_ID=alice\n", encoding="utf-8")
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+
+    assert tm_core.mem0_user_id() == "alice"
