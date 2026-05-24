@@ -322,7 +322,7 @@ def render_preview(partition: str, date: str | None = None) -> str:
 
     lines: list[str] = [
         "---",
-        "owner: tm_compile_index",
+        "owner: linter",
         "status: draft",
         f"updated: {date or _today_cn()}",
         'subtopic: ["memory-engine"]',

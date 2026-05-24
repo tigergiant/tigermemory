@@ -110,9 +110,14 @@ SOURCES_PROVENANCE_KEYS = ("source_url", "fetched_at", "fetched_by")
 # These are the only pages in wiki/ where owner:linter is expected; lint_repo
 # exempts them from the partition-ownership check.
 LINTER_DASHBOARDS = {
+    "wiki/brand/index-by-subtopic.md",
+    "wiki/investment/index-by-subtopic.md",
     "wiki/operations/lint-dashboard.md",
     "wiki/operations/inbox-triage.md",
     "wiki/operations/backlinks-dashboard.md",
+    "wiki/operations/index-by-subtopic.md",
+    "wiki/production/index-by-subtopic.md",
+    "wiki/self-evolution/index-by-subtopic.md",
 }
 
 AUTO_GENERATED_DIRS = {

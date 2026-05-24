@@ -102,6 +102,7 @@ def test_generated_preview_passes_page_lint(wiki_root):
 
     text = tm_compile_index.render_preview("brand", date="2026-05-24")
 
+    assert "owner: linter" in text
     assert tm_core.lint_page_errors(text) == []
 
 
@@ -113,3 +114,40 @@ def test_preview_file_is_not_included_in_partition_index(wiki_root):
 
     assert "alpha.md" in new_index
     assert "index-by-subtopic.md" not in new_index
+
+
+def test_linter_dashboard_preview_paths_are_exempt_from_repo_lint(tmp_path, monkeypatch):
+    repo_root = tmp_path
+    wiki_root = repo_root / "wiki"
+    monkeypatch.setattr(tm_core, "REPO_ROOT", repo_root)
+
+    _write(wiki_root / "brand" / "index.md", "# Brand\n\n## 页面\n")
+    _write(
+        wiki_root / "brand" / "index-by-subtopic.md",
+        "\n".join(
+            [
+                "---",
+                "owner: linter",
+                "status: draft",
+                "updated: 2026-05-24",
+                "---",
+                "",
+                "# brand Index — by subtopic (PoC preview)",
+                "",
+                "## 摘要",
+                "",
+                "preview",
+                "",
+                "## 来源",
+                "",
+                "- test fixture",
+                "",
+            ]
+        ),
+    )
+
+    result = tm_core.lint_repo_scan()
+
+    assert result["orphan_pages"] == []
+    assert result["missing_sources"] == []
+    assert result["partition_mismatches"] == []
