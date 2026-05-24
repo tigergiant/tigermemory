@@ -9,6 +9,9 @@ tools/tm_agent_connect.py — tigermemory 一键 IDE 连接向导工具。
     py tools/tm_agent_connect.py             # 默认交互式安装
     py tools/tm_agent_connect.py --dry-run   # 仅预览要写入的配置，不实际更改文件
     py tools/tm_agent_connect.py --force     # 强制覆盖已有配置而不进行二次确认
+Inputs: Local repo state, service health endpoints, lessons/wiki pages, Mem0 records, or dashboard preference files.
+Outputs: Doctor/audit/onboarding/metrics reports, local UI helper effects, or JSON diagnostics.
+Depends-on (must-have): tm_core helpers, local filesystem/git state, and configured local services when the command asks for live checks.
 """
 
 import os

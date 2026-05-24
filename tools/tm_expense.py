@@ -10,6 +10,9 @@ P0 v2 adds:
 - Soft delete, categories table, payment-method whitelist
 - SQL readonly mode with validation
 - Backward-compatible expense_record / expense_query aliases
+Inputs: Expense CSV exports, backup files, local SQLite data, or CLI import/filter arguments.
+Outputs: Normalized expense records, backup artifacts, digest reports, or migration results.
+Depends-on (must-have): Python stdlib, local expense database/files, and tm_expense shared helpers.
 """
 from __future__ import annotations
 

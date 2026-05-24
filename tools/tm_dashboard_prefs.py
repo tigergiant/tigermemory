@@ -4,6 +4,9 @@
 This module intentionally has no FastAPI or MCP dependency. Web routes and MCP
 tools both call this small SQLite kernel, then perform their own transport or
 proposal side effects.
+Inputs: Local repo state, service health endpoints, lessons/wiki pages, Mem0 records, or dashboard preference files.
+Outputs: Doctor/audit/onboarding/metrics reports, local UI helper effects, or JSON diagnostics.
+Depends-on (must-have): tm_core helpers, local filesystem/git state, and configured local services when the command asks for live checks.
 """
 from __future__ import annotations
 

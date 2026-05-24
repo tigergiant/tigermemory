@@ -26,6 +26,9 @@ Limitations (v0.1 explicit):
   - "repeat incidents" requires human review — script never auto-fills it.
 
 Stdlib only. Python 3.8+ safe.
+Inputs: Local repo state, service health endpoints, lessons/wiki pages, Mem0 records, or dashboard preference files.
+Outputs: Doctor/audit/onboarding/metrics reports, local UI helper effects, or JSON diagnostics.
+Depends-on (must-have): tm_core helpers, local filesystem/git state, and configured local services when the command asks for live checks.
 """
 from __future__ import annotations
 

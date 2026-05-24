@@ -16,6 +16,9 @@ Supported capabilities (Token Plan):
   - image generate:  image-01
   - search query:    web search (coding-plan-search, 150/day)
   - quota show:      usage dashboard
+Inputs: CLI arguments, local repository files, or data supplied by the caller.
+Outputs: A deterministic stdout report, file rewrite, or helper return value documented by the command.
+Depends-on (must-have): Python stdlib and local tigermemory helper modules; external services only when explicitly requested.
 """
 from __future__ import annotations
 

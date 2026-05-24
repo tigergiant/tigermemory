@@ -8,6 +8,9 @@ Backs up the two runtime stores that are not fully covered by Git:
 
 Default output is runtime/openmemory/backups/<timestamp>/, which is ignored by
 Git because runtime/ is local machine state.
+Inputs: Local repo state, service health endpoints, lessons/wiki pages, Mem0 records, or dashboard preference files.
+Outputs: Doctor/audit/onboarding/metrics reports, local UI helper effects, or JSON diagnostics.
+Depends-on (must-have): tm_core helpers, local filesystem/git state, and configured local services when the command asks for live checks.
 """
 from __future__ import annotations
 

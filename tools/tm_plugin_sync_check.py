@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Check deploy/openclaw-ce/openclaw.plugin.json against runtime copy."""
+"""Check deploy/openclaw-ce/openclaw.plugin.json against runtime copy.
+Inputs: Local repo state, service health endpoints, lessons/wiki pages, Mem0 records, or dashboard preference files.
+Outputs: Doctor/audit/onboarding/metrics reports, local UI helper effects, or JSON diagnostics.
+Depends-on (must-have): tm_core helpers, local filesystem/git state, and configured local services when the command asks for live checks.
+"""
 from __future__ import annotations
 import json, subprocess, sys
 from pathlib import Path

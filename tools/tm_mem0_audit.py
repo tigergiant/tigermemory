@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Read-only Mem0 retrospective audit for duplicate-like memories."""
+"""Read-only Mem0 retrospective audit for duplicate-like memories.
+Inputs: Local repo state, service health endpoints, lessons/wiki pages, Mem0 records, or dashboard preference files.
+Outputs: Doctor/audit/onboarding/metrics reports, local UI helper effects, or JSON diagnostics.
+Depends-on (must-have): tm_core helpers, local filesystem/git state, and configured local services when the command asks for live checks.
+"""
 from __future__ import annotations
 
 import argparse

@@ -11,6 +11,9 @@ compact snapshot for new agents:
 
 The output is meant for humans, Codex/Claude sessions, and the read-only MCP
 tool `get_agent_onboarding`.
+Inputs: Local repo state, service health endpoints, lessons/wiki pages, Mem0 records, or dashboard preference files.
+Outputs: Doctor/audit/onboarding/metrics reports, local UI helper effects, or JSON diagnostics.
+Depends-on (must-have): tm_core helpers, local filesystem/git state, and configured local services when the command asks for live checks.
 """
 from __future__ import annotations
 

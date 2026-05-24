@@ -4,6 +4,9 @@ tools/tm_expense_migrate_v3.py — idempotent migration from v2 to v3 schema (FT
 
 Usage:
     python tools/tm_expense_migrate_v3.py [--dry-run] [--ledger PATH]
+Inputs: Expense CSV exports, backup files, local SQLite data, or CLI import/filter arguments.
+Outputs: Normalized expense records, backup artifacts, digest reports, or migration results.
+Depends-on (must-have): Python stdlib, local expense database/files, and tm_expense shared helpers.
 """
 from __future__ import annotations
 

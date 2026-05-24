@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""tools/tm_expense_import_alipay.py — P4 alipay CSV bill importer."""
+"""tools/tm_expense_import_alipay.py — P4 alipay CSV bill importer.
+Inputs: Expense CSV exports, backup files, local SQLite data, or CLI import/filter arguments.
+Outputs: Normalized expense records, backup artifacts, digest reports, or migration results.
+Depends-on (must-have): Python stdlib, local expense database/files, and tm_expense shared helpers.
+"""
 
 import csv
 import datetime

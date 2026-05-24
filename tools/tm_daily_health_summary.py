@@ -4,6 +4,9 @@
 This tool is intentionally aggregation-only. It does not call LLMs, run
 retrieval evals, or write reports; daily scans run the existing checks first
 and feed their JSON outputs here.
+Inputs: Local repo state, service health endpoints, lessons/wiki pages, Mem0 records, or dashboard preference files.
+Outputs: Doctor/audit/onboarding/metrics reports, local UI helper effects, or JSON diagnostics.
+Depends-on (must-have): tm_core helpers, local filesystem/git state, and configured local services when the command asks for live checks.
 """
 from __future__ import annotations
 
