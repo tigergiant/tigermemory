@@ -14,6 +14,38 @@ import tm_io  # type: ignore[import-not-found]
 import tm_route  # type: ignore[import-not-found]
 
 
+def test_status_pretty_includes_phantom_count(monkeypatch, capsys):
+    fake_status = {
+        "ok": True,
+        "branch": "master",
+        "upstream": "origin/master",
+        "head": "abc123",
+        "ahead": 0,
+        "behind": 0,
+        "dirty_count": 0,
+        "phantom_count": 2,
+        "staged_count": 0,
+        "unstaged_count": 0,
+        "untracked_count": 0,
+        "unmerged_count": 0,
+        "hooks_path": ".githooks",
+        "hooks_installed": True,
+        "blockers": [],
+        "paths": [],
+    }
+    monkeypatch.setattr(tm_io.tm_core, "git_session_status", lambda strict_clean=False: fake_status)
+
+    class Args:
+        json = False
+        strict_clean = False
+
+    tm_io.cmd_status(Args())
+
+    out = capsys.readouterr().out
+    assert "dirty_count: 0" in out
+    assert "phantom_count: 2" in out
+
+
 def test_cmd_mem0_update_content_reads_stdin(monkeypatch, capsys):
     captured = {}
 

@@ -292,6 +292,7 @@ def _print_status(status: dict, as_json: bool) -> None:
     print(f"ahead: {status['ahead']}")
     print(f"behind: {status['behind']}")
     print(f"dirty_count: {status['dirty_count']}")
+    print(f"phantom_count: {status.get('phantom_count', 0)}")
     print(f"staged_count: {status['staged_count']}")
     print(f"unstaged_count: {status['unstaged_count']}")
     print(f"untracked_count: {status['untracked_count']}")
