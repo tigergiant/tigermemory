@@ -9,4 +9,8 @@ from __future__ import annotations
 
 import _bootstrap_paths  # noqa: F401
 
-from tigermemory_answer import *  # noqa: F401,F403
+import sys
+
+import tigermemory_answer as _impl
+
+sys.modules[__name__] = _impl
