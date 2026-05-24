@@ -593,8 +593,16 @@ def stats() -> dict[str, Any]:
     index_path = INDEX_DIR / "wiki_layers.jsonl"
     meta_path = INDEX_DIR / "wiki_layers.meta.json"
 
+    meta: dict[str, Any] | None = None
+    if meta_path.exists():
+        try:
+            with meta_path.open("r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception:
+            meta = None
+
     if not index_path.exists():
-        return {"exists": False}
+        return {"exists": False, "meta": meta}
 
     entry_count = 0
     layer_counts = {"L0": 0, "L1": 0, "L2": 0}
@@ -614,11 +622,6 @@ def stats() -> dict[str, Any]:
             if layer in layer_counts:
                 layer_counts[layer] += 1
             pages.add(entry.get("path", ""))
-
-    meta = None
-    if meta_path.exists():
-        with meta_path.open("r", encoding="utf-8") as f:
-            meta = json.load(f)
 
     return {
         "exists": True,

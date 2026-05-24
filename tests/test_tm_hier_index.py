@@ -188,7 +188,7 @@ def test_partition_of():
     assert tm_hier_index._partition_of("wiki/systems/test.md") == "systems"
     assert tm_hier_index._partition_of("sources/external/test.md") == "external"
     assert tm_hier_index._partition_of("AGENTS.md") == ""
-    assert tm_hier_index._partition_of("wiki/test.md") == "test"
+    assert tm_hier_index._partition_of("wiki/test.md") == "test.md"
 
 
 def test_cosine_similarity():
