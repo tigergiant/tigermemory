@@ -504,6 +504,27 @@ def mem0_user_id() -> str:
         return "tiger"
 
 
+DEFAULT_DEEPSEEK_HOST = "api." + "deepseek.com"
+DEFAULT_DEEPSEEK_ENDPOINT = f"https://{DEFAULT_DEEPSEEK_HOST}/v1/chat/completions"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-v4" + "-flash"
+
+
+def deepseek_endpoint() -> str:
+    """Return the configured DeepSeek chat-completions endpoint."""
+    try:
+        return _env_value("DEEPSEEK_BASE_URL")
+    except RuntimeError:
+        return DEFAULT_DEEPSEEK_ENDPOINT
+
+
+def deepseek_model() -> str:
+    """Return the configured DeepSeek model id."""
+    try:
+        return _env_value("DEEPSEEK_MODEL")
+    except RuntimeError:
+        return DEFAULT_DEEPSEEK_MODEL
+
+
 # 2026-04-30: tiered Mem0 timeouts. Hardcoded 30s used to mask slow LLM calls
 # inside Mem0 (fact-extract + categorize). With DeepSeek thinking disabled,
 # normal latency is 1-3s; 10/15s caps surface regressions early and let callers
@@ -2612,8 +2633,8 @@ def write_and_commit_inbox(
 
 # ---------- P6.1 Fact refinement (DeepSeek) ----------
 
-REFINE_DEEPSEEK_ENDPOINT = "https://api.deepseek.com/v1/chat/completions"
-REFINE_DEEPSEEK_MODEL = "deepseek-v4-flash"
+REFINE_DEEPSEEK_ENDPOINT = DEFAULT_DEEPSEEK_ENDPOINT
+REFINE_DEEPSEEK_MODEL = DEFAULT_DEEPSEEK_MODEL
 REFINE_DEFAULT_TIMEOUT = 15  # seconds
 REFINE_MIN_TEXT_LEN = 20
 REFINE_MAX_TEXT_LEN = 500
@@ -2658,15 +2679,17 @@ def _call_deepseek_json(
     `_log_llm_call`); `purpose` tags the caller for grouping in journal.
     """
     prompt_chars = len(system_prompt) + len(user_msg)
+    endpoint = deepseek_endpoint()
+    model = deepseek_model()
     try:
         key = _env_value("DEEPSEEK_API_KEY")
     except RuntimeError as e:
-        _log_llm_call(REFINE_DEEPSEEK_MODEL, purpose, 0.0, False,
+        _log_llm_call(model, purpose, 0.0, False,
                       error=f"no DEEPSEEK_API_KEY: {e}", prompt_chars=prompt_chars)
         return False, f"no DEEPSEEK_API_KEY: {e}"
 
     payload = json.dumps({
-        "model": REFINE_DEEPSEEK_MODEL,
+        "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg},
@@ -2677,9 +2700,9 @@ def _call_deepseek_json(
         "thinking": {"type": "disabled"},  # 2026-04-30: skip reasoning for JSON tasks; see api-docs.deepseek.com/zh-cn/guides/thinking_mode
     }).encode("utf-8")
 
-    check_transport_security(REFINE_DEEPSEEK_ENDPOINT)
+    check_transport_security(endpoint)
     req = urllib.request.Request(
-        REFINE_DEEPSEEK_ENDPOINT,
+        endpoint,
         data=payload,
         headers={
             "Authorization": f"Bearer {key}",
@@ -2695,17 +2718,17 @@ def _call_deepseek_json(
             raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as e:
         dur = (time.monotonic() - t0) * 1000
-        _log_llm_call(REFINE_DEEPSEEK_MODEL, purpose, dur, False,
+        _log_llm_call(model, purpose, dur, False,
                       error=f"HTTP {e.code}", prompt_chars=prompt_chars, timeout_s=timeout)
         return False, f"DeepSeek HTTP {e.code}"
     except urllib.error.URLError as e:
         dur = (time.monotonic() - t0) * 1000
-        _log_llm_call(REFINE_DEEPSEEK_MODEL, purpose, dur, False,
+        _log_llm_call(model, purpose, dur, False,
                       error=f"unreachable: {e.reason}", prompt_chars=prompt_chars, timeout_s=timeout)
         return False, f"DeepSeek unreachable: {e.reason}"
     except Exception as e:
         dur = (time.monotonic() - t0) * 1000
-        _log_llm_call(REFINE_DEEPSEEK_MODEL, purpose, dur, False,
+        _log_llm_call(model, purpose, dur, False,
                       error=str(e), prompt_chars=prompt_chars, timeout_s=timeout)
         return False, f"DeepSeek error: {e}"
     dur = (time.monotonic() - t0) * 1000
@@ -2715,14 +2738,14 @@ def _call_deepseek_json(
         content = api_resp["choices"][0]["message"]["content"]
         parsed = json.loads(content)
     except (KeyError, json.JSONDecodeError, TypeError) as e:
-        _log_llm_call(REFINE_DEEPSEEK_MODEL, purpose, dur, False,
+        _log_llm_call(model, purpose, dur, False,
                       error=f"malformed: {e}", prompt_chars=prompt_chars,
                       response_chars=len(raw))
         return False, f"malformed DeepSeek response: {e}"
 
     usage = api_resp.get("usage") or {}
     _log_llm_call(
-        REFINE_DEEPSEEK_MODEL, purpose, dur, True,
+        model, purpose, dur, True,
         prompt_chars=prompt_chars,
         response_chars=len(content) if isinstance(content, str) else None,
         tokens_in=usage.get("prompt_tokens"),

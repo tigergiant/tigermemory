@@ -701,3 +701,39 @@ def test_mem0_user_id_reads_env_when_set(monkeypatch, tmp_path):
     monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
 
     assert tm_core.mem0_user_id() == "alice"
+
+
+def test_deepseek_endpoint_default_when_env_missing(monkeypatch, tmp_path):
+    env_path = tmp_path / "runtime" / "openmemory" / ".env"
+    env_path.parent.mkdir(parents=True)
+    env_path.write_text("DEEPSEEK_API_KEY=stub\n", encoding="utf-8")
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+
+    assert tm_core.deepseek_endpoint() == tm_core.DEFAULT_DEEPSEEK_ENDPOINT
+
+
+def test_deepseek_endpoint_reads_env_when_set(monkeypatch, tmp_path):
+    env_path = tmp_path / "runtime" / "openmemory" / ".env"
+    env_path.parent.mkdir(parents=True)
+    env_path.write_text("DEEPSEEK_BASE_URL=https://example.test/v1/chat/completions\n", encoding="utf-8")
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+
+    assert tm_core.deepseek_endpoint() == "https://example.test/v1/chat/completions"
+
+
+def test_deepseek_model_default_when_env_missing(monkeypatch, tmp_path):
+    env_path = tmp_path / "runtime" / "openmemory" / ".env"
+    env_path.parent.mkdir(parents=True)
+    env_path.write_text("DEEPSEEK_API_KEY=stub\n", encoding="utf-8")
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+
+    assert tm_core.deepseek_model() == tm_core.DEFAULT_DEEPSEEK_MODEL
+
+
+def test_deepseek_model_reads_env_when_set(monkeypatch, tmp_path):
+    env_path = tmp_path / "runtime" / "openmemory" / ".env"
+    env_path.parent.mkdir(parents=True)
+    env_path.write_text("DEEPSEEK_MODEL=custom-chat\n", encoding="utf-8")
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+
+    assert tm_core.deepseek_model() == "custom-chat"
