@@ -74,6 +74,28 @@ def test_worker_writes_completed_result(tmp_path, monkeypatch):
     assert result["profile"] == "fast"
 
 
+def test_pid_alive_for_self_does_not_kill_caller():
+    """Regression: on Windows, _pid_alive(os.getpid()) used to call
+    os.kill(self, 0) which equals TerminateProcess(self, 0), leaving
+    pytest in an inconsistent state that hangs the next
+    subprocess.run(capture_output=True). Must return True without harm.
+    """
+    assert tm_deep_dive_jobs._pid_alive(os.getpid()) is True
+
+
+def test_pid_alive_for_none_and_zero_returns_none():
+    assert tm_deep_dive_jobs._pid_alive(None) is None
+    assert tm_deep_dive_jobs._pid_alive(0) is None
+    assert tm_deep_dive_jobs._pid_alive(-1) is None
+
+
+def test_pid_alive_for_unlikely_pid_is_not_true():
+    # Very large pid unlikely to exist on either platform. Accept False or
+    # None (permission edge cases), but never True.
+    result = tm_deep_dive_jobs._pid_alive(2**30)
+    assert result is not True
+
+
 def test_fetch_result_before_completion_returns_status(tmp_path, monkeypatch):
     monkeypatch.setenv("TRADINGAGENTS_JOB_ROOT", str(tmp_path / "jobs"))
     job_id = "ta-20260519T010203Z-12345678"
