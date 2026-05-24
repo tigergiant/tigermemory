@@ -30,6 +30,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import difflib
 import pathlib
 import re
@@ -39,6 +40,7 @@ from typing import Iterable
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 WIKI_ROOT = REPO_ROOT / "wiki"
 PARTITIONS = ["brand", "investment", "operations", "person", "production", "self-evolution", "systems"]
+PREVIEW_FILENAME = "index-by-subtopic.md"
 
 PAGES_HEADING = "## 页面"
 SUMMARY_HEADING_RE = re.compile(r"^##\s+摘要\s*$", re.MULTILINE)
@@ -46,6 +48,7 @@ FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
 FRONTMATTER_BLOCK_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 H1_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 INDEX_ITEM_RE = re.compile(r"^\s*-\s*\[([^\]]+)\]\(([^)]+)\)")
+TZ_CN = dt.timezone(dt.timedelta(hours=8))
 
 MAX_SUMMARY_LEN = 120
 
@@ -74,22 +77,23 @@ def _truncate(s: str, limit: int = MAX_SUMMARY_LEN) -> str:
     return s[:cut].rstrip(" ，。,.；;:") + "…"
 
 
-def _parse_aliases(fm: str) -> list[str]:
-    """Parse YAML aliases field from frontmatter text.
+def _parse_string_list_field(fm: str, field: str) -> list[str]:
+    """Parse a simple YAML string/list field from frontmatter text.
 
     Supports two forms:
-      inline: aliases: [A, B, C]
-      block:  aliases:
+      inline: field: [A, B, C]
+      block:  field:
                 - A
                 - B
+      scalar: field: A
     """
     # Inline form
-    m = re.search(r"^aliases:\s*\[(.+?)\]\s*$", fm, re.MULTILINE)
+    m = re.search(rf"^{re.escape(field)}:\s*\[(.+?)\]\s*$", fm, re.MULTILINE)
     if m:
         items = [s.strip().strip('"').strip("'") for s in m.group(1).split(",")]
         return [s for s in items if s]
     # Block form
-    m = re.search(r"^aliases:\s*\n((?:\s*-\s*.+(?:\n|$))+)", fm, re.MULTILINE)
+    m = re.search(rf"^{re.escape(field)}:\s*\n((?:\s*-\s*.+(?:\n|$))+)", fm, re.MULTILINE)
     if m:
         results: list[str] = []
         for line in m.group(1).splitlines():
@@ -99,7 +103,17 @@ def _parse_aliases(fm: str) -> list[str]:
                 if v:
                     results.append(v)
         return results
+    # Scalar form
+    m = re.search(rf"^{re.escape(field)}:\s*(.+?)\s*$", fm, re.MULTILINE)
+    if m:
+        v = m.group(1).strip().strip('"').strip("'")
+        return [v] if v else []
     return []
+
+
+def _parse_aliases(fm: str) -> list[str]:
+    """Parse YAML aliases field from frontmatter text."""
+    return _parse_string_list_field(fm, "aliases")
 
 
 def extract_page_aliases(text: str) -> list[str]:
@@ -155,6 +169,14 @@ def extract_page_summary(text: str) -> str:
     return ""
 
 
+def extract_page_subtopics(text: str) -> list[str]:
+    """Return frontmatter subtopic values (empty if absent or no frontmatter)."""
+    m = FRONTMATTER_BLOCK_RE.match(text)
+    if not m:
+        return []
+    return _parse_string_list_field(m.group(1), "subtopic")
+
+
 # ---------------- index parsing ----------------
 
 
@@ -197,7 +219,7 @@ def split_index(text: str) -> tuple[str, list[str], dict[str, str]]:
 def list_partition_pages(partition_dir: pathlib.Path) -> list[pathlib.Path]:
     pages = []
     for p in sorted(partition_dir.iterdir()):
-        if p.is_file() and p.suffix == ".md" and p.name != "index.md":
+        if p.is_file() and p.suffix == ".md" and p.name not in {"index.md", PREVIEW_FILENAME}:
             pages.append(p)
     return pages
 
@@ -266,6 +288,93 @@ def compile_partition_index(
     return new_text, old_text
 
 
+def _today_cn() -> str:
+    return dt.datetime.now(TZ_CN).strftime("%Y-%m-%d")
+
+
+def render_preview(partition: str, date: str | None = None) -> str:
+    """Render wiki/<partition>/index-by-subtopic.md preview text."""
+    partition_dir = WIKI_ROOT / partition
+    if not partition_dir.is_dir():
+        raise ValueError(f"partition not found: {partition}")
+
+    page_infos: list[dict[str, object]] = []
+    for path in list_partition_pages(partition_dir):
+        text = path.read_text(encoding="utf-8")
+        page_infos.append(
+            {
+                "filename": path.name,
+                "title": extract_page_title(text) or path.stem,
+                "summary": extract_page_summary(text),
+                "subtopics": extract_page_subtopics(text),
+            }
+        )
+
+    groups: dict[str, list[dict[str, object]]] = {}
+    untagged: list[dict[str, object]] = []
+    for info in page_infos:
+        subtopics = info["subtopics"]
+        if not isinstance(subtopics, list) or not subtopics:
+            untagged.append(info)
+            continue
+        for subtopic in subtopics:
+            groups.setdefault(str(subtopic), []).append(info)
+
+    lines: list[str] = [
+        "---",
+        "owner: tm_compile_index",
+        "status: draft",
+        f"updated: {date or _today_cn()}",
+        'subtopic: ["memory-engine"]',
+        f'title: "{partition} Index (by subtopic, preview)"',
+        "---",
+        "",
+        f"# {partition} Index — by subtopic (PoC preview)",
+        "",
+        "## 摘要",
+        "",
+        "本页是 `tools/tm_compile_index.py preview` 的实验性输出，按 subtopic 分组展示。原 `index.md` 仍是 partition 的事实索引，不受本预览影响。",
+        "",
+        f"> 重新生成命令：`py tools/tm_compile_index.py preview --partition {partition}`",
+        "",
+    ]
+
+    for subtopic, pages in sorted(groups.items(), key=lambda item: (-len(item[1]), item[0])):
+        lines.extend([f"## {subtopic} ({len(pages)})", ""])
+        for info in sorted(pages, key=lambda page: str(page["filename"])):
+            title = str(info["title"])
+            filename = str(info["filename"])
+            summary = str(info["summary"])
+            if summary:
+                lines.append(f"- [{title}]({filename}) — {summary}")
+            else:
+                lines.append(f"- [{title}]({filename})")
+        lines.append("")
+
+    if untagged:
+        lines.extend([f"## 未打 subtopic ({len(untagged)})", ""])
+        for info in sorted(untagged, key=lambda page: str(page["filename"])):
+            title = str(info["title"])
+            filename = str(info["filename"])
+            summary = str(info["summary"])
+            if summary:
+                lines.append(f"- [{title}]({filename}) — {summary}")
+            else:
+                lines.append(f"- [{title}]({filename})")
+        lines.append("")
+
+    lines.extend(
+        [
+            "## 来源",
+            "",
+            "- 设计依据：`wiki/systems/memory-tree-subtopic-index-poc.md`",
+            "- subtopic 词表稳定记录：`sources/internal-analysis/2026-05-24-memory-tree-v0-self-evolution-poc.md`",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
 # ---------------- CLI ----------------
 
 
@@ -320,7 +429,31 @@ def cmd_write(args: argparse.Namespace) -> int:
     return 0
 
 
-def main() -> None:
+def cmd_preview(args: argparse.Namespace) -> int:
+    partition = args.partition or "brand"
+    if partition not in PARTITIONS:
+        raise ValueError(f"unknown partition: {partition}")
+    out_path = WIKI_ROOT / partition / PREVIEW_FILENAME
+    out_path.write_text(render_preview(partition), encoding="utf-8")
+    print(f"WROTE: wiki/{partition}/{PREVIEW_FILENAME}")
+    return 0
+
+
+def cmd_check_preview(args: argparse.Namespace) -> int:
+    partition = args.partition or "brand"
+    if partition not in PARTITIONS:
+        raise ValueError(f"unknown partition: {partition}")
+    out_path = WIKI_ROOT / partition / PREVIEW_FILENAME
+    old = out_path.read_text(encoding="utf-8") if out_path.exists() else ""
+    new = render_preview(partition)
+    if new != old:
+        print(f"DIFF wiki/{partition}/{PREVIEW_FILENAME}", file=sys.stderr)
+        sys.stderr.writelines(_diff(old, new, f"wiki/{partition}/{PREVIEW_FILENAME}"))
+        return 1
+    return 0
+
+
+def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="tm_compile_index.py", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -334,7 +467,15 @@ def main() -> None:
         )
         sp.set_defaults(func=fn)
 
-    args = p.parse_args()
+    preview = sub.add_parser("preview")
+    preview.add_argument("--partition", default="brand", help="partition to preview (default: brand)")
+    preview.set_defaults(func=cmd_preview)
+
+    check_preview = sub.add_parser("check-preview")
+    check_preview.add_argument("--partition", default="brand", help="partition to check (default: brand)")
+    check_preview.set_defaults(func=cmd_check_preview)
+
+    args = p.parse_args(argv)
     try:
         code = args.func(args)
     except ValueError as e:
