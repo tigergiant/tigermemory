@@ -24,6 +24,7 @@ inbox/daily/*.md
 plans/
 __pycache__/
 *.pyc
+*.egg-info/
 deploy/openclaw-ce/node_modules/
 deploy/openclaw-ce/dist/
 deploy/openclaw-ce/*.tsbuildinfo
