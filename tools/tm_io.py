@@ -403,6 +403,20 @@ def _run_cron_apply(tm_cron_apply, func, args: argparse.Namespace) -> int:
         return 2
 
 
+def cmd_publish(args: argparse.Namespace) -> None:
+    """Dispatch to tools/tm_publish.main with reconstructed argv."""
+    import tm_publish
+
+    argv = ["--dest", args.dest]
+    if args.dry_run:
+        argv.append("--dry-run")
+    if args.json:
+        argv.append("--json")
+    code = tm_publish.main(argv)
+    if code:
+        sys.exit(code)
+
+
 def cmd_agent_doctor(args: argparse.Namespace) -> None:
     import tm_agent_doctor
 
@@ -565,6 +579,23 @@ def main() -> None:
     cwr = sub.add_parser("cron-weekly-report", help="render the weekly memory route reflection report")
     cwr.add_argument("--date")
     cwr.set_defaults(func=cmd_cron_weekly_report)
+
+    pb = sub.add_parser(
+        "publish",
+        help="build outward distribution snapshot (P2 stage2-2)",
+    )
+    pb.add_argument("--dest", default="dist", help="output directory")
+    pb.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print plan without copying",
+    )
+    pb.add_argument(
+        "--json",
+        action="store_true",
+        help="emit JSON summary",
+    )
+    pb.set_defaults(func=cmd_publish)
 
     ad = sub.add_parser("agent-doctor", help="read-only agent connect / doctor checks")
     ad.add_argument("--query", default="retention dry-run agent doctor connect mem0 audit")

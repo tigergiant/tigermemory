@@ -53,3 +53,6 @@ data/expense_import/reports/2026/audit_replay/40_shadow_workdir/
 data/dashboard/*.sqlite
 data/dashboard/*.sqlite-shm
 data/dashboard/*.sqlite-wal
+
+# tools/tm_publish.py outward snapshot output (P2 stage2-2)
+dist/

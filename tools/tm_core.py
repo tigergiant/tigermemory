@@ -2122,6 +2122,10 @@ def lint_page_errors(text: str) -> list[str]:
             m = re.search(r"^updated:\s*(\S+)", fm, re.MULTILINE)
             if m and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", m.group(1)):
                 errors.append(f"updated '{m.group(1)}' not YYYY-MM-DD")
+            # Optional `public` field (P2 stage2-2 publish gate).
+            pm = re.search(r"^public:\s*(\S+)", fm, re.MULTILINE)
+            if pm and pm.group(1).lower() not in ("true", "false"):
+                errors.append(f"public '{pm.group(1)}' must be 'true' or 'false'")
 
     if "\n## 摘要" not in text:
         errors.append("missing '## 摘要' section")

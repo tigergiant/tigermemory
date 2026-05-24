@@ -737,3 +737,33 @@ def test_deepseek_model_reads_env_when_set(monkeypatch, tmp_path):
     monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
 
     assert tm_core.deepseek_model() == "custom-chat"
+
+
+_LINT_PAGE_BASE = (
+    "---\n"
+    "owner: cascade\n"
+    "status: active\n"
+    "updated: 2026-05-24\n"
+    "title: t\n"
+    "{extra}"
+    "---\n"
+    "\n## 摘要\n\nbody\n\n## 来源\n\n- none\n"
+)
+
+
+def test_lint_page_accepts_missing_public_field():
+    text = _LINT_PAGE_BASE.format(extra="")
+    assert tm_core.lint_page_errors(text) == []
+
+
+def test_lint_page_accepts_public_true_and_false():
+    text_true = _LINT_PAGE_BASE.format(extra="public: true\n")
+    text_false = _LINT_PAGE_BASE.format(extra="public: false\n")
+    assert tm_core.lint_page_errors(text_true) == []
+    assert tm_core.lint_page_errors(text_false) == []
+
+
+def test_lint_page_rejects_non_bool_public_field():
+    text_str = _LINT_PAGE_BASE.format(extra="public: yes\n")
+    errors = tm_core.lint_page_errors(text_str)
+    assert any("public" in e and "yes" in e for e in errors), errors
