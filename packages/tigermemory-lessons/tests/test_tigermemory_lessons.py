@@ -4,7 +4,7 @@ import io
 import pathlib
 import sys
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "packages" / "tigermemory-core" / "src"))
 sys.path.insert(0, str(REPO_ROOT / "packages" / "tigermemory-lessons" / "src"))
 

@@ -25,10 +25,12 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Any
 
+import _bootstrap_paths  # noqa: F401
+
 import tigermemory_core as tm_core
 import tm_embed_index
 import tm_hier_index
-import tm_lessons
+import tigermemory_lessons as tm_lessons
 import tigermemory_persona as tm_persona
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent

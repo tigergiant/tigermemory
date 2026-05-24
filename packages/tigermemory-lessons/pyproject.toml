@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tigermemory-lessons"
+version = "0.1.0"
+description = "TigerMemory prevention lessons search CLI and scoring helpers"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "tigergiant" }]
+keywords = ["llm", "agent", "lessons", "wiki", "tigermemory"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+dependencies = ["tigermemory-core"]
+
+[project.scripts]
+tigermemory-lessons = "tigermemory_lessons:main"
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

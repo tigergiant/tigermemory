@@ -15,8 +15,10 @@ import time
 import urllib.request
 from typing import Any
 
+import _bootstrap_paths  # noqa: F401
+
 import tigermemory_core as tm_core
-import tm_lessons
+import tigermemory_lessons as tm_lessons
 import tm_review
 
 REPO_ROOT = tm_core.REPO_ROOT

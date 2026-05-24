@@ -12,8 +12,10 @@ import re
 from pathlib import Path
 from typing import Any
 
+import _bootstrap_paths  # noqa: F401
+
 import tigermemory_core as tm_core
-import tm_lessons
+import tigermemory_lessons as tm_lessons
 import tigermemory_persona as tm_persona
 
 SEARCH_SCOPES = {"auto", "all", "wiki", "lessons", "onboarding", "mem0"}
