@@ -3,6 +3,9 @@
 """
 TigerMemory Dashboard 冒烟测试脚本 (P6.4)
 支持基于 Python 标准库的轻量级 HTTP + HTML 解析探测，并在 Playwright 缺失时优雅降级。
+Inputs: Local repo state, service health endpoints, lessons/wiki pages, Mem0 records, or dashboard preference files.
+Outputs: Doctor/audit/onboarding/metrics reports, local UI helper effects, or JSON diagnostics.
+Depends-on (must-have): tm_core helpers, local filesystem/git state, and configured local services when the command asks for live checks.
 """
 
 import argparse

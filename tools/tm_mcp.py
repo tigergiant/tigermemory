@@ -55,6 +55,9 @@ Role controls write tools: 'writer' (default) can call all tools; 'reader' can c
 Note: OpenClaw 5.2's `tigermemory-ce` plugin uses HTTP endpoints in
 `tools/tm_http.py` (port 8790), NOT this MCP server. See
 `wiki/systems/tigermemory-agent-access.md` for the full integration map.
+Inputs: MCP stdio/HTTP requests, REST JSON payloads, or local facade smoke-test arguments.
+Outputs: MCP tool responses, HTTP JSON responses, health checks, or smoke-test diagnostics.
+Depends-on (must-have): tm_core shared APIs, FastAPI/uvicorn or MCP runtime libraries, and local tigermemory services.
 """
 from __future__ import annotations
 

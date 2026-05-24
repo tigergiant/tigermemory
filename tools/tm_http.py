@@ -21,6 +21,9 @@ does HTTP ↔ Python function conversion.
 
 Usage:
   python tools/tm_http.py --bind 127.0.0.1 --port 8790
+Inputs: MCP stdio/HTTP requests, REST JSON payloads, or local facade smoke-test arguments.
+Outputs: MCP tool responses, HTTP JSON responses, health checks, or smoke-test diagnostics.
+Depends-on (must-have): tm_core shared APIs, FastAPI/uvicorn or MCP runtime libraries, and local tigermemory services.
 """
 from __future__ import annotations
 

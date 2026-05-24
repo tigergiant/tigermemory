@@ -12,6 +12,9 @@ This server intentionally exposes a narrow ChatGPT-facing surface:
 
 It does not register the full tigermemory wiki/source/admin/media/expense toolset.
 The existing tools/tm_mcp.py endpoint remains unchanged for current MCP clients.
+Inputs: MCP stdio/HTTP requests, REST JSON payloads, or local facade smoke-test arguments.
+Outputs: MCP tool responses, HTTP JSON responses, health checks, or smoke-test diagnostics.
+Depends-on (must-have): tm_core shared APIs, FastAPI/uvicorn or MCP runtime libraries, and local tigermemory services.
 """
 from __future__ import annotations
 

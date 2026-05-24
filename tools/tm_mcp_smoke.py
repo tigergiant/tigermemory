@@ -10,6 +10,9 @@ key, probes /healthz, then shuts down.  Exit 0 on success, 1 on failure.
 
 Requires: pip install -r deploy/mcp/requirements.txt
 Usage:    python tools/tm_mcp_smoke.py [--target-url URL] [--spawn]
+Inputs: MCP stdio/HTTP requests, REST JSON payloads, or local facade smoke-test arguments.
+Outputs: MCP tool responses, HTTP JSON responses, health checks, or smoke-test diagnostics.
+Depends-on (must-have): tm_core shared APIs, FastAPI/uvicorn or MCP runtime libraries, and local tigermemory services.
 """
 from __future__ import annotations
 

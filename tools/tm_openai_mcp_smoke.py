@@ -4,6 +4,9 @@
 The script never prints OAuth tokens. It can run without a token to verify
 public health and discovery endpoints, and with the local OAuth store to test
 the real streamable HTTP MCP handshake.
+Inputs: MCP stdio/HTTP requests, REST JSON payloads, or local facade smoke-test arguments.
+Outputs: MCP tool responses, HTTP JSON responses, health checks, or smoke-test diagnostics.
+Depends-on (must-have): tm_core shared APIs, FastAPI/uvicorn or MCP runtime libraries, and local tigermemory services.
 """
 from __future__ import annotations
 

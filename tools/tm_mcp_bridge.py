@@ -42,6 +42,9 @@ Protocol notes (Streamable HTTP, 2025 MCP spec):
       no body — bridge stays silent.
     - Server may stream multiple `data:` events per response; each one
       is forwarded to stdout as its own line.
+Inputs: MCP stdio/HTTP requests, REST JSON payloads, or local facade smoke-test arguments.
+Outputs: MCP tool responses, HTTP JSON responses, health checks, or smoke-test diagnostics.
+Depends-on (must-have): tm_core shared APIs, FastAPI/uvicorn or MCP runtime libraries, and local tigermemory services.
 """
 from __future__ import annotations
 
