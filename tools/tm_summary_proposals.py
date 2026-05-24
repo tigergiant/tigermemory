@@ -23,6 +23,9 @@ Design choices (intentional simplicity):
 - Summary candidate is only emitted when the page lacks both
   frontmatter `summary:` and `## 摘要` / `## Summary` heading. We reuse
   `tm_embed_index._extract_summary` for the extraction itself.
+Inputs: Repository markdown/python files, frontmatter, section text, git diff inputs, or CLI path arguments.
+Outputs: Deterministic reports, rewritten generated files, validation errors, or patch proposals.
+Depends-on (must-have): Python stdlib plus tm_core/path parsers; no Mem0 write path unless explicitly invoked by caller.
 """
 from __future__ import annotations
 

@@ -5,6 +5,9 @@ Synthetic wiki tree is built under a tempdir; WIKI_ROOT and PARTITIONS are
 monkey-patched so tests don't depend on the real repo state.
 
 Run: python3 tools/tm_compile_index_test.py
+Inputs: Repository markdown/python files, frontmatter, section text, git diff inputs, or CLI path arguments.
+Outputs: Deterministic reports, rewritten generated files, validation errors, or patch proposals.
+Depends-on (must-have): Python stdlib plus tm_core/path parsers; no Mem0 write path unless explicitly invoked by caller.
 """
 from __future__ import annotations
 

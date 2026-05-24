@@ -6,6 +6,9 @@ LLM calls are mocked by monkey-patching tm_core._call_minimax_json; no network
 access is required to run these tests.
 
 Run: python3 tools/tm_suggest_patches_test.py
+Inputs: CLI arguments, local repository files, or data supplied by the caller.
+Outputs: A deterministic stdout report, file rewrite, or helper return value documented by the command.
+Depends-on (must-have): Python stdlib and local tigermemory helper modules; external services only when explicitly requested.
 """
 from __future__ import annotations
 

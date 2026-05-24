@@ -3,6 +3,9 @@
 中文化 aliases 注入工具
 
 扫描 wiki 页面，从 H1 提取中文别名，写入 frontmatter。
+Inputs: Repository markdown/python files, frontmatter, section text, git diff inputs, or CLI path arguments.
+Outputs: Deterministic reports, rewritten generated files, validation errors, or patch proposals.
+Depends-on (must-have): Python stdlib plus tm_core/path parsers; no Mem0 write path unless explicitly invoked by caller.
 """
 from __future__ import annotations
 

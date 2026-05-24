@@ -4,6 +4,9 @@ tools/tm_lint.py — L4 daily linter runner.
 
 Runs a configurable subset of lint checks, updates the dashboard page,
 and writes an inbox findings file iff any issues found.
+Inputs: Repository markdown/python files, frontmatter, section text, git diff inputs, or CLI path arguments.
+Outputs: Deterministic reports, rewritten generated files, validation errors, or patch proposals.
+Depends-on (must-have): Python stdlib plus tm_core/path parsers; no Mem0 write path unless explicitly invoked by caller.
 """
 from __future__ import annotations
 

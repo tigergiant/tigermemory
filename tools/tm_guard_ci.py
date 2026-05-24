@@ -11,6 +11,9 @@ Usage:
     python3 tools/tm_guard_ci.py <before_sha> <after_sha>
 
 Exit 0 if all commits in the range are clean, exit 1 on any violation.
+Inputs: Repository markdown/python files, frontmatter, section text, git diff inputs, or CLI path arguments.
+Outputs: Deterministic reports, rewritten generated files, validation errors, or patch proposals.
+Depends-on (must-have): Python stdlib plus tm_core/path parsers; no Mem0 write path unless explicitly invoked by caller.
 """
 from __future__ import annotations
 

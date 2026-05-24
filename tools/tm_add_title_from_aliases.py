@@ -2,6 +2,9 @@
 """
 从 aliases 生成 title，供 Notebook Navigator 的 Name fields 识别。
 已有 aliases 但无 title 的页面，在 frontmatter 追加 title: 第一个 alias。
+Inputs: CLI arguments, local repository files, or data supplied by the caller.
+Outputs: A deterministic stdout report, file rewrite, or helper return value documented by the command.
+Depends-on (must-have): Python stdlib and local tigermemory helper modules; external services only when explicitly requested.
 """
 from __future__ import annotations
 

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""tm_inject_aliases.py 单元测试"""
+"""tm_inject_aliases.py 单元测试
+Inputs: Repository markdown/python files, frontmatter, section text, git diff inputs, or CLI path arguments.
+Outputs: Deterministic reports, rewritten generated files, validation errors, or patch proposals.
+Depends-on (must-have): Python stdlib plus tm_core/path parsers; no Mem0 write path unless explicitly invoked by caller.
+"""
 
 import os
 import sys

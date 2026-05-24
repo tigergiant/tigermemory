@@ -26,6 +26,9 @@ Exit codes:
   0 no diff (check) / success (write|diff)
   1 diff present (check only)
   2 bad usage / validation failure
+Inputs: Repository markdown/python files, frontmatter, section text, git diff inputs, or CLI path arguments.
+Outputs: Deterministic reports, rewritten generated files, validation errors, or patch proposals.
+Depends-on (must-have): Python stdlib plus tm_core/path parsers; no Mem0 write path unless explicitly invoked by caller.
 """
 from __future__ import annotations
 

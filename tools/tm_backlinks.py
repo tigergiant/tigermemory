@@ -11,6 +11,9 @@ CLI:
   python3 tools/tm_backlinks.py check    # exit 0/1
   python3 tools/tm_backlinks.py write    # 写入 dashboard
   python3 tools/tm_backlinks.py diff     # stdout 显示差异
+Inputs: Repository markdown/python files, frontmatter, section text, git diff inputs, or CLI path arguments.
+Outputs: Deterministic reports, rewritten generated files, validation errors, or patch proposals.
+Depends-on (must-have): Python stdlib plus tm_core/path parsers; no Mem0 write path unless explicitly invoked by caller.
 """
 from __future__ import annotations
 
