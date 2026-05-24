@@ -11,6 +11,9 @@ import json
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "tools"))
+
 # 导入待测核心函数
 import tm_agent_connect
 

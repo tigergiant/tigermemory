@@ -9,7 +9,7 @@ import unittest
 import pytest
 
 # 导入待测核心函数
-import tm_core
+import tigermemory_core as tm_core
 
 
 class TestTransportSecurity(unittest.TestCase):

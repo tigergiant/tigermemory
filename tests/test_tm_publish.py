@@ -176,6 +176,7 @@ def test_execute_plan_dry_run_via_main(tmp_path, monkeypatch, capsys) -> None:
 
     assert rc == 0
     summary = json.loads(out)
+    assert summary["ok"] is True
     assert summary["dry_run"] is True
     assert summary["files_copied"] == 0
     assert summary["counts"]["wiki_public_pages"] == 1
@@ -193,6 +194,7 @@ def test_main_writes_files_when_not_dry_run(tmp_path, monkeypatch, capsys) -> No
 
     assert rc == 0
     summary = json.loads(out)
+    assert summary["ok"] is True
     assert summary["dry_run"] is False
     assert summary["files_copied"] > 0
     assert (tmp_path / "out" / "AGENTS.md").is_file()

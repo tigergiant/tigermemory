@@ -204,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
         copied = execute_plan(plan, REPO_ROOT, dest)
 
     summary = {
+        "ok": True,
         "dest": str(dest),
         "dry_run": args.dry_run,
         "counts": counts,
