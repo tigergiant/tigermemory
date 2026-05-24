@@ -4,9 +4,10 @@ tools/tm_lint.py — L4 daily linter runner.
 
 Runs a configurable subset of lint checks, updates the dashboard page,
 and writes an inbox findings file iff any issues found.
-Inputs: Repository markdown/python files, frontmatter, section text, git diff inputs, or CLI path arguments.
-Outputs: Deterministic reports, rewritten generated files, validation errors, or patch proposals.
-Depends-on (must-have): Python stdlib plus tm_core/path parsers; no Mem0 write path unless explicitly invoked by caller.
+
+Inputs: 全仓 wiki/**/*.md（frontmatter 校验、stale_days 检测、broken backlinks 等）、inbox/**/*.md（age 检测）、git commit log（unreviewed commit 检测）；env LINT_STALE_DAYS / LINT_INBOX_AGE_DAYS / LINT_UNREVIEWED_DAYS / LINT_UNREVIEWED_ALERT 阈值；CLI 子命令 check / write-dashboard。
+Outputs: 重写 wiki/operations/lint-dashboard.md 仪表盘；issue 数量超阈值时写 inbox/<date>-<source>-<topic>.md findings 文件；exit 0/1。
+Depends-on (must-have): tm_core helpers（PAGE_FORMATS 校验、git 调用、AGENTS/TOPICS 枚举）+ tm_review（F/G 类 DeepSeek LLM 调用）；不直接写 Mem0。
 """
 from __future__ import annotations
 

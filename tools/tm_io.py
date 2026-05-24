@@ -35,9 +35,10 @@ Exit codes:
   4  Mem0 API failure (RuntimeError from Mem0)
   5  guard rejected the commit
   6  preflight blocked
-Inputs: CLI/API payloads, inbox or digest markdown, route decisions, proposal metadata, or Mem0 write requests.
-Outputs: Rendered markdown, JSON status payloads, routed memory writes, proposal decisions, or review actions.
-Depends-on (must-have): tm_core, tm_route/tm_memory_ops helpers, local git-managed files, and configured Mem0/OpenMemory endpoints.
+
+Inputs: argparse 子命令 + flags（write-inbox / commit-push / mem0-search / lint-page / status / preflight / guard 等）；stdin 正文（write-inbox 内容、mem0-update-content payload 等）；git hook 调用的 --commit-msg-file 路径。
+Outputs: stdout JSON 或 pretty 文本报告（status / retention-audit / agent-doctor）；以及上面 Exit codes 段定义的 0-6 退出码，供 git hook 和 shell 脚本消费。
+Depends-on (must-have): tm_core（所有业务逻辑入口）、tm_route / tm_retention_audit / tm_review / tm_memory_ops 等业务模块；本进程不直接打 Mem0 HTTP（透过 tm_core）。
 """
 from __future__ import annotations
 

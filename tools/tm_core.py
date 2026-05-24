@@ -18,9 +18,10 @@ both interfaces automatically.
 Errors surface as native Python exceptions (ValueError for bad input,
 GitError for git trouble, RuntimeError for Mem0 / environment). Adapters
 translate to exit codes (CLI) or JSON-RPC errors (MCP).
-Inputs: CLI arguments, local repository files, or data supplied by the caller.
-Outputs: A deterministic stdout report, file rewrite, or helper return value documented by the command.
-Depends-on (must-have): Python stdlib and local tigermemory helper modules; external services only when explicitly requested.
+
+Inputs: agent/topic/partition/action 枚举字符串、目标文件相对路径、inbox/wiki 正文、Mem0 API 凭据（环境变量 MEM0_API_KEY/MEM0_USER_ID）、本地 git 仓库工作树状态。
+Outputs: 已校验的 commit/inbox/wiki 内容字符串、git 操作结果（commit SHA / push 状态）、Mem0 HTTP 响应 dict、lint 错误列表、commit-msg guard 错误列表。
+Depends-on (must-have): Python stdlib (subprocess / urllib / pathlib / zoneinfo)；可选 Mem0 / OpenMemory CE HTTP 端点（由 caller 决定是否调用）；本仓 schemas/PAGE_FORMATS.md 校验规则。
 """
 from __future__ import annotations
 

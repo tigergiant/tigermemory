@@ -26,9 +26,10 @@ Exit codes:
   0 no diff (check) / success (write|diff)
   1 diff present (check only)
   2 bad usage / validation failure
-Inputs: Repository markdown/python files, frontmatter, section text, git diff inputs, or CLI path arguments.
-Outputs: Deterministic reports, rewritten generated files, validation errors, or patch proposals.
-Depends-on (must-have): Python stdlib plus tm_core/path parsers; no Mem0 write path unless explicitly invoked by caller.
+
+Inputs: wiki/<partition>/*.md 单分区下所有非 index.md 页面（读 frontmatter `title` / `aliases` 和 `## 摘要` 段第一行作为一行 summary）；CLI 子命令 check / diff / write + 可选 --partition。
+Outputs: write 模式重写 wiki/<partition>/index.md 的 `## 页面` 段（preamble 保留）；check 模式仅打印差异并返 exit 1；diff 模式打印 unified diff 并返 exit 0。
+Depends-on (must-have): Python stdlib 纯文本处理（pathlib / re / difflib / argparse）。零外部依赖——不读 Mem0、不调 LLM、不打 git；CI 兜底每天 write 一次。
 """
 from __future__ import annotations
 

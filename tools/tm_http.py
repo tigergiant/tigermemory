@@ -21,9 +21,10 @@ does HTTP ↔ Python function conversion.
 
 Usage:
   python tools/tm_http.py --bind 127.0.0.1 --port 8790
-Inputs: MCP stdio/HTTP requests, REST JSON payloads, or local facade smoke-test arguments.
-Outputs: MCP tool responses, HTTP JSON responses, health checks, or smoke-test diagnostics.
-Depends-on (must-have): tm_core shared APIs, FastAPI/uvicorn or MCP runtime libraries, and local tigermemory services.
+
+Inputs: HTTP JSON 请求（POST /search_memories、/memory/answer、/write_memory、/write_inbox、/expense_record、/expense_batch_record 等 12 个端点）；GET /health 无 body；CLI 参数 --bind / --port。
+Outputs: HTTP JSON 响应 body（端点对应的 dict / list）；健康检查 200；写入端点 commit 后返回 commit SHA。
+Depends-on (must-have): FastAPI + uvicorn（HTTP 运行时）；tm_core（所有 git/Mem0 业务）、tm_answer / tm_expense / tm_memory_ops / tm_review / tm_agent_doctor / tm_retention_audit；本进程内嵌 OpenClaw context-engine plugin 的稳定 ABI。
 """
 from __future__ import annotations
 
