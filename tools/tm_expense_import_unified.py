@@ -15,6 +15,9 @@ if _PKG_SRC.is_dir() and str(_PKG_SRC) not in _sys.path:
     _sys.path.insert(0, str(_PKG_SRC))
 
 _mod = _importlib.import_module("tigerledger.import_unified")
+_sys.modules[__name__] = _mod
 globals().update({name: value for name, value in vars(_mod).items() if not name.startswith("__")})
 __all__ = [name for name in globals() if not name.startswith("_")]
+
+
 
