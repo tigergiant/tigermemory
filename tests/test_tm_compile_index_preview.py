@@ -113,7 +113,16 @@ def test_preview_file_is_not_included_in_partition_index(wiki_root):
     new_index, _old_index = tm_compile_index.compile_partition_index("brand")
 
     assert "alpha.md" in new_index
-    assert "index-by-subtopic.md" not in new_index
+    assert "- [brand Index" not in new_index
+    assert tm_compile_index.PREVIEW_LINK_LINE in new_index
+
+
+def test_partition_index_omits_preview_footer_when_preview_missing(wiki_root):
+    _write(wiki_root / "brand" / "alpha.md", _page("Alpha", 'subtopic: ["copywriting"]'))
+
+    new_index, _old_index = tm_compile_index.compile_partition_index("brand")
+
+    assert tm_compile_index.PREVIEW_LINK_LINE not in new_index
 
 
 def test_linter_dashboard_preview_paths_are_exempt_from_repo_lint(tmp_path, monkeypatch):

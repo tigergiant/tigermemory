@@ -41,6 +41,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 WIKI_ROOT = REPO_ROOT / "wiki"
 PARTITIONS = ["brand", "investment", "operations", "person", "production", "self-evolution", "systems"]
 PREVIEW_FILENAME = "index-by-subtopic.md"
+PREVIEW_LINK_LINE = f"*主题视图*：[按 subtopic 浏览]({PREVIEW_FILENAME})"
 
 PAGES_HEADING = "## 页面"
 SUMMARY_HEADING_RE = re.compile(r"^##\s+摘要\s*$", re.MULTILINE)
@@ -285,6 +286,8 @@ def compile_partition_index(
         lines.append("（暂无页面）")
 
     new_text = preamble.rstrip("\n") + "\n\n" + "\n".join(lines) + "\n"
+    if (partition_dir / PREVIEW_FILENAME).exists():
+        new_text += "\n" + PREVIEW_LINK_LINE + "\n"
     return new_text, old_text
 
 
