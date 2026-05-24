@@ -77,7 +77,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 import tigermemory_core as tm_core
 import tm_answer
 import tm_memory_ops
-import tm_minimax
+import tigermemory_minimax as tm_minimax
 import tigermemory_persona as tm_persona
 import tm_review_tools
 import tigerledger as tm_expense
