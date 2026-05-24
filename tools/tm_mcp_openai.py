@@ -53,6 +53,8 @@ from pydantic import AnyUrl, BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
+import _bootstrap_paths  # noqa: F401  -- must precede tigermemory_* / tigerledger imports
+
 import tigermemory_core as tm_core
 import tm_answer
 import tm_memory_ops

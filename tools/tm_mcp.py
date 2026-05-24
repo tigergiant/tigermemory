@@ -74,6 +74,8 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
+import _bootstrap_paths  # noqa: F401  -- must precede tigermemory_* / tigerledger imports
+
 import tigermemory_core as tm_core
 import tm_answer
 import tm_memory_ops

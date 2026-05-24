@@ -41,6 +41,8 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+import _bootstrap_paths  # noqa: F401  -- must precede tigermemory_* / tigerledger imports
+
 import tigermemory_core as tm_core
 import tm_answer
 import tigerledger as tm_expense
