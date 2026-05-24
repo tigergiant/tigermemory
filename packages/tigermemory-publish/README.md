@@ -1,0 +1,37 @@
+# tigermemory-publish
+
+`tigermemory-publish` builds a commit-safe public distribution snapshot from a TigerMemory repository. It copies only explicit allowlist content:
+
+- top-level public project files such as `AGENTS.md` and `index.md`
+- `tools/` and `schemas/`
+- wiki pages whose frontmatter has `public: true`
+- runtime config templates ending in `.example`
+
+It does not call Git, Mem0, LLMs, or network services.
+
+The package is extracted from `tools/tm_publish.py`. The legacy script remains as a compatibility shim:
+
+```powershell
+py tools\tm_publish.py --dry-run --json
+```
+
+New package usage:
+
+```powershell
+pip install -e ./packages/tigermemory-publish
+tigermemory-publish --dry-run --json
+```
+
+Python callers can import the public helpers directly:
+
+```python
+from tigermemory_publish import collect_publish_plan, execute_plan
+```
+
+## Repository Root
+
+The package detects the TigerMemory repository root in this order:
+
+1. `TIGERMEMORY_ROOT` environment variable.
+2. Walk upward from the installed module until a directory contains both `.git` and `wiki/`.
+3. Fallback to the monorepo editable-install layout.

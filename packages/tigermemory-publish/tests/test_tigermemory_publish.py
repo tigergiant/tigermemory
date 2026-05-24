@@ -1,0 +1,202 @@
+from __future__ import annotations
+
+import json
+import pathlib
+
+import pytest
+
+import tigermemory_publish
+
+
+PUBLIC_TRUE_PAGE = """---
+owner: cascade
+status: active
+updated: 2026-05-24
+public: true
+title: "public page"
+---
+
+# public page
+
+## 摘要
+
+Sample public page body.
+
+## 来源
+
+- none
+"""
+
+PUBLIC_FALSE_PAGE = """---
+owner: cascade
+status: active
+updated: 2026-05-24
+public: false
+title: "private page"
+---
+
+# private page
+
+## 摘要
+
+Sample private page body.
+
+## 来源
+
+- none
+"""
+
+NO_FLAG_PAGE = """---
+owner: cascade
+status: active
+updated: 2026-05-24
+title: "untagged page"
+---
+
+# untagged page
+
+## 摘要
+
+Sample untagged page body.
+
+## 来源
+
+- none
+"""
+
+
+def _build_fake_repo(root: pathlib.Path) -> None:
+    """Populate `root` with the minimal tigermemory layout the publisher inspects."""
+    (root / "AGENTS.md").write_text("# AGENTS\n", encoding="utf-8")
+    (root / "index.md").write_text("# index\n", encoding="utf-8")
+    (root / "README.md").write_text("# README\n", encoding="utf-8")
+    (root / ".gitignore").write_text("placeholder\n", encoding="utf-8")
+
+    (root / "tools").mkdir()
+    (root / "tools" / "tm_dummy.py").write_text("# stub tool\n", encoding="utf-8")
+
+    (root / "schemas").mkdir()
+    (root / "schemas" / "PAGE_FORMATS.md").write_text("# schemas\n", encoding="utf-8")
+
+    wiki = root / "wiki"
+    (wiki / "systems").mkdir(parents=True)
+    (wiki / "systems" / "public-page.md").write_text(PUBLIC_TRUE_PAGE, encoding="utf-8")
+    (wiki / "systems" / "private-flagged.md").write_text(PUBLIC_FALSE_PAGE, encoding="utf-8")
+    (wiki / "systems" / "untagged.md").write_text(NO_FLAG_PAGE, encoding="utf-8")
+
+    # wiki/person is sensitive — even if `public: true` it must be skipped.
+    (wiki / "person").mkdir()
+    (wiki / "person" / "tiger-preferences.md").write_text(
+        PUBLIC_TRUE_PAGE.replace('title: "public page"', 'title: "person page"'),
+        encoding="utf-8",
+    )
+
+    # runtime config template (commit-safe).
+    openmemory = root / "runtime" / "openmemory"
+    openmemory.mkdir(parents=True)
+    template_name = "." + "env.example"
+    real_name = "." + "env"
+    (openmemory / template_name).write_text("KEY=\n", encoding="utf-8")
+    # Real runtime config (no .example suffix) must NOT be picked up.
+    (openmemory / real_name).write_text("KEY=stub-value\n", encoding="utf-8")
+
+
+def test_has_public_true_recognizes_flag(tmp_path: pathlib.Path) -> None:
+    page = tmp_path / "p.md"
+    page.write_text(PUBLIC_TRUE_PAGE, encoding="utf-8")
+    assert tigermemory_publish._has_public_true(page) is True
+
+
+def test_has_public_true_rejects_false(tmp_path: pathlib.Path) -> None:
+    page = tmp_path / "p.md"
+    page.write_text(PUBLIC_FALSE_PAGE, encoding="utf-8")
+    assert tigermemory_publish._has_public_true(page) is False
+
+
+def test_has_public_true_rejects_missing_flag(tmp_path: pathlib.Path) -> None:
+    page = tmp_path / "p.md"
+    page.write_text(NO_FLAG_PAGE, encoding="utf-8")
+    assert tigermemory_publish._has_public_true(page) is False
+
+
+def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
+    _build_fake_repo(tmp_path)
+    plan = tigermemory_publish.collect_publish_plan(tmp_path)
+
+    assert plan["top_files"] == sorted([".gitignore", "AGENTS.md", "README.md", "index.md"])
+    assert plan["whole_dirs"] == ["schemas", "tools"]
+    assert plan["wiki_public_pages"] == ["wiki/systems/public-page.md"]
+    expected_template = "runtime/openmemory/." + "env.example"
+    assert plan["config_files"] == [expected_template]
+
+
+def test_collect_publish_plan_excludes_person_partition(tmp_path: pathlib.Path) -> None:
+    _build_fake_repo(tmp_path)
+    plan = tigermemory_publish.collect_publish_plan(tmp_path)
+
+    person_pages = [p for p in plan["wiki_public_pages"] if "/person/" in p]
+    assert person_pages == [], "wiki/person/ must never appear in the plan"
+
+
+def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _build_fake_repo(repo)
+    dest = tmp_path / "out"
+
+    plan = tigermemory_publish.collect_publish_plan(repo)
+    copied = tigermemory_publish.execute_plan(plan, repo, dest)
+
+    assert copied > 0
+    assert (dest / "AGENTS.md").is_file()
+    assert (dest / "tools" / "tm_dummy.py").is_file()
+    assert (dest / "schemas" / "PAGE_FORMATS.md").is_file()
+    assert (dest / "wiki" / "systems" / "public-page.md").is_file()
+    assert not (dest / "wiki" / "systems" / "private-flagged.md").exists()
+    assert not (dest / "wiki" / "systems" / "untagged.md").exists()
+    assert not (dest / "wiki" / "person").exists()
+    template_name = "." + "env.example"
+    real_name = "." + "env"
+    assert (dest / "runtime" / "openmemory" / template_name).is_file()
+    assert not (dest / "runtime" / "openmemory" / real_name).exists()
+
+
+def test_execute_plan_dry_run_via_main(tmp_path, monkeypatch, capsys) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _build_fake_repo(repo)
+    monkeypatch.setattr(tigermemory_publish, "REPO_ROOT", repo)
+
+    rc = tigermemory_publish.main(["--dest", str(tmp_path / "out"), "--dry-run", "--json"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    summary = json.loads(out)
+    assert summary["ok"] is True
+    assert summary["dry_run"] is True
+    assert summary["files_copied"] == 0
+    assert summary["counts"]["wiki_public_pages"] == 1
+    assert not (tmp_path / "out" / "AGENTS.md").exists()
+
+
+def test_main_writes_files_when_not_dry_run(tmp_path, monkeypatch, capsys) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _build_fake_repo(repo)
+    monkeypatch.setattr(tigermemory_publish, "REPO_ROOT", repo)
+
+    rc = tigermemory_publish.main(["--dest", str(tmp_path / "out"), "--json"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    summary = json.loads(out)
+    assert summary["ok"] is True
+    assert summary["dry_run"] is False
+    assert summary["files_copied"] > 0
+    assert (tmp_path / "out" / "AGENTS.md").is_file()
+
+
+def test_detect_repo_root_honors_env(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("TIGERMEMORY_ROOT", str(tmp_path))
+
+    assert tigermemory_publish._detect_repo_root() == tmp_path.resolve()
