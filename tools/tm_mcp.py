@@ -80,7 +80,7 @@ import tm_memory_ops
 import tm_minimax
 import tm_persona
 import tm_review_tools
-import tm_expense
+import tigerledger as tm_expense
 import tm_search
 import tm_deep_dive_jobs
 import tm_stability_eval

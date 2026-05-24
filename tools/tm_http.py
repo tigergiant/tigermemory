@@ -43,7 +43,7 @@ from urllib.parse import urlparse
 
 import tigermemory_core as tm_core
 import tm_answer
-import tm_expense
+import tigerledger as tm_expense
 import tm_memory_ops
 import tm_review
 import tm_agent_doctor
