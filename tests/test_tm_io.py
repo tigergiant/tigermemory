@@ -142,3 +142,55 @@ def test_write_inbox_routed_inbox_preserves_requested_topic(monkeypatch, capsys)
     assert captured["frontmatter_extra"]["route_requested_topic"] == "systems"
     assert captured["frontmatter_extra"]["route_topic_inferred"] == "production"
     assert captured["frontmatter_extra"]["stored_topic"] == "systems"
+
+
+def test_lint_page_allows_inbox_without_summary_or_sources(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(tm_io.tm_core, "REPO_ROOT", tmp_path)
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    page = inbox / "2026-05-24-1200-codex-systems.md"
+    page.write_text(
+        "---\n"
+        "owner: codex\n"
+        "status: draft\n"
+        "updated: 2026-05-24\n"
+        "routed_by: tigermemory\n"
+        "---\n\n"
+        "# Needs review\n\n"
+        "Inbox payload without required wiki sections.\n",
+        encoding="utf-8",
+    )
+
+    class Args:
+        path = "inbox/2026-05-24-1200-codex-systems.md"
+
+    tm_io.cmd_lint_page(Args())
+
+    assert capsys.readouterr().out.strip() == "OK"
+
+
+def test_lint_page_still_rejects_wiki_without_summary(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(tm_io.tm_core, "REPO_ROOT", tmp_path)
+    page_dir = tmp_path / "wiki" / "systems"
+    page_dir.mkdir(parents=True)
+    page = page_dir / "missing-summary.md"
+    page.write_text(
+        "---\n"
+        "owner: codex\n"
+        "status: draft\n"
+        "updated: 2026-05-24\n"
+        "---\n\n"
+        "# Missing summary\n\n"
+        "## 来源\n\n"
+        "- test fixture\n",
+        encoding="utf-8",
+    )
+
+    class Args:
+        path = "wiki/systems/missing-summary.md"
+
+    with pytest.raises(SystemExit) as exc:
+        tm_io.cmd_lint_page(Args())
+
+    assert exc.value.code == 1
+    assert "missing '## 摘要' section" in capsys.readouterr().err

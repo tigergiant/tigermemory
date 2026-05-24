@@ -232,6 +232,14 @@ def cmd_mem0_update_content(args: argparse.Namespace) -> None:
 
 # ---------- lint-page ----------
 
+def _is_inbox_path(path: pathlib.Path) -> bool:
+    try:
+        rel = path.resolve().relative_to(tm_core.REPO_ROOT.resolve())
+    except ValueError:
+        return False
+    return bool(rel.parts) and rel.parts[0] == "inbox"
+
+
 def cmd_lint_page(args: argparse.Namespace) -> None:
     path = pathlib.Path(args.path)
     if not path.is_absolute():
@@ -241,6 +249,12 @@ def cmd_lint_page(args: argparse.Namespace) -> None:
 
     text = path.read_text(encoding="utf-8")
     errors = tm_core.lint_page_errors(text)
+    if _is_inbox_path(path):
+        errors = [
+            e
+            for e in errors
+            if e not in {"missing '## 摘要' section", "missing '## 来源' section"}
+        ]
     if errors:
         for e in errors:
             print(f"ERROR: {e}", file=sys.stderr)
