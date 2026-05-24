@@ -7,7 +7,7 @@ visibility, promotion markers, and local sensitive-pattern checks.
 
 Inputs: Mem0 全量 records（透过 tm_memory_ops 拉 list/v2/memories）或本模块内嵌 SAMPLE_DATA 离线样本；CLI flag --source mem0|sample、--input <jsonl>、--output <path>、--max-items N、--json；可选 .tmp/search-tigermemory.jsonl dogfood 日志做"最近被搜到"信号。
 Outputs: 候选 list[dict]（含 retention_score 0-100、state ∈ {keep, review, candidate_drop}、reasons[]）；--json 模式 stdout JSON；否则 pretty markdown 报告。绝不删除或更新任何 Mem0 记录。
-Depends-on (must-have): tm_core.mem0_request（HTTP 读 Mem0）、tm_memory_ops（批量分页拉取）；本模块内嵌的 sensitive-pattern 黑名单（身份证 / 银行卡 / 密码 / 家庭住址正则）；零写入路径。
+Depends-on (must-have): tm_core 的 Mem0 HTTP 读取 helper、tm_memory_ops（批量分页拉取）；本模块内嵌的 sensitive-pattern 黑名单（身份证 / 银行卡 / 密码 / 家庭住址正则）；零写入路径。
 """
 from __future__ import annotations
 

@@ -164,7 +164,7 @@ def extract_mem0_id(data: dict[str, Any]) -> str:
 def fetch_mem0_page(page: int = 1, page_size: int = 100) -> dict[str, Any]:
     """Read one Mem0 list page through the canonical OpenMemory HTTP surface."""
     params = urllib.parse.urlencode({
-        "user_id": "tiger",
+        "user_id": tm_core.mem0_user_id(),
         "page": page,
         "size": page_size,
     })

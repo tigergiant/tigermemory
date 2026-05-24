@@ -251,7 +251,7 @@ def _fetch_memories_for_date(date_str: str) -> list[dict[str, Any]]:
     while page <= max_pages:
         try:
             params = tm_core.urllib.parse.urlencode({
-                "user_id": "tiger",
+                "user_id": tm_core.mem0_user_id(),
                 "page": page,
                 "size": page_size,
             })
