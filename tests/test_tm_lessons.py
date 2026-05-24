@@ -5,8 +5,12 @@ import pathlib
 import sys
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "packages" / "tigermemory-core" / "src"))
-sys.path.insert(0, str(REPO_ROOT / "packages" / "tigermemory-lessons" / "src"))
+for _pkg_src in (
+    REPO_ROOT / "packages" / "tigermemory-core" / "src",
+    REPO_ROOT / "packages" / "tigermemory-lessons" / "src",
+):
+    if str(_pkg_src) not in sys.path:
+        sys.path.insert(0, str(_pkg_src))
 
 import tigermemory_lessons as tm_lessons
 
