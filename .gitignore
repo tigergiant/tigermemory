@@ -57,3 +57,7 @@ data/dashboard/*.sqlite-wal
 
 # tools/tm_publish.py outward snapshot output (P2 stage2-2)
 dist/
+
+# Python package build artifacts (setuptools 'pip install -e .' produces
+# packages/<name>/build/lib/* as a 1:1 copy of src/; not source of truth).
+packages/*/build/
