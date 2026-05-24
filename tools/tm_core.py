@@ -50,8 +50,20 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent  # tools/.. = repo ro
 
 # ---------- Enums (AGENTS.md §3, §4) ----------
 
-AGENTS = {"claude-code", "cascade", "codex", "chatgpt", "openclaw", "hermes", "deerflow", "human", "mem0", "linter", "tigermemory-ce", "kimi", "gemini", "dsa-cron"}
-ACTIONS = {"create", "update", "archive", "lint", "ingest", "compile"}
+# Regular agents who may author commits and own pages (AGENTS.md §3).
+COMMIT_AGENTS = {
+    "claude-code", "cascade", "codex", "chatgpt", "openclaw",
+    "hermes", "deerflow", "human", "linter", "kimi", "gemini",
+}
+# Special data-source identities: appear only in inbox `source` / Mem0
+# `metadata.source` fields. They MUST NOT be used as commit prefix or page
+# owner. AGENTS.md §3 is the policy source.
+DATA_SOURCE_AGENTS = {"mem0", "tigermemory-ce", "dsa-cron"}
+# Full enum: union of both categories. validate_agent / inbox filename regex /
+# Mem0 metadata.source acceptors fall back to this set. Commit-prefix and page
+# owner validators must use COMMIT_AGENTS instead.
+AGENTS = COMMIT_AGENTS | DATA_SOURCE_AGENTS
+ACTIONS = {"create", "update", "archive", "lint", "ingest", "compile", "fix"}
 # Topic enum used by inbox filenames + Mem0 metadata.topic.
 # Note: file-name regex INBOX_NAME_RE allows only [a-z]+ (no hyphens), so the
 # `self-evolution` partition uses topic key `selfevolution` (no hyphen). The
@@ -78,10 +90,13 @@ PARTITION_OWNERS: dict[str, set[str]] = {
     "self-evolution": set(_ALL_REGULAR_AGENTS),
 }
 
-# Meta-rule files: only claude-code or human may modify.
+# Meta-rule files: only claude-code / cascade / human may modify.
+# 2026-05-24 虎哥 directive: cascade joined the meta-rule owner set so it can
+# draft AGENTS.md / schemas/ edits directly instead of always routing through
+# claude-code. claude-code remains the canonical owner for log.md compile.
 META_RULE_PATHS = {"AGENTS.md", "index.md", "log.md"}
 META_RULE_PREFIXES = ("schemas/",)
-META_RULE_OWNERS = {"claude-code", "human"}
+META_RULE_OWNERS = {"claude-code", "cascade", "human"}
 
 # sources/ is an external-mirror area for original materials.
 # Agent commits to sources/ require scrape-provenance frontmatter
@@ -2287,9 +2302,11 @@ def guard_commit(commit_msg_path: pathlib.Path) -> list[str]:
     else:
         agent = m.group("agent")
         action = m.group("action")
-        if agent not in AGENTS:
+        if agent not in COMMIT_AGENTS:
             errors.append(
-                f"commit prefix agent '{agent}' not in allowed set {sorted(AGENTS)}"
+                f"commit prefix agent '{agent}' not in commit-author set "
+                f"{sorted(COMMIT_AGENTS)} (data-source identities "
+                f"{sorted(DATA_SOURCE_AGENTS)} cannot author commits)"
             )
         if action not in ACTIONS:
             errors.append(
@@ -2348,7 +2365,15 @@ def guard_commit(commit_msg_path: pathlib.Path) -> list[str]:
     if "log.md" in paths and not (agent == "claude-code" and action == "compile"):
         errors.append("log.md is append-only via [claude-code] compile; agents must not write it")
 
-    # 6. Partition ownership + atomicity on wiki/
+    # 6. Partition ownership on wiki/
+    # 2026-05-24 虎哥 directive: removed the cross-partition atomicity check.
+    # It was a treatment preference (force small commits per partition), not a
+    # safety rule. After the 2026-05-04 ownership relaxation it protected
+    # nothing real (all regular agents already own all partitions except
+    # person), and it blocked legitimate cross-partition atomic edits (e.g.
+    # subtopic-index PoC across 5 partitions, synchronized policy rewrites).
+    # Ownership is still enforced per partition below: every partition a
+    # commit touches must be owned by the commit agent.
     # LINTER_DASHBOARDS are auto-generated overwrite-only pages; they have
     # their own check immediately below. Excluding them here lets a pure
     # `[linter] lint` dashboard-refresh commit pass owner check (linter is
@@ -2360,19 +2385,14 @@ def guard_commit(commit_msg_path: pathlib.Path) -> list[str]:
         wm = WIKI_PATH_RE.match(p)
         if wm:
             wiki_partitions.add(wm.group("partition"))
-    if len(wiki_partitions) > 1:
-        errors.append(
-            f"commit touches multiple wiki partitions {sorted(wiki_partitions)}; "
-            "split into one commit per partition"
-        )
-    elif len(wiki_partitions) == 1 and agent is not None:
-        part = next(iter(wiki_partitions))
-        owners = PARTITION_OWNERS.get(part, set())
-        if agent not in owners and agent != "human":
-            errors.append(
-                f"agent '{agent}' is not an owner of wiki/{part}/ "
-                f"(owners: {sorted(owners)}). Write to inbox/ instead."
-            )
+    if agent is not None and agent != "human":
+        for part in sorted(wiki_partitions):
+            owners = PARTITION_OWNERS.get(part, set())
+            if agent not in owners:
+                errors.append(
+                    f"agent '{agent}' is not an owner of wiki/{part}/ "
+                    f"(owners: {sorted(owners)}). Write to inbox/ instead."
+                )
 
     # Special: linter-owned dashboards are overwrite-only by [linter] lint.
     for dash in LINTER_DASHBOARDS:

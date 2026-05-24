@@ -156,7 +156,7 @@ def render_5min(lessons: list[Lesson]) -> str:
     write_boundaries = _bullet_lines(
         [
             "`wiki/systems/` 可由 `codex` 或 `claude-code` 写；`wiki/self-evolution/` 只由 `claude-code` 直接写，其他 agent 走 inbox 提案。",
-            "`AGENTS.md`、`schemas/`、根 `index.md` 属元规则，只有 `claude-code` 和 `human` 可改。",
+            "`AGENTS.md`、`schemas/`、根 `index.md` 属元规则，只有 `claude-code` / `cascade` / `human` 可改。",
             "`log.md` 不手写，由 `claude-code compile` 从 git log 汇总。",
             "跨分区、不确定、需人工二审内容写 inbox；self-evolution 的 inbox topic key 是 `selfevolution`。",
         ]
