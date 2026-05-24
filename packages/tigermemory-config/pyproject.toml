@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tigermemory-config"
+version = "0.1.0"
+description = "Read-only IDE and agent configuration explainer for TigerMemory"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "tigergiant" }]
+keywords = ["agent", "ide", "configuration", "policy", "tigermemory"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+
+[project.scripts]
+tigermemory-config = "tigermemory_config:main"
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
