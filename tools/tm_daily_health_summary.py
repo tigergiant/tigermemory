@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Build machine-readable daily-health summaries from existing check outputs.
 
 This tool is intentionally aggregation-only. It does not call LLMs, run
@@ -21,7 +21,7 @@ import sys
 from collections import Counter
 from typing import Any
 
-import tm_core
+import tigermemory_core as tm_core
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 tm_io.py — tigermemory I/O CLI adapter (thin shell over tm_core).
 
@@ -47,7 +47,7 @@ import json
 import pathlib
 import sys
 
-import tm_core
+import tigermemory_core as tm_core
 
 
 def _die(msg: str, code: int = 2) -> None:

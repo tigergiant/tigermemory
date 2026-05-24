@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """tools/tm_publish.py — outward distribution snapshot builder.
 
 Inputs:  argparse args (--dest / --dry-run / --json) + repo state (wiki
@@ -18,7 +18,7 @@ import re
 import shutil
 import sys
 
-from tm_core import REPO_ROOT, configure_stdio
+from tigermemory_core import REPO_ROOT, configure_stdio
 
 
 PUBLISH_TOP_FILES = (

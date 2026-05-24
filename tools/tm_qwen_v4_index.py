@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 tools/tm_qwen_v4_index.py — Phase 6 eval-only Aliyun DashScope
 text-embedding-v4 dense / dense+sparse index builder + searcher.
@@ -46,7 +46,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-import tm_core
+import tigermemory_core as tm_core
 import tm_embed_index
 
 REPO_ROOT = tm_core.REPO_ROOT

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Unit tests for Phase B1: _strip_minimax_artifacts, suggest_wiki_patches,
 save_wiki_patches_to_inbox.
 
@@ -19,7 +19,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-import tm_core  # noqa: E402
+import tigermemory_core as tm_core  # noqa: E402
 
 
 CATALOG = [

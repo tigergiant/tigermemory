@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 tools/tm_http.py — HTTP wrapper for tigermemory (FastAPI).
 
@@ -41,7 +41,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from urllib.parse import urlparse
 
-import tm_core
+import tigermemory_core as tm_core
 import tm_answer
 import tm_expense
 import tm_memory_ops

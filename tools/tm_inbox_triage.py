@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 tools/tm_inbox_triage.py — weekly inbox triage.
 
@@ -31,7 +31,7 @@ import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-import tm_core
+import tigermemory_core as tm_core
 import tm_review
 
 REPO = tm_core.REPO_ROOT

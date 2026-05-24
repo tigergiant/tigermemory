@@ -1,4 +1,4 @@
-"""Run deterministic retrieval evaluation cases for tigermemory.
+﻿"""Run deterministic retrieval evaluation cases for tigermemory.
 
 Phase 1 is intentionally read-only: it calls existing retrieval paths and
 reports whether expected sources are found. It does not change production
@@ -25,7 +25,7 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Any
 
-import tm_core
+import tigermemory_core as tm_core
 import tm_embed_index
 import tm_hier_index
 import tm_lessons

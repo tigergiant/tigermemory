@@ -1,4 +1,4 @@
-"""Search wiki/self-evolution/lessons/ for relevant prevention lessons.
+﻿"""Search wiki/self-evolution/lessons/ for relevant prevention lessons.
 
 Usage (open a new task):
 
@@ -29,7 +29,7 @@ import re
 import sys
 from typing import Any, List, Tuple
 
-import tm_core
+import tigermemory_core as tm_core
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 LESSONS_DIR = REPO_ROOT / "wiki" / "self-evolution" / "lessons"

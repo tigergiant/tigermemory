@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 tools/tm_hier_index.py — build L0/L1/L2 hierarchical index for tigermemory.
 
@@ -43,7 +43,7 @@ import sys
 import time
 from typing import Any
 
-import tm_core
+import tigermemory_core as tm_core
 
 REPO_ROOT = tm_core.REPO_ROOT
 INDEX_DIR = REPO_ROOT / "runtime" / "embed_index"

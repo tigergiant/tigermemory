@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 tools/tm_route.py — memory routing decision engine (pure functions, no MCP).
 
@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import tm_core
+import tigermemory_core as tm_core
 
 DAILY_HEALTH_INDEX_MARKERS = (
     "每日巡检总清单已更新",

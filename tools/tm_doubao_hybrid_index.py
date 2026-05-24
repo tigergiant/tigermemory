@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 tools/tm_doubao_hybrid_index.py — Phase 5d eval-only Doubao multimodal
 dense+sparse hybrid index builder + searcher.
@@ -43,7 +43,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-import tm_core
+import tigermemory_core as tm_core
 import tm_embed_index
 
 REPO_ROOT = tm_core.REPO_ROOT

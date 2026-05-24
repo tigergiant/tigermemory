@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Read-only retention dry-run audit for tigermemory Mem0 records.
 
 This module never deletes or updates memories. It scores records for human
@@ -20,7 +20,7 @@ import re
 import sys
 from typing import Any
 
-import tm_core
+import tigermemory_core as tm_core
 import tm_memory_ops
 
 REPO_ROOT = tm_core.REPO_ROOT

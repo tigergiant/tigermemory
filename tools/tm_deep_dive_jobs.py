@@ -1,4 +1,4 @@
-"""Background job runner for TradingAgents single-stock deep dives.
+﻿"""Background job runner for TradingAgents single-stock deep dives.
 Inputs: CLI arguments, local repository files, or data supplied by the caller.
 Outputs: A deterministic stdout report, file rewrite, or helper return value documented by the command.
 Depends-on (must-have): Python stdlib and local tigermemory helper modules; external services only when explicitly requested.
@@ -17,7 +17,7 @@ import time
 import uuid
 from typing import Any
 
-import tm_core
+import tigermemory_core as tm_core
 
 
 TERMINAL_STATUSES = {"completed", "failed"}

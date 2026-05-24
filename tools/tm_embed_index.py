@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 tools/tm_embed_index.py — build & query an embedding index over wiki/ + sources/.
 
@@ -36,7 +36,7 @@ import sys
 import time
 from typing import Any, Iterable
 
-import tm_core
+import tigermemory_core as tm_core
 
 REPO_ROOT = tm_core.REPO_ROOT
 INDEX_DIR = REPO_ROOT / "runtime" / "embed_index"

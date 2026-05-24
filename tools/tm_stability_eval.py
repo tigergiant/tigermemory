@@ -1,4 +1,4 @@
-"""TradingAgents stability evaluation runner.
+﻿"""TradingAgents stability evaluation runner.
 
 The evaluator fans out multiple deep-dive jobs for the same ticker/date/profile,
 waits for completion, compares final decisions, and writes a compact consensus
@@ -20,7 +20,7 @@ from collections import Counter
 from itertools import combinations
 from typing import Any
 
-import tm_core
+import tigermemory_core as tm_core
 import tm_deep_dive_jobs
 
 

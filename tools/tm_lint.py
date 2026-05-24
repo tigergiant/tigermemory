@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 tools/tm_lint.py — L4 daily linter runner.
 
@@ -21,7 +21,7 @@ import subprocess
 import sys
 from typing import Any
 
-import tm_core
+import tigermemory_core as tm_core
 import tm_review  # for DeepSeek LLM calls on F/G
 
 REPO = tm_core.REPO_ROOT

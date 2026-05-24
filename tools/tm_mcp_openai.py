@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 OpenAI / ChatGPT-facing MCP facade for tigermemory.
 
@@ -53,7 +53,7 @@ from pydantic import AnyUrl, BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
-import tm_core
+import tigermemory_core as tm_core
 import tm_answer
 import tm_memory_ops
 import tm_persona

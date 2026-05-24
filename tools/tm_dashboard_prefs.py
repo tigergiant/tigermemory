@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Shared dashboard preference storage helpers.
 
 This module intentionally has no FastAPI or MCP dependency. Web routes and MCP
@@ -16,7 +16,7 @@ import pathlib
 import sqlite3
 from typing import Any
 
-import tm_core
+import tigermemory_core as tm_core
 
 REPO_ROOT = tm_core.REPO_ROOT
 PREFS_DB = REPO_ROOT / "data" / "dashboard" / "user_prefs.sqlite"

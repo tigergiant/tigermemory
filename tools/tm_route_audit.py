@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Discard quarantine for write_memory route decisions.
 
 Mem0 and inbox writes already have durable storage and should not be duplicated
@@ -19,7 +19,7 @@ import pathlib
 import re
 from typing import Any
 
-import tm_core
+import tigermemory_core as tm_core
 import tm_route
 
 REPO_ROOT = tm_core.REPO_ROOT

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 tools/tm_mcp.py — tigermemory MCP server (thin adapter over tm_core).
 
@@ -74,7 +74,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
-import tm_core
+import tigermemory_core as tm_core
 import tm_answer
 import tm_memory_ops
 import tm_minimax

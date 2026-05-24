@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 tools/tm_guard_ci.py — server-side commit validator for CI (GitHub Actions).
 
@@ -23,7 +23,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-import tm_core
+import tigermemory_core as tm_core
 
 LINTER_DASHBOARDS = {
     "wiki/operations/lint-dashboard.md",

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Daily and weekly report rendering for memory route reflection.
 
 The renderer is intentionally read-only for routing policy. It may write the
@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-import tm_core
+import tigermemory_core as tm_core
 import tm_route_audit
 
 try:

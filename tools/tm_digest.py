@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 tools/tm_digest.py — Daily Digest Generator (P6.2)
 
@@ -32,7 +32,7 @@ from typing import Any
 _tiger_root = Path(__file__).parent.parent
 if str(_tiger_root) not in sys.path:
     sys.path.insert(0, str(_tiger_root))
-import tm_core  # noqa: E402
+import tigermemory_core as tm_core  # noqa: E402
 
 # ---------- Configuration ----------
 

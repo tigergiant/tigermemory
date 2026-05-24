@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Evidence-first memory answer orchestration for tigermemory.
 Inputs: CLI args, fixture cases, trace JSONL, wiki/Mem0 data, or local index files as selected by the command.
 Outputs: Search/eval/trace/index reports printed to stdout or written to the requested output path.
@@ -18,7 +18,7 @@ import time
 import uuid
 from typing import Any
 
-import tm_core
+import tigermemory_core as tm_core
 import tm_search
 
 TRACE_LOG = tm_core.REPO_ROOT / ".tmp" / "memory-answer-trace.jsonl"

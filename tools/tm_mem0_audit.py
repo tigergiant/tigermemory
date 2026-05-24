@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Read-only Mem0 retrospective audit for duplicate-like memories.
 Inputs: Local repo state, service health endpoints, lessons/wiki pages, Mem0 records, or dashboard preference files.
 Outputs: Doctor/audit/onboarding/metrics reports, local UI helper effects, or JSON diagnostics.
@@ -14,7 +14,7 @@ import pathlib
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-import tm_core
+import tigermemory_core as tm_core
 import tm_memory_ops
 import tm_route_audit
 

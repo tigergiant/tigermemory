@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Seven-day route replay support for memory reflection proposals.
 
 This tool collects historical write_memory inputs from Mem0, inbox, and discard
@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
-import tm_core
+import tigermemory_core as tm_core
 import tm_route_audit
 
 try:

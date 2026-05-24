@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Run answer-level eval cases for tigermemory memory_answer.
 Inputs: CLI args, fixture cases, trace JSONL, wiki/Mem0 data, or local index files as selected by the command.
 Outputs: Search/eval/trace/index reports printed to stdout or written to the requested output path.
@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import tm_answer
-import tm_core
+import tigermemory_core as tm_core
 
 
 def load_cases(path: str) -> list[dict[str, Any]]:

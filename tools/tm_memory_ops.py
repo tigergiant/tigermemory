@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Shared write_memory orchestration for MCP and HTTP adapters.
 Inputs: CLI/API payloads, inbox or digest markdown, route decisions, proposal metadata, or Mem0 write requests.
 Outputs: Rendered markdown, JSON status payloads, routed memory writes, proposal decisions, or review actions.
@@ -17,7 +17,7 @@ import time
 import urllib.parse
 from typing import Any, Callable
 
-import tm_core
+import tigermemory_core as tm_core
 import tm_route
 import tm_route_audit
 

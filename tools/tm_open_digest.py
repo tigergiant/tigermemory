@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Open a generated memory digest in the user's local viewer.
 Inputs: CLI/API payloads, inbox or digest markdown, route decisions, proposal metadata, or Mem0 write requests.
 Outputs: Rendered markdown, JSON status payloads, routed memory writes, proposal decisions, or review actions.
@@ -11,7 +11,7 @@ import pathlib
 import subprocess
 import sys
 
-import tm_core
+import tigermemory_core as tm_core
 
 
 def resolve_digest_path(raw: str) -> pathlib.Path:
