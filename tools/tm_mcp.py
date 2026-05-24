@@ -78,7 +78,7 @@ import tigermemory_core as tm_core
 import tm_answer
 import tm_memory_ops
 import tm_minimax
-import tm_persona
+import tigermemory_persona as tm_persona
 import tm_review_tools
 import tigerledger as tm_expense
 import tm_search

@@ -56,7 +56,7 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 import tigermemory_core as tm_core
 import tm_answer
 import tm_memory_ops
-import tm_persona
+import tigermemory_persona as tm_persona
 
 
 READ_SCOPE = "tm:read"

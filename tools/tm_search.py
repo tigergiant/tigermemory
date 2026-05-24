@@ -14,7 +14,7 @@ from typing import Any
 
 import tigermemory_core as tm_core
 import tm_lessons
-import tm_persona
+import tigermemory_persona as tm_persona
 
 SEARCH_SCOPES = {"auto", "all", "wiki", "lessons", "onboarding", "mem0"}
 DEFAULT_DOGFOOD_LOG = tm_core.REPO_ROOT / ".tmp" / "search-tigermemory.jsonl"

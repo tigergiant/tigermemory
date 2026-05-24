@@ -29,7 +29,7 @@ import tigermemory_core as tm_core
 import tm_embed_index
 import tm_hier_index
 import tm_lessons
-import tm_persona
+import tigermemory_persona as tm_persona
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 VALID_SCOPES = {"wiki", "lessons", "onboarding", "mem0", "all"}
