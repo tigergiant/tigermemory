@@ -18,9 +18,6 @@ _PKG_SRC = _HERE.parent.parent / "packages" / "tigermemory-core" / "src"
 if _PKG_SRC.is_dir() and str(_PKG_SRC) not in _sys.path:
     _sys.path.insert(0, str(_PKG_SRC))
 
-from tigermemory_core import *  # noqa: F401, F403, E402
-from tigermemory_core import (  # noqa: F401, E402
-    _EMBED_BREAKER,
-    _env_value,
-    _log_llm_call,
-)
+import tigermemory_core as _core  # noqa: E402
+
+_sys.modules[__name__] = _core
