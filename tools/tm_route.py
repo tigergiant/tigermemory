@@ -8,6 +8,9 @@ Routes agent-submitted memories to:
   - discard (low quality or transient)
 
 Depends on tm_core._call_deepseek_json for LLM evaluation.
+Inputs: CLI/API payloads, inbox or digest markdown, route decisions, proposal metadata, or Mem0 write requests.
+Outputs: Rendered markdown, JSON status payloads, routed memory writes, proposal decisions, or review actions.
+Depends-on (must-have): tm_core, tm_route/tm_memory_ops helpers, local git-managed files, and configured Mem0/OpenMemory endpoints.
 """
 from __future__ import annotations
 

@@ -14,6 +14,9 @@ Library (called from inside python guards):
 Stdlib only. Best-effort: any failure here MUST NOT block the commit guard
 itself from completing its real job (still exit 1). We swallow logging
 errors and proceed.
+Inputs: CLI arguments, local repository files, or data supplied by the caller.
+Outputs: A deterministic stdout report, file rewrite, or helper return value documented by the command.
+Depends-on (must-have): Python stdlib and local tigermemory helper modules; external services only when explicitly requested.
 """
 from __future__ import annotations
 
