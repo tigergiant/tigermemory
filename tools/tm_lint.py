@@ -253,8 +253,10 @@ def _deepseek_judge(system_prompt: str, user_msg: str) -> dict | None:
         key = os.environ["DEEPSEEK_API_KEY"]
     except KeyError:
         return None
+    endpoint = tm_core.deepseek_endpoint()
+    model = tm_core.deepseek_model()
     payload = json.dumps({
-        "model": "deepseek-v4-flash",
+        "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg[:8000]},  # cap context
@@ -265,7 +267,7 @@ def _deepseek_judge(system_prompt: str, user_msg: str) -> dict | None:
         "thinking": {"type": "disabled"},  # 2026-04-30: skip reasoning for lint JSON; 4x faster, equivalent to legacy deepseek-chat
     }).encode("utf-8")
     req = urllib.request.Request(
-        "https://api.deepseek.com/v1/chat/completions",
+        endpoint,
         data=payload,
         headers={
             "Authorization": f"Bearer {key}",
