@@ -252,8 +252,16 @@ def git_commit_push(files: list[str], msg: str) -> str:
     return run(["git", "rev-parse", "--short", "HEAD"]).stdout.strip()
 
 
-def git_session_status() -> dict[str, Any]:
+def git_session_status(strict_clean: bool = False) -> dict[str, Any]:
     """Return a read-only session preflight snapshot for agent start/end checks.
+
+    Self-scope discipline (added 2026-05-24, lessons/2026-05-24-self-scope-discipline.md):
+    foreign dirty paths are no longer a default blocker. An agent owns only the
+    files it itself staged + committed; another agent's in-flight edits do not
+    stop it from working or closing. dirty_count / paths / staged_count /
+    unstaged_count / untracked_count are still reported as informational so
+    callers (and humans) can see what's outstanding. Pass strict_clean=True
+    to restore the legacy behaviour (sweeps, archive moves, release checks).
 
     Phantom protection (added 2026-05-16, lessons/2026-05-16-close-session-stat-cache-phantom.md)
     catches two classes of false-positive dirty entries:
@@ -362,7 +370,10 @@ def git_session_status() -> dict[str, Any]:
         blockers.append("detached HEAD")
     if unmerged:
         blockers.append(f"unmerged paths: {len(unmerged)}")
-    if lines:
+    # Self-scope discipline (2026-05-24 虎哥 directive): foreign dirty paths
+    # don't block an agent's own work. strict_clean=True is for sweep tasks
+    # (archive moves, release verification) that genuinely need a clean tree.
+    if lines and strict_clean:
         blockers.append(f"dirty worktree: {len(lines)}")
     if ahead:
         blockers.append(f"unpushed commits: {ahead}")

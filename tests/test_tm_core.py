@@ -517,7 +517,12 @@ def test_git_session_status_excludes_pure_phantom_dirty(monkeypatch, tmp_path):
 
 
 def test_git_session_status_keeps_real_dirty_when_mixed_with_phantom(monkeypatch, tmp_path):
-    """Mixed phantom + real should yield dirty_count=1, phantom_count=1."""
+    """Mixed phantom + real should yield dirty_count=1+untracked=1, phantom_count=1.
+
+    Self-scope discipline (2026-05-24): dirty_count is reported but is NOT a
+    default blocker. The session is OK to proceed even with real dirty paths;
+    use strict_clean=True to restore the legacy behaviour.
+    """
     _install_hooks(tmp_path)
     fake_run, _calls = _make_fake_run(
         status_lines=[" M phantom.md", " M real.md", "?? new.md"],
@@ -534,8 +539,48 @@ def test_git_session_status_keeps_real_dirty_when_mixed_with_phantom(monkeypatch
     assert result["phantom_paths"] == [" M phantom.md"]
     assert result["unstaged_count"] == 1
     assert result["untracked_count"] == 1
-    assert any(b == "dirty worktree: 2" for b in result["blockers"])
+    # New default: foreign dirty is informational only, not a blocker.
+    assert not any(b.startswith("dirty worktree:") for b in result["blockers"]), result["blockers"]
+    assert result["ok"] is True
+
+
+def test_git_session_status_strict_clean_blocks_on_real_dirty(monkeypatch, tmp_path):
+    """strict_clean=True restores the legacy 'dirty worktree' blocker for sweep
+    tasks (archive moves, release verification) that genuinely need a clean tree."""
+    _install_hooks(tmp_path)
+    fake_run, _calls = _make_fake_run(
+        status_lines=[" M phantom.md", " M real.md", "?? new.md"],
+        real_dirty_paths={"real.md"},
+    )
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_core, "run", fake_run)
+
+    result = tm_core.git_session_status(strict_clean=True)
+
+    # Same accounting as the default-mode test, but blockers now include dirty.
+    assert result["dirty_count"] == 2
+    assert result["phantom_count"] == 1
+    assert any(b == "dirty worktree: 2" for b in result["blockers"]), result["blockers"]
     assert result["ok"] is False
+
+
+def test_git_session_status_strict_clean_does_not_block_on_pure_phantom(monkeypatch, tmp_path):
+    """strict_clean should still respect phantom detection: a pure-phantom
+    worktree is clean for legacy callers, not dirty."""
+    _install_hooks(tmp_path)
+    fake_run, _calls = _make_fake_run(
+        status_lines=[" M .gitignore", " M deploy/script.ps1"],
+        real_dirty_paths=set(),  # both phantom
+    )
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_core, "run", fake_run)
+
+    result = tm_core.git_session_status(strict_clean=True)
+
+    assert result["dirty_count"] == 0
+    assert result["phantom_count"] == 2
+    assert not any(b.startswith("dirty worktree:") for b in result["blockers"]), result["blockers"]
+    assert result["ok"] is True
 
 
 def test_git_session_status_real_only_baseline_unaffected(monkeypatch, tmp_path):

@@ -293,7 +293,7 @@ def _print_status(status: dict, as_json: bool) -> None:
 
 def cmd_status(args: argparse.Namespace) -> None:
     try:
-        status = tm_core.git_session_status()
+        status = tm_core.git_session_status(strict_clean=getattr(args, "strict_clean", False))
     except tm_core.GitError as e:
         _die(str(e), code=3)
     _print_status(status, args.json)
@@ -301,7 +301,7 @@ def cmd_status(args: argparse.Namespace) -> None:
 
 def cmd_preflight(args: argparse.Namespace) -> None:
     try:
-        status = tm_core.git_session_status()
+        status = tm_core.git_session_status(strict_clean=getattr(args, "strict_clean", False))
     except tm_core.GitError as e:
         _die(str(e), code=3)
     _print_status(status, args.json)
@@ -469,10 +469,22 @@ def main() -> None:
 
     st = sub.add_parser("status", help="print a read-only agent session status snapshot")
     st.add_argument("--json", action="store_true")
+    st.add_argument(
+        "--strict-clean",
+        action="store_true",
+        help="Treat any dirty path as a blocker (sweep/archive/release mode). "
+        "Default is self-scope discipline: foreign dirty is informational only.",
+    )
     st.set_defaults(func=cmd_status)
 
     pf = sub.add_parser("preflight", help="fail if the session cannot safely start or end")
     pf.add_argument("--json", action="store_true")
+    pf.add_argument(
+        "--strict-clean",
+        action="store_true",
+        help="Treat any dirty path as a blocker (sweep/archive/release mode). "
+        "Default is self-scope discipline: foreign dirty is informational only.",
+    )
     pf.set_defaults(func=cmd_preflight)
 
     ra = sub.add_parser("retention-audit", help="read-only Mem0 retention dry-run audit")

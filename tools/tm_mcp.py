@@ -167,8 +167,18 @@ def check_worktree() -> dict[str, Any]:
     """
     status = tm_core.git_session_status()
     blockers = list(status["blockers"])
+    dirty_count = status.get("dirty_count", 0)
     if blockers:
         action = "Report blockers and do not edit files until the owner/human resolves them."
+    elif dirty_count:
+        # Self-scope discipline (AGENTS.md §5.1.1): foreign dirty paths are not a
+        # blocker for the current agent. Surface them so the human / next agent
+        # can see what's outstanding, but proceed.
+        action = (
+            f"Safe to start work. Note: {dirty_count} foreign dirty path(s) "
+            "detected \u2014 leave them to their owner (self-scope discipline, "
+            "AGENTS.md \u00a75.1.1). Only `git add` files you touched in this session."
+        )
     else:
         action = "Safe to start work."
     return {
@@ -232,10 +242,22 @@ def close_session() -> dict[str, Any]:
     """
     status = tm_core.git_session_status()
     blockers = list(status["blockers"])
+    dirty_count = status.get("dirty_count", 0)
     if blockers:
         action = (
             "Do not close the session. Commit/push owned changes or report "
             "unowned blockers explicitly."
+        )
+    elif dirty_count:
+        # Self-scope discipline (AGENTS.md §5.1.1): the session may close even
+        # with foreign dirty paths still in the worktree. The closing agent
+        # confirms its own commits are pushed; the dirty paths belong to
+        # someone else and stay with their owner.
+        action = (
+            f"Safe to close session. Note: {dirty_count} foreign dirty path(s) "
+            "remain in the worktree \u2014 they belong to another owner. "
+            "List them in your handover/closeout report so the human can see, "
+            "but do not commit, stash, or revert them (AGENTS.md \u00a75.1.1)."
         )
     else:
         action = "Safe to close session."
