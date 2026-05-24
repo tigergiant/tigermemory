@@ -169,6 +169,61 @@ def test_lint_page_allows_inbox_without_summary_or_sources(tmp_path, monkeypatch
     assert capsys.readouterr().out.strip() == "OK"
 
 
+def test_lint_repo_emits_four_key_json(monkeypatch, capsys):
+    """tm_io.py lint-repo --json must mirror mcp_lint_repo's 4-key shape.
+
+    Regression for 2026-05-24: P2 stage1 spec failed because lint-repo did not
+    exist as a CLI subcommand and codex hit AttributeError repeatedly.
+    """
+    fake_result = {
+        "orphan_pages": ["wiki/brand/foo.md"],
+        "stale_drafts": ["inbox/2025-01-01-old.md"],
+        "missing_sources": ["wiki/systems/bar.md"],
+        "partition_mismatches": ["wiki/operations/baz.md (owner: tm_compile_index)"],
+    }
+    monkeypatch.setattr(tm_io.tm_core, "lint_repo_scan", lambda: fake_result)
+
+    monkeypatch.setattr(tm_io.sys, "argv", ["tm_io.py", "lint-repo", "--json"])
+    tm_io.main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert set(payload.keys()) == {
+        "orphan_pages",
+        "stale_drafts",
+        "missing_sources",
+        "partition_mismatches",
+    }
+    assert payload["orphan_pages"] == ["wiki/brand/foo.md"]
+
+
+def test_retention_audit_subparser_has_source_default_sample(monkeypatch):
+    """Regression for 2026-05-24 wrapper schema drift.
+
+    tm_retention_audit.cmd_audit reads args.source / args.input / args.output, but
+    tm_io.py's retention-audit sub-parser previously declared none of them, causing
+    AttributeError at runtime. tm_io must now expose --source with default 'sample'.
+    """
+    captured: dict = {}
+
+    def fake_cmd_audit(args):
+        captured["source"] = args.source
+        captured["input"] = args.input
+        captured["output"] = args.output
+        captured["max_items"] = args.max_items
+        return 0
+
+    import tm_retention_audit  # type: ignore[import-not-found]
+    monkeypatch.setattr(tm_retention_audit, "cmd_audit", fake_cmd_audit)
+
+    monkeypatch.setattr(tm_io.sys, "argv", ["tm_io.py", "retention-audit", "--max-items", "10", "--json"])
+    tm_io.main()
+
+    assert captured["source"] == "sample"
+    assert captured["input"] is None
+    assert captured["output"] is None
+    assert captured["max_items"] == 10
+
+
 def test_lint_page_still_rejects_wiki_without_summary(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(tm_io.tm_core, "REPO_ROOT", tmp_path)
     page_dir = tmp_path / "wiki" / "systems"

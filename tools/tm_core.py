@@ -2089,6 +2089,80 @@ def lint_page_errors(text: str) -> list[str]:
     return errors
 
 
+def lint_repo_scan() -> dict[str, list[str]]:
+    """Repo-wide lint: orphan pages, stale inbox drafts, missing sources, partition mismatches.
+
+    Pure helper shared by tm_mcp.lint_repo (MCP tool) and tm_io.cmd_lint_repo
+    (CLI). Linter-owned dashboards (LINTER_DASHBOARDS) and auto-generated
+    paths (is_auto_generated_path) are exempted from all four checks.
+    """
+    orphan_pages: list[str] = []
+    stale_drafts: list[str] = []
+    missing_sources: list[str] = []
+    partition_mismatches: list[str] = []
+
+    # Orphan pages (not linked from index).
+    for partition in PARTITION_OWNERS.keys():
+        partition_dir = REPO_ROOT / "wiki" / partition
+        index_path = partition_dir / "index.md"
+        if not index_path.exists():
+            continue
+        index_content = index_path.read_text(encoding="utf-8")
+        for page_file in partition_dir.glob("*.md"):
+            if page_file.name == "index.md":
+                continue
+            rel = f"wiki/{partition}/{page_file.name}"
+            if rel in LINTER_DASHBOARDS or is_auto_generated_path(rel):
+                continue
+            if page_file.stem not in index_content:
+                orphan_pages.append(rel)
+
+    # Stale inbox drafts (>7 days old by mtime).
+    seven_days_ago = datetime.datetime.now(TZ_CN) - datetime.timedelta(days=7)
+    inbox_dir = REPO_ROOT / "inbox"
+    if inbox_dir.exists():
+        for inbox_file in inbox_dir.glob("*.md"):
+            if inbox_file.name == ".gitkeep":
+                continue
+            try:
+                mtime = datetime.datetime.fromtimestamp(
+                    inbox_file.stat().st_mtime, tz=TZ_CN
+                )
+                if mtime < seven_days_ago:
+                    stale_drafts.append(f"inbox/{inbox_file.name}")
+            except Exception:
+                pass
+
+    # Wiki pages without '## 来源' + owner/partition mismatch.
+    for partition in PARTITION_OWNERS.keys():
+        partition_dir = REPO_ROOT / "wiki" / partition
+        if not partition_dir.exists():
+            continue
+        for page_file in partition_dir.glob("*.md"):
+            if page_file.name == "index.md":
+                continue
+            rel = f"wiki/{partition}/{page_file.name}"
+            if rel in LINTER_DASHBOARDS or is_auto_generated_path(rel):
+                continue
+            content = page_file.read_text(encoding="utf-8")
+            if "## 来源" not in content:
+                missing_sources.append(rel)
+            m = re.search(r"^owner:\s*(\S+)", content, re.MULTILINE)
+            if m:
+                owner = m.group(1)
+                if owner == "linter":
+                    continue
+                if owner not in PARTITION_OWNERS[partition] and owner != "human":
+                    partition_mismatches.append(f"{rel} (owner: {owner})")
+
+    return {
+        "orphan_pages": orphan_pages,
+        "stale_drafts": stale_drafts,
+        "missing_sources": missing_sources,
+        "partition_mismatches": partition_mismatches,
+    }
+
+
 # ---------- IPFB copywriting capability ----------
 
 IPFB_COPYWRITING_FILES = {

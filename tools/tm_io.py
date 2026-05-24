@@ -262,6 +262,23 @@ def cmd_lint_page(args: argparse.Namespace) -> None:
     print("OK")
 
 
+def cmd_lint_repo(args: argparse.Namespace) -> None:
+    """Repo-wide lint via tm_core.lint_repo_scan() (mirrors mcp_lint_repo).
+
+    Returns 4 lists: orphan_pages / stale_drafts / missing_sources / partition_mismatches.
+    Findings do NOT exit non-zero by default — use the JSON output for CI gating.
+    """
+    result = tm_core.lint_repo_scan()
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    for key in ("orphan_pages", "stale_drafts", "missing_sources", "partition_mismatches"):
+        items = result.get(key, [])
+        print(f"{key}: {len(items)}")
+        for item in items:
+            print(f"  - {item}")
+
+
 # ---------- session status / preflight ----------
 
 def _print_status(status: dict, as_json: bool) -> None:
@@ -488,11 +505,26 @@ def main() -> None:
     pf.set_defaults(func=cmd_preflight)
 
     ra = sub.add_parser("retention-audit", help="read-only Mem0 retention dry-run audit")
+    ra.add_argument(
+        "--source",
+        choices=["sample", "mem0-json"],
+        default="sample",
+        help="data source: 'sample' (offline built-in) or 'mem0-json' (local file)",
+    )
+    ra.add_argument("--input", type=str, help="path to input JSON when --source is 'mem0-json'")
+    ra.add_argument("--output", type=str, help="write report to file instead of stdout")
     ra.add_argument("--max-items", type=int, default=200)
     ra.add_argument("--page-size", type=int, default=100)
     ra.add_argument("--limit", type=int, default=30, help="markdown rows to print")
     ra.add_argument("--json", action="store_true", help="emit JSON instead of markdown")
     ra.set_defaults(func=cmd_retention_audit)
+
+    lr = sub.add_parser(
+        "lint-repo",
+        help="repo-wide lint (orphan/stale/missing/partition_mismatch); mirrors mcp lint_repo",
+    )
+    lr.add_argument("--json", action="store_true", help="emit JSON instead of pretty text")
+    lr.set_defaults(func=cmd_lint_repo)
 
     da = sub.add_parser("discard-audit", help="summarize local write_memory discard quarantine")
     da.add_argument("--date")
