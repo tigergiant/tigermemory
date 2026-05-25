@@ -11,6 +11,7 @@ Depends-on: Python stdlib (argparse / pathlib / re / shutil / json). Pure
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import pathlib
@@ -79,6 +80,9 @@ TEXT_EXTENSIONS = {
     ".yaml",
     ".yml",
 }
+
+INCLUDED_PLAN_KEYS = ("top_files", "whole_dirs", "wiki_public_pages", "config_files")
+EXCLUDED_PLAN_KEYS = ("excluded_by_public_field", "excluded_by_person_partition", "excluded_by_pii")
 
 
 def _detect_repo_root() -> pathlib.Path:
@@ -162,7 +166,11 @@ def collect_publish_plan(repo_root: pathlib.Path) -> dict[str, list[str]]:
         "whole_dirs": [],
         "wiki_public_pages": [],
         "config_files": [],
+        "excluded_by_public_field": [],
+        "excluded_by_person_partition": [],
+        "excluded_by_pii": [],
     }
+    pii_findings: list[dict[str, object]] = []
 
     for name in PUBLISH_TOP_FILES:
         if (repo_root / name).is_file():
@@ -174,6 +182,13 @@ def collect_publish_plan(repo_root: pathlib.Path) -> dict[str, list[str]]:
 
     wiki_root = repo_root / "wiki"
     if wiki_root.is_dir():
+        for partition in EXCLUDED_WIKI_PARTITIONS:
+            partition_dir = wiki_root / partition
+            if not partition_dir.is_dir():
+                continue
+            for md in sorted(partition_dir.rglob("*.md")):
+                if md.is_file():
+                    plan["excluded_by_person_partition"].append(md.relative_to(repo_root).as_posix())
         for partition in WIKI_PUBLISH_PARTITIONS:
             if partition in EXCLUDED_WIKI_PARTITIONS:
                 continue
@@ -181,14 +196,27 @@ def collect_publish_plan(repo_root: pathlib.Path) -> dict[str, list[str]]:
             if not partition_dir.is_dir():
                 continue
             for md in sorted(partition_dir.rglob("*.md")):
-                if _has_public_true(md):
-                    rel = md.relative_to(repo_root).as_posix()
-                    plan["wiki_public_pages"].append(rel)
+                rel = md.relative_to(repo_root).as_posix()
+                try:
+                    text = md.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    plan["excluded_by_public_field"].append(rel)
+                    continue
+                if not parse_frontmatter_public(text):
+                    plan["excluded_by_public_field"].append(rel)
+                    continue
+                findings = _scan_text_for_sensitive(text, rel, "wiki_public_pages")
+                if findings:
+                    plan["excluded_by_pii"].append(rel)
+                    pii_findings.extend(findings)
+                    continue
+                plan["wiki_public_pages"].append(rel)
 
     plan["config_files"] = _runtime_config_templates(repo_root)
 
     for k in plan:
         plan[k] = sorted(plan[k])
+    plan["pii_findings"] = pii_findings  # type: ignore[assignment]
     return plan
 
 
@@ -217,6 +245,10 @@ def _mask_secret(value: str) -> str:
     if len(value) <= 8:
         return "[REDACTED]"
     return f"{value[:4]}...[REDACTED]...{value[-4:]}"
+
+
+def _context_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()[:16]
 
 
 def _redact_line(line: str) -> str:
@@ -257,17 +289,24 @@ def _add_finding(
     kind: str,
     severity: str,
     line: str,
+    regex_name: str | None = None,
 ) -> None:
     if len(findings) >= MAX_FINDINGS:
         return
+    preview = _redact_line(line)
     findings.append(
         {
             "path": rel,
+            "file_path": rel,
             "category": category,
             "line": line_no,
+            "line_number": line_no,
             "kind": kind,
+            "regex_name": regex_name or kind,
             "severity": severity,
-            "preview": _redact_line(line),
+            "preview": preview,
+            "context_50chars": preview[:50],
+            "sha256_of_context": _context_hash(preview),
         }
     )
 
@@ -285,6 +324,7 @@ def _scan_text_for_sensitive(text: str, rel: str, category: str) -> list[dict[st
                 kind="private_key",
                 severity="high",
                 line=line,
+                regex_name="PRIVATE_KEY_RE",
             )
         bearer = BEARER_TOKEN_RE.search(line)
         if bearer and not _looks_placeholder(bearer.group(1)):
@@ -296,6 +336,7 @@ def _scan_text_for_sensitive(text: str, rel: str, category: str) -> list[dict[st
                 kind="bearer_token",
                 severity="high",
                 line=line,
+                regex_name="BEARER_TOKEN_RE",
             )
         secret = SECRET_ASSIGNMENT_RE.search(line)
         if secret and not _looks_placeholder(secret.group(2)):
@@ -307,6 +348,7 @@ def _scan_text_for_sensitive(text: str, rel: str, category: str) -> list[dict[st
                 kind=secret.group(1).lower(),
                 severity="high",
                 line=line,
+                regex_name="SECRET_ASSIGNMENT_RE",
             )
         if scan_pii and CN_ID_RE.search(line):
             _add_finding(
@@ -317,6 +359,7 @@ def _scan_text_for_sensitive(text: str, rel: str, category: str) -> list[dict[st
                 kind="cn_id",
                 severity="high",
                 line=line,
+                regex_name="CN_ID_RE",
             )
         if scan_pii and CN_PHONE_RE.search(line):
             _add_finding(
@@ -327,13 +370,14 @@ def _scan_text_for_sensitive(text: str, rel: str, category: str) -> list[dict[st
                 kind="cn_phone",
                 severity="medium",
                 line=line,
+                regex_name="CN_PHONE_RE",
             )
     return findings
 
 
 def audit_publish_plan(plan: dict[str, list[str]], repo_root: pathlib.Path) -> list[dict[str, object]]:
     """Scan files in a publish plan for high-confidence sensitive material."""
-    findings: list[dict[str, object]] = []
+    findings: list[dict[str, object]] = list(plan.get("pii_findings", []))  # type: ignore[arg-type]
     for category, rel in _planned_text_files(plan, repo_root):
         if len(findings) >= MAX_FINDINGS:
             break
@@ -352,6 +396,14 @@ def audit_publish_plan(plan: dict[str, list[str]], repo_root: pathlib.Path) -> l
         if len(findings) > MAX_FINDINGS:
             findings = findings[:MAX_FINDINGS]
     return findings
+
+
+def _included_plan(plan: dict[str, list[str]]) -> dict[str, list[str]]:
+    return {key: list(plan.get(key, [])) for key in INCLUDED_PLAN_KEYS}
+
+
+def _excluded_plan(plan: dict[str, list[str]]) -> dict[str, list[str]]:
+    return {key: list(plan.get(key, [])) for key in EXCLUDED_PLAN_KEYS}
 
 
 _BYTECODE_CACHE_DIRNAME = "__py" + "cache__"
@@ -429,7 +481,10 @@ def main(argv: list[str] | None = None) -> int:
         dest = REPO_ROOT / dest
 
     plan = collect_publish_plan(REPO_ROOT)
-    counts = {k: len(v) for k, v in plan.items()}
+    included = _included_plan(plan)
+    excluded = _excluded_plan(plan)
+    counts = {k: len(v) for k, v in included.items()}
+    excluded_counts = {k: len(v) for k, v in excluded.items()}
 
     sensitive_findings = audit_publish_plan(plan, REPO_ROOT)
 
@@ -443,8 +498,12 @@ def main(argv: list[str] | None = None) -> int:
         "dest": str(dest),
         "dry_run": args.dry_run,
         "counts": counts,
+        "excluded_counts": excluded_counts,
         "files_copied": copied,
-        "plan": plan,
+        "plan": included,
+        "included": included,
+        "excluded": excluded,
+        "pii_findings": sensitive_findings,
         "sensitive_findings": sensitive_findings,
         "sensitive_counts": {
             "total": len(sensitive_findings),

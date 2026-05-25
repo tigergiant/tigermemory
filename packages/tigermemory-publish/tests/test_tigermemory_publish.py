@@ -170,6 +170,11 @@ def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
     assert plan["top_files"] == sorted([".gitignore", "AGENTS.md", "README.md", "index.md"])
     assert plan["whole_dirs"] == ["schemas", "tools"]
     assert plan["wiki_public_pages"] == ["wiki/systems/public-page.md"]
+    assert plan["excluded_by_public_field"] == [
+        "wiki/systems/private-flagged.md",
+        "wiki/systems/untagged.md",
+    ]
+    assert plan["excluded_by_person_partition"] == ["wiki/person/tiger-preferences.md"]
     expected_template = "runtime/openmemory/." + "env.example"
     assert plan["config_files"] == [expected_template]
     findings = tigermemory_publish.audit_publish_plan(plan, tmp_path)
@@ -281,9 +286,16 @@ def test_audit_publish_plan_flags_public_secret(tmp_path: pathlib.Path) -> None:
     plan = tigermemory_publish.collect_publish_plan(tmp_path)
     findings = tigermemory_publish.audit_publish_plan(plan, tmp_path)
 
+    assert "wiki/systems/secret-page.md" not in plan["wiki_public_pages"]
+    assert plan["excluded_by_pii"] == ["wiki/systems/secret-page.md"]
     assert len(findings) == 1
     assert findings[0]["path"] == "wiki/systems/secret-page.md"
+    assert findings[0]["file_path"] == "wiki/systems/secret-page.md"
     assert findings[0]["kind"] == "api_key"
+    assert findings[0]["regex_name"] == "SECRET_ASSIGNMENT_RE"
+    assert findings[0]["line_number"] > 0
+    assert len(findings[0]["context_50chars"]) <= 50
+    assert findings[0]["sha256_of_context"]
     assert "abcdefghijklmnopqrstuvwxyz" not in findings[0]["preview"]
     assert "[REDACTED]" in findings[0]["preview"]
 
