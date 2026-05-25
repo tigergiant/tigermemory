@@ -441,10 +441,71 @@ def test_tigermemory_profile_accepts_local_value_case_insensitive(monkeypatch):
     assert tm_core.tigermemory_profile() == tm_core.TIGERMEMORY_PROFILE_LOCAL
 
 
+def test_tigermemory_profile_prefers_process_env_over_runtime_file(monkeypatch):
+    monkeypatch.setenv("TIGERMEMORY_PROFILE", "local")
+    monkeypatch.setattr(tm_core, "_env_value", lambda key: "hybrid")
+
+    assert tm_core.tigermemory_profile() == tm_core.TIGERMEMORY_PROFILE_LOCAL
+
+
 def test_tigermemory_profile_invalid_value_fails_safe_to_hybrid(monkeypatch):
     monkeypatch.setattr(tm_core, "_env_value", lambda key: "offline" if key == "TIGERMEMORY_PROFILE" else "")
 
     assert tm_core.tigermemory_profile() == tm_core.TIGERMEMORY_PROFILE_HYBRID
+
+
+def test_local_profile_mem0_base_returns_disabled_sentinel(monkeypatch):
+    monkeypatch.setattr(tm_core, "tigermemory_profile", lambda: tm_core.TIGERMEMORY_PROFILE_LOCAL)
+
+    assert tm_core.mem0_base() == "local:disabled"
+
+
+def test_local_profile_mem0_request_blocks_low_level_http(monkeypatch):
+    monkeypatch.setattr(tm_core, "tigermemory_profile", lambda: tm_core.TIGERMEMORY_PROFILE_LOCAL)
+
+    with pytest.raises(RuntimeError, match="mem0_request blocked"):
+        tm_core.mem0_request("http://localhost:8765/api/v1/memories/")
+
+
+def test_local_profile_mem0_write_returns_fail_closed_json(monkeypatch):
+    monkeypatch.setattr(tm_core, "tigermemory_profile", lambda: tm_core.TIGERMEMORY_PROFILE_LOCAL)
+
+    payload = json.loads(tm_core.mem0_write("codex", "systems", "useful local-mode note"))
+
+    assert payload == {"ok": False, "reason": "local profile"}
+
+
+def test_local_profile_mem0_search_returns_empty_results_with_warning(monkeypatch):
+    monkeypatch.setattr(tm_core, "tigermemory_profile", lambda: tm_core.TIGERMEMORY_PROFILE_LOCAL)
+
+    payload = json.loads(tm_core.mem0_search("dashboard", size=3))
+
+    assert payload["count"] == 0
+    assert payload["results"] == []
+    assert payload["warnings"] == ["local profile: mem0 disabled"]
+
+
+def test_local_profile_mem0_get_reports_unavailable_after_uuid_validation(monkeypatch):
+    monkeypatch.setattr(tm_core, "tigermemory_profile", lambda: tm_core.TIGERMEMORY_PROFILE_LOCAL)
+
+    with pytest.raises(ValueError, match="mem0_get unavailable"):
+        tm_core.mem0_get("fd65b298-05bd-493c-83ce-e37d84447362")
+
+
+def test_local_profile_mem0_delete_returns_zero_deleted_json(monkeypatch):
+    monkeypatch.setattr(tm_core, "tigermemory_profile", lambda: tm_core.TIGERMEMORY_PROFILE_LOCAL)
+
+    payload = json.loads(tm_core.mem0_delete(["fd65b298-05bd-493c-83ce-e37d84447362"]))
+
+    assert payload == {"ok": False, "deleted": 0, "reason": "local profile"}
+
+
+def test_local_profile_mem0_update_content_returns_fail_closed_json(monkeypatch):
+    monkeypatch.setattr(tm_core, "tigermemory_profile", lambda: tm_core.TIGERMEMORY_PROFILE_LOCAL)
+
+    payload = json.loads(tm_core.mem0_update_content("fd65b298-05bd-493c-83ce-e37d84447362", "replacement"))
+
+    assert payload == {"ok": False, "reason": "local profile"}
 
 
 def test_write_inbox_file_and_cleanup_on_commit_failure(monkeypatch, tmp_path):

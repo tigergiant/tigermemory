@@ -607,6 +607,8 @@ def mcp_api_key() -> str:
 
 
 def mem0_base() -> str:
+    if tigermemory_profile() == TIGERMEMORY_PROFILE_LOCAL:
+        return "local:disabled"
     return _env_value("MEM0_URL")
 
 
@@ -634,10 +636,13 @@ def tigermemory_profile() -> str:
     Default to hybrid so existing WSL/Mem0-backed deployments keep current
     behavior unless a caller explicitly opts into the local-only PoC profile.
     """
-    try:
-        val = _env_value("TIGERMEMORY_PROFILE").strip().lower()
-    except RuntimeError:
-        return TIGERMEMORY_PROFILE_HYBRID
+    val = os.environ.get("TIGERMEMORY_PROFILE")
+    if val is None:
+        try:
+            val = _env_value("TIGERMEMORY_PROFILE")
+        except (KeyError, RuntimeError):
+            return TIGERMEMORY_PROFILE_HYBRID
+    val = val.strip().lower()
     if val not in TIGERMEMORY_PROFILE_VALUES:
         return TIGERMEMORY_PROFILE_HYBRID
     return val
@@ -776,6 +781,8 @@ def mem0_request(
     Raises RuntimeError("Mem0 timeout: ...") specifically on socket timeout so
     callers can distinguish transient slowness from hard failures and degrade.
     """
+    if tigermemory_profile() == TIGERMEMORY_PROFILE_LOCAL:
+        raise RuntimeError("local profile: mem0_request blocked")
     check_transport_security(url)
     key = mem0_key()
     headers = {"Authorization": f"Bearer {key}"}
@@ -830,6 +837,8 @@ def mem0_write(
     validate_topic(topic)
     if not text.strip():
         raise ValueError("text required")
+    if tigermemory_profile() == TIGERMEMORY_PROFILE_LOCAL:
+        return json.dumps({"ok": False, "reason": "local profile"})
     metadata: dict[str, Any] = {"source": agent, "topic": topic}
     if route_decision is not None:
         metadata["route_decision"] = route_decision
@@ -856,6 +865,8 @@ def mem0_get(memory_id: str) -> str:
     """GET a Mem0 memory by exact UUID. Returns raw response body."""
     if not MEM0_UUID_RE.fullmatch(memory_id.strip()):
         raise ValueError("memory_id must be a full UUID")
+    if tigermemory_profile() == TIGERMEMORY_PROFILE_LOCAL:
+        raise ValueError("mem0_get unavailable in local profile")
     mem_id = urllib.parse.quote(memory_id.strip())
     return mem0_request(
         f"{mem0_base().rstrip('/')}/api/v1/memories/{mem_id}",
@@ -871,6 +882,8 @@ def mem0_delete(memory_ids: list[str]) -> str:
     bad = [mid for mid in ids if not MEM0_UUID_RE.fullmatch(mid)]
     if bad:
         raise ValueError(f"invalid memory UUID(s): {', '.join(bad)}")
+    if tigermemory_profile() == TIGERMEMORY_PROFILE_LOCAL:
+        return json.dumps({"ok": False, "deleted": 0, "reason": "local profile"})
     payload = json.dumps({"user_id": mem0_user_id(), "memory_ids": ids}).encode("utf-8")
     return mem0_request(
         f"{mem0_base().rstrip('/')}/api/v1/memories/",
@@ -891,6 +904,8 @@ def mem0_update_content(memory_id: str, memory_content: str) -> str:
         raise ValueError("memory_id must be a full UUID")
     if not memory_content.strip():
         raise ValueError("memory_content required")
+    if tigermemory_profile() == TIGERMEMORY_PROFILE_LOCAL:
+        return json.dumps({"ok": False, "reason": "local profile"})
     payload = json.dumps({
         "user_id": mem0_user_id(),
         "memory_content": memory_content,
@@ -913,6 +928,12 @@ def mem0_search(
     """GET memories by query. Returns raw response body."""
     if match_mode not in {"id_first", "token_and", "substring"}:
         raise ValueError("match_mode must be one of: id_first, token_and, substring")
+    if tigermemory_profile() == TIGERMEMORY_PROFILE_LOCAL:
+        return json.dumps({
+            "count": 0,
+            "results": [],
+            "warnings": ["local profile: mem0 disabled"],
+        })
     params = urllib.parse.urlencode(
         # OpenMemory's patched GET /api/v1/memories/ filters on search_query.
         # Older tigermemory docs and clients used query=; the router keeps that
