@@ -241,6 +241,61 @@ def _wiki_hit_from_path(page_rel: Path, wiki_root: Path, reason: str) -> dict[st
     )
 
 
+def _frontmatter_partition(text: str) -> str | None:
+    match = re.search(r"(?m)^partition:\s*['\"]?([^'\"\s]+)['\"]?\s*$", text[:800])
+    return match.group(1).strip() if match else None
+
+
+def _hit_partition(hit: dict[str, Any], wiki_root: Path) -> str | None:
+    rel = _wiki_rel_path(str(hit.get("path", "")))
+    if rel is None:
+        return None
+    path = wiki_root / rel
+    if path.exists():
+        try:
+            partition = _frontmatter_partition(path.read_text(encoding="utf-8"))
+            if partition:
+                return partition
+        except UnicodeDecodeError:
+            return None
+    return rel.parts[0] if rel.parts else None
+
+
+def _expand_partition(grouped_hits: list[dict[str, Any]], query: str, wiki_root: Path, top_n: int) -> list[dict[str, Any]]:
+    tokens = tm_core.signal_tokens(query)
+    selected = [rel for hit in grouped_hits if (rel := _wiki_rel_path(str(hit.get("path", ""))))]
+    selected_set = {rel.as_posix() for rel in selected}
+    partitions = {partition for hit in grouped_hits if (partition := _hit_partition(hit, wiki_root))}
+    if not tokens or not partitions:
+        return []
+
+    scored: list[tuple[int, str, Path]] = []
+    for path in sorted(wiki_root.rglob("*.md")):
+        try:
+            page_rel = path.relative_to(wiki_root)
+            if page_rel.as_posix() in selected_set:
+                continue
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, ValueError):
+            continue
+        partition = _frontmatter_partition(text) or (page_rel.parts[0] if page_rel.parts else "")
+        if partition not in partitions:
+            continue
+        lower = f"{page_rel.as_posix()} {text}".lower()
+        score = sum(lower.count(token) for token in tokens)
+        if score > 0:
+            scored.append((score, page_rel.as_posix(), page_rel))
+
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    results: list[dict[str, Any]] = []
+    for score, _raw_rel, page_rel in scored[:top_n]:
+        hit = _wiki_hit_from_path(page_rel, wiki_root, f"same_partition_token_overlap={score}")
+        if hit is not None:
+            hit["score"] = float(score)
+            results.append(hit)
+    return results
+
+
 def _resolve_backlinks(grouped_hits: list[dict[str, Any]], wiki_root: Path, limit: int) -> list[dict[str, Any]]:
     selected = [rel for hit in grouped_hits if (rel := _wiki_rel_path(str(hit.get("path", ""))))]
     selected_set = {rel.as_posix() for rel in selected}
@@ -339,6 +394,8 @@ def search_tigermemory(
     }
     if follow_backlinks:
         result["backlink_results"] = _resolve_backlinks(result["primary_results"], tm_core.REPO_ROOT / "wiki", limit)
+    if expand_partition:
+        result["partition_results"] = _expand_partition(result["primary_results"], q, tm_core.REPO_ROOT / "wiki", limit)
     primary_results = result["primary_results"]
     _log_search_tigermemory({
         "ts": datetime.datetime.now(tm_core.TZ_CN).isoformat(),
@@ -385,12 +442,6 @@ SECRET_PATTERNS = [
     re.compile(r"(?i)\b(api[_-]?key|token|secret|password)\s*[:=]\s*['\"]?[A-Za-z0-9._~+/=-]{8,}['\"]?"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL),
 ]
-
-GENERIC_QUERY_TOKENS = {
-    "a", "an", "and", "answer", "api", "case", "how", "memory", "policy",
-    "query", "search", "the", "tigermemory", "what", "why",
-    "怎么", "如何", "什么", "记忆", "检索", "接口",
-}
 
 AUTHORITY_BASE = {
     "wiki": 90.0,
@@ -473,18 +524,6 @@ def _tokens(query: str) -> list[str]:
         for t in re.split(r"[\s,，。;；:：/\\|()\[\]{}\"'`]+", query.strip())
         if t
     ]
-
-
-def _signal_tokens(query: str) -> list[str]:
-    tokens: list[str] = []
-    for token in _tokens(query):
-        clean = token.strip().lower()
-        if not clean or clean in GENERIC_QUERY_TOKENS:
-            continue
-        if len(clean) < 2 and not re.search(r"[\u4e00-\u9fff]", clean):
-            continue
-        tokens.append(clean)
-    return tokens
 
 
 def _paragraphs(text: str) -> list[str]:
@@ -619,7 +658,7 @@ def _extract_hit_metadata(hit: dict[str, Any], source: str, title: str) -> dict[
 
 
 def _relevance_score(query: str, evidence: dict[str, Any]) -> tuple[float, int, list[str]]:
-    tokens = _signal_tokens(query)
+    tokens = tm_core.signal_tokens(query)
     text = " ".join([
         str(evidence.get("path") or ""),
         str(evidence.get("title") or ""),

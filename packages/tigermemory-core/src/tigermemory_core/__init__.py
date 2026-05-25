@@ -128,6 +128,7 @@ __all__ = [
     "search_query_term_groups",
     "search_wiki",
     "search_wiki_hybrid",
+    "signal_tokens",
     "staged_blob",
     "staged_files",
     "suggest_wiki_patches",
@@ -1632,6 +1633,26 @@ def primary_search_scope(query: str) -> str:
     if "mem0" in q:
         return "mem0"
     return "wiki"
+
+
+_GENERIC_SIGNAL_TOKENS = {
+    "a", "an", "and", "answer", "api", "case", "how", "memory", "policy",
+    "query", "search", "the", "tigermemory", "what", "why",
+    "怎么", "如何", "什么", "记忆", "检索", "接口",
+}
+
+
+def signal_tokens(query: str) -> list[str]:
+    """Return non-generic query tokens useful for relevance expansion."""
+    tokens: list[str] = []
+    for token in re.split(r"[\s,，。;；:：/\\|()\[\]{}\"'`]+", str(query or "").strip()):
+        clean = token.strip().lower()
+        if not clean or clean in _GENERIC_SIGNAL_TOKENS:
+            continue
+        if len(clean) < 2 and not re.search(r"[\u4e00-\u9fff]", clean):
+            continue
+        tokens.append(clean)
+    return tokens
 
 
 def _group_in_text(group: list[str], text: str) -> bool:
