@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
+import subprocess
+import sys
 
 import pytest
 
@@ -351,3 +354,39 @@ def test_main_without_audit_pii_does_not_write_standalone_report(tmp_path, monke
     assert summary["audit_pii"] is False
     assert summary["pii_findings_path"] is None
     assert not (out_dir / "pii_findings.json").exists()
+
+
+def test_module_entrypoint_dry_run_json_reports_public_field_exclusions(tmp_path: pathlib.Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _build_fake_repo(repo)
+    env = os.environ.copy()
+    env["TIGERMEMORY_ROOT"] = str(repo)
+    src = pathlib.Path(__file__).resolve().parents[1] / "src"
+    env["PYTHONPATH"] = str(src) + os.pathsep + env.get("PYTHONPATH", "")
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "tigermemory_publish",
+            "--dest",
+            str(tmp_path / "out"),
+            "--dry-run",
+            "--json",
+        ],
+        cwd=str(repo),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    summary = json.loads(proc.stdout)
+    assert summary["ok"] is True
+    assert summary["counts"]["wiki_public_pages"] == 1
+    assert summary["excluded_counts"]["excluded_by_public_field"] == 2
+    assert summary["excluded_counts"]["excluded_by_person_partition"] == 1
+    assert summary["plan"]["wiki_public_pages"] == ["wiki/systems/public-page.md"]
+    assert not (tmp_path / "out" / "AGENTS.md").exists()
