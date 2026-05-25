@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tigermemory-protocols"
+version = "0.1.0"
+description = "Internal JSON Schema protocols for TigerMemory wiki, memory, agent policy, and context pack payloads"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "tigergiant" }]
+keywords = ["jsonschema", "protocols", "schema", "tigermemory"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "jsonschema>=4.26",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+tigermemory-protocols = "tigermemory_protocols.cli:main"
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+tigermemory_protocols = ["schemas/*.yaml", "schemas/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
