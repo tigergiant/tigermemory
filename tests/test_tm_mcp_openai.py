@@ -225,6 +225,7 @@ def test_memory_answer_via_core_hides_trace_by_default(monkeypatch):
         "top_k": 5,
         "max_evidence": 6,
         "include_trace": False,
+        "task_context": None,
     })]
 
 
@@ -261,6 +262,7 @@ def test_memory_answer_via_core_can_include_trace_and_passes_arguments(monkeypat
         "top_k": 10,
         "max_evidence": 12,
         "include_trace": True,
+        "task_context": None,
     })]
 
 

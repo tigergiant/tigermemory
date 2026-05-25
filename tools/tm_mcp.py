@@ -672,7 +672,13 @@ def search_wiki(
 
 
 @mcp.tool()
-def search_tigermemory(query: str, scope: str = "auto", top_k: int = 5) -> dict[str, Any]:
+def search_tigermemory(
+    query: str,
+    scope: str = "auto",
+    top_k: int = 5,
+    follow_backlinks: bool = False,
+    expand_partition: bool = False,
+) -> dict[str, Any]:
     """[推荐默认搜索入口] Grouped search across tigermemory knowledge surfaces.
 
     🌟 它是推荐的默认搜索入口，并且在 `scope="wiki"`（或自动判断为 wiki 意图）的分支下支持 Hybrid RRF 混合检索
@@ -682,7 +688,15 @@ def search_tigermemory(query: str, scope: str = "auto", top_k: int = 5) -> dict[
     deliberately does not fuse all sources into one normalized ranking because
     eval showed that hurts hit@1.
     """
-    return tm_search.search_tigermemory(query, scope=scope, top_k=top_k, role=_ROLE, dogfood_log=_SEARCH_DOGFOOD_LOG)
+    return tm_search.search_tigermemory(
+        query,
+        scope=scope,
+        top_k=top_k,
+        follow_backlinks=follow_backlinks,
+        expand_partition=expand_partition,
+        role=_ROLE,
+        dogfood_log=_SEARCH_DOGFOOD_LOG,
+    )
 
 
 @mcp.tool()
@@ -694,6 +708,7 @@ def memory_answer(
     include_trace: bool = True,
     run_id: str | None = None,
     evidence_char_budget: int = 2000,
+    task_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Evidence-first answer over tigermemory search surfaces.
 
@@ -705,6 +720,7 @@ def memory_answer(
         include_trace: Include trace details in the response.
         run_id: Optional run id for grouping trace rows from one eval or scan.
         evidence_char_budget: Max total excerpt characters sent to the answer LLM.
+        task_context: Optional L3 task context dict with task, intent, and optional state.
 
     Returns:
         {status, answer, summary, claims, evidence, warnings, run_id, trace_id, trace}.
@@ -717,6 +733,7 @@ def memory_answer(
         include_trace=include_trace,
         run_id=run_id,
         evidence_char_budget=evidence_char_budget,
+        task_context=task_context,
     )
 
 

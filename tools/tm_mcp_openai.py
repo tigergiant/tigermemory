@@ -117,6 +117,10 @@ class MemoryAnswerResponse(BaseModel):
     claims: list[dict[str, Any]] = Field(default_factory=list)
     evidence: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    must_read: list[dict[str, Any]] = Field(default_factory=list)
+    risks: list[dict[str, Any]] = Field(default_factory=list)
+    missing_context: list[str] = Field(default_factory=list)
+    applied_policies: list[str] = Field(default_factory=list)
     trace_id: str
     trace: dict[str, Any] | None = None
 
@@ -592,6 +596,7 @@ def _memory_answer_via_core(
     top_k: int = 5,
     max_evidence: int = 6,
     include_trace: bool = False,
+    task_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     q = (query or "").strip()
     clean_scope = (scope or "auto").strip()
@@ -610,6 +615,7 @@ def _memory_answer_via_core(
         top_k=int(top_k),
         max_evidence=int(max_evidence),
         include_trace=bool(include_trace),
+        task_context=task_context,
     )
     response = MemoryAnswerResponse(
         status=str(data.get("status") or "error"),
@@ -618,6 +624,10 @@ def _memory_answer_via_core(
         claims=data.get("claims") if isinstance(data.get("claims"), list) else [],
         evidence=_slim_memory_answer_evidence(data.get("evidence")),
         warnings=[str(item) for item in data.get("warnings", [])] if isinstance(data.get("warnings"), list) else [],
+        must_read=data.get("must_read") if isinstance(data.get("must_read"), list) else [],
+        risks=data.get("risks") if isinstance(data.get("risks"), list) else [],
+        missing_context=[str(item) for item in data.get("missing_context", [])] if isinstance(data.get("missing_context"), list) else [],
+        applied_policies=[str(item) for item in data.get("applied_policies", [])] if isinstance(data.get("applied_policies"), list) else [],
         trace_id=str(data.get("trace_id") or ""),
         trace=data.get("trace") if include_trace and isinstance(data.get("trace"), dict) else None,
     )
@@ -1015,6 +1025,7 @@ def register_tools(server: FastMCP, *, max_fetch_chars: int) -> None:
         top_k: int = 5,
         max_evidence: int = 6,
         include_trace: bool = False,
+        task_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return _memory_answer_via_core(
             query,
@@ -1022,6 +1033,7 @@ def register_tools(server: FastMCP, *, max_fetch_chars: int) -> None:
             top_k=top_k,
             max_evidence=max_evidence,
             include_trace=include_trace,
+            task_context=task_context,
         )
 
     @server.tool(

@@ -86,6 +86,7 @@ def test_memory_answer_endpoint_delegates_to_core(monkeypatch):
         "include_trace": False,
         "run_id": "http-run-1",
         "evidence_char_budget": 2000,
+        "task_context": None,
     }
 
 

@@ -197,6 +197,7 @@ class MemoryAnswerRequest(BaseModel):
     include_trace: bool = True
     run_id: Optional[str] = Field(default=None, max_length=120)
     evidence_char_budget: int = Field(default=2000, ge=1, le=20000)
+    task_context: Optional[dict[str, Any]] = None
 
 
 class MemoryAnswerClaim(BaseModel):
@@ -227,6 +228,10 @@ class MemoryAnswerResponse(BaseModel):
     claims: list[MemoryAnswerClaim]
     evidence: list[MemoryAnswerEvidence]
     warnings: list[str]
+    must_read: list[dict[str, Any]] = Field(default_factory=list)
+    risks: list[dict[str, Any]] = Field(default_factory=list)
+    missing_context: list[str] = Field(default_factory=list)
+    applied_policies: list[str] = Field(default_factory=list)
     run_id: Optional[str] = None
     trace_id: str
     trace: Optional[dict[str, Any]] = None
@@ -621,6 +626,7 @@ async def memory_answer(req: MemoryAnswerRequest):
             include_trace=req.include_trace,
             run_id=req.run_id,
             evidence_char_budget=req.evidence_char_budget,
+            task_context=req.task_context,
         )
         return result
     except Exception as e:
