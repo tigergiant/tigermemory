@@ -1,0 +1,86 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://tigermemory.local/protocols/v0.1/wiki_page"
+title: "Wiki Page Protocol"
+description: "Internal draft v0.1; fields may break before v1.0."
+type: object
+required:
+  - owner
+  - status
+  - updated
+  - partition
+  - title
+properties:
+  owner:
+    type: string
+    enum:
+      - claude-code
+      - cascade
+      - codex
+      - chatgpt
+      - openclaw
+      - hermes
+      - deerflow
+      - human
+      - linter
+      - kimi
+      - gemini
+    description: "Regular agent or human owner allowed to own wiki pages."
+  status:
+    type: string
+    enum:
+      - active
+      - draft
+      - archived
+    description: "Lifecycle state of the page."
+  updated:
+    type: string
+    format: date
+    description: "Asia/Shanghai local date in YYYY-MM-DD format."
+  partition:
+    type: string
+    enum:
+      - brand
+      - investment
+      - operations
+      - production
+      - systems
+      - person
+      - self-evolution
+      - cross
+    description: "Top-level wiki partition. Uses directory name semantics."
+  title:
+    type: string
+    minLength: 1
+    description: "Human-readable page title."
+  subtopic:
+    type: array
+    items:
+      type: string
+      minLength: 1
+    uniqueItems: true
+    description: "Optional Memory Tree second-level grouping labels."
+  aliases:
+    type: array
+    items:
+      type: string
+      minLength: 1
+    uniqueItems: true
+    description: "Optional search aliases and Chinese/English synonyms."
+  tags:
+    type: array
+    items:
+      type: string
+      minLength: 1
+    uniqueItems: true
+    description: "Optional lightweight labels."
+  public:
+    type: boolean
+    default: false
+    description: "Opt-in public export marker. Missing means private."
+  source_links:
+    type: array
+    items:
+      type: string
+      format: uri
+    description: "Optional source URLs supporting the page."
+additionalProperties: true
