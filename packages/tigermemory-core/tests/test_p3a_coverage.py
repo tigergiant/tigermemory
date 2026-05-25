@@ -426,6 +426,27 @@ def test_env_and_validate_helpers(monkeypatch):
     assert tm_core.inbox_rel_path("codex", "systems", stamp="2026-05-24-1200") == "inbox/2026-05-24-1200-codex-systems.md"
 
 
+def test_tigermemory_profile_defaults_to_hybrid_when_env_missing(monkeypatch):
+    def missing_env(key):
+        raise RuntimeError(f"{key} missing")
+
+    monkeypatch.setattr(tm_core, "_env_value", missing_env)
+
+    assert tm_core.tigermemory_profile() == tm_core.TIGERMEMORY_PROFILE_HYBRID
+
+
+def test_tigermemory_profile_accepts_local_value_case_insensitive(monkeypatch):
+    monkeypatch.setattr(tm_core, "_env_value", lambda key: " LOCAL " if key == "TIGERMEMORY_PROFILE" else "")
+
+    assert tm_core.tigermemory_profile() == tm_core.TIGERMEMORY_PROFILE_LOCAL
+
+
+def test_tigermemory_profile_invalid_value_fails_safe_to_hybrid(monkeypatch):
+    monkeypatch.setattr(tm_core, "_env_value", lambda key: "offline" if key == "TIGERMEMORY_PROFILE" else "")
+
+    assert tm_core.tigermemory_profile() == tm_core.TIGERMEMORY_PROFILE_HYBRID
+
+
 def test_write_inbox_file_and_cleanup_on_commit_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(tm_core, "inbox_rel_path", lambda *_args, **_kwargs: "inbox/unit.md")

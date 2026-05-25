@@ -83,6 +83,9 @@ __all__ = [
     "SUGGEST_PATCH_MAX_SUMMARY_CHARS",
     "SUGGEST_PATCH_PROMPT",
     "SUGGEST_PATCH_TYPES",
+    "TIGERMEMORY_PROFILE_HYBRID",
+    "TIGERMEMORY_PROFILE_LOCAL",
+    "TIGERMEMORY_PROFILE_VALUES",
     "TITLE_RE",
     "TOPICS",
     "TZ_CN",
@@ -132,6 +135,7 @@ __all__ = [
     "staged_blob",
     "staged_files",
     "suggest_wiki_patches",
+    "tigermemory_profile",
     "validate_action",
     "validate_agent",
     "validate_partition",
@@ -617,6 +621,26 @@ def mem0_user_id() -> str:
         return _env_value("MEM0_USER_ID")
     except RuntimeError:
         return "tiger"
+
+
+TIGERMEMORY_PROFILE_LOCAL = "local"
+TIGERMEMORY_PROFILE_HYBRID = "hybrid"
+TIGERMEMORY_PROFILE_VALUES = (TIGERMEMORY_PROFILE_LOCAL, TIGERMEMORY_PROFILE_HYBRID)
+
+
+def tigermemory_profile() -> str:
+    """Return the active tigermemory runtime profile.
+
+    Default to hybrid so existing WSL/Mem0-backed deployments keep current
+    behavior unless a caller explicitly opts into the local-only PoC profile.
+    """
+    try:
+        val = _env_value("TIGERMEMORY_PROFILE").strip().lower()
+    except RuntimeError:
+        return TIGERMEMORY_PROFILE_HYBRID
+    if val not in TIGERMEMORY_PROFILE_VALUES:
+        return TIGERMEMORY_PROFILE_HYBRID
+    return val
 
 
 DEFAULT_DEEPSEEK_ENDPOINT = "https://api.deepseek.com/v1/chat/completions"
