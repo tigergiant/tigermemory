@@ -1,0 +1,70 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://tigermemory.local/protocols/v0.1/agent_policy"
+title: "Agent Policy Protocol"
+description: "Internal draft v0.1; fields may break before v1.0."
+type: object
+required:
+  - policy_id
+  - applies_to
+  - rules
+properties:
+  policy_id:
+    type: string
+    minLength: 1
+    description: "Stable policy identifier."
+  applies_to:
+    description: "Either all agents or a list of regular agent names."
+    oneOf:
+      - type: string
+        const: all
+      - type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          type: string
+          enum:
+            - claude-code
+            - cascade
+            - codex
+            - chatgpt
+            - openclaw
+            - hermes
+            - deerflow
+            - human
+            - linter
+            - kimi
+            - gemini
+  rules:
+    type: object
+    description: "Policy rule groups. Each group is optional, but rules itself is required."
+    properties:
+      before_answer:
+        type: array
+        items:
+          type: string
+          minLength: 1
+        description: "Rules that should be checked before answering."
+      forbidden:
+        type: array
+        items:
+          type: string
+          minLength: 1
+        description: "Actions or claims the agent must not perform."
+      required:
+        type: array
+        items:
+          type: string
+          minLength: 1
+        description: "Actions or evidence the agent must include."
+    additionalProperties: false
+  description:
+    type: string
+    description: "Human-readable policy summary."
+  precedence:
+    type: integer
+    description: "Higher precedence wins when multiple policies conflict."
+  version:
+    type: string
+    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"
+    description: "Semantic version for this policy draft."
+additionalProperties: true
