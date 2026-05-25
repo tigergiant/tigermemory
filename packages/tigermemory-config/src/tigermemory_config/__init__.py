@@ -21,6 +21,7 @@ from typing import Iterable
 SUPPORT_FULL = "full"
 SUPPORT_PARTIAL = "partial"
 SUPPORT_SOFT_ONLY = "soft_only"
+SUPPORT_UNSUPPORTED_BUT_EXPLAINED = "unsupported_but_explained"
 SUPPORT_REQUIRES_EXTERNAL_GUARD = "requires_external_guard"
 
 KNOWN_FILES: dict[str, dict[str, str]] = {

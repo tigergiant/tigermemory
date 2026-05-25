@@ -61,3 +61,14 @@ def test_detect_repo_root_honors_env(tmp_path: pathlib.Path, monkeypatch) -> Non
     monkeypatch.setenv("TIGERMEMORY_ROOT", str(tmp_path))
 
     assert tigermemory_config._detect_repo_root() == tmp_path.resolve()
+
+
+def test_support_constants_match_product_vision_5_level_rubric() -> None:
+    # Canonical 5-state rubric from wiki/systems/tigermemory-product-vision.md §推断 §11
+    # line 406: "输出 full / partial / soft_only / unsupported_but_explained /
+    # requires_external_guard 五态，不止 Yes/Partial/No". Lock the public contract here.
+    assert tigermemory_config.SUPPORT_FULL == "full"
+    assert tigermemory_config.SUPPORT_PARTIAL == "partial"
+    assert tigermemory_config.SUPPORT_SOFT_ONLY == "soft_only"
+    assert tigermemory_config.SUPPORT_UNSUPPORTED_BUT_EXPLAINED == "unsupported_but_explained"
+    assert tigermemory_config.SUPPORT_REQUIRES_EXTERNAL_GUARD == "requires_external_guard"
