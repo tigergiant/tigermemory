@@ -180,11 +180,114 @@ def _log_search_tigermemory(payload: dict[str, Any], log_path: Path | None) -> N
         return
 
 
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+\.md)(?:#[^)]+)?\)")
+
+
+def _wiki_rel_path(path: str) -> Path | None:
+    normalized = str(path or "").replace("\\", "/")
+    if normalized.startswith("wiki/"):
+        normalized = normalized[len("wiki/") :]
+    if not normalized.endswith(".md") or normalized.startswith("../"):
+        return None
+    return Path(normalized)
+
+
+def _resolve_markdown_target(source_rel: Path, raw_target: str) -> Path | None:
+    target = raw_target.split("#", 1)[0].strip()
+    if not target.endswith(".md") or "://" in target:
+        return None
+    resolved = (source_rel.parent / target).as_posix() if not target.startswith("/") else target.lstrip("/")
+    parts: list[str] = []
+    for part in Path(resolved).parts:
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not parts:
+                return None
+            parts.pop()
+        else:
+            parts.append(part)
+    return Path(*parts) if parts else None
+
+
+def _link_neighbors_from_page(page_rel: Path, text: str) -> list[Path]:
+    neighbors: list[Path] = []
+    for _label, target in _MD_LINK_RE.findall(text):
+        resolved = _resolve_markdown_target(page_rel, target)
+        if resolved is not None:
+            neighbors.append(resolved)
+    return neighbors
+
+
+def _wiki_hit_from_path(page_rel: Path, wiki_root: Path, reason: str) -> dict[str, Any] | None:
+    path = wiki_root / page_rel
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return None
+    title_match = re.search(r"(?m)^title:\s*['\"]?(.+?)['\"]?\s*$", text[:800])
+    title = title_match.group(1) if title_match else page_rel.stem.replace("-", " ")
+    body = re.sub(r"\A---\n.*?\n---\n", "", text, flags=re.DOTALL).strip()
+    snippet = re.sub(r"\s+", " ", body)[:300]
+    return format_search_hit(
+        "wiki",
+        f"wiki/{page_rel.as_posix()}",
+        title,
+        snippet,
+        0.0,
+        extra={"l2_reason": reason},
+    )
+
+
+def _resolve_backlinks(grouped_hits: list[dict[str, Any]], wiki_root: Path, limit: int) -> list[dict[str, Any]]:
+    selected = [rel for hit in grouped_hits if (rel := _wiki_rel_path(str(hit.get("path", ""))))]
+    selected_set = {rel.as_posix() for rel in selected}
+    if not selected:
+        return []
+
+    candidates: dict[str, str] = {}
+    for rel in selected:
+        path = wiki_root / rel
+        if path.exists():
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            for neighbor in _link_neighbors_from_page(rel, text):
+                if neighbor.as_posix() not in selected_set:
+                    candidates.setdefault(neighbor.as_posix(), "linked_from_selected")
+
+    for path in sorted(wiki_root.rglob("*.md")):
+        try:
+            page_rel = path.relative_to(wiki_root)
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if page_rel.as_posix() in selected_set:
+            continue
+        linked = {neighbor.as_posix() for neighbor in _link_neighbors_from_page(page_rel, text)}
+        if selected_set & linked:
+            candidates.setdefault(page_rel.as_posix(), "links_to_selected")
+
+    results: list[dict[str, Any]] = []
+    for raw_rel, reason in sorted(candidates.items()):
+        hit = _wiki_hit_from_path(Path(raw_rel), wiki_root, reason)
+        if hit is not None:
+            results.append(hit)
+        if len(results) >= limit:
+            break
+    return results
+
+
 def search_tigermemory(
     query: str,
     scope: str = "auto",
     top_k: int = 5,
     *,
+    follow_backlinks: bool = False,
+    expand_partition: bool = False,
     role: str = "writer",
     dogfood_log: Path | None = DEFAULT_DOGFOOD_LOG,
 ) -> dict[str, Any]:
@@ -234,6 +337,8 @@ def search_tigermemory(
         "groups": groups,
         "warnings": warnings,
     }
+    if follow_backlinks:
+        result["backlink_results"] = _resolve_backlinks(result["primary_results"], tm_core.REPO_ROOT / "wiki", limit)
     primary_results = result["primary_results"]
     _log_search_tigermemory({
         "ts": datetime.datetime.now(tm_core.TZ_CN).isoformat(),
@@ -246,6 +351,8 @@ def search_tigermemory(
         "primary_top_path": primary_results[0].get("path") if primary_results else None,
         "primary_count": len(primary_results),
         "group_counts": {name: len(items) for name, items in groups.items()},
+        "follow_backlinks": follow_backlinks,
+        "expand_partition": expand_partition,
         "warnings": warnings,
     }, dogfood_log)
     return result
