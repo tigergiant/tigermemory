@@ -74,6 +74,21 @@ import tigermemory_answer as tm_answer
 result = tm_answer.memory_answer_core("P3-C 计划是什么？", include_trace=False)
 ```
 
+## L3 Context Pack
+
+`memory_answer` is the L3 layer when the caller passes a `task_context` dictionary such as `{"task": "...", "intent": "review"}`.
+
+In that mode the answer payload keeps the existing `evidence`, `claims`, `trace`, and conflict fields, and also exposes Context Pack style fields:
+
+- `must_read`: high-authority evidence mapped to `{path, reason}`
+- `risks`: deterministic conflict signals mapped to `{risk, severity}`
+- `missing_context`: evidence trimming or gate warnings that should be visible to the agent
+- `applied_policies`: v0.1 placeholder list, currently `[]` until agent policy instances are wired
+
+Without `task_context`, these four fields still exist but return empty arrays. That keeps normal answer calls compatible while giving task-aware agents a stable schema when they opt in.
+
+The field names and shapes intentionally match `packages/tigermemory-protocols/src/tigermemory_protocols/schemas/context_pack.yaml`.
+
 ## Compatibility
 
 MCP, HTTP, trace, and eval callers can continue using `import tm_answer` and `import tm_search`.
