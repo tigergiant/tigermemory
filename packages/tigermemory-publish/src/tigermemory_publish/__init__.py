@@ -40,6 +40,7 @@ WIKI_PUBLISH_PARTITIONS = (
     "systems",
 )
 
+EXCLUDED_WIKI_PARTITIONS = ("person",)
 DEFAULT_DEST_DIRNAME = "dist"
 MAX_FINDINGS = 50
 PUBLIC_FIELD_DEFAULT = False
@@ -174,6 +175,8 @@ def collect_publish_plan(repo_root: pathlib.Path) -> dict[str, list[str]]:
     wiki_root = repo_root / "wiki"
     if wiki_root.is_dir():
         for partition in WIKI_PUBLISH_PARTITIONS:
+            if partition in EXCLUDED_WIKI_PARTITIONS:
+                continue
             partition_dir = wiki_root / partition
             if not partition_dir.is_dir():
                 continue

@@ -184,6 +184,32 @@ def test_collect_publish_plan_excludes_person_partition(tmp_path: pathlib.Path) 
     assert person_pages == [], "wiki/person/ must never appear in the plan"
 
 
+def test_collect_publish_plan_forces_person_excluded_even_if_partition_list_includes_it(tmp_path: pathlib.Path, monkeypatch) -> None:
+    _build_fake_repo(tmp_path)
+    monkeypatch.setattr(
+        tigermemory_publish,
+        "WIKI_PUBLISH_PARTITIONS",
+        tigermemory_publish.WIKI_PUBLISH_PARTITIONS + ("person",),
+    )
+
+    plan = tigermemory_publish.collect_publish_plan(tmp_path)
+
+    assert "wiki/person/tiger-preferences.md" not in plan["wiki_public_pages"]
+
+
+def test_collect_publish_plan_allows_public_non_person_partition_when_person_is_forced_excluded(tmp_path: pathlib.Path, monkeypatch) -> None:
+    _build_fake_repo(tmp_path)
+    monkeypatch.setattr(
+        tigermemory_publish,
+        "WIKI_PUBLISH_PARTITIONS",
+        ("person", "systems"),
+    )
+
+    plan = tigermemory_publish.collect_publish_plan(tmp_path)
+
+    assert plan["wiki_public_pages"] == ["wiki/systems/public-page.md"]
+
+
 def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
