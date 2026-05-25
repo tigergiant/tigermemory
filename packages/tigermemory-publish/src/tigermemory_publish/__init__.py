@@ -42,6 +42,8 @@ WIKI_PUBLISH_PARTITIONS = (
 
 DEFAULT_DEST_DIRNAME = "dist"
 MAX_FINDINGS = 50
+PUBLIC_FIELD_DEFAULT = False
+PUBLIC_TRUE_VALUES = {"true", "True", "yes", "Yes", "1"}
 
 PRIVATE_KEY_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 BEARER_TOKEN_RE = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9._~+/=-]{24,})")
@@ -104,22 +106,29 @@ def configure_stdio() -> None:
                     pass
 
 
+def parse_frontmatter_public(content: str) -> bool:
+    """Return True only when markdown frontmatter explicitly opts into publish."""
+    if not content.startswith("---\n"):
+        return PUBLIC_FIELD_DEFAULT
+    fm_end = content.find("\n---\n", 4)
+    if fm_end < 0:
+        return PUBLIC_FIELD_DEFAULT
+    fm = content[4:fm_end]
+    for line in fm.splitlines():
+        if not line.startswith("public:"):
+            continue
+        val = line.split(":", 1)[1].strip()
+        return val.strip('"').strip("'") in PUBLIC_TRUE_VALUES
+    return PUBLIC_FIELD_DEFAULT
+
+
 def _has_public_true(path: pathlib.Path) -> bool:
-    """Return True iff the markdown file's frontmatter contains `public: true`."""
+    """Return True iff the markdown file's frontmatter opts into publish."""
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
-        return False
-    if not text.startswith("---\n"):
-        return False
-    fm_end = text.find("\n---\n", 4)
-    if fm_end < 0:
-        return False
-    fm = text[4:fm_end]
-    m = re.search(r"^public:\s*(\S+)", fm, re.MULTILINE)
-    if not m:
-        return False
-    return m.group(1).lower() == "true"
+        return PUBLIC_FIELD_DEFAULT
+    return parse_frontmatter_public(text)
 
 
 def _runtime_config_templates(repo_root: pathlib.Path) -> list[str]:

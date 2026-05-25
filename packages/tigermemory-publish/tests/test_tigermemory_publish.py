@@ -143,6 +143,26 @@ def test_has_public_true_rejects_missing_flag(tmp_path: pathlib.Path) -> None:
     assert tigermemory_publish._has_public_true(page) is False
 
 
+def test_parse_frontmatter_public_defaults_false_without_frontmatter() -> None:
+    assert tigermemory_publish.parse_frontmatter_public("# no frontmatter\n") is False
+
+
+def test_parse_frontmatter_public_defaults_false_when_field_missing() -> None:
+    assert tigermemory_publish.parse_frontmatter_public(NO_FLAG_PAGE) is False
+
+
+def test_parse_frontmatter_public_accepts_true_yes_and_one() -> None:
+    for value in ("true", "True", "yes", "Yes", "1", '"true"', "'yes'"):
+        content = PUBLIC_FALSE_PAGE.replace("public: false", f"public: {value}")
+        assert tigermemory_publish.parse_frontmatter_public(content) is True
+
+
+def test_parse_frontmatter_public_rejects_false_like_values() -> None:
+    for value in ("false", "False", "no", "0", "maybe"):
+        content = PUBLIC_FALSE_PAGE.replace("public: false", f"public: {value}")
+        assert tigermemory_publish.parse_frontmatter_public(content) is False
+
+
 def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
     _build_fake_repo(tmp_path)
     plan = tigermemory_publish.collect_publish_plan(tmp_path)
