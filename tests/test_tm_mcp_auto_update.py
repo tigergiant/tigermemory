@@ -25,7 +25,7 @@ def _sh_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
-def test_auto_update_wrapper_starts_mcp_when_worktree_is_dirty(tmp_path):
+def test_auto_update_wrapper_starts_mcp_when_untracked_files_exist(tmp_path):
     if not shutil.which("bash") or not shutil.which("git"):
         pytest.skip("bash and git are required for wrapper smoke")
 
@@ -51,7 +51,7 @@ def test_auto_update_wrapper_starts_mcp_when_worktree_is_dirty(tmp_path):
     os.chmod(fake_python, 0o755)
 
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    (root / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+    (root / "untracked.txt").write_text("untracked\n", encoding="utf-8")
 
     result = subprocess.run(
         ["bash", _bash_path(script), "--stdio"],
@@ -62,5 +62,5 @@ def test_auto_update_wrapper_starts_mcp_when_worktree_is_dirty(tmp_path):
     )
 
     assert result.returncode == 0
-    assert "worktree is dirty; skipping auto-update" in result.stderr
+    assert "auto-update failed; continuing with local checkout" in result.stderr
     assert marker.read_text(encoding="utf-8").startswith("fake-python ")
