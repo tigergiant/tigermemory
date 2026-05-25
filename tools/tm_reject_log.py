@@ -39,6 +39,9 @@ def log_reject(
     line: Optional[int] = None,
     msg: Optional[str] = None,
     purpose: Optional[str] = None,
+    ide: Optional[str] = None,
+    hook: Optional[str] = None,
+    context: Optional[dict] = None,
 ) -> None:
     """Append one JSONL line. Never raises; logging is best-effort.
 
@@ -46,6 +49,10 @@ def log_reject(
     (e.g. `tm_reject_log.py append --purpose test`) and "validation"
     for in-session verification by an agent or auditor. tm_metrics.py
     only counts purpose == "real" toward governance metrics.
+
+    `ide` / `hook` / `context` are optional extensions added 2026-05-26
+    for unified cross-IDE reject logging. Existing callers that omit them
+    produce records with null values for these fields (backwards-compatible).
     """
     try:
         LOG_DIR.mkdir(exist_ok=True)
@@ -53,11 +60,14 @@ def log_reject(
             "ts": datetime.datetime.now(
                 datetime.timezone(datetime.timedelta(hours=8))
             ).isoformat(timespec="seconds"),
+            "ide": ide,
+            "hook": hook,
             "agent": os.environ.get("TM_AGENT", "unknown"),
             "guard": guard,
             "file": file,
             "line": line,
             "msg": msg,
+            "context": context,
             "purpose": purpose or "real",
         }
         with LOG_FILE.open("a", encoding="utf-8") as f:
@@ -74,6 +84,8 @@ def cmd_append(args: argparse.Namespace) -> int:
         line=args.line,
         msg=args.msg,
         purpose=args.purpose,
+        ide=getattr(args, 'ide', None),
+        hook=getattr(args, 'hook', None),
     )
     return 0
 
@@ -86,6 +98,8 @@ def main() -> None:
     sp.add_argument("--file", default=None)
     sp.add_argument("--line", type=int, default=None)
     sp.add_argument("--msg", default=None)
+    sp.add_argument("--ide", default=None, help="IDE source: windsurf / codex / git")
+    sp.add_argument("--hook", default=None, help="hook name: pre_run_command / pre_tool_use_policy / pre-commit / commit-msg")
     sp.add_argument("--purpose", default="real",
                     choices=["real", "test", "validation"],
                     help="real (counted in metrics) / test (manual probe) / validation (in-session audit)")

@@ -437,6 +437,8 @@ def cmd_guard(args: argparse.Namespace) -> None:
                 guard="commit_msg",
                 file=str(args.commit_msg_file),
                 msg="; ".join(errors)[:300],
+                ide="git",
+                hook="commit-msg",
             )
         except Exception:
             pass

@@ -50,7 +50,7 @@ if [ -z "${TM_SKIP_DRIFT_GUARD:-}" ]; then
         echo "  resolve: git pull --rebase origin master  (then retry commit)" >&2
         echo "  bypass:  TM_SKIP_DRIFT_GUARD=1 git commit ...   (offline / read-only mirror)" >&2
         echo "  --no-verify is human emergency only; do not use to skirt drift." >&2
-        $PY "$ROOT/tools/tm_reject_log.py" append --guard drift --msg "HEAD behind $upstream by $behind commit(s)" 2>/dev/null || true
+        $PY "$ROOT/tools/tm_reject_log.py" append --guard drift --ide git --hook pre-commit --msg "HEAD behind $upstream by $behind commit(s)" 2>/dev/null || true
         exit 1
       fi
     fi
@@ -65,7 +65,7 @@ for f in $staged_inbox; do
     echo "  use: python tools/tm_io.py write-inbox ..." >&2
     echo "       or MCP write_memory / write_inbox tools" >&2
     echo "  direct git add inbox/*.md is forbidden." >&2
-    $PY "$ROOT/tools/tm_reject_log.py" append --guard routed_by --file "$f" --msg "missing routed_by frontmatter" 2>/dev/null || true
+    $PY "$ROOT/tools/tm_reject_log.py" append --guard routed_by --ide git --hook pre-commit --file "$f" --msg "missing routed_by frontmatter" 2>/dev/null || true
     exit 1
   fi
 done
@@ -80,7 +80,7 @@ for f in $staged_dashboard; do
     echo "  dashboard files must not reference external CDN (tailwindcss, unpkg, cdnjs)." >&2
     echo "  inline the styles/icons or use local static assets." >&2
     echo "  see: wiki/systems/dashboard-ui-v2-brief.md (去 CDN P1 target)" >&2
-    $PY "$ROOT/tools/tm_reject_log.py" append --guard cdn --file "$f" --msg "external CDN in dashboard static file" 2>/dev/null || true
+    $PY "$ROOT/tools/tm_reject_log.py" append --guard cdn --ide git --hook pre-commit --file "$f" --msg "external CDN in dashboard static file" 2>/dev/null || true
     exit 1
   fi
 done
