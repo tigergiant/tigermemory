@@ -1,0 +1,89 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://tigermemory.local/protocols/v0.1/memory_item"
+title: "Memory Item Protocol"
+description: "Internal draft v0.1; fields may break before v1.0."
+type: object
+required:
+  - memory_id
+  - source
+  - created_at
+  - content
+properties:
+  memory_id:
+    type: string
+    minLength: 1
+    description: "Stable identifier from the memory backend or local audit layer."
+  source:
+    type: string
+    enum:
+      - claude-code
+      - cascade
+      - codex
+      - chatgpt
+      - openclaw
+      - hermes
+      - deerflow
+      - human
+      - linter
+      - kimi
+      - gemini
+      - mem0
+      - tigermemory-ce
+      - dsa-cron
+    description: "Agent or special data source that produced the memory."
+  created_at:
+    type: string
+    format: date-time
+    description: "ISO 8601 creation timestamp."
+  content:
+    type: string
+    minLength: 1
+    description: "Atomic memory text."
+  decay:
+    type: number
+    minimum: 0
+    maximum: 1
+    description: "Retention decay score, where 0 means no decay and 1 means fully decayed."
+  ttl_days:
+    type: integer
+    minimum: 0
+    description: "Optional time-to-live in days. 0 means expires immediately if a retention layer applies it."
+  tags:
+    type: array
+    items:
+      type: string
+      minLength: 1
+    uniqueItems: true
+    description: "Optional labels used by audits or review UI."
+  sensitivity:
+    type: string
+    enum:
+      - public
+      - internal
+      - sensitive
+    description: "Privacy sensitivity classification for the memory item."
+  topic:
+    type: string
+    enum:
+      - brand
+      - investment
+      - operations
+      - production
+      - systems
+      - person
+      - selfevolution
+      - cross
+    description: "Stored memory topic."
+  partition:
+    type: string
+    enum:
+      - brand
+      - investment
+      - operations
+      - production
+      - systems
+      - person
+      - selfevolution
+      - cross
+    description: "Target partition if this memory is promoted into long-term wiki."
+additionalProperties: true
