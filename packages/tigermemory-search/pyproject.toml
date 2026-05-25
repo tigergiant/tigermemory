@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tigermemory-search"
+version = "0.1.0"
+description = "Embedding and hybrid retrieval index helpers for TigerMemory"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "tigergiant" }]
+keywords = ["embedding", "retrieval", "search", "tigermemory"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "tigermemory-core",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
