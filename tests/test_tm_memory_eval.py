@@ -166,6 +166,7 @@ def test_eval_report_shape_with_stubbed_search(monkeypatch):
     assert report["case_count"] == 1
     assert report["hit1"] == 1
     assert report["hit3"] == 1
+    assert report["hit5"] == 1
     assert report["quality_case_count"] == 1
     assert report["runtime_unavailable_count"] == 0
     assert report["results"][0]["top_results"][0]["path"] == "wiki/systems/target.md"
@@ -217,6 +218,7 @@ def test_evaluate_splits_runtime_probe_out_of_retrieval_denominator(monkeypatch)
     assert report["case_count"] == 1
     assert report["hit1"] == 1
     assert report["hit3"] == 1
+    assert report["hit5"] == 1
     assert report["quality_case_count"] == 1
     assert report["runtime_unavailable_count"] == 0
     assert report["total_case_count"] == 2
@@ -225,6 +227,7 @@ def test_evaluate_splits_runtime_probe_out_of_retrieval_denominator(monkeypatch)
     assert report["probe_case_count"] == 1
     assert report["probe_hit1"] == 1
     assert report["probe_hit3"] == 1
+    assert report["probe_hit5"] == 1
     assert report["probe_runtime_unavailable_count"] == 0
     assert len(report["probe_results"]) == 1
     assert report["probe_results"][0]["id"] == "probe"
