@@ -1,0 +1,105 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://tigermemory.local/protocols/v0.1/context_pack"
+title: "Context Pack Protocol"
+description: "Internal draft v0.1; fields may break before v1.0."
+type: object
+required:
+  - task
+  - user_intent
+  - must_read
+  - risks
+  - missing_context
+properties:
+  task:
+    type: string
+    minLength: 1
+    description: "Concrete task the agent is about to perform."
+  user_intent:
+    type: string
+    minLength: 1
+    description: "Plain-language interpretation of what the user wants."
+  must_read:
+    type: array
+    items:
+      type: object
+      required:
+        - path
+        - reason
+      properties:
+        path:
+          type: string
+          minLength: 1
+          description: "Wiki path, source path, or other local context reference."
+        reason:
+          type: string
+          minLength: 1
+          description: "Why this context must be read before acting."
+      additionalProperties: true
+    description: "Context entries that should be read before work starts."
+  risks:
+    type: array
+    items:
+      type: object
+      required:
+        - risk
+        - severity
+      properties:
+        risk:
+          type: string
+          minLength: 1
+          description: "Specific risk or failure mode."
+        severity:
+          type: string
+          enum:
+            - low
+            - medium
+            - high
+          description: "Risk severity."
+      additionalProperties: true
+    description: "Known risks for this task context."
+  missing_context:
+    type: array
+    items:
+      type: string
+      minLength: 1
+    description: "Information that is still missing or must be confirmed."
+  wiki_pages:
+    type: array
+    items:
+      type: string
+      minLength: 1
+    description: "Optional wiki page references already selected for the task."
+  memories:
+    type: array
+    items:
+      type: string
+      minLength: 1
+    description: "Optional memory IDs relevant to the task."
+  applied_policies:
+    type: array
+    items:
+      type: string
+      minLength: 1
+    description: "Policy IDs used to shape this context pack."
+  recommendations:
+    type: array
+    items:
+      type: string
+      minLength: 1
+    description: "Suggested next actions or reading order."
+  evidence:
+    type: array
+    items:
+      type: object
+      properties:
+        id:
+          type: string
+        path:
+          type: string
+        authority_score:
+          type: number
+        excerpt:
+          type: string
+      additionalProperties: true
+    description: "Optional evidence objects supporting the context pack."
+additionalProperties: true
