@@ -320,3 +320,39 @@ def test_main_blocks_write_when_sensitive_public_page_exists(tmp_path, monkeypat
     assert summary["sensitive_counts"]["high"] == 1
     assert summary["files_copied"] == 0
     assert not (tmp_path / "out" / "wiki" / "systems" / "secret-page.md").exists()
+
+
+def test_main_audit_pii_writes_standalone_report_even_when_publish_blocked(tmp_path, monkeypatch, capsys) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _build_fake_repo(repo)
+    (repo / "wiki" / "systems" / "secret-page.md").write_text(PUBLIC_SECRET_PAGE, encoding="utf-8")
+    monkeypatch.setattr(tm_publish, "REPO_ROOT", repo)
+
+    out_dir = tmp_path / "out"
+    rc = tm_publish.main(["--dest", str(out_dir), "--audit-pii", "--json"])
+    summary = json.loads(capsys.readouterr().out)
+
+    assert rc == 3
+    report = out_dir / "pii_findings.json"
+    assert summary["audit_pii"] is True
+    assert summary["pii_findings_path"] == str(report)
+    assert report.is_file()
+    data = json.loads(report.read_text(encoding="utf-8"))
+    assert data[0]["file_path"] == "wiki/systems/secret-page.md"
+
+
+def test_main_without_audit_pii_does_not_write_standalone_report(tmp_path, monkeypatch, capsys) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _build_fake_repo(repo)
+    monkeypatch.setattr(tm_publish, "REPO_ROOT", repo)
+
+    out_dir = tmp_path / "out"
+    rc = tm_publish.main(["--dest", str(out_dir), "--json"])
+    summary = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert summary["audit_pii"] is False
+    assert summary["pii_findings_path"] is None
+    assert not (out_dir / "pii_findings.json").exists()

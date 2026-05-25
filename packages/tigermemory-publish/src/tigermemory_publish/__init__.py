@@ -453,6 +453,14 @@ def execute_plan(
     return copied
 
 
+def write_pii_findings(dest: pathlib.Path, findings: list[dict[str, object]]) -> pathlib.Path:
+    """Write the standalone PII audit report next to the publish snapshot."""
+    dest.mkdir(parents=True, exist_ok=True)
+    out = dest / "pii_findings.json"
+    out.write_text(json.dumps(findings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     configure_stdio()
     p = argparse.ArgumentParser(
@@ -474,6 +482,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="emit JSON summary instead of pretty text",
     )
+    p.add_argument(
+        "--audit-pii",
+        action="store_true",
+        help="write a standalone pii_findings.json report under --dest",
+    )
     args = p.parse_args(argv)
 
     dest = pathlib.Path(args.dest)
@@ -492,11 +505,16 @@ def main(argv: list[str] | None = None) -> int:
     if not args.dry_run and not sensitive_findings:
         dest.mkdir(parents=True, exist_ok=True)
         copied = execute_plan(plan, REPO_ROOT, dest)
+    pii_findings_path = None
+    if args.audit_pii and not args.dry_run:
+        pii_findings_path = write_pii_findings(dest, sensitive_findings)
 
     summary = {
         "ok": not sensitive_findings,
         "dest": str(dest),
         "dry_run": args.dry_run,
+        "audit_pii": args.audit_pii,
+        "pii_findings_path": str(pii_findings_path) if pii_findings_path else None,
         "counts": counts,
         "excluded_counts": excluded_counts,
         "files_copied": copied,
@@ -517,6 +535,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"dest: {summary['dest']}")
         print(f"dry_run: {summary['dry_run']}")
+        print(f"audit_pii: {summary['audit_pii']}")
         print("counts:")
         for k, v in counts.items():
             print(f"  {k}: {v}")
