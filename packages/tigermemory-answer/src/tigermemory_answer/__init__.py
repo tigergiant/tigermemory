@@ -457,6 +457,7 @@ RECENT_QUERY_MARKERS = (
 
 WEAK_EVIDENCE_MIN_RELEVANCE = 1.0
 WEAK_EVIDENCE_MIN_MATCHES = 1
+MUST_READ_THRESHOLD = 70.0
 
 ANSWER_PROMPT = """You are tigermemory's evidence-first memory answerer.
 
@@ -1112,6 +1113,77 @@ def _write_result_trace(result: dict[str, Any], trace: dict[str, Any], query: st
     _write_trace(row)
 
 
+def _derive_must_read(evidence: list[dict[str, Any]]) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    for item in evidence:
+        authority = float(item.get("authority") or item.get("authority_score") or 0.0)
+        if authority < MUST_READ_THRESHOLD:
+            continue
+        path = str(item.get("path") or "")
+        if not path:
+            continue
+        source_role = str(item.get("source_role") or "evidence")
+        items.append({
+            "path": path,
+            "reason": f"authority_score={authority:g}; source_role={source_role}",
+        })
+    return items
+
+
+def _derive_risks(conflicts: list[dict[str, Any]]) -> list[dict[str, str]]:
+    risks: list[dict[str, str]] = []
+    for item in conflicts:
+        evidence_ids = item.get("evidence_ids") if isinstance(item.get("evidence_ids"), list) else []
+        hit_count = len(evidence_ids)
+        severity = "high" if hit_count >= 3 else "medium" if hit_count >= 1 else "low"
+        risks.append({
+            "risk": str(item.get("name") or "conflict"),
+            "severity": severity,
+        })
+    return risks
+
+
+def _derive_missing_context(warnings: list[str], evidence_gate: list[dict[str, Any]]) -> list[str]:
+    missing: list[str] = []
+    for warning in warnings:
+        text = str(warning or "").strip()
+        if text and text not in missing:
+            missing.append(text)
+    for item in evidence_gate:
+        if item.get("keep") is False:
+            reason = str(item.get("reason") or "").strip()
+            if reason and reason not in missing:
+                missing.append(reason)
+    return missing
+
+
+def _derive_applied_policies() -> list[str]:
+    # v0.1: populate from an agent_policy registry after concrete policy instances exist.
+    return []
+
+
+def _attach_context_pack_fields(
+    result: dict[str, Any],
+    *,
+    task_context: dict[str, Any] | None,
+    evidence: list[dict[str, Any]],
+    conflicts: list[dict[str, Any]] | None,
+    warnings: list[str],
+    evidence_gate: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if task_context:
+        result["must_read"] = _derive_must_read(evidence)
+        result["risks"] = _derive_risks(conflicts or [])
+        result["missing_context"] = _derive_missing_context(warnings, evidence_gate)
+        result["applied_policies"] = _derive_applied_policies()
+    else:
+        result["must_read"] = []
+        result["risks"] = []
+        result["missing_context"] = []
+        result["applied_policies"] = []
+    return result
+
+
 def memory_answer_core(
     query: str,
     scope: str = "auto",
@@ -1122,6 +1194,7 @@ def memory_answer_core(
     run_id: str | None = None,
     write_trace: bool = True,
     evidence_char_budget: int = 2000,
+    task_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Answer a memory query from expanded evidence, with traceable grounding."""
     started = time.monotonic()
@@ -1199,6 +1272,14 @@ def memory_answer_core(
             "trace_id": trace_id,
             "trace": trace if include_trace else None,
         }
+        _attach_context_pack_fields(
+            result,
+            task_context=task_context,
+            evidence=[],
+            conflicts=None,
+            warnings=warnings,
+            evidence_gate=evidence_gate,
+        )
         if write_trace:
             _write_result_trace(result, trace, q)
         return result
@@ -1230,6 +1311,14 @@ def memory_answer_core(
             "trace_id": trace_id,
             "trace": trace if include_trace else None,
         }
+        _attach_context_pack_fields(
+            result,
+            task_context=task_context,
+            evidence=evidence,
+            conflicts=conflict_scan.get("conflicts") or [],
+            warnings=warnings,
+            evidence_gate=evidence_gate,
+        )
         if write_trace:
             _write_result_trace(result, trace, q)
         return result
@@ -1250,6 +1339,14 @@ def memory_answer_core(
             "trace_id": trace_id,
             "trace": trace if include_trace else None,
         }
+        _attach_context_pack_fields(
+            result,
+            task_context=task_context,
+            evidence=evidence,
+            conflicts=conflict_scan.get("conflicts") if "conflict_scan" in trace else [],
+            warnings=warnings,
+            evidence_gate=evidence_gate,
+        )
         if write_trace:
             _write_result_trace(result, trace, q)
         return result
@@ -1280,6 +1377,14 @@ def memory_answer_core(
         "trace_id": trace_id,
         "trace": trace if include_trace else None,
     }
+    _attach_context_pack_fields(
+        result,
+        task_context=task_context,
+        evidence=evidence,
+        conflicts=conflict_scan.get("conflicts") or [],
+        warnings=warnings,
+        evidence_gate=evidence_gate,
+    )
     if not result["summary"]:
         result["summary"] = "已基于证据生成回答。" if status == "ok" else "未能生成可用答案。"
     if write_trace:
