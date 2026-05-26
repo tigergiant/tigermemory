@@ -1,0 +1,211 @@
+﻿from __future__ import annotations
+
+import json
+import pathlib
+
+from tigermemory_config import manager
+
+
+CANONICAL = """canonical_version: 0.1
+metadata:
+  source: tigermemory
+preferences:
+  - id: read_wiki_first
+    title: 回答前先读 wiki
+    description: |
+      回答前先检索 wiki。
+    severity: must
+    natural_language: |
+      Search wiki first.
+  - id: confirm_before_delete
+    title: 删除前确认
+    description: |
+      删除前先确认。
+    severity: must
+    natural_language: |
+      Confirm before delete.
+"""
+
+
+def _write(path: pathlib.Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _repo(tmp_path: pathlib.Path) -> pathlib.Path:
+    repo = tmp_path / "repo"
+    _write(repo / "tools" / "gate3" / "canonical_v0.yaml", CANONICAL)
+    return repo
+
+
+def _wsl_home(tmp_path: pathlib.Path) -> pathlib.Path:
+    home = tmp_path / "home" / "giant"
+    for rel in [
+        "workspaces/openclaw/AGENTS.md",
+        "workspaces/openclaw/SOUL.md",
+        ".openclaw/workspace/AGENTS.md",
+        ".openclaw/workspace/TOOLS.md",
+        ".hermes/profiles/tigermemory/SOUL.md",
+        ".hermes/profiles/tigermemory/config.yaml",
+    ]:
+        _write(home / rel, f"user content for {rel}\n")
+    return home
+
+
+def test_plan_reports_openclaw_hermes_targets_without_writing(tmp_path: pathlib.Path) -> None:
+    repo = _repo(tmp_path)
+    home = _wsl_home(tmp_path)
+
+    result = manager.build_plan(["openclaw", "hermes"], repo_root=repo, wsl_home=home)
+
+    assert result["ok"] is True
+    rows = {row["runtime"]: row for row in result["runtimes"]}  # type: ignore[index]
+    assert rows["openclaw"]["apply_supported"] is True
+    assert len(rows["openclaw"]["targets"]) == 4
+    assert len(rows["hermes"]["targets"]) == 2
+    assert all(target["exists"] for target in rows["openclaw"]["targets"])
+
+
+def test_apply_requires_yes_before_writing(tmp_path: pathlib.Path) -> None:
+    repo = _repo(tmp_path)
+    home = _wsl_home(tmp_path)
+
+    result = manager.apply_manager(["openclaw"], repo_root=repo, wsl_home=home)
+
+    assert result["ok"] is False
+    assert "apply requires --yes" in result["errors"]
+    assert "tigermemory-policy:start" not in (home / "workspaces/openclaw/AGENTS.md").read_text(encoding="utf-8")
+
+
+def test_apply_inserts_managed_block_and_preserves_user_content(tmp_path: pathlib.Path) -> None:
+    repo = _repo(tmp_path)
+    home = _wsl_home(tmp_path)
+    original = (home / "workspaces/openclaw/AGENTS.md").read_text(encoding="utf-8")
+
+    result = manager.apply_manager(["openclaw"], yes=True, repo_root=repo, wsl_home=home, backup_root=tmp_path / "backups")
+
+    assert result["ok"] is True
+    text = (home / "workspaces/openclaw/AGENTS.md").read_text(encoding="utf-8")
+    assert original.strip() in text
+    assert "<!-- tigermemory-policy:start" in text
+    assert "read_wiki_first" in text
+    assert "confirm_before_delete" in text
+
+
+def test_repeated_apply_replaces_existing_block_without_duplication(tmp_path: pathlib.Path) -> None:
+    repo = _repo(tmp_path)
+    home = _wsl_home(tmp_path)
+    backup_root = tmp_path / "backups"
+
+    first = manager.apply_manager(["openclaw"], yes=True, repo_root=repo, wsl_home=home, backup_root=backup_root)
+    second = manager.apply_manager(["openclaw"], yes=True, repo_root=repo, wsl_home=home, backup_root=backup_root)
+
+    assert first["ok"] is True
+    assert second["ok"] is True
+    text = (home / "workspaces/openclaw/AGENTS.md").read_text(encoding="utf-8")
+    assert text.count("<!-- tigermemory-policy:start") == 1
+    assert text.count("<!-- tigermemory-policy:end -->") == 1
+
+
+def test_hermes_config_yaml_is_backed_up_but_not_modified(tmp_path: pathlib.Path) -> None:
+    repo = _repo(tmp_path)
+    home = _wsl_home(tmp_path)
+    config = home / ".hermes/profiles/tigermemory/config.yaml"
+    before = config.read_text(encoding="utf-8")
+
+    result = manager.apply_manager(["hermes"], yes=True, repo_root=repo, wsl_home=home, backup_root=tmp_path / "backups")
+
+    assert result["ok"] is True
+    assert config.read_text(encoding="utf-8") == before
+    target = [item for item in result["targets"] if item["target_id"] == "profile-config"][0]
+    assert target["write_policy"] == "backup_only"
+    assert pathlib.Path(target["backup_path"]).is_file()
+
+
+def test_verify_accepts_managed_blocks_and_backup_only_config(tmp_path: pathlib.Path) -> None:
+    repo = _repo(tmp_path)
+    home = _wsl_home(tmp_path)
+    applied = manager.apply_manager(["openclaw", "hermes"], yes=True, repo_root=repo, wsl_home=home, backup_root=tmp_path / "backups")
+
+    result = manager.verify_manager(str(applied["snapshot_id"]), repo_root=repo, backup_root=tmp_path / "backups")
+
+    assert result["ok"] is True
+    assert result["errors"] == []
+    profile_config = [item for item in result["targets"] if item["target_id"] == "profile-config"][0]
+    assert profile_config["write_policy"] == "backup_only"
+    assert profile_config["readable"] is True
+
+
+def test_verify_reports_missing_preference_when_block_is_damaged(tmp_path: pathlib.Path) -> None:
+    repo = _repo(tmp_path)
+    home = _wsl_home(tmp_path)
+    applied = manager.apply_manager(["openclaw"], yes=True, repo_root=repo, wsl_home=home, backup_root=tmp_path / "backups")
+    target = home / "workspaces/openclaw/AGENTS.md"
+    target.write_text(target.read_text(encoding="utf-8").replace("confirm_before_delete", "missing_id"), encoding="utf-8")
+
+    result = manager.verify_manager(str(applied["snapshot_id"]), repo_root=repo, backup_root=tmp_path / "backups")
+
+    assert result["ok"] is False
+    assert result["errors"]
+
+
+def test_rollback_restores_original_file_after_apply(tmp_path: pathlib.Path) -> None:
+    repo = _repo(tmp_path)
+    home = _wsl_home(tmp_path)
+    target = home / "workspaces/openclaw/AGENTS.md"
+    before = target.read_text(encoding="utf-8")
+    applied = manager.apply_manager(["openclaw"], yes=True, repo_root=repo, wsl_home=home, backup_root=tmp_path / "backups")
+
+    result = manager.rollback_manager(str(applied["snapshot_id"]), runtimes=["openclaw"], yes=True, repo_root=repo, backup_root=tmp_path / "backups")
+
+    assert result["ok"] is True
+    assert target.read_text(encoding="utf-8") == before
+
+
+def test_rollback_dry_run_does_not_restore_file(tmp_path: pathlib.Path) -> None:
+    repo = _repo(tmp_path)
+    home = _wsl_home(tmp_path)
+    target = home / "workspaces/openclaw/AGENTS.md"
+    applied = manager.apply_manager(["openclaw"], yes=True, repo_root=repo, wsl_home=home, backup_root=tmp_path / "backups")
+    modified = target.read_text(encoding="utf-8")
+
+    result = manager.rollback_manager(str(applied["snapshot_id"]), runtimes=["openclaw"], dry_run=True, repo_root=repo, backup_root=tmp_path / "backups")
+
+    assert result["ok"] is True
+    assert target.read_text(encoding="utf-8") == modified
+
+
+def test_rollback_rejects_tampered_backup(tmp_path: pathlib.Path) -> None:
+    repo = _repo(tmp_path)
+    home = _wsl_home(tmp_path)
+    applied = manager.apply_manager(["openclaw"], yes=True, repo_root=repo, wsl_home=home, backup_root=tmp_path / "backups")
+    manifest_path = pathlib.Path(str(applied["manifest_path"]))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    pathlib.Path(manifest["targets"][0]["backup_path"]).write_text("tampered", encoding="utf-8")
+
+    result = manager.rollback_manager(str(applied["snapshot_id"]), runtimes=["openclaw"], yes=True, repo_root=repo, backup_root=tmp_path / "backups")
+
+    assert result["ok"] is False
+    assert "backup sha256 mismatch" in result["errors"][0]
+
+
+def test_apply_rejects_preview_only_runtime(tmp_path: pathlib.Path) -> None:
+    repo = _repo(tmp_path)
+    home = _wsl_home(tmp_path)
+
+    result = manager.apply_manager(["codex"], yes=True, repo_root=repo, wsl_home=home, backup_root=tmp_path / "backups")
+
+    assert result["ok"] is False
+    assert "preview only / unsupported in v0" in result["errors"][0]
+
+
+def test_manager_cli_plan_outputs_json(tmp_path: pathlib.Path, capsys) -> None:
+    repo = _repo(tmp_path)
+    home = _wsl_home(tmp_path)
+
+    rc = manager.main(["plan", "--runtime", "openclaw", "--repo-root", str(repo), "--wsl-home", str(home), "--json"])
+    result = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert result["ok"] is True
+    assert result["runtimes"][0]["runtime"] == "openclaw"

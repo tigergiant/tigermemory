@@ -1,11 +1,12 @@
-"""Read-only IDE/agent configuration explainer for TigerMemory.
+"""IDE/agent configuration explainer and Runtime Config Manager for TigerMemory.
 
 Inputs: local repository path plus known project-level agent config surfaces
         such as AGENTS.md, CLAUDE.md, .cursor/rules, and .githooks.
 Outputs: Chinese explanation records describing what each config surface is
-         likely controlling, its enforcement strength, and user-visible risks.
-Depends-on: Python stdlib only. This module never writes config files, never
-            applies diffs, and never calls IDEs, LLMs, MCP, or network APIs.
+         likely controlling, plus optional Gate 3 manager plan/apply/verify
+         commands for approved runtime policy entrypoints.
+Depends-on: Python stdlib only. The explainer remains read-only. Manager writes
+            only when invoked through explicit subcommands that require --yes.
 """
 from __future__ import annotations
 
@@ -233,7 +234,7 @@ def summarize(items: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
-def main(argv: list[str] | None = None) -> int:
+def _cmd_explain(argv: list[str] | None = None) -> int:
     configure_stdio()
     parser = argparse.ArgumentParser(prog="tigermemory-config", description=__doc__)
     parser.add_argument("--root", default=None, help="repository root to scan")
@@ -263,6 +264,18 @@ def main(argv: list[str] | None = None) -> int:
         if item["risks_cn"]:
             print("  风险提示：" + "；".join(str(x) for x in item["risks_cn"]))
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    configure_stdio()
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "manager":
+        from . import manager
+
+        return manager.main(argv[1:])
+    if argv and argv[0] == "explain":
+        return _cmd_explain(argv[1:])
+    return _cmd_explain(argv)
 
 
 if __name__ == "__main__":
