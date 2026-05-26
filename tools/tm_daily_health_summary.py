@@ -55,6 +55,13 @@ REQUIRED_HEALTH_PROBE_FIELDS = (
     "mem0_api_latency_ms",
     "mem0_api_error",
 )
+REQUIRED_RUNTIME_CONFIG_MANAGER_FIELDS = (
+    "status",
+    "runtime_count",
+    "target_count",
+    "bad_target_count",
+    "error_count",
+)
 SUMMARY_HEADINGS = ("## 机器可读摘要", "## Machine-readable Summary")
 SOURCE_HEADINGS = ("## 来源", "## Sources")
 REQUIRED_CHINESE_REPORT_MARKERS = (
@@ -79,6 +86,17 @@ AUTOMATION_CONTRACT_CHECKS = (
         "id": "runtime_health_probe",
         "description": "scan records tm_http health with mem0 API signals",
         "markers": ("tm_http /health", "mem0_api_reachable", "mem0_api_latency_ms", "mem0_api_error"),
+    },
+    {
+        "id": "runtime_config_manager",
+        "description": "scan records Runtime Config Manager status for OpenClaw and Hermes",
+        "markers": (
+            "tigermemory-config manager status",
+            "--runtime openclaw",
+            "--runtime hermes",
+            "--require-runtime-config-manager",
+            "runtime_config_manager",
+        ),
     },
     {
         "id": "report_language",
@@ -245,7 +263,7 @@ def default_daily_report_path(today: str | None = None) -> pathlib.Path:
 
 def load_json_report(path: pathlib.Path | str) -> dict[str, Any]:
     """Load a JSON object, tolerating diagnostic lines before the final JSON."""
-    text = _read_text(pathlib.Path(path)).strip()
+    text = _read_text(pathlib.Path(path)).lstrip("\ufeff").strip()
     if not text:
         return {}
     try:
@@ -500,6 +518,61 @@ def compact_prompt_audit(report: dict[str, Any] | None) -> dict[str, Any] | None
     return compact
 
 
+def compact_runtime_config_manager(report: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not report:
+        return None
+    runtimes: list[dict[str, Any]] = []
+    bad_target_ids: list[str] = []
+    total_targets = 0
+    for runtime in report.get("runtimes") or []:
+        if not isinstance(runtime, dict):
+            continue
+        targets = [target for target in runtime.get("targets") or [] if isinstance(target, dict)]
+        total_targets += len(targets)
+        status_counts = Counter(str(target.get("status") or "unknown") for target in targets)
+        missing_block = sum(1 for target in targets if target.get("has_managed_block") is False and target.get("write_policy") != "backup_only")
+        canonical_mismatch = sum(1 for target in targets if target.get("canonical_match") is False)
+        unreadable = sum(1 for target in targets if target.get("readable") is False)
+        missing_preference = sum(1 for target in targets if target.get("missing_preference_ids"))
+        bad_targets = [
+            str(target.get("target_id") or target.get("path") or "unknown")
+            for target in targets
+            if target.get("status") not in ("ok", "backup_only_readable")
+            or target.get("canonical_match") is False
+            or target.get("readable") is False
+            or bool(target.get("missing_preference_ids"))
+        ]
+        bad_target_ids.extend(f"{runtime.get('runtime')}:{target_id}" for target_id in bad_targets)
+        runtimes.append({
+            "runtime": runtime.get("runtime"),
+            "mode": runtime.get("mode"),
+            "apply_supported": runtime.get("apply_supported"),
+            "target_count": len(targets),
+            "status_counts": dict(sorted(status_counts.items())),
+            "missing_block_count": missing_block,
+            "canonical_mismatch_count": canonical_mismatch,
+            "unreadable_count": unreadable,
+            "missing_preference_target_count": missing_preference,
+        })
+    errors = report.get("errors") if isinstance(report.get("errors"), list) else []
+    bad_target_count = len(bad_target_ids)
+    status = "ok" if report.get("ok") is True and not errors and bad_target_count == 0 else "fail"
+    canonical_sha = str(report.get("canonical_sha256") or "")
+    return {
+        "status": status,
+        "action": report.get("action"),
+        "canonical_sha12": canonical_sha[:12] or None,
+        "preference_count": len(report.get("preference_ids") or []),
+        "runtime_count": len(runtimes),
+        "target_count": total_targets,
+        "bad_target_count": bad_target_count,
+        "bad_target_ids": bad_target_ids,
+        "error_count": len(errors),
+        "errors": errors[:5],
+        "runtimes": runtimes,
+    }
+
+
 def _number(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
@@ -591,6 +664,7 @@ def _compact_daily_summary(row: dict[str, Any]) -> dict[str, Any]:
     lexical = summary.get("retrieval_eval_lexical") if isinstance(summary.get("retrieval_eval_lexical"), dict) else {}
     hybrid = summary.get("retrieval_eval_hybrid") if isinstance(summary.get("retrieval_eval_hybrid"), dict) else {}
     health = summary.get("health_probe") if isinstance(summary.get("health_probe"), dict) else {}
+    runtime_config = summary.get("runtime_config_manager") if isinstance(summary.get("runtime_config_manager"), dict) else {}
     prompt_audit = summary.get("prompt_audit") if isinstance(summary.get("prompt_audit"), dict) else {}
     known_debt_changes = summary.get("known_debt_changes") if isinstance(summary.get("known_debt_changes"), dict) else {}
     answer_status_rate = _ratio(answer_eval.get("status_correct"), answer_eval.get("case_count"))
@@ -609,6 +683,9 @@ def _compact_daily_summary(row: dict[str, Any]) -> dict[str, Any]:
         },
         "mem0_api_reachable": health.get("mem0_api_reachable"),
         "mem0_api_latency_ms": _number(health.get("mem0_api_latency_ms")),
+        "runtime_config_manager_status": runtime_config.get("status"),
+        "runtime_config_manager_bad_target_count": _int(runtime_config.get("bad_target_count")) or 0,
+        "runtime_config_manager_error_count": _int(runtime_config.get("error_count")) or 0,
         "answer_status_rate": answer_status_rate,
         "answer_status_correct": _int(answer_eval.get("status_correct")),
         "answer_case_count": _int(answer_eval.get("case_count")),
@@ -665,6 +742,7 @@ def build_daily_health_trend(
         or (row.get("answer_trace_failure_count") or 0) > 0
         or row.get("prompt_audit_status") not in (None, "ok")
         or row.get("mem0_api_reachable") is False
+        or row.get("runtime_config_manager_status") not in (None, "ok")
     ]
     latest = days_compact[-1] if days_compact else None
     return {
@@ -710,6 +788,18 @@ def build_daily_health_trend(
                 row["date"] for row in days_compact if row.get("mem0_api_reachable") is False
             ],
         },
+        "runtime_config_manager": {
+            "latest_status": latest.get("runtime_config_manager_status") if latest else None,
+            "latest_bad_target_count": latest.get("runtime_config_manager_bad_target_count") if latest else None,
+            "latest_error_count": latest.get("runtime_config_manager_error_count") if latest else None,
+            "bad_days": [
+                row["date"]
+                for row in days_compact
+                if row.get("runtime_config_manager_status") not in (None, "ok")
+            ],
+            "total_bad_target_count": sum(row.get("runtime_config_manager_bad_target_count") or 0 for row in days_compact),
+            "total_error_count": sum(row.get("runtime_config_manager_error_count") or 0 for row in days_compact),
+        },
         "problem_day_count": len(problem_days),
         "problem_days": problem_days,
         "errors": errors,
@@ -732,6 +822,7 @@ def compact_daily_trend(report: dict[str, Any] | None) -> dict[str, Any] | None:
         "answer_trace": report.get("answer_trace") or {},
         "retrieval_eval": report.get("retrieval_eval") or {},
         "health_probe": report.get("health_probe") or {},
+        "runtime_config_manager": report.get("runtime_config_manager") or {},
         "problem_day_count": report.get("problem_day_count"),
         "problem_days": (report.get("problem_days") or [])[-7:],
         "error_count": len(report.get("errors") or []),
@@ -789,6 +880,7 @@ def validate_daily_report(
     *,
     path: pathlib.Path | str | None = None,
     require_daily_trend: bool = False,
+    require_runtime_config_manager: bool = False,
 ) -> dict[str, Any]:
     missing_sections: list[str] = []
     if not any(heading in text for heading in SOURCE_HEADINGS):
@@ -810,6 +902,8 @@ def validate_daily_report(
             errors.append(f"schema_version must be {DAILY_SUMMARY_SCHEMA}")
         if require_daily_trend and "daily_trend" not in summary:
             missing_fields.append("daily_trend")
+        if require_runtime_config_manager and "runtime_config_manager" not in summary:
+            missing_fields.append("runtime_config_manager")
         health_probe = summary.get("health_probe")
         if not isinstance(health_probe, dict):
             nested_missing_fields.append("health_probe")
@@ -818,6 +912,21 @@ def validate_daily_report(
                 f"health_probe.{key}"
                 for key in REQUIRED_HEALTH_PROBE_FIELDS
                 if key not in health_probe
+            )
+        runtime_config_manager = summary.get("runtime_config_manager")
+        if runtime_config_manager is not None:
+            if not isinstance(runtime_config_manager, dict):
+                nested_missing_fields.append("runtime_config_manager")
+            else:
+                nested_missing_fields.extend(
+                    f"runtime_config_manager.{key}"
+                    for key in REQUIRED_RUNTIME_CONFIG_MANAGER_FIELDS
+                    if key not in runtime_config_manager
+                )
+        elif require_runtime_config_manager:
+            nested_missing_fields.extend(
+                f"runtime_config_manager.{key}"
+                for key in REQUIRED_RUNTIME_CONFIG_MANAGER_FIELDS
             )
     status = "ok" if not (missing_sections or missing_fields or nested_missing_fields or errors) else "fail"
     return {
@@ -893,6 +1002,7 @@ def cmd_assemble(args: argparse.Namespace) -> int:
         today=dt.date.fromisoformat(args.today) if args.today else dt.date.today(),
     )
     health_probe = _optional_json(args.health_json)
+    runtime_config_manager = _optional_json(args.runtime_config_manager)
     summary = {
         "schema_version": DAILY_SUMMARY_SCHEMA,
         "health_color": args.health_color,
@@ -905,6 +1015,7 @@ def cmd_assemble(args: argparse.Namespace) -> int:
             "mem0_api_latency_ms": health_probe.get("mem0_api_latency_ms"),
             "mem0_api_error": health_probe.get("mem0_api_error"),
         },
+        "runtime_config_manager": compact_runtime_config_manager(runtime_config_manager),
         "known_debt_changes": {
             "new": args.known_debt_new,
             "known": args.known_debt_known,
@@ -948,7 +1059,12 @@ def cmd_trend(args: argparse.Namespace) -> int:
 def cmd_validate_report(args: argparse.Namespace) -> int:
     path = pathlib.Path(args.path) if args.path else default_daily_report_path(args.today)
     try:
-        report = validate_daily_report(_read_text(path), path=path, require_daily_trend=args.require_daily_trend)
+        report = validate_daily_report(
+            _read_text(path),
+            path=path,
+            require_daily_trend=args.require_daily_trend,
+            require_runtime_config_manager=args.require_runtime_config_manager,
+        )
     except FileNotFoundError:
         report = {
             "schema_version": DAILY_REPORT_VALIDATION_SCHEMA,
@@ -1008,6 +1124,7 @@ def main() -> None:
     assemble_p.add_argument("--known-debt-worsened", type=int, default=0)
     assemble_p.add_argument("--known-debt-file", default="wiki/operations/daily-health-known-debt.md")
     assemble_p.add_argument("--health-json", default=None, help="optional tm_http /health JSON file")
+    assemble_p.add_argument("--runtime-config-manager", default=None, help="optional tigermemory-config manager status JSON file")
     assemble_p.add_argument("--answer-eval", default=None)
     assemble_p.add_argument("--answer-trace-summary", default=None)
     assemble_p.add_argument("--answer-trace-failures", default=None)
@@ -1024,6 +1141,7 @@ def main() -> None:
     validate_p.add_argument("--path", default=None, help="daily report path; defaults to today's report")
     validate_p.add_argument("--today", default=None, help="YYYY-MM-DD override when --path is omitted")
     validate_p.add_argument("--require-daily-trend", action="store_true", help="require the P5 daily_trend field")
+    validate_p.add_argument("--require-runtime-config-manager", action="store_true", help="require the P2 Gate 3 runtime_config_manager field")
     validate_p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     validate_p.set_defaults(func=cmd_validate_report)
 

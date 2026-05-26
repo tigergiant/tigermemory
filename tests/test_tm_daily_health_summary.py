@@ -16,13 +16,14 @@ Run py tools/tm_daily_health_summary.py automation-contract --json.
 Persist .tmp/daily-health/YYYY-MM-DD/ files.
 Run tm_http /health and persist the JSON to .tmp/daily-health/YYYY-MM-DD/health.json.
 Use mem0_reachable, mem0_api_reachable, mem0_api_latency_ms, and mem0_api_error as first-class health signals.
+Run tigermemory-config manager status --runtime openclaw --runtime hermes --json and pass runtime_config_manager into the machine summary.
 Write the human-facing daily report and final closeout as 中文优先 / Chinese-first content; if English is needed, use 中英双文.
 Run py tools/tm_answer_eval.py eval --run-id daily-health-YYYY-MM-DD, py tools/tm_answer_trace.py summary --run-id daily-health-YYYY-MM-DD, and py tools/tm_answer_trace.py failures --status error --run-id daily-health-YYYY-MM-DD.
 Run py tools/tm_daily_health_summary.py prompt-audit --json to audit agent role prompts, agent identity coverage, ChatGPT facade prompt, requested_topic handling, and topic taxonomy.
 Run py tools/tm_memory_eval.py eval and py tools/tm_memory_eval.py eval --recall hybrid --embedding-base-url http://127.0.0.1:19190/v1.
 Run py tools/tm_daily_health_summary.py trend --json --days 14 > .tmp/daily-health/YYYY-MM-DD/daily-trend.json and pass daily_trend into the machine summary.
 Run py tools/tm_daily_health_summary.py assemble with the health JSON and daily-trend.json, then place the result under ## 机器可读摘要.
-Run py tools/tm_daily_health_summary.py validate-report --require-daily-trend and confirm schema_version and health_probe are present.
+Run py tools/tm_daily_health_summary.py validate-report --require-daily-trend --require-runtime-config-manager and confirm schema_version, health_probe, runtime_config_manager, and daily_trend are present.
 Read wiki/operations/daily-health-known-debt.md and classify findings as new / known / resolved / worsened.
 Use git commit, git push, git pull --ff-only origin master, and write_memory at closeout.
 """
@@ -47,6 +48,13 @@ def test_load_json_report_tolerates_llm_log_lines(tmp_path):
     assert data["case_count"] == 25
     assert data["status_correct"] == 25
     assert data["failures"] == []
+
+
+def test_load_json_report_tolerates_utf8_bom(tmp_path):
+    report = tmp_path / "bom.json"
+    report.write_text("\ufeff{\"ok\": true}", encoding="utf-8")
+
+    assert tm_daily_health_summary.load_json_report(report) == {"ok": True}
 
 
 def test_summarize_known_debt_counts_status_and_review_dates():
@@ -160,6 +168,69 @@ def test_compact_prompt_audit_omits_full_marker_details():
     }
 
 
+def test_compact_runtime_config_manager_summarizes_targets():
+    compact = tm_daily_health_summary.compact_runtime_config_manager({
+        "ok": True,
+        "action": "status",
+        "canonical_sha256": "b5725f03c7989b7ea",
+        "preference_ids": ["read_wiki_first", "commit_prefix"],
+        "errors": [],
+        "runtimes": [
+            {
+                "runtime": "openclaw",
+                "mode": "apply",
+                "apply_supported": True,
+                "targets": [
+                    {
+                        "target_id": "workspace-agents",
+                        "status": "ok",
+                        "write_policy": "managed_block",
+                        "readable": True,
+                        "has_managed_block": True,
+                        "canonical_match": True,
+                        "missing_preference_ids": [],
+                    },
+                    {
+                        "target_id": "runtime-tools",
+                        "status": "missing_block",
+                        "write_policy": "managed_block",
+                        "readable": True,
+                        "has_managed_block": False,
+                        "canonical_match": None,
+                        "missing_preference_ids": ["read_wiki_first"],
+                    },
+                ],
+            },
+            {
+                "runtime": "hermes",
+                "mode": "apply",
+                "apply_supported": True,
+                "targets": [
+                    {
+                        "target_id": "profile-config",
+                        "status": "backup_only_readable",
+                        "write_policy": "backup_only",
+                        "readable": True,
+                        "has_managed_block": False,
+                        "canonical_match": None,
+                        "missing_preference_ids": [],
+                    }
+                ],
+            },
+        ],
+    })
+
+    assert compact["status"] == "fail"
+    assert compact["canonical_sha12"] == "b5725f03c798"
+    assert compact["preference_count"] == 2
+    assert compact["runtime_count"] == 2
+    assert compact["target_count"] == 3
+    assert compact["bad_target_count"] == 1
+    assert compact["bad_target_ids"] == ["openclaw:runtime-tools"]
+    assert compact["runtimes"][0]["status_counts"]["missing_block"] == 1
+    assert compact["runtimes"][0]["missing_block_count"] == 1
+
+
 def test_compact_answer_eval_omits_success_rows():
     report = {
         "case_count": 2,
@@ -250,6 +321,8 @@ def test_daily_health_trend_summarizes_historical_machine_summaries(tmp_path, mo
     assert trend["answer_eval"]["min_status_rate"] == 0.96
     assert trend["answer_trace"]["max_p95_ms"] == 900.0
     assert trend["health_probe"]["unreachable_days"] == ["2026-05-19"]
+    assert trend["runtime_config_manager"]["latest_status"] == "ok"
+    assert trend["runtime_config_manager"]["bad_days"] == []
     assert trend["problem_days"] == ["2026-05-19"]
 
 
@@ -260,6 +333,7 @@ def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
     lexical = tmp_path / "lexical.json"
     hybrid = tmp_path / "hybrid.json"
     prompt_audit = tmp_path / "prompt-audit.json"
+    manager_status = tmp_path / "manager-status.json"
     trend = tmp_path / "daily-trend.json"
     debt = tmp_path / "known-debt.md"
 
@@ -306,6 +380,31 @@ def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
         "agent_count": 13,
         "missing": [],
     }), encoding="utf-8")
+    manager_status.write_text(json.dumps({
+        "ok": True,
+        "action": "status",
+        "canonical_sha256": "b5725f03c7989b7ea",
+        "preference_ids": ["read_wiki_first"],
+        "errors": [],
+        "runtimes": [
+            {
+                "runtime": "openclaw",
+                "mode": "apply",
+                "apply_supported": True,
+                "targets": [
+                    {
+                        "target_id": "workspace-agents",
+                        "status": "ok",
+                        "write_policy": "managed_block",
+                        "readable": True,
+                        "has_managed_block": True,
+                        "canonical_match": True,
+                        "missing_preference_ids": [],
+                    }
+                ],
+            }
+        ],
+    }), encoding="utf-8")
     trend.write_text(json.dumps({
         "schema_version": "daily-health-trend-v1",
         "report_count": 2,
@@ -317,6 +416,7 @@ def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
         "answer_trace": {"latest_p95_ms": 420.0},
         "retrieval_eval": {"hybrid_latest_hit3_rate": 1.0},
         "health_probe": {"latest_mem0_api_reachable": True},
+        "runtime_config_manager": {"latest_status": "ok", "bad_days": []},
         "problem_day_count": 1,
         "problem_days": ["2026-05-18"],
         "errors": [],
@@ -343,6 +443,7 @@ def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
         "known_debt_resolved": 0,
         "known_debt_worsened": 0,
         "health_json": "health.json",
+        "runtime_config_manager": "manager-status.json",
         "answer_eval": "answer.json",
         "answer_trace_summary": "trace.json",
         "answer_trace_failures": "failures.json",
@@ -365,6 +466,8 @@ def test_assemble_summary_from_fixture_jsons(tmp_path, monkeypatch):
     assert summary["known_debt_changes"]["known"] == 1
     assert summary["health_probe"]["mem0_api_reachable"] is True
     assert summary["health_probe"]["mem0_api_latency_ms"] == 123.4
+    assert summary["runtime_config_manager"]["status"] == "ok"
+    assert summary["runtime_config_manager"]["target_count"] == 1
     assert summary["answer_eval"]["status_correct"] == 25
     assert summary["answer_trace"]["failure_count"] == 1
     assert summary["answer_trace"]["duration_ms"]["p95"] == 420.0
@@ -390,6 +493,13 @@ def _daily_summary() -> dict:
             "mem0_api_reachable": True,
             "mem0_api_latency_ms": 123.4,
             "mem0_api_error": None,
+        },
+        "runtime_config_manager": {
+            "status": "ok",
+            "runtime_count": 2,
+            "target_count": 6,
+            "bad_target_count": 0,
+            "error_count": 0,
         },
         "known_debt_changes": {"new": 0, "known": 1, "resolved": 0, "worsened": 0},
         "answer_eval": {"case_count": 25, "status_correct": 25},
@@ -429,7 +539,7 @@ def test_validate_daily_report_accepts_machine_summary_before_sources():
         "- live checks",
     ])
 
-    report = tm_daily_health_summary.validate_daily_report(text, path="report.md")
+    report = tm_daily_health_summary.validate_daily_report(text, path="report.md", require_runtime_config_manager=True)
 
     assert report["schema_version"] == "daily-health-report-validation-v1"
     assert report["status"] == "ok"
@@ -450,10 +560,37 @@ def test_validate_daily_report_rejects_missing_health_probe():
         "- live checks",
     ])
 
-    report = tm_daily_health_summary.validate_daily_report(text, path="report.md")
+    report = tm_daily_health_summary.validate_daily_report(
+        text,
+        path="report.md",
+        require_runtime_config_manager=True,
+    )
 
     assert report["status"] == "fail"
     assert "health_probe" in report["missing_fields"]
+
+
+def test_validate_daily_report_rejects_missing_runtime_config_manager():
+    summary = _daily_summary()
+    summary.pop("runtime_config_manager")
+    text = "\n".join([
+        "# daily",
+        "## 中文总览",
+        "已验证：ok。推断：none。待确认：none。规划：continue。",
+        "## 机器可读摘要",
+        json.dumps(summary, ensure_ascii=False, sort_keys=True),
+        "## 来源",
+        "- live checks",
+    ])
+
+    report = tm_daily_health_summary.validate_daily_report(
+        text,
+        path="report.md",
+        require_runtime_config_manager=True,
+    )
+
+    assert report["status"] == "fail"
+    assert "runtime_config_manager" in report["missing_fields"]
 
 
 def test_validate_daily_report_can_require_daily_trend():
@@ -509,7 +646,13 @@ def test_cmd_validate_report_json_exit_codes(tmp_path, monkeypatch):
     captured: list[str] = []
     monkeypatch.setattr(tm_daily_health_summary.sys.stdout, "write", captured.append)
 
-    args = type("Args", (), {"path": str(report_path), "today": None, "require_daily_trend": False, "json": True})()
+    args = type("Args", (), {
+        "path": str(report_path),
+        "today": None,
+        "require_daily_trend": False,
+        "require_runtime_config_manager": False,
+        "json": True,
+    })()
 
     assert tm_daily_health_summary.cmd_validate_report(args) == 0
     assert json.loads("".join(captured))["status"] == "ok"

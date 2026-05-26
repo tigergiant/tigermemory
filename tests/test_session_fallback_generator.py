@@ -24,6 +24,7 @@ def load_generator():
 def test_write_to_mem0_uses_tigermemory_http_router(monkeypatch):
     generator = load_generator()
     monkeypatch.delenv("TM_HTTP_URL", raising=False)
+    monkeypatch.setattr(generator.tm_core, "mcp_api_key", lambda: "test-key")
     captured = {}
 
     class Response:
@@ -39,6 +40,7 @@ def test_write_to_mem0_uses_tigermemory_http_router(monkeypatch):
         captured["url"] = req.full_url
         captured["method"] = req.get_method()
         captured["payload"] = json.loads(req.data.decode("utf-8"))
+        captured["auth"] = req.get_header("Authorization")
         captured["timeout"] = timeout
         return Response()
 
@@ -53,12 +55,14 @@ def test_write_to_mem0_uses_tigermemory_http_router(monkeypatch):
         "text": "fallback card",
         "light": True,
     }
+    assert captured["auth"] == "Bearer test-key"
     assert captured["timeout"] == 10
 
 
 def test_write_to_mem0_respects_tm_http_url_override(monkeypatch):
     generator = load_generator()
     monkeypatch.setenv("TM_HTTP_URL", "http://127.0.0.1:9999/")
+    monkeypatch.setattr(generator.tm_core, "mcp_api_key", lambda: "test-key")
     captured = {}
 
     class Response:
@@ -80,9 +84,21 @@ def test_write_to_mem0_respects_tm_http_url_override(monkeypatch):
     assert captured["url"] == "http://127.0.0.1:9999/write_memory"
 
 
+def test_write_headers_omits_auth_when_key_missing(monkeypatch):
+    generator = load_generator()
+
+    def missing_key():
+        raise RuntimeError("missing test key")
+
+    monkeypatch.setattr(generator.tm_core, "mcp_api_key", missing_key)
+
+    assert generator.write_headers() == {"Content-Type": "application/json"}
+
+
 def test_write_agent_from_pending_prefers_allowed_agent():
     generator = load_generator()
 
-    assert generator.write_agent_from_pending({"agent": "cascade", "ide": "windsurf"}) == "cascade"
+    assert generator.write_agent_from_pending({"agent": "hermes", "ide": "windsurf"}) == "hermes"
     assert generator.write_agent_from_pending({"ide": "codex"}) == "codex"
+    assert generator.write_agent_from_pending({"agent": "cascade", "ide": "windsurf"}) == "codex"
     assert generator.write_agent_from_pending({"ide": "windsurf"}) == "codex"
