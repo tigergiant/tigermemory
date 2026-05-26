@@ -199,6 +199,21 @@ def upsert_managed_block(text: str, block: str) -> str:
     return (text + "\n\n" + block).lstrip()
 
 
+def _current_managed_block(text: str) -> str:
+    match = BEGIN_RE.search(text)
+    return match.group(0) if match else ""
+
+
+def _managed_block_canonical_sha(block: str) -> str | None:
+    match = re.search(r"<!-- tigermemory-policy:start\s+([^>]*)-->", block)
+    if not match:
+        return None
+    for token in match.group(1).split():
+        if token.startswith("canonical_sha="):
+            return token.split("=", 1)[1]
+    return None
+
+
 def _selected_runtimes(runtimes: Sequence[str] | None) -> list[str]:
     selected = list(runtimes or sorted(KNOWN_RUNTIMES))
     unknown = [runtime for runtime in selected if runtime not in KNOWN_RUNTIMES]
@@ -400,6 +415,92 @@ def verify_manager(
     return {"ok": not errors, "action": "verify", "snapshot_id": snapshot_id, "targets": rows, "errors": errors}
 
 
+def _status_for_target(
+    target: RuntimeTarget,
+    *,
+    path: pathlib.Path,
+    canonical: dict[str, object],
+) -> dict[str, object]:
+    readable = path.is_file()
+    text = _read_text(path) if readable else ""
+    block = _current_managed_block(text) if readable else ""
+    expected_sha = str(canonical["canonical_sha256"])[:12]
+    current_block_sha = _managed_block_canonical_sha(block) if block else None
+    preference_ids = [str(item) for item in canonical["preference_ids"]]  # type: ignore[index]
+    missing_ids = [pref_id for pref_id in preference_ids if pref_id not in block] if target.write_policy == "managed_block" else []
+
+    if target.write_policy == "backup_only":
+        status = "backup_only_readable" if readable else "missing"
+    elif not readable:
+        status = "missing"
+    elif not block:
+        status = "missing_block"
+    elif current_block_sha != expected_sha:
+        status = "stale"
+    elif missing_ids:
+        status = "incomplete"
+    else:
+        status = "ok"
+
+    return {
+        "runtime": target.runtime,
+        "target_id": target.target_id,
+        "path": str(path),
+        "write_policy": target.write_policy,
+        "support": target.support,
+        "summary_cn": target.summary_cn,
+        "readable": readable,
+        "current_sha256": _sha256_file(path),
+        "has_managed_block": bool(block),
+        "current_canonical_sha": current_block_sha,
+        "expected_canonical_sha": expected_sha,
+        "canonical_match": current_block_sha == expected_sha if target.write_policy == "managed_block" else None,
+        "missing_preference_ids": missing_ids,
+        "status": status,
+    }
+
+
+def status_manager(
+    runtimes: Sequence[str] | None = None,
+    *,
+    repo_root: pathlib.Path | None = None,
+    wsl_home: pathlib.Path | None = None,
+) -> dict[str, object]:
+    repo_root = repo_root or _detect_repo_root()
+    wsl_home = wsl_home or _default_wsl_home()
+    canonical = load_canonical(repo_root / CANONICAL_REL)
+    target_map = runtime_targets(wsl_home)
+    runtime_rows: list[dict[str, object]] = []
+    errors: list[str] = []
+    for runtime in _selected_runtimes(runtimes):
+        targets = [
+            _status_for_target(target, path=_target_path(target, wsl_home), canonical=canonical)
+            for target in target_map.get(runtime, [])
+        ]
+        for target in targets:
+            status = str(target["status"])
+            if status not in {"ok", "backup_only_readable"}:
+                errors.append(f"{runtime}:{target['target_id']}: {status}")
+        runtime_rows.append(
+            {
+                "runtime": runtime,
+                "apply_supported": runtime in APPLY_RUNTIMES,
+                "mode": "apply" if runtime in APPLY_RUNTIMES else "preview_only",
+                "targets": targets,
+            }
+        )
+    return {
+        "ok": not errors,
+        "action": "status",
+        "repo_root": str(repo_root),
+        "wsl_home": str(wsl_home),
+        "canonical_sha256": canonical["canonical_sha256"],
+        "preference_ids": canonical["preference_ids"],
+        "runtimes": runtime_rows,
+        "errors": errors,
+    }
+
+
 def rollback_manager(
     snapshot_id: str,
     *,
@@ -470,6 +571,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     plan_p = sub.add_parser("plan")
     _add_common_runtime_args(plan_p)
 
+    status_p = sub.add_parser("status")
+    _add_common_runtime_args(status_p)
+
     apply_p = sub.add_parser("apply")
     _add_common_runtime_args(apply_p)
     apply_p.add_argument("--yes", action="store_true")
@@ -494,6 +598,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "plan":
             result = build_plan(args.runtime, wsl_home=args.wsl_home, repo_root=args.repo_root)
+        elif args.command == "status":
+            result = status_manager(args.runtime, repo_root=args.repo_root, wsl_home=args.wsl_home)
         elif args.command == "apply":
             result = apply_manager(args.runtime, yes=args.yes, repo_root=args.repo_root, wsl_home=args.wsl_home, backup_root=args.backup_root)
         elif args.command == "verify":

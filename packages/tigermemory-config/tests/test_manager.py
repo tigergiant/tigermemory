@@ -209,3 +209,72 @@ def test_manager_cli_plan_outputs_json(tmp_path: pathlib.Path, capsys) -> None:
     assert rc == 0
     assert result["ok"] is True
     assert result["runtimes"][0]["runtime"] == "openclaw"
+
+
+def test_status_reports_missing_block_before_apply(tmp_path: pathlib.Path) -> None:
+    repo = _repo(tmp_path)
+    home = _wsl_home(tmp_path)
+
+    result = manager.status_manager(["openclaw"], repo_root=repo, wsl_home=home)
+
+    assert result["ok"] is False
+    targets = result["runtimes"][0]["targets"]  # type: ignore[index]
+    assert {target["status"] for target in targets} == {"missing_block"}
+    assert all(target["has_managed_block"] is False for target in targets)
+
+
+def test_status_reports_ok_after_apply_with_current_canonical_sha(tmp_path: pathlib.Path) -> None:
+    repo = _repo(tmp_path)
+    home = _wsl_home(tmp_path)
+    manager.apply_manager(["openclaw"], yes=True, repo_root=repo, wsl_home=home, backup_root=tmp_path / "backups")
+
+    result = manager.status_manager(["openclaw"], repo_root=repo, wsl_home=home)
+
+    assert result["ok"] is True
+    targets = result["runtimes"][0]["targets"]  # type: ignore[index]
+    assert {target["status"] for target in targets} == {"ok"}
+    assert all(target["canonical_match"] is True for target in targets)
+    assert all(target["missing_preference_ids"] == [] for target in targets)
+
+
+def test_status_detects_incomplete_managed_block_after_user_damage(tmp_path: pathlib.Path) -> None:
+    repo = _repo(tmp_path)
+    home = _wsl_home(tmp_path)
+    manager.apply_manager(["openclaw"], yes=True, repo_root=repo, wsl_home=home, backup_root=tmp_path / "backups")
+    target = home / "workspaces/openclaw/AGENTS.md"
+    target.write_text(target.read_text(encoding="utf-8").replace("confirm_before_delete", "removed_preference"), encoding="utf-8")
+
+    result = manager.status_manager(["openclaw"], repo_root=repo, wsl_home=home)
+
+    damaged = [item for item in result["runtimes"][0]["targets"] if item["target_id"] == "workspace-agents"][0]  # type: ignore[index]
+    assert result["ok"] is False
+    assert damaged["status"] == "incomplete"
+    assert damaged["missing_preference_ids"] == ["confirm_before_delete"]
+
+
+def test_status_treats_hermes_config_as_readable_backup_only(tmp_path: pathlib.Path) -> None:
+    repo = _repo(tmp_path)
+    home = _wsl_home(tmp_path)
+    manager.apply_manager(["hermes"], yes=True, repo_root=repo, wsl_home=home, backup_root=tmp_path / "backups")
+
+    result = manager.status_manager(["hermes"], repo_root=repo, wsl_home=home)
+
+    profile_config = [item for item in result["runtimes"][0]["targets"] if item["target_id"] == "profile-config"][0]  # type: ignore[index]
+    assert result["ok"] is True
+    assert profile_config["write_policy"] == "backup_only"
+    assert profile_config["status"] == "backup_only_readable"
+    assert profile_config["has_managed_block"] is False
+
+
+def test_manager_cli_status_outputs_json_for_runtime_readback(tmp_path: pathlib.Path, capsys) -> None:
+    repo = _repo(tmp_path)
+    home = _wsl_home(tmp_path)
+    manager.apply_manager(["openclaw"], yes=True, repo_root=repo, wsl_home=home, backup_root=tmp_path / "backups")
+
+    rc = manager.main(["status", "--runtime", "openclaw", "--repo-root", str(repo), "--wsl-home", str(home), "--json"])
+    result = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert result["ok"] is True
+    assert result["action"] == "status"
+    assert result["runtimes"][0]["targets"][0]["status"] == "ok"
