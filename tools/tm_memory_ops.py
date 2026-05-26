@@ -419,6 +419,40 @@ def _attach_discard_audit(result: dict[str, Any], audit: dict[str, Any]) -> dict
     return result
 
 
+def _auto_wrap_handoff_card(agent: str, text: str) -> str:
+    """If text looks like a session closeout but lacks session-handoff frontmatter, wrap it."""
+    if "memory_type: session-handoff" in text:
+        return text  # already has it
+    # Detect closeout patterns (commits, file changes, task completion markers)
+    closeout_signals = sum([
+        bool(re.search(r"(?i)(commit|push|完成|completed|done|verified|验证通过)", text)),
+        bool(re.search(r"(?i)(关键文件|changed files|Evidence|Blockers|Handoff)", text)),
+        bool(re.search(r"[a-f0-9]{7,}", text)),  # commit hash
+    ])
+    if closeout_signals < 2:
+        return text  # not a closeout, leave as-is
+    now = datetime.datetime.now(tm_core.TZ_CN)
+    session_id = f"{agent}-{now.strftime('%Y%m%d-%H%M')}"
+    # Extract first meaningful line as task summary
+    task_line = "(auto-wrapped by server)"
+    for line in text.split("\n"):
+        stripped = line.strip().lstrip("#").strip()
+        if len(stripped) > 10:
+            task_line = stripped[:120]
+            break
+    wrapped = (
+        f"---\nmemory_type: session-handoff\nsession_id: {session_id}\n"
+        f"ide: mcp\nagent: {agent}\npersona_primary: executor\n"
+        f"confidence: low\nsource: server_auto_wrap\nprivacy_level: normal\n---\n\n"
+        f"## Task\n{task_line}\n\n"
+        f"## Decisions\n(Auto-wrapped by server; original text below.)\n\n"
+        f"## Blockers\nnone\n\n"
+        f"## Handoff\n{text[:1500]}\n\n"
+        f"## Evidence Refs\n- (see original text above)\n"
+    )
+    return wrapped
+
+
 def write_memory_with_review(
     agent: str,
     topic: str,
@@ -434,6 +468,8 @@ def write_memory_with_review(
 ) -> dict[str, Any]:
     """Route a memory write to discard/mem0/inbox with consistent fallback semantics."""
     t0 = time.monotonic()
+    # Auto-wrap closeout writes from hookless agents (OpenClaw, Hermes, etc.)
+    text = _auto_wrap_handoff_card(agent, text)
     if force_inbox and light:
         raise ValueError("force_inbox and light are mutually exclusive")
     route_metadata_extra: dict[str, Any] = {}
