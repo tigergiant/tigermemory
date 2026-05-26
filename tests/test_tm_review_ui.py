@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import pathlib
 import sys
+import builtins
 
 from fastapi.testclient import TestClient
 
@@ -1415,6 +1416,54 @@ def test_api_agent_eval_endpoint(tmp_path, monkeypatch):
     assert data["mem0"]["active"] is True
     assert data["mem0"]["accuracy"] == 1.0
     assert data["mem0"]["avg_latency_ms"] == 50.0
+
+
+def test_api_agent_eval_import_error_returns_json(tmp_path, monkeypatch):
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "tm_eval_runner":
+            raise ImportError("No module named 'tigermemory_eval'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/api/agent/eval", headers=HOST)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is False
+    assert "评测模块不可用" in data["error"]
+    assert "tigermemory_eval" in data["hint"]
+
+
+def test_dashboard_memory_quality_falls_back_to_live_inbox(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    _write_inbox(tmp_path, "2026-05-01-1200-codex-systems.md")
+    _write_inbox(tmp_path, "2026-05-02-1200-codex-systems.md")
+    monkeypatch.setattr(tm_review_ui.tm_answer_trace, "load_trace_rows", lambda **_kwargs: ([], []))
+    monkeypatch.setattr(tm_review_ui.tm_answer_trace, "summarize_rows", lambda *_args, **_kwargs: {"duration_ms": {}, "status_counts": {}, "latest": []})
+
+    data = tm_review_ui.dashboard_memory_quality("2026-05-27")
+
+    assert data["digest_available"] is False
+    assert data["fallback_mode"] is True
+    assert data["counts"]["mem0"] is None
+    assert data["counts"]["inbox"] == 2
+    assert "digest not found" in data["digest_error"]
+
+
+def test_dashboard_p0_i18n_static_guards():
+    i18n_js = (tm_review_ui.STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
+    pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
+
+    assert "get: lookup" in i18n_js
+    assert ".chip, [data-chip-key], [data-action]" in i18n_js
+    assert "next.includes(target)" in i18n_js
+    assert "data.hint || data.error" in pages_js
+    assert "今日摘要未生成，以下为实时估算数据。" in pages_js
 
 
 def test_dashboard_smoke_script_execution(monkeypatch):
