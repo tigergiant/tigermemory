@@ -18,6 +18,7 @@ The explainer never writes config files, applies diffs, calls IDEs, invokes LLMs
 pip install -e ./packages/tigermemory-config
 tigermemory-config --root D:\tigermemory --json
 tigermemory-config explain --root D:\tigermemory --json
+tigermemory-config manager capabilities --json
 tigermemory-config manager plan --runtime openclaw --runtime hermes --json
 tigermemory-config manager apply --runtime openclaw --runtime hermes --yes
 tigermemory-config manager status --runtime openclaw --runtime hermes --json
@@ -25,4 +26,4 @@ tigermemory-config manager verify --snapshot-id <snapshot-id> --json
 tigermemory-config manager rollback --snapshot-id <snapshot-id> --runtime openclaw --dry-run --json
 ```
 
-Manager v0 applies only to OpenClaw / Hermes and writes managed blocks only to text policy files. Hermes `config.yaml` is backed up and verified readable, but v0 does not write policy into YAML comments. `manager status` is read-only and checks the current live files without requiring a snapshot id.
+Manager v0 applies only to OpenClaw / Hermes and writes managed blocks only to text policy files. Hermes `config.yaml` is backed up and verified readable, but v0 does not write policy into YAML comments. `manager status` is read-only and checks the current live files without requiring a snapshot id. `manager capabilities` is also read-only; it lists each known runtime with a P2 capability label such as `partial` or `unsupported_but_explained`.

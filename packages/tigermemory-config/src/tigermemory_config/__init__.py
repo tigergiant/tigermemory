@@ -25,6 +25,14 @@ SUPPORT_SOFT_ONLY = "soft_only"
 SUPPORT_UNSUPPORTED_BUT_EXPLAINED = "unsupported_but_explained"
 SUPPORT_REQUIRES_EXTERNAL_GUARD = "requires_external_guard"
 
+SUPPORT_LABELS_CN = {
+    SUPPORT_FULL: "full：配置可被当前工具完整表达和执行。",
+    SUPPORT_PARTIAL: "partial：配置能表达一部分约束，但仍依赖 hook、权限或人工确认。",
+    SUPPORT_SOFT_ONLY: "soft_only：配置主要是软提示，不能当作硬权限。",
+    SUPPORT_UNSUPPORTED_BUT_EXPLAINED: "unsupported_but_explained：当前不能直接落地，但可以解释边界和替代路径。",
+    SUPPORT_REQUIRES_EXTERNAL_GUARD: "requires_external_guard：需要 Git hook、权限系统或外部守卫才有强约束。",
+}
+
 KNOWN_FILES: dict[str, dict[str, str]] = {
     "AGENTS.md": {
         "target": "generic-agent",
@@ -156,6 +164,7 @@ def _make_item(
         "target": target,
         "kind": kind,
         "support": support,
+        "support_label_cn": SUPPORT_LABELS_CN.get(support, support),
         "summary_cn": summary_cn,
         "line_count": _line_count(text),
         "controls_cn": controls,

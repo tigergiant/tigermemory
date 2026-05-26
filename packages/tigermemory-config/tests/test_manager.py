@@ -66,6 +66,29 @@ def test_plan_reports_openclaw_hermes_targets_without_writing(tmp_path: pathlib.
     assert all(target["exists"] for target in rows["openclaw"]["targets"])
 
 
+def test_runtime_capabilities_label_apply_and_preview_runtimes() -> None:
+    result = manager.runtime_capabilities(["openclaw", "codex"])
+
+    assert result["ok"] is True
+    rows = {row["runtime"]: row for row in result["runtimes"]}  # type: ignore[index]
+    assert rows["openclaw"]["apply_supported"] is True
+    assert rows["openclaw"]["support"] == "partial"
+    assert rows["openclaw"]["capability_label_cn"].startswith("partial")
+    assert rows["codex"]["apply_supported"] is False
+    assert rows["codex"]["mode"] == "preview_only"
+    assert rows["codex"]["support"] == "unsupported_but_explained"
+
+
+def test_manager_cli_capabilities_outputs_json(capsys) -> None:
+    rc = manager.main(["capabilities", "--runtime", "hermes", "--runtime", "windsurf", "--json"])
+    result = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert result["action"] == "capabilities"
+    assert [row["runtime"] for row in result["runtimes"]] == ["hermes", "windsurf"]
+    assert {row["support"] for row in result["runtimes"]} == {"partial", "unsupported_but_explained"}
+
+
 def test_apply_requires_yes_before_writing(tmp_path: pathlib.Path) -> None:
     repo = _repo(tmp_path)
     home = _wsl_home(tmp_path)

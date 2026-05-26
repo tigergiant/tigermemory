@@ -37,6 +37,12 @@ KNOWN_RUNTIMES = {
     "codex",
     "windsurf",
 }
+SUPPORT_PARTIAL = "partial"
+SUPPORT_UNSUPPORTED_BUT_EXPLAINED = "unsupported_but_explained"
+CAPABILITY_LABELS_CN = {
+    SUPPORT_PARTIAL: "partial：P2 只保证文件级写入、读回、验证和回滚，不保证运行时热加载。",
+    SUPPORT_UNSUPPORTED_BUT_EXPLAINED: "unsupported_but_explained：P2 只解释或预览，不写入该 runtime 的真实配置。",
+}
 
 
 @dataclass(frozen=True)
@@ -261,6 +267,29 @@ def build_plan(
         "wsl_home": str(wsl_home),
         "runtimes": rows,
     }
+
+
+def runtime_capabilities(runtimes: Sequence[str] | None = None) -> dict[str, object]:
+    """Return read-only P2 capability labels for every known runtime."""
+    rows: list[dict[str, object]] = []
+    for runtime in _selected_runtimes(runtimes):
+        apply_supported = runtime in APPLY_RUNTIMES
+        support = SUPPORT_PARTIAL if apply_supported else SUPPORT_UNSUPPORTED_BUT_EXPLAINED
+        rows.append(
+            {
+                "runtime": runtime,
+                "apply_supported": apply_supported,
+                "mode": "apply" if apply_supported else "preview_only",
+                "support": support,
+                "capability_label_cn": CAPABILITY_LABELS_CN[support],
+                "summary_cn": (
+                    "Runtime Config Manager v0 可对已确认入口执行 managed block 写入和回滚。"
+                    if apply_supported
+                    else "Runtime Config Manager v0 尚未确认可回滚写入入口；P2 只保留 explain / preview。"
+                ),
+            }
+        )
+    return {"ok": True, "action": "capabilities", "runtimes": rows}
 
 
 def _snapshot_id(canonical_sha: str) -> str:
@@ -574,6 +603,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     status_p = sub.add_parser("status")
     _add_common_runtime_args(status_p)
 
+    capabilities_p = sub.add_parser("capabilities")
+    capabilities_p.add_argument("--runtime", action="append", default=None, help="runtime to include; repeatable")
+    capabilities_p.add_argument("--json", action="store_true")
+
     apply_p = sub.add_parser("apply")
     _add_common_runtime_args(apply_p)
     apply_p.add_argument("--yes", action="store_true")
@@ -600,6 +633,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = build_plan(args.runtime, wsl_home=args.wsl_home, repo_root=args.repo_root)
         elif args.command == "status":
             result = status_manager(args.runtime, repo_root=args.repo_root, wsl_home=args.wsl_home)
+        elif args.command == "capabilities":
+            result = runtime_capabilities(args.runtime)
         elif args.command == "apply":
             result = apply_manager(args.runtime, yes=args.yes, repo_root=args.repo_root, wsl_home=args.wsl_home, backup_root=args.backup_root)
         elif args.command == "verify":
