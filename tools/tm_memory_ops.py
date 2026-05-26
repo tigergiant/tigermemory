@@ -420,7 +420,13 @@ def _attach_discard_audit(result: dict[str, Any], audit: dict[str, Any]) -> dict
 
 
 def _auto_wrap_handoff_card(agent: str, text: str) -> str:
-    """If text looks like a session closeout but lacks session-handoff frontmatter, wrap it."""
+    """TEMPORARY STOPGAP — will be replaced by tigermemory-ce afterTurn hook (Phase 3).
+
+    If text looks like a session closeout but lacks session-handoff frontmatter,
+    wrap it. This regex-based detection is inherently fragile (no session context,
+    no turn boundaries). The correct path for OpenClaw is the CE plugin's afterTurn
+    hook; for Hermes, a session-closeout skill. See openclaw-ce-plugin-spec.md §Phase 3.
+    """
     if "memory_type: session-handoff" in text:
         return text  # already has it
     # Detect closeout patterns (commits, file changes, task completion markers)
