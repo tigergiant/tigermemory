@@ -165,7 +165,7 @@ PROMPT_AUDIT_TARGETS = (
     },
     {
         "id": "agent-onboarding-snapshot",
-        "path": "tools/tm_persona.py",
+        "path": "packages/tigermemory-persona/src/tigermemory_persona/__init__.py",
         "description": "deterministic get_agent_onboarding source",
         "markers": (
             "get_agent_onboarding",
@@ -199,7 +199,7 @@ PROMPT_AUDIT_TARGETS = (
     },
     {
         "id": "memory-routing-llm",
-        "path": "tools/tm_route.py",
+        "path": "packages/tigermemory-route/src/tigermemory_route/__init__.py",
         "description": "LLM route prompt and topic taxonomy",
         "markers": (
             "requested_topic",

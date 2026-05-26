@@ -116,6 +116,17 @@ def test_cmd_automation_contract_json_exit_codes(tmp_path, monkeypatch):
     assert report["status"] == "ok"
 
 
+def test_prompt_audit_targets_follow_package_split():
+    targets = {target["id"]: target["path"] for target in tm_daily_health_summary.PROMPT_AUDIT_TARGETS}
+
+    assert targets["agent-onboarding-snapshot"] == (
+        "packages/tigermemory-persona/src/tigermemory_persona/__init__.py"
+    )
+    assert targets["memory-routing-llm"] == (
+        "packages/tigermemory-route/src/tigermemory_route/__init__.py"
+    )
+
+
 def test_audit_role_prompts_reports_marker_status(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_daily_health_summary, "PROMPT_AUDIT_TARGETS", (
         {
