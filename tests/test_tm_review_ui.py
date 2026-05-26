@@ -1455,6 +1455,40 @@ def test_dashboard_memory_quality_falls_back_to_live_inbox(tmp_path, monkeypatch
     assert "digest not found" in data["digest_error"]
 
 
+def test_api_health_memory_overview_endpoint(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    (tmp_path / "wiki" / "systems").mkdir(parents=True)
+    (tmp_path / "wiki" / "systems" / "one.md").write_text("# one\n", encoding="utf-8")
+    _write_inbox(tmp_path, "2026-05-01-1200-codex-systems.md")
+    monkeypatch.setattr(tm_review_ui, "_get_mem0_approximate_count", lambda: 7)
+    monkeypatch.setattr(tm_review_ui, "_get_7day_digest_trend", lambda: [{"date": "2026-05-27", "mem0": 1, "inbox": 1, "discard": 0, "available": True}])
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/api/health/memory-overview", headers=HOST)
+
+    data = response.json()
+    assert data["ok"] is True
+    assert data["wiki_pages"] == 1
+    assert data["inbox_pending"] == 1
+    assert data["mem0_approximate"] == 7
+    assert data["trend_7d"][0]["available"] is True
+
+
+def test_api_agent_recent_activity_endpoint(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "_recent_agent_commits", lambda: [{"type": "commit", "agent": "codex", "title": "[codex] update: test"}])
+    monkeypatch.setattr(tm_review_ui, "_recent_handoff_cards", lambda: [{"type": "handoff", "agent": "openclaw", "title": "handoff"}])
+    monkeypatch.setattr(tm_review_ui, "_ce_plugin_last_write", lambda: {"type": "ce-plugin", "agent": "tigermemory-ce", "title": "ce write"})
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/api/agent/recent-activity", headers=HOST)
+
+    data = response.json()
+    assert data["ok"] is True
+    assert [item["type"] for item in data["items"][:3]] == ["ce-plugin", "commit", "handoff"]
+
+
 def test_dashboard_p0_i18n_static_guards():
     i18n_js = (tm_review_ui.STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
     pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
@@ -1464,6 +1498,17 @@ def test_dashboard_p0_i18n_static_guards():
     assert "next.includes(target)" in i18n_js
     assert "data.hint || data.error" in pages_js
     assert "今日摘要未生成，以下为实时估算数据。" in pages_js
+
+
+def test_dashboard_p2_static_sections():
+    health_html = (tm_review_ui.STATIC_DIR / "health.html").read_text(encoding="utf-8")
+    agent_html = (tm_review_ui.STATIC_DIR / "agent-tools.html").read_text(encoding="utf-8")
+    pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
+
+    assert 'id="memory-overview"' in health_html
+    assert 'id="recent-activity-list"' in agent_html
+    assert "renderMemoryOverview" in pages_js
+    assert "fetchRecentActivity" in pages_js
 
 
 def test_dashboard_smoke_script_execution(monkeypatch):
