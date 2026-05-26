@@ -65,6 +65,9 @@ def cmd_write_inbox(args: argparse.Namespace) -> None:
     import tm_memory_ops
     import tm_route
 
+    # Server-side auto-wrap for hookless agents (same logic as write_memory MCP path)
+    body = tm_memory_ops._auto_wrap_handoff_card(args.agent, body)
+
     if args.force_inbox:
         fm_extra = {
             "routed_by": "tigermemory",

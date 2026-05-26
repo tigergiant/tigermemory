@@ -81,3 +81,41 @@ def test_long_text_truncated_in_handoff():
     handoff_end = result.find("\n\n## Evidence")
     handoff_body = result[handoff_start:handoff_end]
     assert len(handoff_body) < 1600
+
+
+def test_hermes_natural_chinese_wrap():
+    """Real Hermes output: uses '提交' + commit hashes (645c067 etc). Should wrap."""
+    text = (
+        "2026-05-26 Hermes查阅tigermemory最近7天git log，"
+        "筛出与investment相关的提交：645c067（刷新预览）、"
+        "ea7f5b2（新增600887.SH决策日志）、204b7ef（批量归档）。"
+        "口语化结论：最近一周确有多条投资相关提交。"
+    )
+    result = _auto_wrap_handoff_card("hermes", text)
+    assert "memory_type: session-handoff" in result
+    assert "hermes-" in result
+
+
+def test_openclaw_natural_chinese_wrap():
+    """Real OpenClaw output: uses '提交' + hash + '口语化结论'. Should wrap."""
+    text = (
+        "最近 5 个 commit：\n"
+        "- `60cdff5` `[cascade] create: server-side auto-wrap`\n"
+        "- `77ff508` `[codex] create: P2 development closeout plan`\n\n"
+        "口语化结论：最近几次提交主要在收口 agent 运行规范。\n"
+        "提交作者名显示为 raogiant66。"
+    )
+    result = _auto_wrap_handoff_card("openclaw", text)
+    assert "memory_type: session-handoff" in result
+    assert "openclaw-" in result
+
+
+def test_no_wrap_for_pure_question():
+    """Pure research text with hashes but no closeout words should NOT wrap."""
+    text = (
+        "看了 645c067 和 ea7f5b2 这两条，"
+        "前者是刷新预览，后者是决策日志。"
+        "我还需要你帮我看另外几个。"
+    )
+    result = _auto_wrap_handoff_card("hermes", text)
+    assert result == text  # no wrap, only 1 signal (hash)

@@ -425,8 +425,8 @@ def _auto_wrap_handoff_card(agent: str, text: str) -> str:
         return text  # already has it
     # Detect closeout patterns (commits, file changes, task completion markers)
     closeout_signals = sum([
-        bool(re.search(r"(?i)(commit|push|完成|completed|done|verified|验证通过)", text)),
-        bool(re.search(r"(?i)(关键文件|changed files|Evidence|Blockers|Handoff)", text)),
+        bool(re.search(r"(?i)(commit|push|完成|completed|done|verified|验证通过|提交|做完|查完|搞定|已完成|已写入|写入成功|巡检完|任务完成)", text)),
+        bool(re.search(r"(?i)(关键文件|changed files|Evidence|Blockers|Handoff|相关文件|涉及文件|改动文件|关键结论|口语化结论)", text)),
         bool(re.search(r"[a-f0-9]{7,}", text)),  # commit hash
     ])
     if closeout_signals < 2:
