@@ -1231,7 +1231,7 @@ def test_review_html_contains_batch_controls_and_status_copy(tmp_path, monkeypat
     assert "进入短期记忆：写入 Mem0" in js_content  # JS 内的 actionHelps
     assert "写入长期事实记忆" in js_content
     assert "data-row-status" in js_content
-    assert "展开原文预览（约 200 字）" in js_content
+    assert "展开详情" in js_content
 
 
 
