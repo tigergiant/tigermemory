@@ -1475,6 +1475,12 @@ def test_api_health_memory_overview_endpoint(tmp_path, monkeypatch):
     assert data["trend_7d"][0]["available"] is True
 
 
+def test_mem0_approximate_count_accepts_total(monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "_mem0_payload", lambda *_args, **_kwargs: {"total": 696, "items": []})
+
+    assert tm_review_ui._get_mem0_approximate_count() == 696
+
+
 def test_api_agent_recent_activity_endpoint(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "_recent_agent_commits", lambda: [{"type": "commit", "agent": "codex", "title": "[codex] update: test"}])
     monkeypatch.setattr(tm_review_ui, "_recent_handoff_cards", lambda: [{"type": "handoff", "agent": "openclaw", "title": "handoff"}])
