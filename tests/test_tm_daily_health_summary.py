@@ -179,6 +179,59 @@ def test_compact_prompt_audit_omits_full_marker_details():
     }
 
 
+def test_audit_session_handoff_cards_requires_codex_and_windsurf_cards():
+    report = tm_daily_health_summary.audit_session_handoff_cards([
+        {
+            "id": "codex-1",
+            "content": (
+                "---\n"
+                "memory_type: session-handoff\n"
+                "ide: codex\n"
+                "agent: codex\n"
+                "source: agent\n"
+                "---\n"
+            ),
+        },
+        {
+            "id": "windsurf-1",
+            "content": (
+                "---\n"
+                "memory_type: session-handoff\n"
+                "ide: windsurf\n"
+                "agent: cascade\n"
+                "source: hook_auto\n"
+                "---\n"
+            ),
+        },
+    ])
+
+    assert report["schema_version"] == "session-handoff-audit-v1"
+    assert report["status"] == "ok"
+    assert report["passed_count"] == 2
+    assert report["missing_ids"] == []
+    assert report["by_ide"] == {"codex": 1, "windsurf": 1}
+
+
+def test_audit_session_handoff_cards_reports_missing_windsurf_card():
+    report = tm_daily_health_summary.audit_session_handoff_cards([
+        {
+            "id": "codex-1",
+            "content": (
+                "---\n"
+                "memory_type: session-handoff\n"
+                "ide: codex\n"
+                "agent: codex\n"
+                "source: agent\n"
+                "---\n"
+            ),
+        },
+    ])
+
+    assert report["status"] == "fail"
+    assert report["passed_count"] == 1
+    assert report["missing_ids"] == ["windsurf_hook_card"]
+
+
 def test_compact_runtime_config_manager_summarizes_targets():
     compact = tm_daily_health_summary.compact_runtime_config_manager({
         "ok": True,

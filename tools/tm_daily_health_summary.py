@@ -18,6 +18,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import urllib.parse
 from collections import Counter
 from typing import Any
 
@@ -33,6 +34,7 @@ DAILY_SUMMARY_SCHEMA = "daily-health-summary-v1"
 DAILY_TREND_SCHEMA = "daily-health-trend-v1"
 DAILY_REPORT_VALIDATION_SCHEMA = "daily-health-report-validation-v1"
 PROMPT_AUDIT_SCHEMA = "daily-health-prompt-audit-v1"
+SESSION_HANDOFF_AUDIT_SCHEMA = "session-handoff-audit-v1"
 REQUIRED_DAILY_SUMMARY_FIELDS = (
     "schema_version",
     "health_color",
@@ -64,6 +66,22 @@ REQUIRED_RUNTIME_CONFIG_MANAGER_FIELDS = (
 )
 SUMMARY_HEADINGS = ("## 机器可读摘要", "## Machine-readable Summary")
 SOURCE_HEADINGS = ("## 来源", "## Sources")
+SESSION_HANDOFF_REQUIRED = (
+    {
+        "id": "codex_agent_card",
+        "ide": "codex",
+        "agent": "codex",
+        "source": "agent",
+        "description": "Codex agent-written Session Handoff Card",
+    },
+    {
+        "id": "windsurf_hook_card",
+        "ide": "windsurf",
+        "agent": "cascade",
+        "source": "hook_auto",
+        "description": "Windsurf post_cascade_response Session Handoff Card",
+    },
+)
 REQUIRED_CHINESE_REPORT_MARKERS = (
     "## 中文总览",
     "已验证",
@@ -943,6 +961,96 @@ def validate_daily_report(
     }
 
 
+def _frontmatter_value(text: str, key: str) -> str | None:
+    match = re.search(rf"(?m)^{re.escape(key)}:\s*(.+?)\s*$", text)
+    if not match:
+        return None
+    return match.group(1).strip().strip('"').strip("'")
+
+
+def session_handoff_cards_from_memories(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    cards: list[dict[str, Any]] = []
+    for item in items:
+        text = str(item.get("content") or item.get("memory") or "")
+        if _frontmatter_value(text, "memory_type") != "session-handoff":
+            continue
+        cards.append(
+            {
+                "id": item.get("id"),
+                "created_at": item.get("created_at"),
+                "session_id": _frontmatter_value(text, "session_id"),
+                "ide": _frontmatter_value(text, "ide"),
+                "agent": _frontmatter_value(text, "agent"),
+                "source": _frontmatter_value(text, "source"),
+                "confidence": _frontmatter_value(text, "confidence"),
+            }
+        )
+    return cards
+
+
+def audit_session_handoff_cards(items: list[dict[str, Any]]) -> dict[str, Any]:
+    cards = session_handoff_cards_from_memories(items)
+    required = []
+    missing = []
+    for req in SESSION_HANDOFF_REQUIRED:
+        matches = [
+            card for card in cards
+            if card.get("ide") == req["ide"]
+            and card.get("agent") == req["agent"]
+            and card.get("source") == req["source"]
+        ]
+        row = {
+            "id": req["id"],
+            "description": req["description"],
+            "ide": req["ide"],
+            "agent": req["agent"],
+            "source": req["source"],
+            "match_count": len(matches),
+            "latest_ids": [str(card.get("id")) for card in matches[-3:] if card.get("id")],
+        }
+        required.append(row)
+        if not matches:
+            missing.append(row)
+    by_source = Counter(str(card.get("source") or "unknown") for card in cards)
+    by_ide = Counter(str(card.get("ide") or "unknown") for card in cards)
+    return {
+        "schema_version": SESSION_HANDOFF_AUDIT_SCHEMA,
+        "status": "ok" if not missing else "fail",
+        "memory_count": len(items),
+        "card_count": len(cards),
+        "required_count": len(required),
+        "passed_count": len(required) - len(missing),
+        "missing_count": len(missing),
+        "missing_ids": [str(item["id"]) for item in missing],
+        "required": required,
+        "by_source": dict(sorted(by_source.items())),
+        "by_ide": dict(sorted(by_ide.items())),
+    }
+
+
+def fetch_mem0_memories(*, page_size: int = 100, max_pages: int = 20) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for page in range(1, max_pages + 1):
+        params = urllib.parse.urlencode({
+            "user_id": tm_core.mem0_user_id(),
+            "page": page,
+            "size": page_size,
+        })
+        raw = tm_core.mem0_request(
+            f"{tm_core.mem0_base().rstrip('/')}/api/v1/memories/?{params}",
+            timeout=tm_core.MEM0_READ_TIMEOUT,
+        )
+        data = json.loads(raw)
+        page_items = data.get("items") or data.get("results") or []
+        if not isinstance(page_items, list) or not page_items:
+            break
+        items.extend(item for item in page_items if isinstance(item, dict))
+        pages = int(data.get("pages") or 0)
+        if pages and page >= pages:
+            break
+    return items
+
+
 def cmd_known_debt(args: argparse.Namespace) -> int:
     rows = load_known_debt(REPO_ROOT / args.file)
     today = dt.date.fromisoformat(args.today) if args.today else dt.date.today()
@@ -989,6 +1097,50 @@ def cmd_prompt_audit(args: argparse.Namespace) -> int:
         sys.stdout.write(f"fail: prompt audit missing {report['missing_count']} checks\n")
         for item in report["missing"]:
             sys.stdout.write(f"- {item['id']}: {', '.join(item.get('missing_markers') or [])}\n")
+    return 0 if report["status"] == "ok" else 1
+
+
+def cmd_session_handoff_audit(args: argparse.Namespace) -> int:
+    try:
+        if args.input_json:
+            data = load_json_report(pathlib.Path(args.input_json))
+            items = data.get("items") or data.get("results") or data.get("memories") or []
+            if not isinstance(items, list):
+                items = []
+        else:
+            items = fetch_mem0_memories(page_size=args.page_size, max_pages=args.max_pages)
+        report = audit_session_handoff_cards([item for item in items if isinstance(item, dict)])
+    except Exception as exc:
+        report = {
+            "schema_version": SESSION_HANDOFF_AUDIT_SCHEMA,
+            "status": "fail",
+            "memory_count": 0,
+            "card_count": 0,
+            "required_count": len(SESSION_HANDOFF_REQUIRED),
+            "passed_count": 0,
+            "missing_count": len(SESSION_HANDOFF_REQUIRED),
+            "missing_ids": [item["id"] for item in SESSION_HANDOFF_REQUIRED],
+            "required": [],
+            "by_source": {},
+            "by_ide": {},
+            "errors": [str(exc)[:240]],
+        }
+    if args.json:
+        sys.stdout.write(json.dumps(report, ensure_ascii=False, sort_keys=True) + "\n")
+    elif report["status"] == "ok":
+        sys.stdout.write(
+            f"ok: session handoff audit passed ({report['passed_count']}/{report['required_count']})\n"
+        )
+    else:
+        sys.stdout.write(
+            f"fail: session handoff audit missing {report['missing_count']} required cards\n"
+        )
+        for item in report.get("required") or []:
+            if item.get("match_count"):
+                continue
+            sys.stdout.write(f"- {item['id']}: {item['description']}\n")
+        for error in report.get("errors") or []:
+            sys.stdout.write(f"- error: {error}\n")
     return 0 if report["status"] == "ok" else 1
 
 
@@ -1107,6 +1259,13 @@ def main() -> None:
     prompt_audit_p = sub.add_parser("prompt-audit", help="audit agent role prompts and routing prompts")
     prompt_audit_p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     prompt_audit_p.set_defaults(func=cmd_prompt_audit)
+
+    handoff_p = sub.add_parser("session-handoff-audit", help="audit Mem0 Session Handoff Card coverage")
+    handoff_p.add_argument("--input-json", default=None, help="optional captured Mem0 list JSON for tests")
+    handoff_p.add_argument("--page-size", type=int, default=100)
+    handoff_p.add_argument("--max-pages", type=int, default=20)
+    handoff_p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    handoff_p.set_defaults(func=cmd_session_handoff_audit)
 
     trend_p = sub.add_parser("trend", help="summarize historical daily-health machine summaries")
     trend_p.add_argument("--reports-dir", default=None, help="daily-health report directory; defaults to wiki/operations/daily-health")
