@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import subprocess
 import sys
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -195,3 +196,32 @@ def test_replay_no_query_omits_call_queries(tmp_path):
 
     assert "query" not in replay
     assert "query" not in replay["calls"][0]
+
+
+def test_tool_cli_shim_invokes_trace_main(tmp_path):
+    log = tmp_path / "trace.jsonl"
+    _write_jsonl(log, [_row("t-ok", "ok", run_id="shim-smoke")])
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "tools" / "tm_answer_trace.py"),
+            "--log",
+            str(log),
+            "summary",
+            "--json",
+            "--run-id",
+            "shim-smoke",
+            "--latest",
+            "0",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    report = json.loads(result.stdout)
+    assert report["selected_run_id"] == "shim-smoke"
+    assert report["row_count"] == 1
+    assert result.stdout.strip()

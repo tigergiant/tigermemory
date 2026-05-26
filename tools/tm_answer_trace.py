@@ -9,3 +9,7 @@ import sys
 import tigermemory_answer.trace as _impl
 
 sys.modules[__name__] = _impl
+
+
+if __name__ == "__main__":
+    _impl.main()
