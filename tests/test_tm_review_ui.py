@@ -1475,6 +1475,29 @@ def test_api_health_memory_overview_endpoint(tmp_path, monkeypatch):
     assert data["trend_7d"][0]["available"] is True
 
 
+def test_dashboard_digest_trend_reads_frontmatter_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_ui, "today", lambda: "2026-05-27")
+    monkeypatch.setattr(
+        tm_review_ui,
+        "parse_digest",
+        lambda _date: (_ for _ in ()).throw(AssertionError("trend should not parse full digest")),
+    )
+    digest_dir = tmp_path / "wiki" / "operations"
+    digest_dir.mkdir(parents=True)
+    (digest_dir / "daily-memory-digest-2026-05-27.md").write_text(
+        "---\nmem0_count: 11\ninbox_count: 3\ndiscard_count: 2\n---\n# digest\n",
+        encoding="utf-8",
+    )
+
+    rows = tm_review_ui._get_7day_digest_trend()
+
+    assert rows[-1]["available"] is True
+    assert rows[-1]["mem0"] == 11
+    assert rows[-1]["inbox"] == 3
+    assert rows[-1]["discard"] == 2
+
+
 def test_dashboard_health_summary_does_not_compute_memory_overview(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(
