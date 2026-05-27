@@ -1561,6 +1561,62 @@ def test_api_agent_recent_activity_endpoint(tmp_path, monkeypatch):
     assert [item["type"] for item in data["items"][:3]] == ["ce-plugin", "commit", "handoff"]
 
 
+def test_dashboard_recent_activity_sorts_by_created_at(monkeypatch):
+    monkeypatch.setattr(
+        tm_review_ui,
+        "_recent_agent_commits",
+        lambda: [
+            {"type": "commit", "agent": "codex", "title": "old commit", "created_at": "2026-05-20T10:00:00+08:00"},
+            {"type": "commit", "agent": "cascade", "title": "new commit", "created_at": "2026-05-27T10:00:00+08:00"},
+        ],
+    )
+    monkeypatch.setattr(
+        tm_review_ui,
+        "_recent_handoff_cards",
+        lambda: [
+            {"type": "handoff", "agent": "openclaw", "title": "mid handoff", "created_at": "2026-05-25T10:00:00+08:00"},
+        ],
+    )
+    monkeypatch.setattr(tm_review_ui, "_ce_plugin_last_write", lambda: None)
+
+    result = tm_review_ui.dashboard_agent_recent_activity()
+
+    assert result["ok"] is True
+    assert [item["created_at"] for item in result["items"]] == [
+        "2026-05-27T10:00:00+08:00",
+        "2026-05-25T10:00:00+08:00",
+        "2026-05-20T10:00:00+08:00",
+    ]
+
+
+def test_dashboard_recent_activity_ce_plugin_stays_at_top(monkeypatch):
+    monkeypatch.setattr(
+        tm_review_ui,
+        "_recent_agent_commits",
+        lambda: [{"type": "commit", "agent": "cascade", "title": "newer", "created_at": "2026-05-27T10:00:00+08:00"}],
+    )
+    monkeypatch.setattr(tm_review_ui, "_recent_handoff_cards", lambda: [])
+    monkeypatch.setattr(
+        tm_review_ui,
+        "_ce_plugin_last_write",
+        lambda: {"type": "ce-plugin", "agent": "tigermemory-ce", "title": "ce", "created_at": "2026-05-20T10:00:00+08:00"},
+    )
+
+    result = tm_review_ui.dashboard_agent_recent_activity()
+
+    assert result["items"][0]["type"] == "ce-plugin"
+
+
+def test_recent_handoff_cards_empty_task_section(monkeypatch):
+    fake_payload = {"items": [{"content": "## Task\n\n\n", "created_at": "2026-05-27T10:00:00+08:00"}]}
+    monkeypatch.setattr(tm_review_ui, "_mem0_payload", lambda *a, **kw: fake_payload)
+    monkeypatch.setattr(tm_review_ui, "_mem0_items", lambda payload: payload.get("items", []))
+
+    cards = tm_review_ui._recent_handoff_cards()
+
+    assert cards and cards[0]["title"] == "## Task\n\n\n"[:120]
+
+
 def test_dashboard_p0_i18n_static_guards():
     i18n_js = (tm_review_ui.STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
     pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
@@ -1570,6 +1626,12 @@ def test_dashboard_p0_i18n_static_guards():
     assert "next.includes(target)" in i18n_js
     assert "data.hint || data.error" in pages_js
     assert "今日摘要未生成，以下为实时估算数据。" in pages_js
+
+
+def test_dashboard_memory_overview_mem0_offline_subline():
+    pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
+    assert "Mem0 离线或超时，临时无法计数" in pages_js
+    assert "mem0Available" in pages_js
 
 
 def test_dashboard_p2_static_sections():
