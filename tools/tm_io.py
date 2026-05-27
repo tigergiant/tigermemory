@@ -47,6 +47,7 @@ import json
 import pathlib
 import sys
 
+import _bootstrap_paths  # noqa: F401  -- expose packages/*/src before tigermemory imports
 import tigermemory_core as tm_core
 
 

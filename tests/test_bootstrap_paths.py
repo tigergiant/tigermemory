@@ -28,6 +28,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 TOOLS_DIR = REPO_ROOT / "tools"
 PACKAGES_DIR = REPO_ROOT / "packages"
 ENTRY_POINTS = (
+    "tm_io.py",
     "tm_mcp.py",
     "tm_http.py",
     "tm_mcp_openai.py",
