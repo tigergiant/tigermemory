@@ -1475,6 +1475,25 @@ def test_api_health_memory_overview_endpoint(tmp_path, monkeypatch):
     assert data["trend_7d"][0]["available"] is True
 
 
+def test_dashboard_health_summary_does_not_compute_memory_overview(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        tm_review_ui.tm_agent_doctor,
+        "run_agent_doctor",
+        lambda **_kwargs: {"status": "ok", "checks": []},
+    )
+    monkeypatch.setattr(
+        tm_review_ui,
+        "dashboard_memory_overview",
+        lambda: (_ for _ in ()).throw(AssertionError("memory overview should stay on its own endpoint")),
+    )
+
+    data = tm_review_ui.dashboard_health_summary()
+
+    assert data["ok"] is True
+    assert "memory_overview" not in data
+
+
 def test_mem0_approximate_count_accepts_total(monkeypatch):
     monkeypatch.setattr(tm_review_ui, "_mem0_payload", lambda *_args, **_kwargs: {"total": 696, "items": []})
 
@@ -1515,6 +1534,8 @@ def test_dashboard_p2_static_sections():
     assert 'id="recent-activity-list"' in agent_html
     assert "renderMemoryOverview" in pages_js
     assert "fetchRecentActivity" in pages_js
+    assert "fetchMemoryOverview" in pages_js
+    assert "/api/health/memory-overview" in pages_js
 
 
 def test_dashboard_smoke_script_execution(monkeypatch):
