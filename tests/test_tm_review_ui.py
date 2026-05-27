@@ -217,7 +217,7 @@ def test_digest_with_cookie_returns_html_and_embedded_json(tmp_path, monkeypatch
     response = client.get("/digest/2026-05-21", headers=HOST)
 
     assert response.status_code == 200
-    assert "TigerMemory 每日审批" in response.text
+    assert "TigerMemory 今日待确认" in response.text
     assert "今日要决策" in response.text
     assert "/static/assets/tailwindcss.min.js" in response.text
     assert "/static/assets/lucide.min.js" in response.text
@@ -235,7 +235,7 @@ def test_i18n_assets_are_public(tmp_path, monkeypatch):
     js_response = client.get("/static/i18n.js", headers=HOST)
 
     assert json_response.status_code == 200
-    assert json_response.json()["zh"]["nav.daily"] == "每日审批"
+    assert json_response.json()["zh"]["nav.daily"] == "今日待确认"
     assert json_response.json()["en"]["nav.daily"] == "Daily Review"
     assert js_response.status_code == 200
     assert "window.tmI18n" in js_response.text
@@ -326,7 +326,7 @@ def test_digest_entry_uses_today_even_when_only_old_report_exists(tmp_path, monk
     assert response.status_code == 200
     assert '"date": "2026-05-22"' in response.text
     assert '"live_fallback": true' in response.text
-    assert "TigerMemory 每日审批" in response.text
+    assert "TigerMemory 今日待确认" in response.text
 
 
 def test_digest_entry_prefers_today_when_available(tmp_path, monkeypatch):
@@ -438,7 +438,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v7" in response.text
+    assert "tigermemory-memory-ops-v8" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -667,7 +667,7 @@ def test_health_page_uses_real_template_not_json_page(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert "health-data" in response.text
-    assert "系统健康" in response.text
+    assert "运行检查" in response.text
     assert "记忆管家" in response.text
     assert "#f7f2e6" in response.text
     assert "#c8a560" in response.text
@@ -755,7 +755,7 @@ def test_quality_and_settings_no_longer_use_raw_json_page(tmp_path, monkeypatch)
     assert "AI 回复详细程度" in settings.text
     assert "记忆管家" in quality.text
     assert "记忆管家" in settings.text
-    assert "保存在本地" in settings.text
+    assert "保存在本机" in settings.text
     combined = quality.text + settings.text
     assert "阶段 2 占位" not in combined
     assert "bg-zinc-950" not in combined
@@ -1228,7 +1228,7 @@ def test_review_html_contains_batch_controls_and_status_copy(tmp_path, monkeypat
     # 动态及去内联文案在模块化后的 JS 文件中进行断言
     js_content = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
     assert "Codex 推荐操作" in js_content
-    assert "进入短期记忆：写入 Mem0" in js_content  # JS 内的 actionHelps
+    assert "进入即时记忆：适合近期偏好" in js_content  # JS 内的 actionHelps
     assert "写入长期事实记忆" in js_content
     assert "data-row-status" in js_content
     assert "展开详情" in js_content
@@ -1625,7 +1625,7 @@ def test_dashboard_p0_i18n_static_guards():
     assert ".chip, [data-chip-key], [data-action]" in i18n_js
     assert "next.includes(target)" in i18n_js
     assert "data.hint || data.error" in pages_js
-    assert "今日摘要未生成，以下为实时估算数据。" in pages_js
+    assert "今日整理尚未生成，以下为实时估算数据。" in pages_js
 
 
 def test_dashboard_memory_overview_mem0_offline_subline():
