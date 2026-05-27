@@ -1628,6 +1628,27 @@ def test_dashboard_p0_i18n_static_guards():
     assert "今日整理尚未生成，以下为实时估算数据。" in pages_js
 
 
+def test_dashboard_write_actions_do_not_block_event_loop():
+    source = pathlib.Path(tm_review_ui.__file__).read_text(encoding="utf-8")
+
+    assert "WRITE_ACTION_LOCK = threading.Lock()" in source
+    assert "await run_in_threadpool(_render_digest_page, date)" in source
+    assert "await run_in_threadpool(daily_review_data, date)" in source
+    assert "await run_in_threadpool(_locked_write_action, execute_inbox_action, req)" in source
+    assert "await run_in_threadpool(_locked_write_action, execute_batch_inbox_action, req)" in source
+
+
+def test_dashboard_action_controls_and_toast_static_guards():
+    pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
+    review_html = (tm_review_ui.STATIC_DIR / "review.html").read_text(encoding="utf-8")
+
+    assert "actionInFlight" in pages_js
+    assert "setWriteControlsDisabled" in pages_js
+    assert "上一项还在处理，请稍等。" in pages_js
+    assert "bottom-6 left-1/2" in pages_js
+    assert "bottom-6 left-1/2" in review_html
+
+
 def test_dashboard_memory_overview_mem0_offline_subline():
     pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
     assert "即时记忆暂时无法连接" in pages_js
