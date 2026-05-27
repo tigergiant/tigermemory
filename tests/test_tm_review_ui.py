@@ -1418,6 +1418,30 @@ def test_api_agent_eval_endpoint(tmp_path, monkeypatch):
     assert data["mem0"]["avg_latency_ms"] == 50.0
 
 
+def test_api_agent_eval_accepts_wiki_degraded_tuple(tmp_path, monkeypatch):
+    import tm_eval_runner
+    monkeypatch.setattr(
+        tm_eval_runner,
+        "load_or_create_eval_suite",
+        lambda _name: [{"id": "case-1", "description": "Test wiki", "query": "test"}],
+    )
+    monkeypatch.setattr(
+        tm_eval_runner,
+        "run_wiki_eval",
+        lambda _case: (1, 15.5, False),
+    )
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/api/agent/eval?skip_mem0=true", headers=HOST)
+
+    data = response.json()
+    assert data["ok"] is True
+    assert data["results"][0]["wiki_rank"] == 1
+    assert data["results"][0]["wiki_degraded"] is False
+    assert data["mem0"]["active"] is False
+
+
 def test_api_agent_eval_import_error_returns_json(tmp_path, monkeypatch):
     real_import = builtins.__import__
 
