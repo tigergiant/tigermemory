@@ -39,7 +39,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import _bootstrap_paths  # noqa: F401  -- must precede tigermemory_* / tigerledger imports
 
@@ -411,8 +411,14 @@ def _probe_mem0_api(timeout: int = 2) -> dict[str, Any]:
     """Cheap API-level probe for cases where the port is open but the app is hung."""
     start = time.time()
     try:
+        params = urlencode({
+            "user_id": tm_core.mem0_user_id(),
+            "page": 1,
+            "size": 1,
+            "match_mode": "id_first",
+        })
         tm_core.mem0_request(
-            f"{tm_core.mem0_base().rstrip()}/api/v1/memories/categories?user_id=tiger",
+            f"{tm_core.mem0_base().rstrip()}/api/v1/memories/?{params}",
             timeout=timeout,
         )
         return {

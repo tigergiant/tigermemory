@@ -146,9 +146,10 @@ def test_mem0_api_probe_reports_latency_and_error(monkeypatch):
     def fake_request(url, **kwargs):
         calls["url"] = url
         calls["kwargs"] = kwargs
-        return '{"categories":[],"total":0}'
+        return '{"items":[],"total":0}'
 
     monkeypatch.setattr(tm_http.tm_core, "mem0_base", lambda: "http://localhost:8765")
+    monkeypatch.setattr(tm_http.tm_core, "mem0_user_id", lambda: "tiger")
     monkeypatch.setattr(tm_http.tm_core, "mem0_request", fake_request)
 
     ok = tm_http._probe_mem0_api(timeout=3)
@@ -156,7 +157,7 @@ def test_mem0_api_probe_reports_latency_and_error(monkeypatch):
     assert ok["reachable"] is True
     assert ok["latency_ms"] >= 0
     assert ok["error"] is None
-    assert calls["url"] == "http://localhost:8765/api/v1/memories/categories?user_id=tiger"
+    assert calls["url"] == "http://localhost:8765/api/v1/memories/?user_id=tiger&page=1&size=1&match_mode=id_first"
     assert calls["kwargs"]["timeout"] == 3
 
     monkeypatch.setattr(

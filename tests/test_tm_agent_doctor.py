@@ -79,3 +79,22 @@ def test_agent_doctor_retention_check_runs_real_offline_sample():
     assert res["offline_only"] is True
     assert "item_count" in res
     assert "action_counts" in res
+
+
+def test_check_mem0_uses_lightweight_memories_probe(monkeypatch):
+    calls = {}
+
+    def fake_request(url, **kwargs):
+        calls["url"] = url
+        calls["kwargs"] = kwargs
+        return '{"items":[],"total":0}'
+
+    monkeypatch.setattr(tm_agent_doctor.tm_core, "mem0_base", lambda: "http://localhost:8765")
+    monkeypatch.setattr(tm_agent_doctor.tm_core, "mem0_user_id", lambda: "tiger")
+    monkeypatch.setattr(tm_agent_doctor.tm_core, "mem0_request", fake_request)
+
+    res = tm_agent_doctor.check_mem0(timeout=4)
+
+    assert res["status"] == "ok"
+    assert calls["url"] == "http://localhost:8765/api/v1/memories/?user_id=tiger&page=1&size=1&match_mode=id_first"
+    assert calls["kwargs"]["timeout"] == 4

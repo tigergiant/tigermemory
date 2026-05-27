@@ -13,6 +13,7 @@ import json
 import pathlib
 import sys
 import time
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -104,8 +105,14 @@ def check_tm_http(base_url: str | None = None, *, timeout: int = 3) -> dict[str,
 def check_mem0(timeout: int = 3) -> dict[str, Any]:
     start = time.time()
     try:
+        params = urllib.parse.urlencode({
+            "user_id": tm_core.mem0_user_id(),
+            "page": 1,
+            "size": 1,
+            "match_mode": "id_first",
+        })
         tm_core.mem0_request(
-            f"{tm_core.mem0_base().rstrip('/')}/api/v1/memories/categories?user_id=tiger",
+            f"{tm_core.mem0_base().rstrip('/')}/api/v1/memories/?{params}",
             timeout=timeout,
         )
     except Exception as exc:

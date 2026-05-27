@@ -25,3 +25,20 @@ def test_openmemory_memories_patch_preserves_tigermemory_write_contract():
         create_body = re.search(r"async def create_memory\([\s\S]+?# Get memory by ID", text)
         assert create_body is not None
         assert "return memory\n" not in create_body.group(0)
+
+
+def test_categories_patch_does_not_load_all_memories():
+    text = (REPO_ROOT / "deploy/openmemory/patches/app/routers/memories.py").read_text(encoding="utf-8")
+
+    assert ".join(Category.memories)" in text
+    assert ".distinct()" in text
+    assert "db.query(Memory).filter(Memory.user_id == user.id" not in text
+    assert "for memory in memories for category in memory.categories" not in text
+
+
+def test_memory_client_config_session_closes_on_exception_path():
+    text = (REPO_ROOT / "deploy/openmemory/patches/app/utils/memory.py").read_text(encoding="utf-8")
+    load_block = text.split("# tigermemory patch: env-var override for embedder", 1)[0]
+
+    assert "db = SessionLocal()" in load_block
+    assert "finally:\n                db.close()" in load_block
