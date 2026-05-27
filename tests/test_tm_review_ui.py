@@ -438,7 +438,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v8" in response.text
+    assert "tigermemory-memory-ops-v9" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -1641,12 +1641,17 @@ def test_dashboard_write_actions_do_not_block_event_loop():
 def test_dashboard_action_controls_and_toast_static_guards():
     pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
     review_html = (tm_review_ui.STATIC_DIR / "review.html").read_text(encoding="utf-8")
+    style_css = (tm_review_ui.STATIC_DIR / "_components" / "style.css").read_text(encoding="utf-8")
 
     assert "actionInFlight" in pages_js
-    assert "setWriteControlsDisabled" in pages_js
-    assert "上一项还在处理，请稍等。" in pages_js
+    assert "enqueueWriteJob" in pages_js
+    assert "processWriteQueue" in pages_js
+    assert "处理队列" in pages_js
     assert "bottom-6 left-1/2" in pages_js
     assert "bottom-6 left-1/2" in review_html
+    assert 'id="action-queue"' in review_html
+    assert "tm-action-queue:hover" in style_css
+    assert "tmBusySheen" in style_css
 
 
 def test_dashboard_memory_overview_mem0_offline_subline():
