@@ -438,7 +438,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v9" in response.text
+    assert "tigermemory-memory-ops-v10" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -1652,6 +1652,8 @@ def test_dashboard_action_controls_and_toast_static_guards():
     assert 'id="action-queue"' in review_html
     assert "tm-action-queue:hover" in style_css
     assert "tmBusySheen" in style_css
+    assert "tmQueueSheen" in style_css
+    assert "tmQueueBar" not in style_css
 
 
 def test_dashboard_memory_overview_mem0_offline_subline():
