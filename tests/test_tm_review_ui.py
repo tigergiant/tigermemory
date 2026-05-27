@@ -668,7 +668,7 @@ def test_health_page_uses_real_template_not_json_page(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert "health-data" in response.text
     assert "系统健康" in response.text
-    assert "记忆运维台" in response.text
+    assert "记忆管家" in response.text
     assert "#f7f2e6" in response.text
     assert "#c8a560" in response.text
     assert "/static/tiger/tigerlogo.png" in response.text
@@ -751,11 +751,11 @@ def test_quality_and_settings_no_longer_use_raw_json_page(tmp_path, monkeypatch)
 
     assert "quality-data" in quality.text
     assert "settings-data" in settings.text
-    assert "记忆系统质量" in quality.text
-    assert "沟通深度档位" in settings.text
-    assert "记忆运维台" in quality.text
-    assert "记忆运维台" in settings.text
-    assert "本地数据库" in settings.text
+    assert "记忆写入质量" in quality.text
+    assert "AI 回复详细程度" in settings.text
+    assert "记忆管家" in quality.text
+    assert "记忆管家" in settings.text
+    assert "保存在本地" in settings.text
     combined = quality.text + settings.text
     assert "阶段 2 占位" not in combined
     assert "bg-zinc-950" not in combined
@@ -1219,11 +1219,11 @@ def test_review_html_contains_batch_controls_and_status_copy(tmp_path, monkeypat
 
     assert response.status_code == 200
     assert "批量归档" in response.text
-    assert "批量进入短期记忆" in response.text
-    assert "写入 Wiki 推荐" in response.text
+    assert "存入即时记忆" in response.text
+    assert "写入知识库推荐" in response.text
     assert "wiki-modal" in response.text
     assert "AI 修改建议" in response.text
-    assert "短期记忆库：适合近期偏好" in response.text  # 保留在 review.html 的 button title 属性中
+    assert "即时记忆：适合近期偏好" in response.text  # 保留在 review.html 的 button title 属性中
 
     # 动态及去内联文案在模块化后的 JS 文件中进行断言
     js_content = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
@@ -1630,7 +1630,7 @@ def test_dashboard_p0_i18n_static_guards():
 
 def test_dashboard_memory_overview_mem0_offline_subline():
     pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
-    assert "Mem0 离线或超时，临时无法计数" in pages_js
+    assert "即时记忆暂时无法连接" in pages_js
     assert "mem0Available" in pages_js
 
 
