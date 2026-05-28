@@ -438,7 +438,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v10" in response.text
+    assert "tigermemory-memory-ops-v11" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -1645,6 +1645,9 @@ def test_dashboard_action_controls_and_toast_static_guards():
 
     assert "actionInFlight" in pages_js
     assert "enqueueWriteJob" in pages_js
+    assert "scheduleWriteQueue" in pages_js
+    assert "batchableQueuedJobs" in pages_js
+    assert "/api/inbox/batch-action" in pages_js
     assert "processWriteQueue" in pages_js
     assert "处理队列" in pages_js
     assert "bottom-6 left-1/2" in pages_js
