@@ -1703,6 +1703,72 @@ def test_dashboard_smoke_script_execution(monkeypatch):
         url = req.full_url if hasattr(req, "full_url") else req
         if "healthz" in url:
             return FakeResponse(json.dumps({"ok": True, "git_sha": "ea7f5b2", "version": "0.2.0"}).encode("utf-8"))
+        elif "/api/health/summary" in url:
+            payload = {
+                "ok": True,
+                "source": "dashboard-runtime",
+                "source_path": "tools/tm_review_ui.py",
+                "source_updated_at": "2026-05-30T00:00:00+08:00",
+                "generated_at": "2026-05-30T00:00:00+08:00",
+                "latency_ms": 1,
+                "cache": {"hit": False, "ttl_seconds": 30, "source": "dashboard-runtime"},
+                "stale": False,
+                "repo_dirty": False,
+                "services": [],
+                "dashboard": {"version": "0.2.0", "git_sha": "ea7f5b2"},
+            }
+            return FakeResponse(json.dumps(payload).encode("utf-8"))
+        elif "/api/quality/memory" in url:
+            payload = {
+                "ok": True,
+                "source": "live-inbox",
+                "source_path": "",
+                "source_updated_at": "",
+                "generated_at": "2026-05-30T00:00:00+08:00",
+                "latency_ms": 1,
+                "cache": {"hit": False, "ttl_seconds": 30},
+                "stale": False,
+                "fallback": True,
+                "fallback_mode": True,
+                "repo_dirty": False,
+                "counts": {},
+                "trace_summary": {},
+            }
+            return FakeResponse(json.dumps(payload).encode("utf-8"))
+        elif "/api/digest/" in url:
+            payload = {
+                "ok": True,
+                "digest": {
+                    "source": "wiki/operations/daily-memory-digest-2026-05-30.md",
+                    "source_path": "wiki/operations/daily-memory-digest-2026-05-30.md",
+                    "source_updated_at": "2026-05-30T00:00:00+08:00",
+                    "generated_at": "2026-05-30T00:00:00+08:00",
+                    "latency_ms": 1,
+                    "fallback": False,
+                    "cached": False,
+                    "stale": False,
+                    "warnings": [],
+                    "errors": [],
+                    "cache": {"hit": False, "ttl_seconds": 30},
+                    "counts": {},
+                },
+            }
+            return FakeResponse(json.dumps(payload).encode("utf-8"))
+        elif "/api/canvas" in url:
+            payload = {
+                "ok": True,
+                "source": "project-canvas.md",
+                "source_path": "wiki/operations/project-canvas.md",
+                "source_updated_at": "2026-05-30T00:00:00+08:00",
+                "generated_at": "2026-05-30T00:00:00+08:00",
+                "latency_ms": 1,
+                "cache": {"hit": False, "ttl_seconds": 25},
+                "stale": False,
+                "repo_dirty": False,
+                "mermaid_src": "flowchart LR\nA-->B",
+                "active_modules": [],
+            }
+            return FakeResponse(json.dumps(payload).encode("utf-8"))
         elif "digest" in url:
             html = '<body data-page="daily"><header></header><a class="nav-tab" data-target-page="daily"></a><code id="sha-pill">ea7f5b2</code></body>'
             return FakeResponse(html.encode("utf-8"))
@@ -1717,6 +1783,9 @@ def test_dashboard_smoke_script_execution(monkeypatch):
             return FakeResponse(html.encode("utf-8"))
         elif "settings" in url:
             html = '<body data-page="settings"><header></header><a class="nav-tab" data-target-page="settings"></a><code id="sha-pill">ea7f5b2</code></body>'
+            return FakeResponse(html.encode("utf-8"))
+        elif "canvas" in url:
+            html = '<body data-page="canvas"><header></header><a class="nav-tab" data-target-page="canvas"></a><code id="sha-pill">ea7f5b2</code></body>'
             return FakeResponse(html.encode("utf-8"))
         return FakeResponse(b"")
 
