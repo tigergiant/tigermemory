@@ -32,6 +32,11 @@ deploy/openclaw-ce/*.tsbuildinfo
 # 敏感个人数据 - 记账记录
 data/expense_tracker/
 
+# Local memory backend state (P4.1 local profile)
+data/tigermemory/*.sqlite
+data/tigermemory/*.sqlite-shm
+data/tigermemory/*.sqlite-wal
+
 # Top-level catch-all for any local npm experiments
 node_modules/
 

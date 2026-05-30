@@ -467,22 +467,33 @@ def test_local_profile_mem0_request_blocks_low_level_http(monkeypatch):
         tm_core.mem0_request("http://localhost:8765/api/v1/memories/")
 
 
-def test_local_profile_mem0_write_returns_fail_closed_json(monkeypatch):
+def test_local_profile_mem0_write_persists_to_sqlite(monkeypatch, tmp_path):
+    db_path = str(tmp_path / "local.sqlite")
     monkeypatch.setattr(tm_core, "tigermemory_profile", lambda: tm_core.TIGERMEMORY_PROFILE_LOCAL)
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", db_path)
 
-    payload = json.loads(tm_core.mem0_write("codex", "systems", "useful local-mode note"))
+    payload = json.loads(tm_core.mem0_write("codex", "systems", "useful local-mode note for sqlite backend"))
 
-    assert payload == {"ok": False, "reason": "local profile"}
+    assert payload["ok"] is True
+    assert payload["route"] == tm_core.TIGERMEMORY_PROFILE_LOCAL
+    assert payload["route_info"]["backend"] == tm_core.TIGERMEMORY_PROFILE_LOCAL
+    assert (tmp_path / "local.sqlite").exists()
 
 
-def test_local_profile_mem0_search_returns_empty_results_with_warning(monkeypatch):
+def test_local_profile_mem0_search_uses_local_fts(monkeypatch, tmp_path):
+    db_path = str(tmp_path / "local.sqlite")
     monkeypatch.setattr(tm_core, "tigermemory_profile", lambda: tm_core.TIGERMEMORY_PROFILE_LOCAL)
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", db_path)
 
+    payload = json.loads(tm_core.mem0_write("codex", "systems", "dashboard local backend searchable"))
+    mem_id = payload["id"]
     payload = json.loads(tm_core.mem0_search("dashboard", size=3))
 
-    assert payload["count"] == 0
-    assert payload["results"] == []
-    assert payload["warnings"] == ["local profile: mem0 disabled"]
+    assert payload["count"] == 1
+    assert payload["results"][0]["id"] == mem_id
+    assert payload["results"][0]["source_agent"] == "codex"
+    assert payload["search_backend"] == tm_core.TIGERMEMORY_PROFILE_LOCAL
+    assert payload["results"][0]["route_info"]["vector_status"] == "fts5_only"
 
 
 def test_local_profile_mem0_get_reports_unavailable_after_uuid_validation(monkeypatch):

@@ -32,6 +32,7 @@ import os
 import ipaddress
 import pathlib
 import re
+import sqlite3
 import socket
 import subprocess
 import sys
@@ -39,6 +40,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from typing import Any
 
 __all__ = [
@@ -123,6 +125,7 @@ __all__ = [
     "mem0_write",
     "now",
     "primary_search_scope",
+    "verify_memory_record",
     "refine_from_summary",
     "render_inbox_body",
     "render_wiki_body",
@@ -678,6 +681,186 @@ MEM0_UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 
+_LOCAL_DB_DEFAULT_REL_PATH = pathlib.Path("data") / "tigermemory" / "memory.sqlite"
+_LOCAL_MEMORY_SCHEMA_VERSION = 1
+
+
+def _local_db_path() -> pathlib.Path:
+    """Resolve local sqlite DB path for the current process.
+
+    Priority:
+    1) TIGERMEMORY_LOCAL_DB (absolute / relative path, relative to REPO_ROOT)
+    2) default local path `data/tigermemory/memory.sqlite`
+    """
+    value = os.environ.get("TIGERMEMORY_LOCAL_DB")
+    if value:
+        path = pathlib.Path(value).expanduser()
+        if not path.is_absolute():
+            path = REPO_ROOT / path
+    else:
+        path = REPO_ROOT / _LOCAL_DB_DEFAULT_REL_PATH
+    return path
+
+
+def _local_db_conn() -> sqlite3.Connection:
+    path = _local_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    return conn
+
+
+def _local_schema_ddl() -> str:
+    return """
+    CREATE TABLE IF NOT EXISTS schema_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS memories (
+        id TEXT PRIMARY KEY,
+        content TEXT NOT NULL,
+        topic TEXT NOT NULL,
+        source_agent TEXT NOT NULL,
+        route_decision TEXT NOT NULL,
+        route_score INTEGER NOT NULL DEFAULT 0,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        state TEXT NOT NULL DEFAULT 'active',
+        backend_origin TEXT NOT NULL DEFAULT 'local',
+        vector_status TEXT NOT NULL DEFAULT 'fts5_only'
+    );
+    CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+        id UNINDEXED,
+        content
+    );
+    CREATE TRIGGER IF NOT EXISTS memories_fts_ai
+    AFTER INSERT ON memories
+    BEGIN
+        INSERT INTO memories_fts(id, content) VALUES (new.id, new.content);
+    END;
+    CREATE TRIGGER IF NOT EXISTS memories_fts_ad
+    AFTER DELETE ON memories
+    BEGIN
+        DELETE FROM memories_fts WHERE id = old.id;
+    END;
+    CREATE TRIGGER IF NOT EXISTS memories_fts_au
+    AFTER UPDATE ON memories
+    BEGIN
+        DELETE FROM memories_fts WHERE id = old.id;
+        INSERT INTO memories_fts(id, content) VALUES (new.id, new.content);
+    END;
+    """
+
+
+def _ensure_local_memory_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(_local_schema_ddl())
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO schema_meta (key, value, updated_at)
+        VALUES ('schema_version', ?, ?)
+        """,
+        (str(_LOCAL_MEMORY_SCHEMA_VERSION), datetime.datetime.now(TZ_CN).isoformat()),
+    )
+
+
+def _ensure_local_metadata_json(raw: Any) -> tuple[dict[str, Any], bool]:
+    if raw is None:
+        return ({}, False)
+    if isinstance(raw, dict):
+        return (dict(raw), False)
+    try:
+        parsed = json.loads(str(raw))
+        if isinstance(parsed, dict):
+            return (dict(parsed), False)
+    except Exception:
+        pass
+    return ({"_raw_metadata": str(raw)}, True)
+
+
+def _local_fts_query(query: str) -> str:
+    terms = flatten_search_query_terms(search_query_term_groups(query))
+    if not terms:
+        terms = [t for t in query.split() if t.strip()]
+    terms = [term.strip().replace('"', '""') for term in terms if term.strip()]
+    if not terms:
+        return ""
+    return " AND ".join(f'"{term}"' for term in terms)
+
+
+def _local_memory_row_to_item(row: sqlite3.Row, *, include_route_info: bool = True) -> dict[str, Any]:
+    meta, _meta_warn = _ensure_local_metadata_json(row["metadata_json"])
+    route_decision = row["route_decision"]
+    route_score = row["route_score"]
+    item: dict[str, Any] = {
+        "id": row["id"],
+        "text": row["content"],
+        "content": row["content"],
+        "topic": row["topic"],
+        "state": row["state"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "source_agent": row["source_agent"],
+        "source": row["source_agent"],
+        "metadata_": meta,
+        "metadata": meta,
+        "backend_origin": row["backend_origin"],
+        "vector_status": row["vector_status"],
+    }
+    if include_route_info:
+        item["route_decision"] = route_decision
+        item["route_score"] = route_score
+        item["route_info"] = {
+            "backend": row["backend_origin"],
+            "route_decision": route_decision,
+            "route_score": route_score,
+            "vector_status": row["vector_status"],
+        }
+    return item
+
+
+def _local_read_memory_by_id(conn: sqlite3.Connection, memory_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT id, content, topic, source_agent, route_decision, route_score,
+               metadata_json, created_at, updated_at, state, backend_origin, vector_status
+        FROM memories
+        WHERE id = ?
+        """,
+        (memory_id,),
+    ).fetchone()
+    if not row:
+        return None
+    return _local_memory_row_to_item(row, include_route_info=True)
+
+
+def _local_search_local_memory(conn: sqlite3.Connection, query: str, size: int = 5) -> list[dict[str, Any]]:
+    limit = max(1, int(size))
+    q = query.strip()
+    if MEM0_UUID_RE.fullmatch(q):
+        row = _local_read_memory_by_id(conn, q)
+        return [row] if row else []
+    fts_query = _local_fts_query(q)
+    if not fts_query:
+        return []
+    rows = conn.execute(
+        """
+        SELECT m.id, m.content, m.topic, m.source_agent, m.route_decision, m.route_score,
+               m.metadata_json, m.created_at, m.updated_at, m.state, m.backend_origin, m.vector_status
+        FROM memories AS m
+        WHERE m.id IN (
+            SELECT id FROM memories_fts WHERE memories_fts MATCH ?
+        )
+        ORDER BY m.created_at DESC
+        LIMIT ?
+        """,
+        (fts_query, limit),
+    ).fetchall()
+    return [_local_memory_row_to_item(row, include_route_info=True) for row in rows]
+
 
 def configure_stdio() -> None:
     """
@@ -838,7 +1021,62 @@ def mem0_write(
     if not text.strip():
         raise ValueError("text required")
     if tigermemory_profile() == TIGERMEMORY_PROFILE_LOCAL:
-        return json.dumps({"ok": False, "reason": "local profile"})
+        conn = _local_db_conn()
+        try:
+            _ensure_local_memory_schema(conn)
+            memory_id = str(uuid.uuid4())
+            now_ts = int(time.time())
+            metadata_payload, _ = _ensure_local_metadata_json(metadata_extra)
+            metadata_payload.setdefault("source", agent)
+            metadata_payload.setdefault("topic", topic)
+            route_decision_value = str(
+                route_decision or metadata_payload.get("route_decision") or "mem0"
+            ).strip() or "mem0"
+            try:
+                raw_score = route_score if route_score is not None else metadata_payload.get("route_score")
+                route_score_value = int(raw_score) if raw_score is not None else 0
+            except (TypeError, ValueError):
+                route_score_value = 0
+
+            metadata_payload["routed_from"] = "mem0_write"
+            metadata_payload["source_agent"] = metadata_payload.get("source_agent", agent)
+            conn.execute(
+                """
+                INSERT INTO memories(
+                    id, content, topic, source_agent, route_decision, route_score,
+                    metadata_json, created_at, updated_at, state, backend_origin, vector_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    memory_id,
+                    text,
+                    topic,
+                    agent,
+                    route_decision_value,
+                    route_score_value,
+                    json.dumps(metadata_payload, ensure_ascii=False),
+                    now_ts,
+                    now_ts,
+                    "active",
+                    TIGERMEMORY_PROFILE_LOCAL,
+                    "fts5_only",
+                ),
+            )
+            conn.commit()
+            return json.dumps({
+                "ok": True,
+                "id": memory_id,
+                "route": "local",
+                "route_info": {
+                    "backend": TIGERMEMORY_PROFILE_LOCAL,
+                    "backend_origin": TIGERMEMORY_PROFILE_LOCAL,
+                    "vector_status": "fts5_only",
+                    "route_decision": route_decision_value,
+                    "route_score": route_score_value,
+                },
+            })
+        finally:
+            conn.close()
     metadata: dict[str, Any] = {"source": agent, "topic": topic}
     if route_decision is not None:
         metadata["route_decision"] = route_decision
@@ -929,11 +1167,20 @@ def mem0_search(
     if match_mode not in {"id_first", "token_and", "substring"}:
         raise ValueError("match_mode must be one of: id_first, token_and, substring")
     if tigermemory_profile() == TIGERMEMORY_PROFILE_LOCAL:
-        return json.dumps({
-            "count": 0,
-            "results": [],
-            "warnings": ["local profile: mem0 disabled"],
-        })
+        conn = _local_db_conn()
+        try:
+            _ensure_local_memory_schema(conn)
+            results = _local_search_local_memory(conn, query, size=size)
+            payload = {
+                "count": len(results),
+                "results": results,
+                "items": results,
+                "warnings": [],
+                "search_backend": TIGERMEMORY_PROFILE_LOCAL,
+            }
+            return json.dumps(payload)
+        finally:
+            conn.close()
     params = urllib.parse.urlencode(
         # OpenMemory's patched GET /api/v1/memories/ filters on search_query.
         # Older tigermemory docs and clients used query=; the router keeps that
@@ -1039,12 +1286,105 @@ def verify_memory_id(
     key_terms: str | None = None,
     digest_date: str | None = None,
 ) -> dict[str, Any]:
+    return verify_memory_record(memory_id, key_terms=key_terms, digest_date=digest_date)
+
+
+def verify_memory_record(
+    memory_id: str,
+    key_terms: str | None = None,
+    digest_date: str | None = None,
+) -> dict[str, Any]:
     """Verify a Mem0 id against direct storage, search, and daily digest visibility."""
     mem_id = memory_id.strip()
     if not MEM0_UUID_RE.fullmatch(mem_id):
         raise ValueError("memory_id must be a full UUID")
 
-    result: dict[str, Any] = {
+    if tigermemory_profile() == TIGERMEMORY_PROFILE_LOCAL:
+        conn = _local_db_conn()
+        try:
+            _ensure_local_memory_schema(conn)
+            data = _local_read_memory_by_id(conn, mem_id)
+            if not data:
+                return {
+                    "id": mem_id,
+                    "status": "not_found",
+                    "exists": False,
+                    "direct_readback_ok": False,
+                    "state": None,
+                    "metadata": {},
+                    "created_at": None,
+                    "created_at_local": None,
+                    "text_len": 0,
+                    "text_sha256_12": None,
+                    "text_preview": "",
+                    "search_by_id_self_hit": False,
+                    "search_by_id_count": 0,
+                    "search_by_id_ids": [],
+                    "search_by_terms_self_hit": None,
+                    "search_by_terms_count": None,
+                    "search_by_terms_ids": [],
+                    "backend_origin": TIGERMEMORY_PROFILE_LOCAL,
+                    "warnings": [],
+                }
+
+            text = str(data.get("content") or "")
+            created_dt, created_local = _mem0_created_at_local(data.get("created_at"))
+            effective_digest_date = digest_date or (created_dt.strftime("%Y-%m-%d") if created_dt else None)
+
+            result: dict[str, Any] = {
+                "id": mem_id,
+                "status": "exists_active" if str(data.get("state") or "") == "active" else "exists_inactive",
+                "exists": True,
+                "direct_readback_ok": True,
+                "state": data.get("state"),
+                "metadata": data.get("metadata_") or {},
+                "created_at": data.get("created_at"),
+                "created_at_local": created_local,
+                "text_len": len(text),
+                "text_sha256_12": hashlib.sha256(text.encode("utf-8")).hexdigest()[:12],
+                "text_preview": text[:300],
+                "search_by_id_self_hit": False,
+                "search_by_id_count": None,
+                "search_by_id_ids": [],
+                "search_by_terms_self_hit": None,
+                "search_by_terms_count": None,
+                "search_by_terms_ids": [],
+                "backend_origin": data.get("backend_origin"),
+                "vector_status": data.get("vector_status"),
+                "warnings": [],
+                "digest_date": None,
+                "digest_path": None,
+                "digest_contains": None,
+                "digest_inclusion_reason": "n/a: local backend MVP does not write digest",
+            }
+
+            try:
+                ids = [item.get("id") for item in _local_search_local_memory(conn, mem_id, size=20)]
+                ids = [item_id for item_id in ids if isinstance(item_id, str)]
+                result["search_by_id_ids"] = ids
+                result["search_by_id_count"] = len(ids)
+                result["search_by_id_self_hit"] = mem_id in ids
+            except Exception as exc:
+                result["search_by_id_self_hit"] = False
+                result["warnings"].append(f"search_by_id failed: {exc}")
+
+            terms = (key_terms or "").strip()
+            if terms:
+                try:
+                    ids = [item.get("id") for item in _local_search_local_memory(conn, terms, size=20)]
+                    ids = [item_id for item_id in ids if isinstance(item_id, str)]
+                    result["search_by_terms_ids"] = ids
+                    result["search_by_terms_count"] = len(ids)
+                    result["search_by_terms_self_hit"] = mem_id in ids
+                except Exception as exc:
+                    result["search_by_terms_self_hit"] = False
+                    result["warnings"].append(f"search_by_terms failed: {exc}")
+
+            return result
+        finally:
+            conn.close()
+
+    result = {
         "id": mem_id,
         "status": "unknown",
         "exists": False,

@@ -69,6 +69,61 @@ def test_cmd_mem0_update_content_reads_stdin(monkeypatch, capsys):
     assert '{"ok": true}' in capsys.readouterr().out
 
 
+def test_mem0_write_cli_supports_local_db_override(monkeypatch, tmp_path, capsys):
+    captured = {}
+    monkeypatch.delenv("TIGERMEMORY_LOCAL_DB", raising=False)
+
+    class Args:
+        agent = "codex"
+        topic = "systems"
+        db = str(tmp_path / "local.sqlite")
+
+    def fake_mem0_write(agent, topic, text, metadata_extra=None):
+        captured["agent"] = agent
+        captured["topic"] = topic
+        captured["text"] = text
+        captured["db_env"] = tm_io.os.environ.get("TIGERMEMORY_LOCAL_DB")
+        return '{"ok": true}'
+
+    monkeypatch.setattr(tm_io.sys, "stdin", io.StringIO("memory body for sqlite profile"))
+    monkeypatch.setattr(tm_io.tm_core, "mem0_write", fake_mem0_write)
+
+    tm_io.cmd_mem0_write(Args())
+
+    assert captured["agent"] == "codex"
+    assert captured["db_env"] == str(tmp_path / "local.sqlite")
+    assert captured["text"] == "memory body for sqlite profile"
+    assert '{"ok": true}' in capsys.readouterr().out
+
+
+def test_mem0_search_cli_supports_local_db_override(monkeypatch, tmp_path, capsys):
+    captured = {}
+    monkeypatch.delenv("TIGERMEMORY_LOCAL_DB", raising=False)
+
+    class Args:
+        query = "dashboard"
+        size = 3
+        match_mode = "id_first"
+        db = str(tmp_path / "local.sqlite")
+
+    def fake_mem0_search(query, size=5, match_mode="id_first"):
+        captured["query"] = query
+        captured["size"] = size
+        captured["match_mode"] = match_mode
+        captured["db_env"] = tm_io.os.environ.get("TIGERMEMORY_LOCAL_DB")
+        return '{"count": 0}'
+
+    monkeypatch.setattr(tm_io.tm_core, "mem0_search", fake_mem0_search)
+
+    tm_io.cmd_mem0_search(Args())
+
+    assert captured["query"] == "dashboard"
+    assert captured["size"] == 3
+    assert captured["match_mode"] == "id_first"
+    assert captured["db_env"] == str(tmp_path / "local.sqlite")
+    assert '{"count": 0}' in capsys.readouterr().out
+
+
 def test_mem0_update_content_cli_has_no_metadata_option(monkeypatch):
     monkeypatch.setattr(tm_io.sys, "argv", [
         "tm_io.py",

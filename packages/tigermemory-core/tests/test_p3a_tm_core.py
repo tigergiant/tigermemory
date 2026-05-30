@@ -219,6 +219,33 @@ def test_verify_memory_id_distinguishes_not_found_and_unreachable(monkeypatch):
     assert tm_core.verify_memory_id(mem_id)["status"] == "mem0_unreachable"
 
 
+def test_verify_memory_id_uses_local_backend_for_readback_and_fts(monkeypatch, tmp_path):
+    db_path = str(tmp_path / "local.sqlite")
+    text = "P4.1b local memory PoC Session Handoff smoke test"
+
+    monkeypatch.setattr(tm_core, "tigermemory_profile", lambda: tm_core.TIGERMEMORY_PROFILE_LOCAL)
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", db_path)
+    payload = json.loads(
+        tm_core.mem0_write(
+            "codex",
+            "systems",
+            "---\nmemory_type: session-handoff\nagent: codex\n---\n" + text,
+        )
+    )
+    assert payload["ok"] is True
+    mem_id = payload["id"]
+
+    result = tm_core.verify_memory_record(mem_id, key_terms="Session Handoff PoC")
+
+    assert result["status"] == "exists_active"
+    assert result["direct_readback_ok"] is True
+    assert result["search_by_id_self_hit"] is True
+    assert result["search_by_terms_self_hit"] is True
+    assert "---\nmemory_type: session-handoff" in result["text_preview"]
+    assert result["backend_origin"] == "local"
+    assert result["vector_status"] == "fts5_only"
+
+
 def test_mem0_update_content_puts_content_only(monkeypatch):
     mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"
     captured = {}

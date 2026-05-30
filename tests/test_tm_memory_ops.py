@@ -54,6 +54,34 @@ def test_write_memory_success_adds_verified_readback(monkeypatch):
     assert result["verified"]["search_by_id_self_hit"] is True
 
 
+def test_write_memory_with_review_local_profile_persists_sqlite(monkeypatch, tmp_path):
+    monkeypatch.setattr(tm_memory_ops.tm_route, "route_memory", lambda *_args, **_kwargs: _decision())
+    monkeypatch.setattr(
+        tm_memory_ops.tm_core,
+        "tigermemory_profile",
+        lambda: tm_memory_ops.tm_core.TIGERMEMORY_PROFILE_LOCAL,
+    )
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(tmp_path / "local.sqlite"))
+    monkeypatch.setattr(tm_memory_ops, "schedule_digest_refresh", lambda: None)
+
+    result = tm_memory_ops.write_memory_with_review(
+        "codex",
+        "systems",
+        "---\nmemory_type: session-handoff\nagent: codex\n---\nP4.1b local write review path",
+    )
+
+    assert result["route"] == "mem0"
+    assert result["verified"]["direct_readback_ok"] is True
+    assert result["verified"]["search_by_id_self_hit"] is True
+    assert result["verified"]["digest_inclusion_reason"].startswith("n/a: local backend")
+    assert result["id"]
+    raw = tm_memory_ops.tm_core.mem0_search("P4.1b review", size=3)
+    payload = json.loads(raw)
+    assert payload["count"] == 1
+    assert payload["results"][0]["metadata"]["source"] == "codex"
+    assert payload["results"][0]["metadata"]["topic"] == "systems"
+
+
 def test_light_write_skips_route_memory_and_adds_metadata(monkeypatch):
     mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"
     captured = {}

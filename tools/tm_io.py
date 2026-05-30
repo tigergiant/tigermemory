@@ -43,6 +43,7 @@ Depends-on (must-have): tm_core（所有业务逻辑入口）、tm_route / tm_re
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import pathlib
 import sys
@@ -54,6 +55,11 @@ import tigermemory_core as tm_core
 def _die(msg: str, code: int = 2) -> None:
     print(f"ERROR: {msg}", file=sys.stderr)
     sys.exit(code)
+
+
+def _apply_local_db_arg(db_path: str | None) -> None:
+    if db_path:
+        os.environ["TIGERMEMORY_LOCAL_DB"] = db_path
 
 
 # ---------- write-inbox ----------
@@ -193,6 +199,7 @@ def cmd_commit_push(args: argparse.Namespace) -> None:
 # ---------- mem0 ----------
 
 def cmd_mem0_write(args: argparse.Namespace) -> None:
+    _apply_local_db_arg(getattr(args, "db", None))
     text = sys.stdin.read().strip()
     if not text:
         _die("text required on stdin")
@@ -206,6 +213,7 @@ def cmd_mem0_write(args: argparse.Namespace) -> None:
 
 
 def cmd_mem0_search(args: argparse.Namespace) -> None:
+    _apply_local_db_arg(getattr(args, "db", None))
     try:
         resp = tm_core.mem0_search(args.query, args.size, match_mode=args.match_mode)
     except RuntimeError as e:
@@ -216,6 +224,7 @@ def cmd_mem0_search(args: argparse.Namespace) -> None:
 
 
 def cmd_mem0_verify(args: argparse.Namespace) -> None:
+    _apply_local_db_arg(getattr(args, "db", None))
     try:
         result = tm_core.verify_memory_id(args.id, key_terms=args.terms, digest_date=args.digest_date)
     except RuntimeError as e:
@@ -487,18 +496,21 @@ def main() -> None:
     mw = sub.add_parser("mem0-write", help="POST a memory with enforced metadata")
     mw.add_argument("--agent", required=True)
     mw.add_argument("--topic", required=True)
+    mw.add_argument("--db", help="override local sqlite path when TIGERMEMORY_PROFILE=local")
     mw.set_defaults(func=cmd_mem0_write)
 
     ms = sub.add_parser("mem0-search", help="GET memories by query")
     ms.add_argument("--query", required=True)
     ms.add_argument("--size", type=int, default=5)
     ms.add_argument("--match-mode", choices=["id_first", "token_and", "substring"], default="id_first")
+    ms.add_argument("--db", help="override local sqlite path when TIGERMEMORY_PROFILE=local")
     ms.set_defaults(func=cmd_mem0_search)
 
     mv = sub.add_parser("mem0-verify", help="verify a Mem0 memory id via direct readback/search/digest")
     mv.add_argument("--id", required=True)
     mv.add_argument("--terms")
     mv.add_argument("--digest-date")
+    mv.add_argument("--db", help="override local sqlite path when TIGERMEMORY_PROFILE=local")
     mv.set_defaults(func=cmd_mem0_verify)
 
     mu = sub.add_parser("mem0-update-content", help="PUT replacement content only; metadata changes require delete + recreate")
