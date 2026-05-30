@@ -82,6 +82,18 @@ The guard blocks high-confidence secrets, PII, and personal path leaks in
 published files. Governance files such as `AGENTS.md` can report path leaks as
 warnings, but ordinary public wiki pages and shipped tooling are blocked.
 
+This private development repository is not the public artifact. Before making a
+whole Git repository public, run the stricter tracked-repo audit:
+
+```powershell
+tm publish --dry-run --json --audit-pii --audit-scope repo
+```
+
+That command is expected to fail while private notes, local paths, or non-public
+research pages remain in the repository. Use the default snapshot audit for
+public-package preparation; use `--audit-scope repo` only to prove that the
+entire tracked repository is safe to expose.
+
 ## Development Checks
 
 ```powershell

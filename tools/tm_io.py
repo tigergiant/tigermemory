@@ -430,6 +430,7 @@ def cmd_publish(args: argparse.Namespace) -> None:
         argv.append("--json")
     if args.audit_pii:
         argv.append("--audit-pii")
+    argv.extend(["--audit-scope", args.audit_scope])
     code = tm_publish.main(argv)
     if code:
         sys.exit(code)
@@ -622,6 +623,12 @@ def main() -> None:
         "--audit-pii",
         action="store_true",
         help="write pii_findings.json under the destination and include path-leak findings",
+    )
+    pb.add_argument(
+        "--audit-scope",
+        choices=["snapshot", "repo"],
+        default="snapshot",
+        help="sensitive audit scope: publish snapshot only, or the full tracked repo",
     )
     pb.set_defaults(func=cmd_publish)
 

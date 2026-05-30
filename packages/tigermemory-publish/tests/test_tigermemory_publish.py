@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -98,7 +98,25 @@ title: "path leak page"
 
 ## 摘要
 
-This sample references C:\\Users\\Giant for demo.
+This sample references {{PRIVATE_PATH}} for demo.
+
+## 来源
+
+- none
+"""
+
+PRIVATE_PATH_LEAK_PAGE = """---
+owner: cascade
+status: active
+updated: 2026-05-24
+title: "private path page"
+---
+
+# private path page
+
+## 摘要
+
+This private page references {{PRIVATE_PATH}}.
 
 ## 来源
 
@@ -380,7 +398,7 @@ def test_main_blocks_public_wiki_path_leak(tmp_path, monkeypatch, capsys) -> Non
     repo.mkdir()
     _build_fake_repo(repo)
     (repo / "wiki" / "systems" / "path-leak-page.md").write_text(
-        PUBLIC_PATH_LEAK_PAGE,
+        PUBLIC_PATH_LEAK_PAGE.replace("{{PRIVATE_PATH}}", str(repo)),
         encoding="utf-8",
     )
     monkeypatch.setattr(tigermemory_publish, "REPO_ROOT", repo)
@@ -401,7 +419,7 @@ def test_main_allows_path_leak_in_agents_md_as_warning(tmp_path, monkeypatch, ca
     repo.mkdir()
     _build_fake_repo(repo)
     (repo / "AGENTS.md").write_text(
-        """# AGENTS\n\nLocal runbook path: C:\\Users\\Giant\\Documents\n""",
+        f"""# AGENTS\n\nLocal runbook path: {repo}\n""",
         encoding="utf-8",
     )
     monkeypatch.setattr(tigermemory_publish, "REPO_ROOT", repo)
@@ -415,6 +433,39 @@ def test_main_allows_path_leak_in_agents_md_as_warning(tmp_path, monkeypatch, ca
     assert warnings
     assert all(f["severity"] == "warning" for f in warnings if f["path"] == "AGENTS.md")
     assert not summary["pii_findings"] == []
+
+
+def test_repo_audit_scope_flags_private_non_public_pages(tmp_path, monkeypatch, capsys) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _build_fake_repo(repo)
+    (repo / "wiki" / "systems" / "private-path.md").write_text(
+        PRIVATE_PATH_LEAK_PAGE.replace("{{PRIVATE_PATH}}", str(repo)),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tigermemory_publish, "REPO_ROOT", repo)
+
+    snapshot_rc = tigermemory_publish.main(["--dest", str(tmp_path / "snapshot"), "--dry-run", "--json"])
+    snapshot_summary = json.loads(capsys.readouterr().out)
+    repo_rc = tigermemory_publish.main([
+        "--dest",
+        str(tmp_path / "repo-audit"),
+        "--dry-run",
+        "--json",
+        "--audit-scope",
+        "repo",
+    ])
+    repo_summary = json.loads(capsys.readouterr().out)
+
+    assert snapshot_rc == 0
+    assert snapshot_summary["audit_scope"] == "snapshot"
+    assert not any(f["path"] == "wiki/systems/private-path.md" for f in snapshot_summary["pii_findings"])
+    assert repo_rc == 3
+    assert repo_summary["audit_scope"] == "repo"
+    assert any(
+        f["path"] == "wiki/systems/private-path.md" and f["kind"] == "path_leak"
+        for f in repo_summary["pii_findings"]
+    )
 
 
 def test_module_entrypoint_dry_run_json_reports_public_field_exclusions(tmp_path: pathlib.Path) -> None:

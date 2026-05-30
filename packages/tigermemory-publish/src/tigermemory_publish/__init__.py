@@ -17,6 +17,7 @@ import os
 import pathlib
 import re
 import shutil
+import subprocess
 import sys
 
 
@@ -65,13 +66,6 @@ PUBLIC_FIELD_DEFAULT = False
 PUBLIC_TRUE_VALUES = {"true", "True", "yes", "Yes", "1"}
 
 PATH_LEAK_WARNING_PATHS = {"AGENTS.md", "README.md", "index.md"}
-PATH_LEAK_TOKENS = (
-    "d:/tigermemory",
-    "/home/giant",
-    "c:/users/giant",
-    "//wsl.localhost/ubuntu/home/giant",
-    "/wsl.localhost/ubuntu/home/giant",
-)
 
 PRIVATE_KEY_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 BEARER_TOKEN_RE = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9._~+/=-]{24,})")
@@ -231,7 +225,7 @@ def collect_publish_plan(repo_root: pathlib.Path) -> dict[str, list[str]]:
                 if not parse_frontmatter_public(text):
                     plan["excluded_by_public_field"].append(rel)
                     continue
-                findings = _scan_text_for_sensitive(text, rel, "wiki_public_pages")
+                findings = _scan_text_for_sensitive(text, rel, "wiki_public_pages", repo_root)
                 if findings:
                     plan["excluded_by_pii"].append(rel)
                     pii_findings.extend(findings)
@@ -286,9 +280,31 @@ def _redact_line(line: str) -> str:
     return line.strip()[:160]
 
 
-def _contains_path_leak(line: str) -> bool:
+def _path_leak_tokens(repo_root: pathlib.Path | None = None) -> set[str]:
+    tokens: set[str] = set()
+    root = (repo_root or REPO_ROOT).resolve()
+    candidates = [root, pathlib.Path.home()]
+    for env_key in ("USERPROFILE", "HOME"):
+        value = os.environ.get(env_key)
+        if value:
+            candidates.append(pathlib.Path(value))
+
+    for candidate in candidates:
+        normalized = str(candidate).replace("\\", "/").lower().rstrip("/")
+        if normalized:
+            tokens.add(normalized)
+
+    user_name = pathlib.Path.home().name.lower()
+    if user_name:
+        tokens.add(f"/home/{user_name}")
+        tokens.add(f"//wsl.localhost/ubuntu/home/{user_name}")
+        tokens.add(f"/wsl.localhost/ubuntu/home/{user_name}")
+    return {token for token in tokens if len(token) >= 6}
+
+
+def _contains_path_leak(line: str, repo_root: pathlib.Path | None = None) -> bool:
     normalized = line.replace("\\\\", "/").replace("\\", "/").lower()
-    return any(token in normalized for token in PATH_LEAK_TOKENS)
+    return any(token in normalized for token in _path_leak_tokens(repo_root))
 
 
 def _path_leak_severity(path: str) -> str:
@@ -349,9 +365,14 @@ def _add_finding(
     )
 
 
-def _scan_text_for_sensitive(text: str, rel: str, category: str) -> list[dict[str, object]]:
+def _scan_text_for_sensitive(
+    text: str,
+    rel: str,
+    category: str,
+    repo_root: pathlib.Path | None = None,
+) -> list[dict[str, object]]:
     findings: list[dict[str, object]] = []
-    scan_pii = category in {"wiki_public_pages", "top_files", "config_files"}
+    scan_pii = category in {"wiki_public_pages", "top_files", "config_files", "repo_audit"}
     for line_no, line in enumerate(text.splitlines(), start=1):
         if PRIVATE_KEY_RE.search(line):
             _add_finding(
@@ -410,7 +431,7 @@ def _scan_text_for_sensitive(text: str, rel: str, category: str) -> list[dict[st
                 line=line,
                 regex_name="CN_PHONE_RE",
             )
-        if _contains_path_leak(line):
+        if _contains_path_leak(line, repo_root):
             _add_finding(
                 findings,
                 category=category,
@@ -441,7 +462,66 @@ def audit_publish_plan(plan: dict[str, list[str]], repo_root: pathlib.Path) -> l
             continue
         if "\x00" in text[:4096]:
             continue
-        findings.extend(_scan_text_for_sensitive(text, rel, category))
+        findings.extend(_scan_text_for_sensitive(text, rel, category, repo_root))
+        if len(findings) > MAX_FINDINGS:
+            findings = findings[:MAX_FINDINGS]
+    return findings
+
+
+def _repo_audit_files(repo_root: pathlib.Path) -> list[str]:
+    """Return tracked text-ish files for whole-repo privacy readiness audits."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files", "-z"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        proc = None
+
+    rels: list[str] = []
+    if proc and proc.returncode == 0:
+        rels = [item for item in proc.stdout.decode("utf-8", errors="replace").split("\0") if item]
+    else:
+        for path in sorted(repo_root.rglob("*")):
+            if not path.is_file():
+                continue
+            try:
+                rels.append(path.relative_to(repo_root).as_posix())
+            except ValueError:
+                continue
+
+    out: list[str] = []
+    for rel in rels:
+        path = pathlib.PurePosixPath(rel)
+        if _BYTECODE_CACHE_DIRNAME in path.parts:
+            continue
+        if any(part in {".git", ".tmp", "dist", "node_modules"} for part in path.parts):
+            continue
+        if path.name.endswith(".pyc"):
+            continue
+        if path.suffix.lower() in TEXT_EXTENSIONS or path.name.endswith(".example"):
+            out.append(rel)
+    return sorted(out)
+
+
+def audit_repo_sensitive(repo_root: pathlib.Path) -> list[dict[str, object]]:
+    """Scan tracked text files to prove whether the full repo is safe to make public."""
+    findings: list[dict[str, object]] = []
+    for rel in _repo_audit_files(repo_root):
+        if len(findings) >= MAX_FINDINGS:
+            break
+        path = repo_root / rel
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if "\x00" in text[:4096]:
+            continue
+        findings.extend(_scan_text_for_sensitive(text, rel, "repo_audit", repo_root))
         if len(findings) > MAX_FINDINGS:
             findings = findings[:MAX_FINDINGS]
     return findings
@@ -536,6 +616,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="write a standalone pii_findings.json report under --dest",
     )
+    p.add_argument(
+        "--audit-scope",
+        choices=["snapshot", "repo"],
+        default="snapshot",
+        help="sensitive audit scope: publish snapshot only, or the full tracked repo",
+    )
     args = p.parse_args(argv)
 
     dest = pathlib.Path(args.dest)
@@ -548,7 +634,11 @@ def main(argv: list[str] | None = None) -> int:
     counts = {k: len(v) for k, v in included.items()}
     excluded_counts = {k: len(v) for k, v in excluded.items()}
 
-    sensitive_findings = audit_publish_plan(plan, REPO_ROOT)
+    sensitive_findings = (
+        audit_repo_sensitive(REPO_ROOT)
+        if args.audit_scope == "repo"
+        else audit_publish_plan(plan, REPO_ROOT)
+    )
     blocking_findings = [f for f in sensitive_findings if f.get("severity") != "warning"]
     has_blocking_findings = bool(blocking_findings)
 
@@ -565,6 +655,7 @@ def main(argv: list[str] | None = None) -> int:
         "dest": str(dest),
         "dry_run": args.dry_run,
         "audit_pii": args.audit_pii,
+        "audit_scope": args.audit_scope,
         "pii_findings_path": str(pii_findings_path) if pii_findings_path else None,
         "counts": counts,
         "excluded_counts": excluded_counts,

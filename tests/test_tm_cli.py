@@ -132,5 +132,18 @@ def test_publish_passthrough_accepts_tool_options(monkeypatch) -> None:
 
     monkeypatch.setattr(tigermemory_cli, "_run_python", fake_run)
 
-    assert tigermemory_cli.main(["publish", "--dest", "out", "--dry-run", "--audit-pii"]) == 0
-    assert calls == [("tools/tm_io.py", ["publish", "--dest", "out", "--dry-run", "--audit-pii"])]
+    assert tigermemory_cli.main([
+        "publish",
+        "--dest",
+        "out",
+        "--dry-run",
+        "--audit-pii",
+        "--audit-scope",
+        "repo",
+    ]) == 0
+    assert calls == [
+        (
+            "tools/tm_io.py",
+            ["publish", "--dest", "out", "--dry-run", "--audit-pii", "--audit-scope", "repo"],
+        )
+    ]

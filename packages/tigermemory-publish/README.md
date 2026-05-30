@@ -15,6 +15,18 @@ ID numbers, and phone numbers in public wiki pages. Dry-run output includes
 `sensitive_findings`; non-dry-run publishing exits non-zero and copies nothing
 when findings are present.
 
+By default the audit scans only the publish snapshot. To prove that an entire
+tracked repository is safe to make public, run:
+
+```powershell
+tigermemory-publish --dry-run --json --audit-pii --audit-scope repo
+```
+
+Use the repo scope as a release-readiness check, not as the normal snapshot
+builder. Private TigerMemory worktrees are expected to fail this stricter audit
+until local paths, private notes, and non-public research pages are removed or
+moved to a private repository.
+
 The package is extracted from `tools/tm_publish.py`. The legacy script remains as a compatibility shim:
 
 ```powershell
