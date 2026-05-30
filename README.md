@@ -79,8 +79,8 @@ tm publish --dry-run --json --audit-pii
 ```
 
 The guard blocks high-confidence secrets, PII, and personal path leaks in
-published files. Governance files such as `AGENTS.md` can report path leaks as
-warnings, but ordinary public wiki pages and shipped tooling are blocked.
+published files. The private source repository's root `AGENTS.md` is not copied
+into public snapshots because it contains workspace-specific operating rules.
 
 This private development repository is not the public artifact. Before making a
 whole Git repository public, run the stricter tracked-repo audit:

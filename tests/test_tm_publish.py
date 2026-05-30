@@ -220,7 +220,6 @@ def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
 
     assert plan["top_files"] == sorted([
         ".gitignore",
-        "AGENTS.md",
         "README.md",
         "index.md",
         "pyproject.toml",
@@ -283,7 +282,7 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     copied = tm_publish.execute_plan(plan, repo, dest)
 
     assert copied > 0
-    assert (dest / "AGENTS.md").is_file()
+    assert not (dest / "AGENTS.md").exists()
     assert (dest / "tools" / "tm_dummy.py").is_file()
     assert (dest / "schemas" / "PAGE_FORMATS.md").is_file()
     assert (dest / "pyproject.toml").is_file()
@@ -331,7 +330,7 @@ def test_main_writes_files_when_not_dry_run(tmp_path, monkeypatch, capsys) -> No
     assert summary["ok"] is True
     assert summary["dry_run"] is False
     assert summary["files_copied"] > 0
-    assert (tmp_path / "out" / "AGENTS.md").is_file()
+    assert not (tmp_path / "out" / "AGENTS.md").exists()
 
 
 def test_detect_repo_root_honors_env(tmp_path, monkeypatch) -> None:
@@ -435,7 +434,7 @@ def test_main_blocks_public_wiki_path_leak(tmp_path, monkeypatch, capsys) -> Non
     assert any(f["severity"] == "high" for f in path_findings)
 
 
-def test_main_allows_path_leak_in_agents_md_as_warning(tmp_path, monkeypatch, capsys) -> None:
+def test_snapshot_excludes_private_agents_md_but_repo_audit_reports_it(tmp_path, monkeypatch, capsys) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     _build_fake_repo(repo)
@@ -445,15 +444,25 @@ def test_main_allows_path_leak_in_agents_md_as_warning(tmp_path, monkeypatch, ca
     )
     monkeypatch.setattr(tm_publish, "REPO_ROOT", repo)
 
-    rc = tm_publish.main(["--dest", str(tmp_path / "out"), "--dry-run", "--json"])
-    summary = json.loads(capsys.readouterr().out)
+    snapshot_rc = tm_publish.main(["--dest", str(tmp_path / "snapshot"), "--dry-run", "--json"])
+    snapshot_summary = json.loads(capsys.readouterr().out)
+    repo_rc = tm_publish.main([
+        "--dest",
+        str(tmp_path / "repo-audit"),
+        "--dry-run",
+        "--json",
+        "--audit-scope",
+        "repo",
+    ])
+    repo_summary = json.loads(capsys.readouterr().out)
 
-    assert rc == 0
-    assert summary["ok"] is True
-    warnings = [f for f in summary["pii_findings"] if f["kind"] == "path_leak"]
+    assert snapshot_rc == 0
+    assert snapshot_summary["ok"] is True
+    assert not any(f["path"] == "AGENTS.md" for f in snapshot_summary["pii_findings"])
+    assert repo_rc == 0
+    warnings = [f for f in repo_summary["pii_findings"] if f["kind"] == "path_leak"]
     assert warnings
     assert all(f["severity"] == "warning" for f in warnings if f["path"] == "AGENTS.md")
-    assert not summary["pii_findings"] == []
 
 
 def test_repo_audit_scope_flags_private_non_public_pages(tmp_path, monkeypatch, capsys) -> None:

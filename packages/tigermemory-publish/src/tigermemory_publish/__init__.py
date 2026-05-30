@@ -22,7 +22,6 @@ import sys
 
 
 PUBLISH_TOP_FILES = (
-    "AGENTS.md",
     "index.md",
     "README.md",
     "pyproject.toml",
