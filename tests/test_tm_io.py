@@ -96,6 +96,27 @@ def test_mem0_write_cli_supports_local_db_override(monkeypatch, tmp_path, capsys
     assert '{"ok": true}' in capsys.readouterr().out
 
 
+def test_mem0_write_cli_strips_powershell_bom(monkeypatch, tmp_path, capsys):
+    captured = {}
+
+    class Args:
+        agent = "codex"
+        topic = "systems"
+        db = str(tmp_path / "local.sqlite")
+
+    def fake_mem0_write(agent, topic, text, metadata_extra=None):
+        captured["text"] = text
+        return '{"ok": true}'
+
+    monkeypatch.setattr(tm_io.sys, "stdin", io.StringIO("\ufeffmemory body from powershell"))
+    monkeypatch.setattr(tm_io.tm_core, "mem0_write", fake_mem0_write)
+
+    tm_io.cmd_mem0_write(Args())
+
+    assert captured["text"] == "memory body from powershell"
+    assert '{"ok": true}' in capsys.readouterr().out
+
+
 def test_mem0_search_cli_supports_local_db_override(monkeypatch, tmp_path, capsys):
     captured = {}
     monkeypatch.delenv("TIGERMEMORY_LOCAL_DB", raising=False)

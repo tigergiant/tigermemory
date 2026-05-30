@@ -470,6 +470,16 @@ def test_digest_html_and_api_are_no_store(tmp_path, monkeypatch):
     assert api.headers["Cache-Control"].startswith("no-store")
 
 
+def test_dashboard_shell_pages_are_no_store(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    for path in ["/health", "/quality", "/canvas", "/settings"]:
+        response = client.get(path, headers=HOST)
+        assert response.status_code == 200
+        assert response.headers["Cache-Control"].startswith("no-store")
+
+
 def test_digest_page_embeds_live_data_without_empty_shell(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_digest(tmp_path)

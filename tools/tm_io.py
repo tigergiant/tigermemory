@@ -62,12 +62,17 @@ def _apply_local_db_arg(db_path: str | None) -> None:
         os.environ["TIGERMEMORY_LOCAL_DB"] = db_path
 
 
+def _read_required_stdin(label: str) -> str:
+    text = sys.stdin.read().strip().lstrip("\ufeff").strip()
+    if not text:
+        _die(f"{label} required on stdin")
+    return text
+
+
 # ---------- write-inbox ----------
 
 def cmd_write_inbox(args: argparse.Namespace) -> None:
-    body = sys.stdin.read().strip()
-    if not body:
-        _die("body required on stdin", code=2)
+    body = _read_required_stdin("body")
 
     import tm_memory_ops
     import tm_route
@@ -200,9 +205,7 @@ def cmd_commit_push(args: argparse.Namespace) -> None:
 
 def cmd_mem0_write(args: argparse.Namespace) -> None:
     _apply_local_db_arg(getattr(args, "db", None))
-    text = sys.stdin.read().strip()
-    if not text:
-        _die("text required on stdin")
+    text = _read_required_stdin("text")
     try:
         resp = tm_core.mem0_write(args.agent, args.topic, text)
     except ValueError as e:

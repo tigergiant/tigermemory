@@ -9,6 +9,15 @@ description = "Local-first LLM wiki and memory runtime."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Internal; open-source release pending publish guard clearance" }
+dependencies = [
+  "fastapi>=0.100",
+  "pydantic>=2",
+  "uvicorn>=0.20",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp[cli]>=1.0"]
+dev = ["pytest>=8"]
 
 [project.scripts]
 tm = "tigermemory_cli:main"

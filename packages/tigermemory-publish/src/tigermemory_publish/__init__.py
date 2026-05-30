@@ -24,12 +24,29 @@ PUBLISH_TOP_FILES = (
     "AGENTS.md",
     "index.md",
     "README.md",
+    "pyproject.toml",
+    "tigermemory_cli.py",
     ".gitignore",
 )
 
 PUBLISH_WHOLE_DIRS = (
     "tools",
     "schemas",
+    "packages/tigerledger/src",
+    "packages/tigermemory-answer/src",
+    "packages/tigermemory-config/src",
+    "packages/tigermemory-core/src",
+    "packages/tigermemory-digest/src",
+    "packages/tigermemory-doctor/src",
+    "packages/tigermemory-eval/src",
+    "packages/tigermemory-index/src",
+    "packages/tigermemory-lessons/src",
+    "packages/tigermemory-minimax/src",
+    "packages/tigermemory-persona/src",
+    "packages/tigermemory-protocols/src",
+    "packages/tigermemory-publish/src",
+    "packages/tigermemory-route/src",
+    "packages/tigermemory-search/src",
 )
 
 WIKI_PUBLISH_PARTITIONS = (
@@ -276,6 +293,8 @@ def _contains_path_leak(line: str) -> bool:
 
 def _path_leak_severity(path: str) -> str:
     rel = path.replace("\\", "/").strip("/")
+    if rel == "packages/tigermemory-publish/src/tigermemory_publish/__init__.py":
+        return "warning"
     return "warning" if rel in PATH_LEAK_WARNING_PATHS else "high"
 
 

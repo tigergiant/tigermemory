@@ -203,7 +203,7 @@ def render_5min(lessons: list[Lesson]) -> str:
             "**Hermes**：持续跟踪 / 分阶段推进 agent，适合多轮研究、长期跟踪、阶段性总结；不擅长一次性深度专题。详见 `wiki/systems/hermes-docs-index.md`。",
             "**DeerFlow**：深度专题研究 agent，吃结构化任务（目标 / 范围 / 时间窗 / 输出格式），不要把模糊问题整包丢进去。详见 `wiki/systems/deerflow-research-engine.md`。",
             "**Mem0 / OpenMemory**：对话级实时记忆层（atomic event-style，例如“X 部署了”“Y 工具不适合 Z”），HTTP `:8765` `user_id=tiger`；长文 / 规则 / 历史文案在 Wiki，不在 Mem0。`write_memory` 返回的 id 用 `verify_memory_id` direct readback 审计，不靠文件 grep 0 命中判幻觉。详见 `wiki/systems/multi-endpoint-mem0.md`、`wiki/systems/openmemory-ce-limits.md`。",
-            "**Cascade / Codex / Claude Code / Kimi**：常驻 agent。写入主入口：D:\\tigermemory（人工 + Cascade / Codex / Obsidian）↔ WSL `~/tigermemory`（Claude Code / MCP / Hermes / DeerFlow），通过 GitHub origin 同步；开工先 `git pull --ff-only`。元规则修改权限只在 `claude-code` + `human`。完整 agent 枚举：`AGENTS.md §3`。",
+            "**Cascade / Codex / Claude Code / Kimi**：常驻 agent。写入主入口：本机仓库 `<repo>`（人工 + Cascade / Codex / Obsidian）↔ 运行时 worktree（Claude Code / MCP / Hermes / DeerFlow），通过 GitHub origin 同步；开工先 `git pull --ff-only`。元规则修改权限只在 `claude-code` + `human`。完整 agent 枚举：`AGENTS.md §3`。",
             "**OpenSpace**：登录态网页 / 浏览器自动化 / 桌面采集；目前主要通过技能 / 上游 agent 间接接入。",
             "**search_tigermemory**（MCP）：检索的统一入口，分组返回 wiki / lessons / onboarding / mem0；wiki 召回已是 lexical + embedding 的 RRF 混合 (`tm_core.search_wiki_hybrid`)。详见 `wiki/systems/memory-retrieval-eval.md`。",
         ]

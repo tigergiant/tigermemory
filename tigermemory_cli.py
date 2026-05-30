@@ -117,6 +117,12 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _effective_profile() -> tuple[str, str | None, str | None]:
+    env_value = os.environ.get("TIGERMEMORY_PROFILE")
+    file_value = _read_profile_file()
+    return env_value or file_value or "hybrid", env_value, file_value
+
+
 def cmd_profile(args: argparse.Namespace) -> int:
     if args.profile_command == "set":
         path = _write_profile_file(args.value)
@@ -124,15 +130,32 @@ def cmd_profile(args: argparse.Namespace) -> int:
         print(f"written={path}")
         return 0
     if args.profile_command == "show":
-        env_value = os.environ.get("TIGERMEMORY_PROFILE")
-        file_value = _read_profile_file()
-        effective = env_value or file_value or "hybrid"
+        effective, env_value, file_value = _effective_profile()
         print(f"effective={effective}")
         print(f"env={env_value or ''}")
         print(f"file={file_value or ''}")
         print(f"path={_profile_path()}")
         return 0
-    print("profile command required: show|set", file=sys.stderr)
+    if args.profile_command == "guide":
+        effective, _env_value, _file_value = _effective_profile()
+        target = args.value or effective
+        print(f"current={effective}")
+        print(f"target={target}")
+        if target == "local":
+            print("mode=basic")
+            print("requires=Python>=3.10, Markdown wiki, local SQLite")
+            print("does_not_require=WSL,Docker,OpenMemory,Qdrant,Caddy,npm")
+            print("next=tm init --profile local")
+            print("verify=tm profile show; tm search --query \"your text\"")
+            return 0
+        print("mode=advanced")
+        print("requires=OpenMemory/Mem0 reachable on MEM0_URL, MEM0_API_KEY, optional Qdrant/Caddy")
+        print("before_switch=backup existing OpenMemory data; read deploy/openmemory/README.md")
+        print("switch=tm profile set hybrid")
+        print("verify=tm doctor --skip-l2; tm search --query \"memory_type: session-handoff\"")
+        print("rollback=tm profile set local")
+        return 0
+    print("profile command required: show|set|guide", file=sys.stderr)
     return 2
 
 
@@ -170,6 +193,17 @@ def cmd_search(args: argparse.Namespace) -> int:
     return _run_python("tools/tm_io.py", forwarded)
 
 
+def cmd_verify(args: argparse.Namespace) -> int:
+    forwarded = ["mem0-verify", "--id", args.id]
+    if args.terms:
+        forwarded.extend(["--terms", args.terms])
+    if args.digest_date:
+        forwarded.extend(["--digest-date", args.digest_date])
+    if args.db:
+        forwarded.extend(["--db", args.db])
+    return _run_python("tools/tm_io.py", forwarded)
+
+
 def cmd_dashboard(args: argparse.Namespace) -> int:
     forwarded = []
     if args.host:
@@ -184,7 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     init_p = sub.add_parser("init", help="create local runtime directories and optionally set profile")
-    init_p.add_argument("--profile", choices=sorted(PROFILE_VALUES), default=None)
+    init_p.add_argument("--profile", choices=sorted(PROFILE_VALUES), default="local")
     init_p.set_defaults(func=cmd_init)
 
     profile_p = sub.add_parser("profile", help="show or set runtime profile")
@@ -194,6 +228,9 @@ def build_parser() -> argparse.ArgumentParser:
     profile_set = profile_sub.add_parser("set")
     profile_set.add_argument("value", choices=sorted(PROFILE_VALUES))
     profile_set.set_defaults(func=cmd_profile)
+    profile_guide = profile_sub.add_parser("guide", help="print local/basic or hybrid/advanced upgrade guidance")
+    profile_guide.add_argument("value", choices=sorted(PROFILE_VALUES), nargs="?")
+    profile_guide.set_defaults(func=cmd_profile)
 
     doctor_p = sub.add_parser("doctor", help="run agent doctor")
     doctor_p.add_argument("args", nargs=argparse.REMAINDER)
@@ -226,6 +263,13 @@ def build_parser() -> argparse.ArgumentParser:
     search_p.add_argument("--size", type=int, default=5)
     search_p.add_argument("--db", default=None)
     search_p.set_defaults(func=cmd_search)
+
+    verify_p = sub.add_parser("verify", help="verify a memory id")
+    verify_p.add_argument("--id", required=True)
+    verify_p.add_argument("--terms", default=None)
+    verify_p.add_argument("--digest-date", default=None)
+    verify_p.add_argument("--db", default=None)
+    verify_p.set_defaults(func=cmd_verify)
 
     dashboard_p = sub.add_parser("dashboard", help="start dashboard server")
     dashboard_p.add_argument("--host", default=None)

@@ -113,6 +113,8 @@ def _build_fake_repo(root: pathlib.Path) -> None:
     (root / "AGENTS.md").write_text("# AGENTS\n", encoding="utf-8")
     (root / "index.md").write_text("# index\n", encoding="utf-8")
     (root / "README.md").write_text("# README\n", encoding="utf-8")
+    (root / "pyproject.toml").write_text("[project]\nname='tigermemory'\n", encoding="utf-8")
+    (root / "tigermemory_cli.py").write_text("def main():\n    return 0\n", encoding="utf-8")
     (root / ".gitignore").write_text("placeholder\n", encoding="utf-8")
 
     (root / "tools").mkdir()
@@ -125,6 +127,13 @@ def _build_fake_repo(root: pathlib.Path) -> None:
 
     (root / "schemas").mkdir()
     (root / "schemas" / "PAGE_FORMATS.md").write_text("# schemas\n", encoding="utf-8")
+
+    for rel in tm_publish.PUBLISH_WHOLE_DIRS:
+        if rel in {"tools", "schemas"}:
+            continue
+        package_src = root / rel
+        package_src.mkdir(parents=True)
+        (package_src / "__init__.py").write_text("# package\n", encoding="utf-8")
 
     wiki = root / "wiki"
     (wiki / "systems").mkdir(parents=True)
@@ -191,8 +200,15 @@ def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
     _build_fake_repo(tmp_path)
     plan = tm_publish.collect_publish_plan(tmp_path)
 
-    assert plan["top_files"] == sorted([".gitignore", "AGENTS.md", "README.md", "index.md"])
-    assert plan["whole_dirs"] == ["schemas", "tools"]
+    assert plan["top_files"] == sorted([
+        ".gitignore",
+        "AGENTS.md",
+        "README.md",
+        "index.md",
+        "pyproject.toml",
+        "tigermemory_cli.py",
+    ])
+    assert set(plan["whole_dirs"]) >= {"schemas", "tools", "packages/tigermemory-core/src"}
     assert plan["wiki_public_pages"] == ["wiki/systems/public-page.md"]
     assert plan["excluded_by_public_field"] == [
         "wiki/systems/private-flagged.md",
@@ -252,6 +268,9 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     assert (dest / "AGENTS.md").is_file()
     assert (dest / "tools" / "tm_dummy.py").is_file()
     assert (dest / "schemas" / "PAGE_FORMATS.md").is_file()
+    assert (dest / "pyproject.toml").is_file()
+    assert (dest / "tigermemory_cli.py").is_file()
+    assert (dest / "packages" / "tigermemory-core" / "src" / "__init__.py").is_file()
     assert (dest / "wiki" / "systems" / "public-page.md").is_file()
     assert not (dest / "wiki" / "systems" / "private-flagged.md").exists()
     assert not (dest / "wiki" / "systems" / "untagged.md").exists()

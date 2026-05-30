@@ -1,32 +1,44 @@
 # TigerMemory
 
 TigerMemory is a local-first LLM wiki and memory runtime. It keeps durable
-knowledge in Markdown + Git, and can optionally connect to OpenMemory/Mem0 for
-cross-device or vector-enhanced memory.
+knowledge in Markdown + Git, uses a local SQLite memory store by default, and
+can optionally connect to OpenMemory/Mem0 for advanced cross-device memory.
 
-## Runtime profiles
+## What You Need
 
-- `local`: default open-source path. Uses the local SQLite memory backend and
-  does not require Docker, OpenMemory, Qdrant, or Caddy.
-- `hybrid`: advanced integration path. Keeps OpenMemory/Mem0 as a required
-  runtime dependency.
+- Python 3.10 or newer.
+- Git.
+- No Docker, WSL, OpenMemory, Qdrant, Caddy, or npm for the basic mode.
 
-## Quick start from a clone
+Node/npm is only used by optional subprojects such as the OpenClaw context
+engine plugin under `deploy/openclaw-ce/` and ingestion experiments under
+`tools/ingest/`. It is not the TigerMemory installer. The public npm package
+name `tigermemory` is already used by a different project, so do not use
+`npm install tigermemory` for this repository.
+
+## Quick Start From GitHub
 
 ```powershell
+git clone https://github.com/tigergiant/tigermemory.git
+cd tigermemory
 py -m pip install -e .
-tm init --profile local
+tm init
 tm profile show
-tm lessons search "dashboard mermaid"
-tm persona compile --depth 5min
 ```
 
-Write and search local memory without Docker:
+Expected profile after `tm init`:
+
+```text
+effective=local
+```
+
+Write, search, and verify local memory without Docker:
 
 ```powershell
 $env:TIGERMEMORY_PROFILE='local'
 "hello local memory" | tm write-memory --agent codex --topic systems
 tm search --query "hello local memory" --size 5
+tm verify --id "<id printed by write-memory>" --terms "hello local"
 ```
 
 Start the dashboard:
@@ -35,9 +47,32 @@ Start the dashboard:
 tm dashboard --host 127.0.0.1 --port 9777
 ```
 
-## Publish guard
+Then open `http://127.0.0.1:9777/health`.
 
-Open-source snapshots are produced by `tigermemory-publish` through:
+## Runtime Profiles
+
+- `local`: default basic mode. Uses Markdown + Git + local SQLite + FTS5
+  lexical search. It is intended for new users and does not require external
+  services.
+- `hybrid`: advanced mode. Requires OpenMemory/Mem0 and can use Qdrant/Caddy
+  and multi-IDE integrations.
+
+Useful commands:
+
+```powershell
+tm profile guide local
+tm profile guide hybrid
+tm profile set hybrid
+tm profile set local
+```
+
+Before switching a real deployment to `hybrid`, read `deploy/openmemory/README.md`
+and back up existing OpenMemory data. You can always roll back to local mode with
+`tm profile set local`.
+
+## Publish Guard
+
+Public snapshots are produced by `tigermemory-publish` through:
 
 ```powershell
 tm publish --dry-run --json --audit-pii
@@ -47,9 +82,15 @@ The guard blocks high-confidence secrets, PII, and personal path leaks in
 published files. Governance files such as `AGENTS.md` can report path leaks as
 warnings, but ordinary public wiki pages and shipped tooling are blocked.
 
-## Optional OpenMemory integration
+## Development Checks
 
-OpenMemory, Qdrant, and Caddy are optional advanced integrations for the
-`hybrid` profile. See `deploy/openmemory/README.md` for setup and version pinning
-guidance. Do not delete existing Docker volumes during migration; export and
-backup first.
+```powershell
+py -m pytest tests\test_tm_cli.py tests\test_tm_io.py tests\test_tm_local_memory.py tests\test_tm_publish.py -q
+py tools\tm_io.py lint-repo --json
+tm publish --dry-run --json --audit-pii
+```
+
+## Current Boundary
+
+The basic local mode is designed for public GitHub use. Advanced integrations
+remain optional and should not be required for first-run success.
