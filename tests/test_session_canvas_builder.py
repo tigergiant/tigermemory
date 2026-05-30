@@ -67,7 +67,8 @@ def test_build_writes_nodes_and_mmd(tmp_path):
     assert {"node_id", "session_id", "repo", "ide", "agent", "type", "status", "title", "refs", "confidence", "canvas_quality", "privacy_level", "created_at", "updated_at"} <= nodes[0].keys()
     assert nodes[0]["session_id"] == session_id
     assert nodes[1]["status"] == "failed"
-    assert nodes[2]["refs"][0] == nodes[1]["node_id"]
+    assert nodes[0]["refs"][0].startswith("trace:")
+    assert nodes[2]["refs"][1] == f"node:{nodes[1]['node_id']}"
     assert mmd_path.exists()
     assert 'flowchart TD' in mmd_path.read_text(encoding='utf-8')
 
@@ -98,6 +99,7 @@ def test_mmd_label_sanitizes_backslashes_quotes_and_newlines(tmp_path):
     assert audit.returncode == 0
     report = json.loads(audit.stdout)
     assert report["ok"] is True
+    assert report["ref_count"] >= 1
 
 
 def test_read_node_exact_lookup(tmp_path):
@@ -138,7 +140,7 @@ def test_audit_detects_broken_ref_and_missing_node(tmp_path):
 
     nodes_path = out / f"{session_id}.nodes.jsonl"
     nodes = _read_jsonl_lines(nodes_path)
-    nodes[2]["refs"] = ["ghost-node"]
+    nodes[2]["refs"] = ["node:ghost-node"]
     nodes_path.write_text(
         "\n".join(json.dumps(row, ensure_ascii=False) for row in nodes) + "\n",
         encoding="utf-8",
@@ -156,5 +158,32 @@ def test_audit_detects_broken_ref_and_missing_node(tmp_path):
     )
     assert audit.returncode == 0
     report = json.loads(audit.stdout)
-    assert any(item["missing_ref"] == "ghost-node" for item in report["broken_refs"])
+    assert any(item["ref"] == "node:ghost-node" for item in report["broken_refs"])
     assert "orphan_123" in report["missing_nodes"]
+
+
+def test_audit_detects_broken_trace_ref(tmp_path):
+    trace = tmp_path / "trace.jsonl"
+    out = tmp_path / ".tmp" / "session-canvas"
+    _write_trace(trace)
+    session_id = "codex-test-20260529-broken-trace"
+    _run_build(trace, out, session_id)
+
+    nodes_path = out / f"{session_id}.nodes.jsonl"
+    nodes = _read_jsonl_lines(nodes_path)
+    nodes[0]["refs"] = ["trace:missing-trace.jsonl#L99"]
+    nodes_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in nodes) + "\n",
+        encoding="utf-8",
+    )
+
+    audit = subprocess.run(
+        CMD + ["audit", "--session-id", session_id, "--out", str(out), "--json"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert audit.returncode == 0
+    report = json.loads(audit.stdout)
+    assert report["ok"] is False
+    assert any(item["error"].startswith("missing_trace:") for item in report["broken_refs"])
