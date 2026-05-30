@@ -88,6 +88,25 @@ Sample untagged page body.
 - none
 """
 
+PUBLIC_PATH_LEAK_PAGE = """---
+owner: cascade
+status: active
+updated: 2026-05-24
+public: true
+title: "path leak page"
+---
+
+# path leak page
+
+## 摘要
+
+This sample references C:\\Users\\Giant for demo.
+
+## 来源
+
+- none
+"""
+
 
 def _build_fake_repo(root: pathlib.Path) -> None:
     """Populate `root` with the minimal tigermemory layout the publisher inspects."""
@@ -356,3 +375,45 @@ def test_main_without_audit_pii_does_not_write_standalone_report(tmp_path, monke
     assert summary["audit_pii"] is False
     assert summary["pii_findings_path"] is None
     assert not (out_dir / "pii_findings.json").exists()
+
+
+def test_main_blocks_public_wiki_path_leak(tmp_path, monkeypatch, capsys) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _build_fake_repo(repo)
+    (repo / "wiki" / "systems" / "path-leak-page.md").write_text(
+        PUBLIC_PATH_LEAK_PAGE,
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tm_publish, "REPO_ROOT", repo)
+
+    rc = tm_publish.main(["--dest", str(tmp_path / "out"), "--json"])
+    summary = json.loads(capsys.readouterr().out)
+
+    assert rc == 3
+    assert summary["ok"] is False
+    path_findings = [f for f in summary["pii_findings"] if f["kind"] == "path_leak"]
+    assert path_findings
+    assert any(f["path"] == "wiki/systems/path-leak-page.md" for f in path_findings)
+    assert any(f["severity"] == "high" for f in path_findings)
+
+
+def test_main_allows_path_leak_in_agents_md_as_warning(tmp_path, monkeypatch, capsys) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _build_fake_repo(repo)
+    (repo / "AGENTS.md").write_text(
+        """# AGENTS\n\nLocal runbook path: C:\\Users\\Giant\\Documents\n""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tm_publish, "REPO_ROOT", repo)
+
+    rc = tm_publish.main(["--dest", str(tmp_path / "out"), "--dry-run", "--json"])
+    summary = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert summary["ok"] is True
+    warnings = [f for f in summary["pii_findings"] if f["kind"] == "path_leak"]
+    assert warnings
+    assert all(f["severity"] == "warning" for f in warnings if f["path"] == "AGENTS.md")
+    assert not summary["pii_findings"] == []

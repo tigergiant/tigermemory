@@ -8,6 +8,9 @@ runtime/*
 !runtime/openmemory/
 runtime/openmemory/*
 !runtime/openmemory/.env.example
+!runtime/tigermemory/
+runtime/tigermemory/*
+!runtime/tigermemory/*.example
 # Asset source directory: keep large images local, but track lightweight
 # index pages for GitHub-backed memory retrieval.
 sources/assets/*

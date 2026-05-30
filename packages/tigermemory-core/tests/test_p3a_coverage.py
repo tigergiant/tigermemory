@@ -448,6 +448,16 @@ def test_tigermemory_profile_prefers_process_env_over_runtime_file(monkeypatch):
     assert tm_core.tigermemory_profile() == tm_core.TIGERMEMORY_PROFILE_LOCAL
 
 
+def test_tigermemory_profile_reads_runtime_profile_file(monkeypatch, tmp_path):
+    runtime_dir = tmp_path / "runtime" / "tigermemory"
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / "profile.env").write_text("TIGERMEMORY_PROFILE=local\n", encoding="utf-8")
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_core, "_env_value", lambda key: "hybrid")
+
+    assert tm_core.tigermemory_profile() == tm_core.TIGERMEMORY_PROFILE_LOCAL
+
+
 def test_tigermemory_profile_invalid_value_fails_safe_to_hybrid(monkeypatch):
     monkeypatch.setattr(tm_core, "_env_value", lambda key: "offline" if key == "TIGERMEMORY_PROFILE" else "")
 

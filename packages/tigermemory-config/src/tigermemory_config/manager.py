@@ -74,7 +74,7 @@ def _default_wsl_home() -> pathlib.Path:
     explicit = os.environ.get("TIGERMEMORY_MANAGER_WSL_HOME")
     if explicit:
         return pathlib.Path(explicit)
-    return pathlib.Path(r"\\wsl.localhost\Ubuntu\home\giant")
+    return pathlib.Path.home()
 
 
 def _sha256_bytes(data: bytes) -> str:

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """tigermemory_publish — outward distribution snapshot builder.
 
 Inputs:  argparse args (--dest / --dry-run / --json) + repo state (wiki
@@ -46,6 +46,15 @@ DEFAULT_DEST_DIRNAME = "dist"
 MAX_FINDINGS = 50
 PUBLIC_FIELD_DEFAULT = False
 PUBLIC_TRUE_VALUES = {"true", "True", "yes", "Yes", "1"}
+
+PATH_LEAK_WARNING_PATHS = {"AGENTS.md", "README.md", "index.md"}
+PATH_LEAK_TOKENS = (
+    "d:/tigermemory",
+    "/home/giant",
+    "c:/users/giant",
+    "//wsl.localhost/ubuntu/home/giant",
+    "/wsl.localhost/ubuntu/home/giant",
+)
 
 PRIVATE_KEY_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 BEARER_TOKEN_RE = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9._~+/=-]{24,})")
@@ -260,6 +269,16 @@ def _redact_line(line: str) -> str:
     return line.strip()[:160]
 
 
+def _contains_path_leak(line: str) -> bool:
+    normalized = line.replace("\\\\", "/").replace("\\", "/").lower()
+    return any(token in normalized for token in PATH_LEAK_TOKENS)
+
+
+def _path_leak_severity(path: str) -> str:
+    rel = path.replace("\\", "/").strip("/")
+    return "warning" if rel in PATH_LEAK_WARNING_PATHS else "high"
+
+
 def _planned_text_files(plan: dict[str, list[str]], repo_root: pathlib.Path) -> list[tuple[str, str]]:
     """Return (category, rel_path) pairs that should be scanned before publish."""
     items: list[tuple[str, str]] = []
@@ -371,6 +390,17 @@ def _scan_text_for_sensitive(text: str, rel: str, category: str) -> list[dict[st
                 severity="medium",
                 line=line,
                 regex_name="CN_PHONE_RE",
+            )
+        if _contains_path_leak(line):
+            _add_finding(
+                findings,
+                category=category,
+                rel=rel,
+                line_no=line_no,
+                kind="path_leak",
+                severity=_path_leak_severity(rel),
+                line=line,
+                regex_name="PATH_LEAK_TOKENS",
             )
     return findings
 
@@ -500,9 +530,11 @@ def main(argv: list[str] | None = None) -> int:
     excluded_counts = {k: len(v) for k, v in excluded.items()}
 
     sensitive_findings = audit_publish_plan(plan, REPO_ROOT)
+    blocking_findings = [f for f in sensitive_findings if f.get("severity") != "warning"]
+    has_blocking_findings = bool(blocking_findings)
 
     copied = 0
-    if not args.dry_run and not sensitive_findings:
+    if not args.dry_run and not has_blocking_findings:
         dest.mkdir(parents=True, exist_ok=True)
         copied = execute_plan(plan, REPO_ROOT, dest)
     pii_findings_path = None
@@ -510,7 +542,7 @@ def main(argv: list[str] | None = None) -> int:
         pii_findings_path = write_pii_findings(dest, sensitive_findings)
 
     summary = {
-        "ok": not sensitive_findings,
+        "ok": not blocking_findings,
         "dest": str(dest),
         "dry_run": args.dry_run,
         "audit_pii": args.audit_pii,
@@ -525,6 +557,7 @@ def main(argv: list[str] | None = None) -> int:
         "sensitive_findings": sensitive_findings,
         "sensitive_counts": {
             "total": len(sensitive_findings),
+            "warning": sum(1 for f in sensitive_findings if f["severity"] == "warning"),
             "high": sum(1 for f in sensitive_findings if f["severity"] == "high"),
             "medium": sum(1 for f in sensitive_findings if f["severity"] == "medium"),
         },
@@ -556,7 +589,8 @@ def main(argv: list[str] | None = None) -> int:
                     f"  - {finding['severity']} {finding['kind']} "
                     f"{finding['path']}:{finding['line']} {finding['preview']}"
                 )
-    return 3 if sensitive_findings and not args.dry_run else 0
+    blocking_findings = [f for f in sensitive_findings if f.get("severity") != "warning"]
+    return 3 if blocking_findings else 0
 
 
 if __name__ == "__main__":

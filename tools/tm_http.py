@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 tools/tm_http.py — HTTP wrapper for tigermemory (FastAPI).
 
@@ -171,10 +171,15 @@ class HealthResponse(BaseModel):
     ok: bool
     version: str
     tm_core_version: Optional[str] = None
+    profile: str
     mem0_reachable: bool
     mem0_api_reachable: Optional[bool] = None
     mem0_api_latency_ms: Optional[float] = None
     mem0_api_error: Optional[str] = None
+    memory_backend: str
+    memory_backend_status: str
+    lexical: str
+    vector: str
     deepseek_reachable: Optional[bool] = None
     uptime_seconds: float
 
@@ -434,6 +439,19 @@ def _probe_mem0_api(timeout: int = 2) -> dict[str, Any]:
         }
 
 
+def _memory_backend_status(profile: str, mem0_reachable: bool, mem0_api_reachable: bool) -> str:
+    if profile == tm_core.TIGERMEMORY_PROFILE_LOCAL:
+        return "ok" if mem0_reachable and mem0_api_reachable else "optional_missing"
+    return "ok" if mem0_reachable and mem0_api_reachable else "required_missing"
+
+
+def _memory_capability(profile: str) -> tuple[str, str]:
+    """Return (memory_backend, vector_capability) for dashboard display."""
+    if profile == tm_core.TIGERMEMORY_PROFILE_LOCAL:
+        return "local", "local_fts5"
+    return "openmemory", "openmemory/qdrant"
+
+
 def _git_sha() -> str | None:
     """Return short git sha of tigermemory HEAD, or None if unavailable."""
     try:
@@ -518,15 +536,24 @@ async def health():
     trace_id = str(uuid.uuid4())
     start = time.time()
     try:
+        profile = tm_core.tigermemory_profile()
         mem0_api = _probe_mem0_api()
+        mem0_reachable = _probe_mem0_reachable()
+        backend_status = _memory_backend_status(profile, mem0_reachable, mem0_api["reachable"])
+        memory_backend, vector = _memory_capability(profile)
         return HealthResponse(
-            ok=True,
+            ok=(profile != tm_core.TIGERMEMORY_PROFILE_HYBRID or backend_status == "ok"),
             version=VERSION,
-            tm_core_version=app.state.tm_core_version,
-            mem0_reachable=_probe_mem0_reachable(),
+            tm_core_version=getattr(app.state, "tm_core_version", None),
+            profile=profile,
+            mem0_reachable=mem0_reachable,
             mem0_api_reachable=mem0_api["reachable"],
             mem0_api_latency_ms=mem0_api["latency_ms"],
             mem0_api_error=mem0_api["error"],
+            memory_backend=memory_backend,
+            memory_backend_status=backend_status,
+            lexical="on",
+            vector=vector,
             deepseek_reachable=None,
             uptime_seconds=time.time() - _start_time,
         )

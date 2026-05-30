@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import difflib
+import os
 import pathlib
 import re
 import sys
@@ -50,11 +51,19 @@ OUTPUT_PAGE = REPO_ROOT / "wiki" / "systems" / "services-inventory.md"
 TZ_CN = datetime.timezone(datetime.timedelta(hours=8))
 
 # Path prefixes stripped from ExecStart so the rendered "entry" column shows
-# repo-relative paths. Order matters: longest prefix first.
-PATH_PREFIXES = (
-    "/home/giant/tigermemory/",
-    "/root/tigermemory/",
+# repo-relative paths. Deployment users can override the prefix without
+# hard-coding a contributor home directory into the source tree.
+PATH_PREFIXES = tuple(
+    prefix
+    for prefix in (
+        os.environ.get("TIGERMEMORY_DEPLOY_PREFIX"),
+        "/srv/tigermemory/",
+        "/opt/tigermemory/",
+        "/root/tigermemory/",
+    )
+    if prefix
 )
+HOME_DEPLOY_RE = re.compile(r"^/home/[^/]+/tigermemory/")
 
 PORT_RE = re.compile(r"--port\s+(\d+)")
 ENV_KV_RE = re.compile(r"^Environment=(\w+)=(.+)$")
@@ -128,6 +137,8 @@ def repo_relative(absolute_path: str) -> str:
     for pref in PATH_PREFIXES:
         if absolute_path.startswith(pref):
             return absolute_path[len(pref):]
+    if HOME_DEPLOY_RE.match(absolute_path):
+        return HOME_DEPLOY_RE.sub("", absolute_path, count=1)
     return absolute_path
 
 
@@ -135,15 +146,15 @@ def extract_entry(exec_start: str) -> str:
     """Return the repo-relative entry script from ExecStart.
 
     ExecStart typically looks like:
-      /home/giant/tigermemory/<venv>/bin/python /home/giant/tigermemory/tools/tm_review_ui.py --host 0.0.0.0 --port 1998
+      /home/<user>/tigermemory/<venv>/bin/python /home/<user>/tigermemory/tools/tm_review_ui.py --host 0.0.0.0 --port 1998
     or:
-      /home/giant/tigermemory/deploy/mcp/tm_mcp_auto_update.sh --http ...
+      /home/<user>/tigermemory/deploy/mcp/tm_mcp_auto_update.sh --http ...
 
     The first .py / .sh token *under* the tigermemory tree is the entry.
     Venv pythons and unrelated absolute paths are ignored.
     """
     for token in exec_start.split():
-        if any(token.startswith(p) for p in PATH_PREFIXES) and (
+        if (any(token.startswith(p) for p in PATH_PREFIXES) or HOME_DEPLOY_RE.match(token)) and (
             token.endswith(".py") or token.endswith(".sh")
         ):
             return repo_relative(token)

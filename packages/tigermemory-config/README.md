@@ -16,8 +16,8 @@ The explainer never writes config files, applies diffs, calls IDEs, invokes LLMs
 
 ```powershell
 pip install -e ./packages/tigermemory-config
-tigermemory-config --root D:\tigermemory --json
-tigermemory-config explain --root D:\tigermemory --json
+tigermemory-config --root <repo> --json
+tigermemory-config explain --root <repo> --json
 tigermemory-config manager capabilities --json
 tigermemory-config manager plan --runtime openclaw --runtime hermes --json
 tigermemory-config manager apply --runtime openclaw --runtime hermes --yes

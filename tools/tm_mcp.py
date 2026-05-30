@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 tools/tm_mcp.py — tigermemory MCP server (thin adapter over tm_core).
 
@@ -900,7 +900,10 @@ def single_stock_deep_dive(ticker: str, trade_date: str, profile: str = "deep") 
     profile may be "deep" for the full chain or "fast" for daily scanning.
     """
     _require_writer()
-    ta_root = os.environ.get("TRADINGAGENTS_ROOT", "/home/giant/workspaces/TradingAgents")
+    ta_root = os.environ.get(
+        "TRADINGAGENTS_ROOT",
+        os.path.join(os.path.expanduser("~"), "workspaces", "TradingAgents"),
+    )
     python_bin = os.environ.get("TRADINGAGENTS_PYTHON", os.path.join(ta_root, ".venv", "bin", "python"))
     env = os.environ.copy()
     env["PYTHONPATH"] = ta_root

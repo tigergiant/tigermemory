@@ -1,4 +1,4 @@
-﻿"""Background job runner for TradingAgents single-stock deep dives.
+"""Background job runner for TradingAgents single-stock deep dives.
 Inputs: CLI arguments, local repository files, or data supplied by the caller.
 Outputs: A deterministic stdout report, file rewrite, or helper return value documented by the command.
 Depends-on (must-have): Python stdlib and local tigermemory helper modules; external services only when explicitly requested.
@@ -37,7 +37,12 @@ def jobs_root() -> pathlib.Path:
 
 
 def ta_root() -> pathlib.Path:
-    return pathlib.Path(os.environ.get("TRADINGAGENTS_ROOT", "/home/giant/workspaces/TradingAgents"))
+    return pathlib.Path(
+        os.environ.get(
+            "TRADINGAGENTS_ROOT",
+            str(pathlib.Path.home() / "workspaces" / "TradingAgents"),
+        )
+    )
 
 
 def python_bin() -> str:

@@ -474,7 +474,7 @@ def main():
     if args.client == "generic":
         print("💡 【通用模式引导说明】您指定了 --client generic，脚本将跳过对本地 IDE 配置文件的物理自动注入。")
         print("如果您需要手动配置其他智能体客户端（如 Aider, Windsurf, Cline 等），请复制以上生成的 MCP 配置文件块，")
-        print("手动将其粘入您对应客户端的配置文件中。详细配置教程请参考：D:\\tigermemory\\tools\\skills\\mcp-client-setup.md")
+        print("手动将其粘入您对应客户端的配置文件中。详细配置教程请参考：tools\\skills\\mcp-client-setup.md")
     else:
         # 4. 对 Claude Desktop 执行注入操作
         if args.client in ("all", "claude-desktop"):

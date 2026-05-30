@@ -1,6 +1,6 @@
 """Smoke tests for tm_persona.py compile_snapshot and helpers.
 
-Run:  cd d:\tigermemory && py -m pytest tests/test_tm_persona.py -v
+Run:  cd <repo> && py -m pytest tests/test_tm_persona.py -v
 
 These are fast deterministic tests (no LLM, no network, no external services).
 They guard against accidental breakage of the onboarding snapshot contract.

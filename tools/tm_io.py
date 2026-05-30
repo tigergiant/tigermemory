@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 tm_io.py — tigermemory I/O CLI adapter (thin shell over tm_core).
 
@@ -425,6 +425,8 @@ def cmd_publish(args: argparse.Namespace) -> None:
         argv.append("--dry-run")
     if args.json:
         argv.append("--json")
+    if args.audit_pii:
+        argv.append("--audit-pii")
     code = tm_publish.main(argv)
     if code:
         sys.exit(code)
@@ -612,6 +614,11 @@ def main() -> None:
         "--json",
         action="store_true",
         help="emit JSON summary",
+    )
+    pb.add_argument(
+        "--audit-pii",
+        action="store_true",
+        help="write pii_findings.json under the destination and include path-leak findings",
     )
     pb.set_defaults(func=cmd_publish)
 

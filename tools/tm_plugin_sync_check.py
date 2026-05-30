@@ -7,9 +7,13 @@ Depends-on (must-have): tm_core helpers, local filesystem/git state, and configu
 from __future__ import annotations
 import json, subprocess, sys
 from pathlib import Path
+import os
 
 SRC = Path(__file__).resolve().parent.parent / "deploy/openclaw-ce/openclaw.plugin.json"
-RUNTIME = "/home/giant/.openclaw/extensions/tigermemory-ce/openclaw.plugin.json"
+RUNTIME = os.environ.get(
+    "OPENCLAW_PLUGIN_RUNTIME",
+    str(Path.home() / ".openclaw" / "extensions" / "tigermemory-ce" / "openclaw.plugin.json"),
+)
 
 def _read(path: str | Path) -> str:
     p = Path(path)

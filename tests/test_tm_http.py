@@ -206,3 +206,62 @@ def test_retention_audit_endpoint_delegates(monkeypatch):
 
     assert result["dry_run"] is True
     assert captured == {"max_items": 12}
+
+
+def test_health_local_profile_marks_mem0_optional(monkeypatch):
+    tm_http.app.state.tm_core_version = "test-abc"
+    monkeypatch.setattr(tm_http.tm_core, "tigermemory_profile", lambda: tm_http.tm_core.TIGERMEMORY_PROFILE_LOCAL)
+    monkeypatch.setattr(tm_http, "_probe_mem0_reachable", lambda: False)
+    monkeypatch.setattr(
+        tm_http,
+        "_probe_mem0_api",
+        lambda timeout=2: {"reachable": False, "latency_ms": 4.2, "error": "disabled"},
+    )
+
+    result = asyncio.run(tm_http.health())
+
+    assert result.profile == tm_http.tm_core.TIGERMEMORY_PROFILE_LOCAL
+    assert result.ok is True
+    assert result.memory_backend == "local"
+    assert result.memory_backend_status == "optional_missing"
+    assert result.lexical == "on"
+    assert result.vector == "local_fts5"
+    assert result.mem0_api_reachable is False
+
+
+def test_health_tolerates_missing_startup_state(monkeypatch):
+    if hasattr(tm_http.app.state, "tm_core_version"):
+        delattr(tm_http.app.state, "tm_core_version")
+    monkeypatch.setattr(tm_http.tm_core, "tigermemory_profile", lambda: tm_http.tm_core.TIGERMEMORY_PROFILE_LOCAL)
+    monkeypatch.setattr(tm_http, "_probe_mem0_reachable", lambda: False)
+    monkeypatch.setattr(
+        tm_http,
+        "_probe_mem0_api",
+        lambda timeout=2: {"reachable": False, "latency_ms": None, "error": "disabled"},
+    )
+
+    result = asyncio.run(tm_http.health())
+
+    assert result.ok is True
+    assert result.tm_core_version is None
+
+
+def test_health_hybrid_profile_treats_mem0_as_required(monkeypatch):
+    tm_http.app.state.tm_core_version = "test-abc"
+    monkeypatch.setattr(tm_http.tm_core, "tigermemory_profile", lambda: tm_http.tm_core.TIGERMEMORY_PROFILE_HYBRID)
+    monkeypatch.setattr(tm_http, "_probe_mem0_reachable", lambda: False)
+    monkeypatch.setattr(
+        tm_http,
+        "_probe_mem0_api",
+        lambda timeout=2: {"reachable": False, "latency_ms": 4.2, "error": "offline"},
+    )
+
+    result = asyncio.run(tm_http.health())
+
+    assert result.profile == tm_http.tm_core.TIGERMEMORY_PROFILE_HYBRID
+    assert result.ok is False
+    assert result.memory_backend == "openmemory"
+    assert result.memory_backend_status == "required_missing"
+    assert result.lexical == "on"
+    assert result.vector == "openmemory/qdrant"
+    assert result.mem0_api_reachable is False

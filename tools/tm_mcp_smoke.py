@@ -2,7 +2,7 @@
 """Runtime smoke for tm_mcp.py HTTP transport.
 
 On Windows, probes the deployed WSL-backed HTTP service (default
-http://127.0.0.1:9766/healthz) because D:\tigermemory is the human editing
+http://127.0.0.1:9766/healthz) because <repo> is the human editing
 worktree and Windows Python does not own the MCP service runtime.
 
 On POSIX/WSL, spins up tm_mcp.py on a free localhost port with a temporary API

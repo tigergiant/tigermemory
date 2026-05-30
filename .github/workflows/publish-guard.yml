@@ -1,0 +1,32 @@
+name: Publish Guard
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  publish_guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Publish dry-run audit via package command
+        run: |
+          PYTHONPATH="${{ github.workspace }}/packages/tigermemory-publish/src:${PYTHONPATH}"
+          python3 -m tigermemory_publish --dry-run --json
+
+      - name: Publish dry-run audit via tools/tm_io wrapper
+        run: |
+          PYTHONPATH="${{ github.workspace }}/packages/tigermemory-publish/src:${PYTHONPATH}"
+          python3 tools/tm_io.py publish --dry-run --audit-pii --json

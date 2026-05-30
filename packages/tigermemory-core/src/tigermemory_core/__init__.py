@@ -633,6 +633,23 @@ TIGERMEMORY_PROFILE_HYBRID = "hybrid"
 TIGERMEMORY_PROFILE_VALUES = (TIGERMEMORY_PROFILE_LOCAL, TIGERMEMORY_PROFILE_HYBRID)
 
 
+def _runtime_profile_file_value() -> str | None:
+    """Return TIGERMEMORY_PROFILE from runtime/tigermemory/profile.env if present."""
+    path = REPO_ROOT / "runtime" / "tigermemory" / "profile.env"
+    if not path.is_file():
+        return None
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            if key.strip() == "TIGERMEMORY_PROFILE":
+                return value.strip()
+    except OSError:
+        return None
+    return None
+
+
 def tigermemory_profile() -> str:
     """Return the active tigermemory runtime profile.
 
@@ -640,6 +657,8 @@ def tigermemory_profile() -> str:
     behavior unless a caller explicitly opts into the local-only PoC profile.
     """
     val = os.environ.get("TIGERMEMORY_PROFILE")
+    if val is None:
+        val = _runtime_profile_file_value()
     if val is None:
         try:
             val = _env_value("TIGERMEMORY_PROFILE")
