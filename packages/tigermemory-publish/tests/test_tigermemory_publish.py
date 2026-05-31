@@ -130,10 +130,13 @@ def _build_fake_repo(root: pathlib.Path) -> None:
     (root / "index.md").write_text("# index\n", encoding="utf-8")
     (root / "README.md").write_text("# README\n", encoding="utf-8")
     (root / ".gitignore").write_text("placeholder\n", encoding="utf-8")
-    for src, _dst in tigermemory_publish.PUBLISH_MAPPED_FILES:
+    for src, dst in tigermemory_publish.PUBLISH_MAPPED_FILES:
         path = root / src
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("# public AGENTS\n\nNo private path here.\n", encoding="utf-8")
+        if dst == "README.md":
+            path.write_text("# public README\n\nInstall from this snapshot checkout.\n", encoding="utf-8")
+        else:
+            path.write_text("# public AGENTS\n\nNo private path here.\n", encoding="utf-8")
 
     (root / "tools").mkdir()
     (root / "tools" / "tm_dummy.py").write_text("# stub tool\n", encoding="utf-8")
@@ -219,13 +222,14 @@ def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
     _build_fake_repo(tmp_path)
     plan = tigermemory_publish.collect_publish_plan(tmp_path)
 
-    assert plan["top_files"] == sorted([".gitignore", "README.md", "index.md"])
+    assert plan["top_files"] == sorted([".gitignore", "index.md"])
     assert plan["whole_dirs"] == [
         "packages/tigermemory-publish/src",
         "schemas",
     ]
     assert plan["mapped_files"] == [
-        "packages/tigermemory-publish/src/tigermemory_publish/templates/AGENTS.md=>AGENTS.md"
+        "packages/tigermemory-publish/src/tigermemory_publish/templates/AGENTS.md=>AGENTS.md",
+        "packages/tigermemory-publish/src/tigermemory_publish/templates/README.md=>README.md",
     ]
     assert set(plan["tool_files"]) >= {"tools/tm_io.py", "tools/tm_review_ui.py"}
     assert plan["tool_dirs"] == sorted(["tools/memory_answer", "tools/static"])
@@ -286,6 +290,9 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
 
     assert copied > 0
     assert (dest / "AGENTS.md").read_text(encoding="utf-8").startswith("# public AGENTS")
+    public_readme = (dest / "README.md").read_text(encoding="utf-8")
+    assert public_readme.startswith("# public README")
+    assert "git clone https://github.com/tigergiant/tigermemory.git" not in public_readme
     assert not (dest / "tools" / "tm_dummy.py").exists()
     assert (dest / "tools" / "tm_io.py").is_file()
     assert (dest / "tools" / "static" / "asset.txt").is_file()

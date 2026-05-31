@@ -23,7 +23,6 @@ import sys
 
 PUBLISH_TOP_FILES = (
     "index.md",
-    "README.md",
     "pyproject.toml",
     "tigermemory_cli.py",
     ".gitignore",
@@ -31,6 +30,7 @@ PUBLISH_TOP_FILES = (
 
 PUBLISH_MAPPED_FILES = (
     ("packages/tigermemory-publish/src/tigermemory_publish/templates/AGENTS.md", "AGENTS.md"),
+    ("packages/tigermemory-publish/src/tigermemory_publish/templates/README.md", "README.md"),
 )
 
 PUBLISH_WHOLE_DIRS = (
@@ -425,7 +425,7 @@ def _scan_text_for_sensitive(
     repo_root: pathlib.Path | None = None,
 ) -> list[dict[str, object]]:
     findings: list[dict[str, object]] = []
-    scan_pii = category in {"wiki_public_pages", "top_files", "config_files", "repo_audit"}
+    scan_pii = category in {"wiki_public_pages", "top_files", "mapped_files", "config_files", "repo_audit"}
     for line_no, line in enumerate(text.splitlines(), start=1):
         if PRIVATE_KEY_RE.search(line):
             _add_finding(
