@@ -138,6 +138,14 @@ def _build_fake_repo(root: pathlib.Path) -> None:
         "token = RefreshToken.model_validate(raw)\n",
         encoding="utf-8",
     )
+    for rel in tigermemory_publish.PUBLISH_TOOL_FILES:
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# publish tool stub\n", encoding="utf-8")
+    for rel in tigermemory_publish.PUBLISH_TOOL_DIRS:
+        path = root / rel
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "asset.txt").write_text("asset\n", encoding="utf-8")
 
     (root / "schemas").mkdir()
     (root / "schemas" / "PAGE_FORMATS.md").write_text("# schemas\n", encoding="utf-8")
@@ -208,7 +216,9 @@ def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
     plan = tigermemory_publish.collect_publish_plan(tmp_path)
 
     assert plan["top_files"] == sorted([".gitignore", "README.md", "index.md"])
-    assert plan["whole_dirs"] == ["schemas", "tools"]
+    assert plan["whole_dirs"] == ["schemas"]
+    assert set(plan["tool_files"]) >= {"tools/tm_io.py", "tools/tm_review_ui.py"}
+    assert plan["tool_dirs"] == sorted(["tools/memory_answer", "tools/static"])
     assert plan["wiki_public_pages"] == ["wiki/systems/public-page.md"]
     assert plan["excluded_by_public_field"] == [
         "wiki/systems/private-flagged.md",
@@ -266,7 +276,9 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
 
     assert copied > 0
     assert not (dest / "AGENTS.md").exists()
-    assert (dest / "tools" / "tm_dummy.py").is_file()
+    assert not (dest / "tools" / "tm_dummy.py").exists()
+    assert (dest / "tools" / "tm_io.py").is_file()
+    assert (dest / "tools" / "static" / "asset.txt").is_file()
     assert (dest / "schemas" / "PAGE_FORMATS.md").is_file()
     assert (dest / "wiki" / "systems" / "public-page.md").is_file()
     assert not (dest / "wiki" / "systems" / "private-flagged.md").exists()

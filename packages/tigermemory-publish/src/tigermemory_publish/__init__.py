@@ -30,23 +30,47 @@ PUBLISH_TOP_FILES = (
 )
 
 PUBLISH_WHOLE_DIRS = (
-    "tools",
     "schemas",
-    "packages/tigerledger/src",
     "packages/tigermemory-answer/src",
     "packages/tigermemory-config/src",
     "packages/tigermemory-core/src",
     "packages/tigermemory-digest/src",
     "packages/tigermemory-doctor/src",
-    "packages/tigermemory-eval/src",
     "packages/tigermemory-index/src",
     "packages/tigermemory-lessons/src",
-    "packages/tigermemory-minimax/src",
     "packages/tigermemory-persona/src",
     "packages/tigermemory-protocols/src",
     "packages/tigermemory-publish/src",
     "packages/tigermemory-route/src",
     "packages/tigermemory-search/src",
+)
+
+PUBLISH_TOOL_FILES = (
+    "tools/_bootstrap_paths.py",
+    "tools/tm_agent_doctor.py",
+    "tools/tm_answer_trace.py",
+    "tools/tm_compile_index.py",
+    "tools/tm_core.py",
+    "tools/tm_cron_apply.py",
+    "tools/tm_dashboard_prefs.py",
+    "tools/tm_io.py",
+    "tools/tm_lessons.py",
+    "tools/tm_local_memory.py",
+    "tools/tm_memory_ops.py",
+    "tools/tm_memory_reflection.py",
+    "tools/tm_persona.py",
+    "tools/tm_publish.py",
+    "tools/tm_retention_audit.py",
+    "tools/tm_review.py",
+    "tools/tm_review_tools.py",
+    "tools/tm_review_ui.py",
+    "tools/tm_route.py",
+    "tools/tm_route_audit.py",
+)
+
+PUBLISH_TOOL_DIRS = (
+    "tools/memory_answer",
+    "tools/static",
 )
 
 WIKI_PUBLISH_PARTITIONS = (
@@ -100,7 +124,14 @@ TEXT_EXTENSIONS = {
     ".yml",
 }
 
-INCLUDED_PLAN_KEYS = ("top_files", "whole_dirs", "wiki_public_pages", "config_files")
+INCLUDED_PLAN_KEYS = (
+    "top_files",
+    "whole_dirs",
+    "tool_files",
+    "tool_dirs",
+    "wiki_public_pages",
+    "config_files",
+)
 EXCLUDED_PLAN_KEYS = ("excluded_by_public_field", "excluded_by_person_partition", "excluded_by_pii")
 
 
@@ -183,6 +214,8 @@ def collect_publish_plan(repo_root: pathlib.Path) -> dict[str, list[str]]:
     plan: dict[str, list[str]] = {
         "top_files": [],
         "whole_dirs": [],
+        "tool_files": [],
+        "tool_dirs": [],
         "wiki_public_pages": [],
         "config_files": [],
         "excluded_by_public_field": [],
@@ -198,6 +231,14 @@ def collect_publish_plan(repo_root: pathlib.Path) -> dict[str, list[str]]:
     for d in PUBLISH_WHOLE_DIRS:
         if (repo_root / d).is_dir():
             plan["whole_dirs"].append(d)
+
+    for name in PUBLISH_TOOL_FILES:
+        if (repo_root / name).is_file():
+            plan["tool_files"].append(name)
+
+    for d in PUBLISH_TOOL_DIRS:
+        if (repo_root / d).is_dir():
+            plan["tool_dirs"].append(d)
 
     wiki_root = repo_root / "wiki"
     if wiki_root.is_dir():
@@ -316,10 +357,10 @@ def _path_leak_severity(path: str) -> str:
 def _planned_text_files(plan: dict[str, list[str]], repo_root: pathlib.Path) -> list[tuple[str, str]]:
     """Return (category, rel_path) pairs that should be scanned before publish."""
     items: list[tuple[str, str]] = []
-    for category in ("top_files", "wiki_public_pages", "config_files"):
+    for category in ("top_files", "tool_files", "wiki_public_pages", "config_files"):
         for rel in plan.get(category, []):
             items.append((category, rel))
-    for rel_dir in plan.get("whole_dirs", []):
+    for rel_dir in [*plan.get("whole_dirs", []), *plan.get("tool_dirs", [])]:
         root = repo_root / rel_dir
         if not root.is_dir():
             continue
@@ -539,7 +580,11 @@ _BYTECODE_CACHE_DIRNAME = "__py" + "cache__"
 
 def _ignore_compiled_artifacts(_dir: str, names: list[str]) -> list[str]:
     """shutil.copytree ignore callback: drop bytecode cache dirs and .pyc files."""
-    return [n for n in names if n == _BYTECODE_CACHE_DIRNAME or n.endswith(".pyc")]
+    return [
+        n
+        for n in names
+        if n == _BYTECODE_CACHE_DIRNAME or n.endswith(".pyc") or n.endswith(".egg-info")
+    ]
 
 
 def _copy_file(src: pathlib.Path, dst: pathlib.Path) -> None:
@@ -563,6 +608,18 @@ def execute_plan(
         copied += 1
 
     for rel in plan["whole_dirs"]:
+        src = repo_root / rel
+        dst = dest / rel
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.copytree(src, dst, ignore=_ignore_compiled_artifacts)
+        copied += sum(1 for _ in dst.rglob("*") if _.is_file())
+
+    for rel in plan["tool_files"]:
+        _copy_file(repo_root / rel, dest / rel)
+        copied += 1
+
+    for rel in plan["tool_dirs"]:
         src = repo_root / rel
         dst = dest / rel
         if dst.exists():
@@ -685,7 +742,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"files_copied: {copied}")
         else:
             print("plan (would copy):")
-            for k in ("top_files", "whole_dirs", "wiki_public_pages", "config_files"):
+            for k in ("top_files", "whole_dirs", "tool_files", "tool_dirs", "wiki_public_pages", "config_files"):
                 if not plan[k]:
                     continue
                 print(f"  [{k}]")
