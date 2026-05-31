@@ -1770,6 +1770,19 @@ def test_dashboard_memory_overview_mem0_offline_subline():
     assert "mem0Available" in pages_js
 
 
+def test_quality_page_hides_unready_trace_metrics():
+    quality_html = (tm_review_ui.STATIC_DIR / "quality.html").read_text(encoding="utf-8")
+    pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
+
+    assert 'id="status-section"' in quality_html
+    assert 'id="failure-section"' in quality_html
+    assert "hasDuration" in pages_js
+    assert "有回答记录后显示耗时" in pages_js
+    assert "暂无回答记录" in pages_js
+    assert "statusSection.classList.add('hidden')" in pages_js
+    assert "section.classList.add('hidden')" in pages_js
+
+
 def test_dashboard_p2_static_sections():
     health_html = (tm_review_ui.STATIC_DIR / "health.html").read_text(encoding="utf-8")
     agent_html = (tm_review_ui.STATIC_DIR / "agent-tools.html").read_text(encoding="utf-8")
