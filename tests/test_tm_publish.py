@@ -143,7 +143,10 @@ def _build_fake_repo(root: pathlib.Path) -> None:
                 "Install from this snapshot checkout.\n\n"
                 "## Do Not Install From npm\n\n"
                 "Do not run `npm install -g tigermemory` for this project. "
-                "That npm package is a different Node/TypeScript Claude Code memory server.\n",
+                "That npm package is a different Node/TypeScript Claude Code memory server.\n\n"
+                "## Which Mode Should I Use?\n\n"
+                "Start with **local** unless you already know you need a shared memory service.\n\n"
+                "Do not install WSL, Docker, Qdrant, Caddy, or OpenMemory just to try the basic mode.\n",
                 encoding="utf-8",
             )
         elif dst == "LICENSE":
@@ -335,6 +338,9 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     assert "Do Not Install From npm" in public_readme
     assert "npm install -g tigermemory" in public_readme
     assert "different Node/TypeScript Claude Code memory server" in public_readme
+    assert "Which Mode Should I Use?" in public_readme
+    assert "Start with **local**" in public_readme
+    assert "Do not install WSL, Docker, Qdrant, Caddy, or OpenMemory just to try the basic" in public_readme
     public_pyproject = (dest / "pyproject.toml").read_text(encoding="utf-8")
     assert "AGPL-3.0-or-later" in public_pyproject
     assert "Internal; open-source release pending" not in public_pyproject

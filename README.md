@@ -81,6 +81,19 @@ The `tm dashboard` quick-start command uses port `9777`. The long-running
 private `tm-dashboard` service used by this development repository still uses
 port `1998`, so public first-run testing does not collide with that service.
 
+## Which Mode Should I Use?
+
+Start with **local** unless you already know you need a shared memory service.
+
+| Need | Use | Requires |
+|---|---|---|
+| Try TigerMemory, keep personal notes local, search Markdown Wiki and local memory | `local` | Python + Git |
+| Connect multiple machines or IDE agents to the same live memory layer | `hybrid` | OpenMemory/Mem0 service and extra deployment setup |
+| Develop the optional OpenClaw Context Engine plugin | optional subproject | Node/npm for that subproject only |
+
+Do not install WSL, Docker, Qdrant, Caddy, or OpenMemory just to try the basic
+mode. Those pieces are advanced integrations and can be added later.
+
 ## Runtime Profiles
 
 - `local`: default basic mode. Uses Markdown + Git + local SQLite + FTS5
