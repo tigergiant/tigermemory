@@ -16,6 +16,20 @@ engine plugin and ingestion experiments. It is not the TigerMemory installer.
 The public npm package name `tigermemory` is already used by a different
 project, so do not use `npm install tigermemory` for this repository.
 
+## Do Not Install From npm
+
+Do not run `npm install -g tigermemory` for this project. That npm package is a
+different Node/TypeScript Claude Code memory server published by another
+maintainer. TigerMemory's public basic mode is installed from this snapshot
+checkout with Python:
+
+```powershell
+py -m pip install -e .
+```
+
+If TigerMemory later offers an npm installer, it must use a scoped or different
+package name and this README will say so explicitly.
+
 ## Quick Start
 
 Run these commands from this repository checkout:

@@ -16,6 +16,20 @@ engine plugin under `deploy/openclaw-ce/` and ingestion experiments under
 name `tigermemory` is already used by a different project, so do not use
 `npm install tigermemory` for this repository.
 
+## Do Not Install From npm
+
+Do not run `npm install -g tigermemory` for this project. That npm package is a
+different Node/TypeScript Claude Code memory server published by another
+maintainer. TigerMemory's public basic mode is installed from this Git checkout
+with Python:
+
+```powershell
+py -m pip install -e .
+```
+
+If TigerMemory later offers an npm installer, it must use a scoped or different
+package name and this README will say so explicitly.
+
 ## Quick Start From GitHub
 
 ```powershell

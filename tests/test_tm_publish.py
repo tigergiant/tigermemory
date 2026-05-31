@@ -138,7 +138,14 @@ def _build_fake_repo(root: pathlib.Path) -> None:
         path = root / src
         path.parent.mkdir(parents=True, exist_ok=True)
         if dst == "README.md":
-            path.write_text("# public README\n\nInstall from this snapshot checkout.\n", encoding="utf-8")
+            path.write_text(
+                "# public README\n\n"
+                "Install from this snapshot checkout.\n\n"
+                "## Do Not Install From npm\n\n"
+                "Do not run `npm install -g tigermemory` for this project. "
+                "That npm package is a different Node/TypeScript Claude Code memory server.\n",
+                encoding="utf-8",
+            )
         elif dst == "wiki/operations/project-canvas.md":
             path.write_text(
                 "---\npublic: true\n---\n\n```mermaid\nstateDiagram-v2\n    [*] --> P0_Setup: done\n```\n",
@@ -312,6 +319,9 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     public_readme = (dest / "README.md").read_text(encoding="utf-8")
     assert public_readme.startswith("# public README")
     assert "git clone https://github.com/tigergiant/tigermemory.git" not in public_readme
+    assert "Do Not Install From npm" in public_readme
+    assert "npm install -g tigermemory" in public_readme
+    assert "different Node/TypeScript Claude Code memory server" in public_readme
     public_canvas = (dest / "wiki" / "operations" / "project-canvas.md").read_text(encoding="utf-8")
     assert "stateDiagram-v2" in public_canvas
     assert "TigerMemory 当前项目拓扑" not in public_canvas
