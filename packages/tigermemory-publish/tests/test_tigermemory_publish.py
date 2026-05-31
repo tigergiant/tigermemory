@@ -127,7 +127,7 @@ This private page references {{PRIVATE_PATH}}.
 def _build_fake_repo(root: pathlib.Path) -> None:
     """Populate `root` with the minimal tigermemory layout the publisher inspects."""
     (root / "AGENTS.md").write_text("# AGENTS\n", encoding="utf-8")
-    (root / "index.md").write_text("# index\n", encoding="utf-8")
+    (root / "index.md").write_text("# private index\n\nTM_MCP_API_KEY lives elsewhere.\n", encoding="utf-8")
     (root / "README.md").write_text("# README\n", encoding="utf-8")
     (root / ".gitignore").write_text("placeholder\n", encoding="utf-8")
     for src, dst in tigermemory_publish.PUBLISH_MAPPED_FILES:
@@ -145,6 +145,8 @@ def _build_fake_repo(root: pathlib.Path) -> None:
                 "Do not install WSL, Docker, Qdrant, Caddy, or OpenMemory just to try the basic mode.\n",
                 encoding="utf-8",
             )
+        elif dst == "index.md":
+            path.write_text("# public index\n\nNo private endpoint here.\n", encoding="utf-8")
         elif dst == "LICENSE":
             path.write_text("AGPL-3.0-or-later\n", encoding="utf-8")
         elif dst == "THIRD_PARTY_NOTICES.md":
@@ -248,7 +250,7 @@ def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
     _build_fake_repo(tmp_path)
     plan = tigermemory_publish.collect_publish_plan(tmp_path)
 
-    assert plan["top_files"] == sorted([".gitignore", "index.md"])
+    assert plan["top_files"] == sorted([".gitignore"])
     assert plan["whole_dirs"] == [
         "packages/tigermemory-publish/src",
         "schemas",
@@ -258,6 +260,7 @@ def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
         "packages/tigermemory-publish/src/tigermemory_publish/templates/LICENSE=>LICENSE",
         "packages/tigermemory-publish/src/tigermemory_publish/templates/README.md=>README.md",
         "packages/tigermemory-publish/src/tigermemory_publish/templates/THIRD_PARTY_NOTICES.md=>THIRD_PARTY_NOTICES.md",
+        "packages/tigermemory-publish/src/tigermemory_publish/templates/index.md=>index.md",
         "packages/tigermemory-publish/src/tigermemory_publish/templates/pyproject.toml=>pyproject.toml",
         "packages/tigermemory-publish/src/tigermemory_publish/templates/wiki/operations/project-canvas.md=>wiki/operations/project-canvas.md",
     ]
@@ -320,6 +323,9 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
 
     assert copied > 0
     assert (dest / "AGENTS.md").read_text(encoding="utf-8").startswith("# public AGENTS")
+    public_index = (dest / "index.md").read_text(encoding="utf-8")
+    assert public_index.startswith("# public index")
+    assert "TM_MCP_API_KEY" not in public_index
     public_readme = (dest / "README.md").read_text(encoding="utf-8")
     assert public_readme.startswith("# public README")
     assert "git clone https://github.com/tigergiant/tigermemory.git" not in public_readme

@@ -90,6 +90,16 @@ def test_profile_guide_explains_hybrid_upgrade(tmp_path, monkeypatch, capsys) ->
     assert "rollback=tm profile set local" in out
 
 
+def test_profile_guide_local_explains_no_advanced_dependencies(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(tigermemory_cli, "REPO_ROOT", tmp_path)
+
+    assert tigermemory_cli.main(["profile", "guide", "local"]) == 0
+
+    out = capsys.readouterr().out
+    assert "mode=basic" in out
+    assert "does_not_require=WSL,Docker,OpenMemory,Qdrant,Caddy,npm" in out
+
+
 def test_dashboard_defaults_to_public_quickstart_port(monkeypatch) -> None:
     calls: list[tuple[str, list[str]]] = []
 
