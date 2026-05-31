@@ -66,7 +66,7 @@ jobs:
           TIGERMEMORY_ROOT="$work" tm search --query "hello local" --size 3 | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["count"] >= 1, data'
           TIGERMEMORY_ROOT="$work" tm verify --id "$memory_id" --terms "hello local" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["direct_readback_ok"] and data["search_by_terms_self_hit"], data'
 
-          TIGERMEMORY_ROOT="$work" tm dashboard --host 127.0.0.1 --port 9789 &
+          TIGERMEMORY_ROOT="$snapshot" TIGERMEMORY_PROFILE=local tm dashboard --host 127.0.0.1 --port 9789 &
           dashboard_pid="$!"
           python3 - <<'PY'
           import http.cookiejar
