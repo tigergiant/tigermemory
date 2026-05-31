@@ -143,9 +143,11 @@ def test_cli_registered_dashboard_port_allows_local_browser_cookie(tmp_path, mon
     client = _client(tmp_path, monkeypatch)
 
     response = client.get("/health", headers={"Host": "127.0.0.1:9789"})
+    healthz = client.get("/healthz", headers={"Host": "127.0.0.1:9789"})
 
     assert response.status_code == 200
     assert "tm_review_session" in response.headers["set-cookie"]
+    assert healthz.json()["port"] == 9789
 
 
 def test_session_token_cookie_flow(tmp_path, monkeypatch):
@@ -451,11 +453,20 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v14" in response.text
+    assert "tigermemory-memory-ops-v15" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
     assert response.headers["Cache-Control"].startswith("no-store")
+
+
+def test_favicon_served_from_local_asset_without_session(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+
+    response = client.get("/favicon.ico", headers=HOST)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/png")
 
 
 def test_sw_reset_page_clears_browser_cache(tmp_path, monkeypatch):
@@ -491,6 +502,43 @@ def test_dashboard_shell_pages_are_no_store(tmp_path, monkeypatch):
         response = client.get(path, headers=HOST)
         assert response.status_code == 200
         assert response.headers["Cache-Control"].startswith("no-store")
+
+
+def test_dashboard_git_helpers_do_not_climb_to_parent_repo(tmp_path, monkeypatch):
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", snapshot)
+
+    dirty = tm_review_ui._worktree_dirty_state()
+
+    assert tm_review_ui.git_sha() == "unknown"
+    assert tm_review_ui._recent_agent_commits() == []
+    assert tm_review_ui._get_opposite_sha(False) is None
+    assert dirty["dirty"] is None
+    assert "git metadata not found at dashboard root" in dirty["error"]
+
+
+def test_agent_status_degrades_when_connect_helper_missing(tmp_path, monkeypatch):
+    original_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "tm_agent_connect":
+            raise ImportError("missing helper")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/api/agent/status", headers=HOST)
+    data = response.json()
+
+    assert response.status_code == 200
+    assert data["ok"] is True
+    assert data["cursor"]["connected"] is False
+    assert data["claude"]["connected"] is False
+    assert "helper" in data["warning"]
 
 
 def test_digest_page_embeds_live_data_without_empty_shell(tmp_path, monkeypatch):
