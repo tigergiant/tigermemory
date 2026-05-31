@@ -1783,6 +1783,17 @@ def test_quality_page_hides_unready_trace_metrics():
     assert "section.classList.add('hidden')" in pages_js
 
 
+def test_health_page_compacts_optional_advanced_services_for_local_mode():
+    pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
+
+    assert "renderServices(report)" in pages_js
+    assert "runtime_profile) === 'local'" in pages_js
+    assert "service.status !== 'optional'" in pages_js
+    assert "高级连接未启用" in pages_js
+    assert "基础模式不需要" in pages_js
+    assert "基础模式可用" in pages_js
+
+
 def test_dashboard_p2_static_sections():
     health_html = (tm_review_ui.STATIC_DIR / "health.html").read_text(encoding="utf-8")
     agent_html = (tm_review_ui.STATIC_DIR / "agent-tools.html").read_text(encoding="utf-8")
