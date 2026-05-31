@@ -43,3 +43,6 @@ where = [
   "packages/tigermemory-route/src",
   "packages/tigermemory-search/src",
 ]
+
+[tool.setuptools.package-data]
+tigermemory_publish = ["templates/*.md"]

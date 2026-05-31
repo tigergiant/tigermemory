@@ -3,6 +3,7 @@
 `tigermemory-publish` builds a commit-safe public distribution snapshot from a TigerMemory repository. It copies only explicit allowlist content:
 
 - top-level public project files such as `README.md`, `index.md`, and `pyproject.toml`
+- a sanitized public `AGENTS.md` generated from `packages/tigermemory-publish/src/tigermemory_publish/templates/AGENTS.md`
 - `schemas/`
 - an explicit allowlist of basic CLI/dashboard tool files plus `tools/static/`
   and `tools/memory_answer/`
@@ -11,8 +12,8 @@
 
 It does not call Git, Mem0, LLMs, or network services.
 It deliberately does not copy the private source repository's root `AGENTS.md`;
-that file contains workspace-specific operating rules and must be replaced by a
-sanitized public guide before a whole repository is made public.
+that file contains workspace-specific operating rules. The public snapshot gets
+a sanitized root `AGENTS.md` from the publish package template instead.
 It also deliberately avoids private or optional tooling directories such as
 expense importers, ingestion experiments, and IDE adapters unless they are
 separately promoted into the public allowlist.

@@ -29,6 +29,10 @@ PUBLISH_TOP_FILES = (
     ".gitignore",
 )
 
+PUBLISH_MAPPED_FILES = (
+    ("packages/tigermemory-publish/src/tigermemory_publish/templates/AGENTS.md", "AGENTS.md"),
+)
+
 PUBLISH_WHOLE_DIRS = (
     "schemas",
     "packages/tigermemory-answer/src",
@@ -127,6 +131,7 @@ TEXT_EXTENSIONS = {
 INCLUDED_PLAN_KEYS = (
     "top_files",
     "whole_dirs",
+    "mapped_files",
     "tool_files",
     "tool_dirs",
     "wiki_public_pages",
@@ -207,13 +212,14 @@ def _runtime_config_templates(repo_root: pathlib.Path) -> list[str]:
 def collect_publish_plan(repo_root: pathlib.Path) -> dict[str, list[str]]:
     """Return categorized lists of repo-relative paths slated for publishing.
 
-    Keys: top_files, whole_dirs, wiki_public_pages, config_files.
+    Keys include top_files, mapped_files, whole_dirs, wiki_public_pages, config_files.
     Each value is a sorted list of forward-slash relative paths. Paths that
     do not exist on disk are skipped silently.
     """
     plan: dict[str, list[str]] = {
         "top_files": [],
         "whole_dirs": [],
+        "mapped_files": [],
         "tool_files": [],
         "tool_dirs": [],
         "wiki_public_pages": [],
@@ -227,6 +233,10 @@ def collect_publish_plan(repo_root: pathlib.Path) -> dict[str, list[str]]:
     for name in PUBLISH_TOP_FILES:
         if (repo_root / name).is_file():
             plan["top_files"].append(name)
+
+    for src, dst in PUBLISH_MAPPED_FILES:
+        if (repo_root / src).is_file():
+            plan["mapped_files"].append(f"{src}=>{dst}")
 
     for d in PUBLISH_WHOLE_DIRS:
         if (repo_root / d).is_dir():
@@ -360,6 +370,9 @@ def _planned_text_files(plan: dict[str, list[str]], repo_root: pathlib.Path) -> 
     for category in ("top_files", "tool_files", "wiki_public_pages", "config_files"):
         for rel in plan.get(category, []):
             items.append((category, rel))
+    for item in plan.get("mapped_files", []):
+        src, _dst = _split_mapped_file(item)
+        items.append(("mapped_files", src))
     for rel_dir in [*plan.get("whole_dirs", []), *plan.get("tool_dirs", [])]:
         root = repo_root / rel_dir
         if not root.is_dir():
@@ -592,6 +605,13 @@ def _copy_file(src: pathlib.Path, dst: pathlib.Path) -> None:
     shutil.copy2(src, dst)
 
 
+def _split_mapped_file(item: str) -> tuple[str, str]:
+    src, sep, dst = item.partition("=>")
+    if not sep or not src or not dst:
+        raise ValueError(f"invalid mapped file entry: {item}")
+    return src, dst
+
+
 def execute_plan(
     plan: dict[str, list[str]],
     repo_root: pathlib.Path,
@@ -605,6 +625,11 @@ def execute_plan(
 
     for rel in plan["top_files"]:
         _copy_file(repo_root / rel, dest / rel)
+        copied += 1
+
+    for item in plan["mapped_files"]:
+        src, dst = _split_mapped_file(item)
+        _copy_file(repo_root / src, dest / dst)
         copied += 1
 
     for rel in plan["whole_dirs"]:
@@ -742,7 +767,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"files_copied: {copied}")
         else:
             print("plan (would copy):")
-            for k in ("top_files", "whole_dirs", "tool_files", "tool_dirs", "wiki_public_pages", "config_files"):
+            for k in ("top_files", "mapped_files", "whole_dirs", "tool_files", "tool_dirs", "wiki_public_pages", "config_files"):
                 if not plan[k]:
                     continue
                 print(f"  [{k}]")

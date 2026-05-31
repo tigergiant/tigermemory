@@ -134,6 +134,10 @@ def _build_fake_repo(root: pathlib.Path) -> None:
     (root / "pyproject.toml").write_text("[project]\nname='tigermemory'\n", encoding="utf-8")
     (root / "tigermemory_cli.py").write_text("def main():\n    return 0\n", encoding="utf-8")
     (root / ".gitignore").write_text("placeholder\n", encoding="utf-8")
+    for src, _dst in tm_publish.PUBLISH_MAPPED_FILES:
+        path = root / src
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# public AGENTS\n\nNo private path here.\n", encoding="utf-8")
 
     (root / "tools").mkdir()
     (root / "tools" / "tm_dummy.py").write_text("# stub tool\n", encoding="utf-8")
@@ -158,7 +162,7 @@ def _build_fake_repo(root: pathlib.Path) -> None:
         if rel == "schemas":
             continue
         package_src = root / rel
-        package_src.mkdir(parents=True)
+        package_src.mkdir(parents=True, exist_ok=True)
         (package_src / "__init__.py").write_text("# package\n", encoding="utf-8")
 
     wiki = root / "wiki"
@@ -234,6 +238,9 @@ def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
         "tigermemory_cli.py",
     ])
     assert set(plan["whole_dirs"]) >= {"schemas", "packages/tigermemory-core/src"}
+    assert plan["mapped_files"] == [
+        "packages/tigermemory-publish/src/tigermemory_publish/templates/AGENTS.md=>AGENTS.md"
+    ]
     assert set(plan["tool_files"]) >= {"tools/tm_io.py", "tools/tm_review_ui.py"}
     assert plan["tool_dirs"] == sorted(["tools/memory_answer", "tools/static"])
     assert plan["wiki_public_pages"] == ["wiki/systems/public-page.md"]
@@ -292,7 +299,7 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     copied = tm_publish.execute_plan(plan, repo, dest)
 
     assert copied > 0
-    assert not (dest / "AGENTS.md").exists()
+    assert (dest / "AGENTS.md").read_text(encoding="utf-8").startswith("# public AGENTS")
     assert not (dest / "tools" / "tm_dummy.py").exists()
     assert (dest / "tools" / "tm_io.py").is_file()
     assert (dest / "tools" / "static" / "asset.txt").is_file()
@@ -342,7 +349,8 @@ def test_main_writes_files_when_not_dry_run(tmp_path, monkeypatch, capsys) -> No
     assert summary["ok"] is True
     assert summary["dry_run"] is False
     assert summary["files_copied"] > 0
-    assert not (tmp_path / "out" / "AGENTS.md").exists()
+    public_agents = tmp_path / "out" / "AGENTS.md"
+    assert public_agents.read_text(encoding="utf-8").startswith("# public AGENTS")
 
 
 def test_detect_repo_root_honors_env(tmp_path, monkeypatch) -> None:

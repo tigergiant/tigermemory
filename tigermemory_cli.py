@@ -21,7 +21,7 @@ PASSTHROUGH_COMMANDS = {
 
 def _configure_stdio() -> None:
     if sys.version_info >= (3, 7):
-        for stream in (sys.stdout, sys.stderr):
+        for stream in (sys.stdin, sys.stdout, sys.stderr):
             try:
                 stream.reconfigure(encoding="utf-8", errors="replace")
             except Exception:
@@ -29,6 +29,9 @@ def _configure_stdio() -> None:
 
 
 def _detect_repo_root() -> pathlib.Path:
+    explicit = os.environ.get("TIGERMEMORY_ROOT")
+    if explicit:
+        return pathlib.Path(explicit).resolve()
     try:
         from tigermemory_config import _detect_repo_root as config_detect_repo_root
 
@@ -101,6 +104,14 @@ def _write_profile_file(profile: str) -> pathlib.Path:
         encoding="utf-8",
     )
     return path
+
+
+def _read_required_stdin(label: str) -> str | None:
+    text = sys.stdin.read().strip().lstrip("\ufeff").strip()
+    if not text:
+        print(f"{label} required on stdin", file=sys.stderr)
+        return None
+    return text
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -180,28 +191,56 @@ def cmd_index(args: argparse.Namespace) -> int:
 
 
 def cmd_write_memory(args: argparse.Namespace) -> int:
-    forwarded = ["mem0-write", "--agent", args.agent, "--topic", args.topic]
     if args.db:
-        forwarded.extend(["--db", args.db])
-    return _run_python("tools/tm_io.py", forwarded)
+        os.environ["TIGERMEMORY_LOCAL_DB"] = args.db
+    text = _read_required_stdin("text")
+    if text is None:
+        return 2
+    try:
+        import tigermemory_core as tm_core
+
+        print(tm_core.mem0_write(args.agent, args.topic, text))
+        return 0
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
+        return 4
 
 
 def cmd_search(args: argparse.Namespace) -> int:
-    forwarded = ["mem0-search", "--query", args.query, "--size", str(args.size)]
     if args.db:
-        forwarded.extend(["--db", args.db])
-    return _run_python("tools/tm_io.py", forwarded)
+        os.environ["TIGERMEMORY_LOCAL_DB"] = args.db
+    try:
+        import tigermemory_core as tm_core
+
+        print(tm_core.mem0_search(args.query, args.size))
+        return 0
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
+        return 4
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
-    forwarded = ["mem0-verify", "--id", args.id]
-    if args.terms:
-        forwarded.extend(["--terms", args.terms])
-    if args.digest_date:
-        forwarded.extend(["--digest-date", args.digest_date])
     if args.db:
-        forwarded.extend(["--db", args.db])
-    return _run_python("tools/tm_io.py", forwarded)
+        os.environ["TIGERMEMORY_LOCAL_DB"] = args.db
+    try:
+        import json
+        import tigermemory_core as tm_core
+
+        result = tm_core.verify_memory_id(args.id, key_terms=args.terms, digest_date=args.digest_date)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
+        return 4
 
 
 def cmd_dashboard(args: argparse.Namespace) -> int:
