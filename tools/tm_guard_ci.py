@@ -23,6 +23,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import _bootstrap_paths  # noqa: F401  -- expose packages/*/src before tigermemory imports
 import tigermemory_core as tm_core
 
 LINTER_DASHBOARDS = {
