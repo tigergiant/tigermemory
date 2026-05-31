@@ -30,6 +30,10 @@ PUBLISH_TOP_FILES = (
 
 PUBLISH_MAPPED_FILES = (
     ("packages/tigermemory-publish/src/tigermemory_publish/templates/AGENTS.md", "AGENTS.md"),
+    (
+        "packages/tigermemory-publish/src/tigermemory_publish/templates/wiki/operations/project-canvas.md",
+        "wiki/operations/project-canvas.md",
+    ),
     ("packages/tigermemory-publish/src/tigermemory_publish/templates/README.md", "README.md"),
 )
 

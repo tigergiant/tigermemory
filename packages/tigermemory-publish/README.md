@@ -5,6 +5,7 @@
 - top-level public project files such as `index.md` and `pyproject.toml`
 - a sanitized public `README.md` generated from `packages/tigermemory-publish/src/tigermemory_publish/templates/README.md`
 - a sanitized public `AGENTS.md` generated from `packages/tigermemory-publish/src/tigermemory_publish/templates/AGENTS.md`
+- a sanitized starter Project Canvas generated from `packages/tigermemory-publish/src/tigermemory_publish/templates/wiki/operations/project-canvas.md`
 - `schemas/`
 - an explicit allowlist of basic CLI/dashboard tool files plus `tools/static/`
   and `tools/memory_answer/`
@@ -15,7 +16,8 @@ It does not call Git, Mem0, LLMs, or network services.
 It deliberately does not copy the private source repository's root `README.md`
 or `AGENTS.md`; those files can contain workspace-specific operating rules or
 private-repository instructions. The public snapshot gets sanitized root
-`README.md` and `AGENTS.md` files from publish package templates instead.
+`README.md`, `AGENTS.md`, and starter Project Canvas files from publish package
+templates instead.
 It also deliberately avoids private or optional tooling directories such as
 expense importers, ingestion experiments, and IDE adapters unless they are
 separately promoted into the public allowlist.

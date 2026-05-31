@@ -139,6 +139,11 @@ def _build_fake_repo(root: pathlib.Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         if dst == "README.md":
             path.write_text("# public README\n\nInstall from this snapshot checkout.\n", encoding="utf-8")
+        elif dst == "wiki/operations/project-canvas.md":
+            path.write_text(
+                "---\npublic: true\n---\n\n```mermaid\nstateDiagram-v2\n    [*] --> P0_Setup: done\n```\n",
+                encoding="utf-8",
+            )
         else:
             path.write_text("# public AGENTS\n\nNo private path here.\n", encoding="utf-8")
 
@@ -243,6 +248,7 @@ def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
     assert plan["mapped_files"] == [
         "packages/tigermemory-publish/src/tigermemory_publish/templates/AGENTS.md=>AGENTS.md",
         "packages/tigermemory-publish/src/tigermemory_publish/templates/README.md=>README.md",
+        "packages/tigermemory-publish/src/tigermemory_publish/templates/wiki/operations/project-canvas.md=>wiki/operations/project-canvas.md",
     ]
     assert set(plan["tool_files"]) >= {"tools/tm_io.py", "tools/tm_review_ui.py"}
     assert plan["tool_dirs"] == sorted(["tools/memory_answer", "tools/static"])
@@ -306,6 +312,9 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     public_readme = (dest / "README.md").read_text(encoding="utf-8")
     assert public_readme.startswith("# public README")
     assert "git clone https://github.com/tigergiant/tigermemory.git" not in public_readme
+    public_canvas = (dest / "wiki" / "operations" / "project-canvas.md").read_text(encoding="utf-8")
+    assert "stateDiagram-v2" in public_canvas
+    assert "TigerMemory 当前项目拓扑" not in public_canvas
     assert not (dest / "tools" / "tm_dummy.py").exists()
     assert (dest / "tools" / "tm_io.py").is_file()
     assert (dest / "tools" / "static" / "asset.txt").is_file()
