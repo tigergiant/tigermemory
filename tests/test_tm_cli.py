@@ -76,6 +76,34 @@ def test_profile_guide_explains_hybrid_upgrade(tmp_path, monkeypatch, capsys) ->
     assert "rollback=tm profile set local" in out
 
 
+def test_dashboard_defaults_to_public_quickstart_port(monkeypatch) -> None:
+    calls: list[tuple[str, list[str]]] = []
+
+    def fake_run(rel_path: str, args: list[str]) -> int:
+        calls.append((rel_path, args))
+        return 0
+
+    monkeypatch.setattr(tigermemory_cli, "_run_python", fake_run)
+
+    assert tigermemory_cli.main(["dashboard"]) == 0
+
+    assert calls == [("tools/tm_review_ui.py", ["--port", "9777"])]
+
+
+def test_dashboard_accepts_explicit_private_service_port(monkeypatch) -> None:
+    calls: list[tuple[str, list[str]]] = []
+
+    def fake_run(rel_path: str, args: list[str]) -> int:
+        calls.append((rel_path, args))
+        return 0
+
+    monkeypatch.setattr(tigermemory_cli, "_run_python", fake_run)
+
+    assert tigermemory_cli.main(["dashboard", "--host", "127.0.0.1", "--port", "1998"]) == 0
+
+    assert calls == [("tools/tm_review_ui.py", ["--host", "127.0.0.1", "--port", "1998"])]
+
+
 def test_cli_module_help_smoke() -> None:
     result = subprocess.run(
         [sys.executable, "-m", "tigermemory_cli", "--help"],
@@ -89,6 +117,21 @@ def test_cli_module_help_smoke() -> None:
 
     assert result.returncode == 0
     assert "TigerMemory umbrella command" in result.stdout
+
+
+def test_dashboard_help_mentions_public_default_port() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "tigermemory_cli", "dashboard", "--help"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=20,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "default: 9777" in result.stdout
 
 
 def test_local_profile_cli_write_search_verify_smoke(tmp_path) -> None:

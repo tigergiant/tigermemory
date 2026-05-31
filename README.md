@@ -44,10 +44,14 @@ tm verify --id "<id printed by write-memory>" --terms "hello local"
 Start the dashboard:
 
 ```powershell
-tm dashboard --host 127.0.0.1 --port 9777
+tm dashboard
 ```
 
 Then open `http://127.0.0.1:9777/health`.
+
+The `tm dashboard` quick-start command uses port `9777`. The long-running
+private `tm-dashboard` service used by this development repository still uses
+port `1998`, so public first-run testing does not collide with that service.
 
 ## Runtime Profiles
 

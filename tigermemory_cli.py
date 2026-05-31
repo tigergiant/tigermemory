@@ -247,7 +247,7 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
     forwarded = []
     if args.host:
         forwarded.extend(["--host", args.host])
-    if args.port:
+    if args.port is not None:
         forwarded.extend(["--port", str(args.port)])
     return _run_python("tools/tm_review_ui.py", forwarded)
 
@@ -311,8 +311,8 @@ def build_parser() -> argparse.ArgumentParser:
     verify_p.set_defaults(func=cmd_verify)
 
     dashboard_p = sub.add_parser("dashboard", help="start dashboard server")
-    dashboard_p.add_argument("--host", default=None)
-    dashboard_p.add_argument("--port", type=int, default=None)
+    dashboard_p.add_argument("--host", default=None, help="bind host; default is tm_review_ui.py's local host")
+    dashboard_p.add_argument("--port", type=int, default=9777, help="bind port for public quick start; default: 9777")
     dashboard_p.set_defaults(func=cmd_dashboard)
 
     return parser
