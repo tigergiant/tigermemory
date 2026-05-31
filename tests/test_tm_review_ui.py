@@ -251,7 +251,9 @@ def test_i18n_assets_are_public(tmp_path, monkeypatch):
 
     assert json_response.status_code == 200
     assert json_response.json()["zh"]["nav.daily"] == "今日待确认"
+    assert json_response.json()["zh"]["term.auto_refresh_45s"] == "自动刷新 45s"
     assert json_response.json()["en"]["nav.daily"] == "Daily Review"
+    assert json_response.json()["en"]["term.auto_refresh_45s"] == "Auto-refresh 45s"
     assert js_response.status_code == 200
     assert "window.tmI18n" in js_response.text
 
@@ -453,7 +455,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v15" in response.text
+    assert "tigermemory-memory-ops-v16" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -515,8 +517,9 @@ def test_dashboard_git_helpers_do_not_climb_to_parent_repo(tmp_path, monkeypatch
     assert tm_review_ui.git_sha() == "unknown"
     assert tm_review_ui._recent_agent_commits() == []
     assert tm_review_ui._get_opposite_sha(False) is None
-    assert dirty["dirty"] is None
-    assert "git metadata not found at dashboard root" in dirty["error"]
+    assert dirty["dirty"] is False
+    assert dirty["error"] is None
+    assert dirty["git_present"] is False
 
 
 def test_agent_status_degrades_when_connect_helper_missing(tmp_path, monkeypatch):
@@ -709,6 +712,34 @@ def test_health_summary_endpoint_uses_agent_doctor(tmp_path, monkeypatch):
     assert data["dashboard"]["port"] == tm_review_ui.PORT
     assert data["dashboard"]["git_sha"] == "abc123"
     assert [service["name"] for service in data["services"]] == ["Dashboard", "tm-http", "tm-mcp", "Mem0", "OpenClaw"]
+
+
+def test_dashboard_health_summary_marks_advanced_services_optional_in_local_profile(tmp_path, monkeypatch):
+    monkeypatch.setenv("TIGERMEMORY_PROFILE", "local")
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_ui, "_worktree_dirty_state", lambda: {"dirty": False, "status_count": 0, "sample": [], "error": None})
+    monkeypatch.setattr(tm_review_ui, "_probe_url", lambda *_args, **_kwargs: {"ok": False, "latency_ms": 1, "error": "connection refused"})
+    monkeypatch.setattr(
+        tm_review_ui,
+        "_dashboard_fast_agent_doctor",
+        lambda: {
+            "status": "ok",
+            "checks": [
+                {"name": "tm_http", "status": "warn", "latency_ms": 1},
+                {"name": "mem0_api", "status": "warn", "latency_ms": 1},
+            ],
+        },
+    )
+
+    data = tm_review_ui.dashboard_health_summary()
+    statuses = {service["name"]: service["status"] for service in data["services"]}
+
+    assert data["dashboard"]["runtime_profile"] == "local"
+    assert statuses["tm-http"] == "optional"
+    assert statuses["tm-mcp"] == "optional"
+    assert statuses["Mem0"] == "optional"
+    assert statuses["OpenClaw"] == "optional"
+    assert not any("处于告警状态" in warning for warning in data["warnings"])
 
 
 def test_health_page_uses_real_template_not_json_page(tmp_path, monkeypatch):
