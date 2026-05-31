@@ -48,6 +48,9 @@ tm init
 tm profile show
 ```
 
+The installed command is the `tm` console script. Do not use `python -m tm`;
+there is no module entry point with that name.
+
 Expected profile after `tm init`:
 
 ```text

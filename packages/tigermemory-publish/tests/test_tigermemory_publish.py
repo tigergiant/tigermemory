@@ -142,7 +142,8 @@ def _build_fake_repo(root: pathlib.Path) -> None:
                 "That npm package is a different Node/TypeScript Claude Code memory server.\n\n"
                 "## Which Mode Should I Use?\n\n"
                 "Start with **local** unless you already know you need a shared memory service.\n\n"
-                "Do not install WSL, Docker, Qdrant, Caddy, or OpenMemory just to try the basic mode.\n",
+                "Do not install WSL, Docker, Qdrant, Caddy, or OpenMemory just to try the basic mode.\n"
+                "Do not use `python -m tm`; use the installed `tm` console script.\n",
                 encoding="utf-8",
             )
         elif dst == "index.md":
@@ -155,7 +156,9 @@ def _build_fake_repo(root: pathlib.Path) -> None:
             path.write_text(
                 "[project]\n"
                 "name='tigermemory'\n"
-                "license = { text = 'AGPL-3.0-or-later' }\n",
+                "license = { text = 'AGPL-3.0-or-later' }\n"
+                "\n[project.scripts]\n"
+                "tm = 'tigermemory_cli:main'\n",
                 encoding="utf-8",
             )
         elif dst == "wiki/operations/project-canvas.md":
@@ -335,8 +338,10 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     assert "Which Mode Should I Use?" in public_readme
     assert "Start with **local**" in public_readme
     assert "Do not install WSL, Docker, Qdrant, Caddy, or OpenMemory just to try the basic" in public_readme
+    assert "Do not use `python -m tm`" in public_readme
     public_pyproject = (dest / "pyproject.toml").read_text(encoding="utf-8")
     assert "AGPL-3.0-or-later" in public_pyproject
+    assert "tm = 'tigermemory_cli:main'" in public_pyproject
     assert "Internal; open-source release pending" not in public_pyproject
     assert (dest / "LICENSE").read_text(encoding="utf-8").startswith("AGPL-3.0-or-later")
     assert "Tailwind CSS" in (dest / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
