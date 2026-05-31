@@ -41,6 +41,13 @@ tm search --query "hello local memory" --size 5
 tm verify --id "<id printed by write-memory>" --terms "hello local"
 ```
 
+Search the Markdown Wiki as part of the same basic mode:
+
+```powershell
+tm search --scope wiki --query "project canvas"
+tm search --scope all --query "local memory"
+```
+
 Start the dashboard:
 
 ```powershell

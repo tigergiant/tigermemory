@@ -242,6 +242,81 @@ def test_installed_style_local_cli_does_not_require_tools_dir(tmp_path) -> None:
     assert '"direct_readback_ok": true' in verify.stdout
 
 
+def test_installed_style_cli_searches_wiki_without_mem0(tmp_path) -> None:
+    env = _cli_subprocess_env(tmp_path)
+    page = tmp_path / "wiki" / "systems" / "starter-search.md"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(
+        "\n".join([
+            "---",
+            'title: "Starter Search"',
+            "updated: 2026-05-31",
+            "owner: codex",
+            "status: active",
+            "---",
+            "",
+            "# Starter Search",
+            "",
+            "Local-first wiki recall works without Mem0 or Docker.",
+        ]),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "tigermemory_cli", "search", "--scope", "wiki", "--query", "local-first recall"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=20,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["search_backend"] == "wiki_hybrid"
+    assert payload["results"][0]["path"] == "wiki/systems/starter-search.md"
+
+
+def test_installed_style_cli_search_all_groups_memory_and_wiki(tmp_path) -> None:
+    env = _cli_subprocess_env(tmp_path)
+    env["TIGERMEMORY_PROFILE"] = "local"
+    page = tmp_path / "wiki" / "systems" / "starter-all-search.md"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text("# Starter All Search\n\nHybrid local search can read wiki pages.", encoding="utf-8")
+
+    write = subprocess.run(
+        [sys.executable, "-m", "tigermemory_cli", "write-memory", "--agent", "codex", "--topic", "systems"],
+        cwd=tmp_path,
+        input="hybrid local event memory",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=20,
+        check=False,
+    )
+    assert write.returncode == 0, write.stderr
+
+    result = subprocess.run(
+        [sys.executable, "-m", "tigermemory_cli", "search", "--scope", "all", "--query", "hybrid local"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=20,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["scope"] == "all"
+    assert payload["memory"]["count"] >= 1
+    assert payload["wiki"]["count"] >= 1
+
+
 def test_publish_passthrough_accepts_tool_options(monkeypatch) -> None:
     calls: list[tuple[str, list[str]]] = []
 

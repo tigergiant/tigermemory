@@ -213,9 +213,33 @@ def cmd_search(args: argparse.Namespace) -> int:
     if args.db:
         os.environ["TIGERMEMORY_LOCAL_DB"] = args.db
     try:
+        import json
         import tigermemory_core as tm_core
 
-        print(tm_core.mem0_search(args.query, args.size))
+        if args.scope == "memory":
+            print(tm_core.mem0_search(args.query, args.size))
+            return 0
+        wiki_results = tm_core.search_wiki_hybrid(args.query, size=args.size)
+        if args.scope == "wiki":
+            print(json.dumps({
+                "count": len(wiki_results),
+                "results": wiki_results,
+                "items": wiki_results,
+                "search_backend": "wiki_hybrid",
+            }, ensure_ascii=False))
+            return 0
+        memory_payload = json.loads(tm_core.mem0_search(args.query, args.size))
+        print(json.dumps({
+            "query": args.query,
+            "scope": "all",
+            "memory": memory_payload,
+            "wiki": {
+                "count": len(wiki_results),
+                "results": wiki_results,
+                "items": wiki_results,
+                "search_backend": "wiki_hybrid",
+            },
+        }, ensure_ascii=False))
         return 0
     except ValueError as e:
         print(str(e), file=sys.stderr)
@@ -297,9 +321,10 @@ def build_parser() -> argparse.ArgumentParser:
     write_p.add_argument("--db", default=None)
     write_p.set_defaults(func=cmd_write_memory)
 
-    search_p = sub.add_parser("search", help="search memory backend")
+    search_p = sub.add_parser("search", help="search local memory and/or Markdown wiki")
     search_p.add_argument("--query", required=True)
     search_p.add_argument("--size", type=int, default=5)
+    search_p.add_argument("--scope", choices=["memory", "wiki", "all"], default="memory", help="default: memory")
     search_p.add_argument("--db", default=None)
     search_p.set_defaults(func=cmd_search)
 
