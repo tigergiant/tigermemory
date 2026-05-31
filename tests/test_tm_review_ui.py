@@ -135,6 +135,19 @@ def test_host_header_rejects_non_localhost(tmp_path, monkeypatch):
     assert response.status_code == 403
 
 
+def test_cli_registered_dashboard_port_allows_local_browser_cookie(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "ALLOWED_HOSTS", set(tm_review_ui.DEFAULT_ALLOWED_HOSTS))
+    monkeypatch.setattr(tm_review_ui, "LOCAL_HOSTS", {"127.0.0.1", "localhost"})
+    monkeypatch.setattr(tm_review_ui, "COOKIE_BOOTSTRAP_HOSTS", {"127.0.0.1", "localhost"})
+    tm_review_ui.register_dashboard_bind_host("127.0.0.1", 9789)
+    client = _client(tmp_path, monkeypatch)
+
+    response = client.get("/health", headers={"Host": "127.0.0.1:9789"})
+
+    assert response.status_code == 200
+    assert "tm_review_session" in response.headers["set-cookie"]
+
+
 def test_session_token_cookie_flow(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
 
