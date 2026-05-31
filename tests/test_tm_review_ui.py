@@ -853,7 +853,9 @@ def test_quality_and_settings_no_longer_use_raw_json_page(tmp_path, monkeypatch)
 
     assert "quality-data" in quality.text
     assert "settings-data" in settings.text
-    assert "记忆写入质量" in quality.text
+    assert "记忆系统质量" in quality.text
+    assert "回答状态分布" in quality.text
+    assert "沟通规则执行度" not in quality.text
     assert "AI 回复详细程度" in settings.text
     assert "记忆管家" in quality.text
     assert "记忆管家" in settings.text
@@ -1727,7 +1729,8 @@ def test_dashboard_p0_i18n_static_guards():
     assert ".chip, [data-chip-key], [data-action]" in i18n_js
     assert "next.includes(target)" in i18n_js
     assert "data.hint || data.error" in pages_js
-    assert "今日整理尚未生成，以下为实时估算数据。" in pages_js
+    assert "未接入的低频指标不会占位" in pages_js
+    assert "renderStatusBars" in pages_js
 
 
 def test_dashboard_write_actions_do_not_block_event_loop():
