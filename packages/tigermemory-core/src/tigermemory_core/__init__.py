@@ -166,7 +166,11 @@ def _detect_repo_root() -> pathlib.Path:
         return pathlib.Path(explicit).resolve()
     here = pathlib.Path(__file__).resolve()
     for ancestor in [here.parent, *here.parents]:
-        if (ancestor / ".git").is_dir() and (ancestor / "wiki").is_dir():
+        if (ancestor / "wiki").is_dir() and (
+            (ancestor / ".git").is_dir()
+            or (ancestor / "tools").is_dir()
+            or (ancestor / "pyproject.toml").is_file()
+        ):
             return ancestor
     return here.parent.parent.parent.parent
 

@@ -25,6 +25,20 @@ def _cli_subprocess_env(root: pathlib.Path) -> dict[str, str]:
     return env
 
 
+def _snapshot_subprocess_env(root: pathlib.Path) -> dict[str, str]:
+    package_paths = [
+        str(root),
+        *[str(src) for src in sorted((root / "packages").glob("*/src")) if src.is_dir()],
+    ]
+    env = dict(os.environ)
+    env.pop("TIGERMEMORY_ROOT", None)
+    env.pop("TIGERMEMORY_PROFILE", None)
+    env.pop("TIGERMEMORY_LOCAL_DB", None)
+    env["PYTHONPATH"] = os.pathsep.join(package_paths + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
+
+
 def test_detect_repo_root_honors_explicit_env_for_empty_local_root(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("TIGERMEMORY_ROOT", str(tmp_path))
 
@@ -315,6 +329,70 @@ def test_installed_style_cli_search_all_groups_memory_and_wiki(tmp_path) -> None
     assert payload["scope"] == "all"
     assert payload["memory"]["count"] >= 1
     assert payload["wiki"]["count"] >= 1
+
+
+def test_published_snapshot_cli_detects_root_without_env(tmp_path) -> None:
+    sys.path.insert(0, str(REPO_ROOT / "packages" / "tigermemory-publish" / "src"))
+    import tigermemory_publish
+
+    snapshot = tmp_path / "snapshot"
+    plan = tigermemory_publish.collect_publish_plan(REPO_ROOT)
+    tigermemory_publish.execute_plan(plan, REPO_ROOT, snapshot)
+    env = _snapshot_subprocess_env(snapshot)
+
+    init = subprocess.run(
+        [sys.executable, "-m", "tigermemory_cli", "init"],
+        cwd=snapshot,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=20,
+        check=False,
+    )
+    assert init.returncode == 0, init.stderr
+    assert f"root={snapshot.resolve()}" in init.stdout
+
+    write = subprocess.run(
+        [sys.executable, "-m", "tigermemory_cli", "write-memory", "--agent", "codex", "--topic", "systems"],
+        cwd=snapshot,
+        input="published snapshot local recall",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=20,
+        check=False,
+    )
+    assert write.returncode == 0, write.stderr
+    memory_id = json.loads(write.stdout)["id"]
+
+    memory = subprocess.run(
+        [sys.executable, "-m", "tigermemory_cli", "search", "--query", "snapshot local recall", "--size", "3"],
+        cwd=snapshot,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=20,
+        check=False,
+    )
+    assert memory.returncode == 0, memory.stderr
+    assert memory_id in memory.stdout
+
+    wiki = subprocess.run(
+        [sys.executable, "-m", "tigermemory_cli", "search", "--scope", "wiki", "--query", "Project Canvas", "--size", "3"],
+        cwd=snapshot,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=20,
+        check=False,
+    )
+    assert wiki.returncode == 0, wiki.stderr
+    wiki_payload = json.loads(wiki.stdout)
+    assert wiki_payload["results"][0]["path"] == "wiki/operations/project-canvas.md"
 
 
 def test_publish_passthrough_accepts_tool_options(monkeypatch) -> None:
