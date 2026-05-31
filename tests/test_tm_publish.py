@@ -188,6 +188,16 @@ def _build_fake_repo(root: pathlib.Path) -> None:
         path = root / rel
         path.mkdir(parents=True, exist_ok=True)
         (path / "asset.txt").write_text("asset\n", encoding="utf-8")
+        if rel == "tools/static":
+            for name in (
+                "review.html",
+                "health.html",
+                "quality.html",
+                "canvas.html",
+                "dashboard-common.js",
+                "dashboard-pages.js",
+            ):
+                (path / name).write_text(f"// {name}\n", encoding="utf-8")
 
     (root / "schemas").mkdir()
     (root / "schemas" / "PAGE_FORMATS.md").write_text("# schemas\n", encoding="utf-8")
@@ -359,9 +369,17 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     public_canvas = (dest / "wiki" / "operations" / "project-canvas.md").read_text(encoding="utf-8")
     assert "stateDiagram-v2" in public_canvas
     assert "TigerMemory 当前项目拓扑" not in public_canvas
+    assert "Expense Tracker" not in public_canvas
+    assert "TradingAgents" not in public_canvas
     assert not (dest / "tools" / "tm_dummy.py").exists()
     assert (dest / "tools" / "tm_io.py").is_file()
     assert (dest / "tools" / "static" / "asset.txt").is_file()
+    assert (dest / "tools" / "static" / "review.html").is_file()
+    assert (dest / "tools" / "static" / "health.html").is_file()
+    assert (dest / "tools" / "static" / "quality.html").is_file()
+    assert (dest / "tools" / "static" / "canvas.html").is_file()
+    assert (dest / "tools" / "static" / "dashboard-common.js").is_file()
+    assert (dest / "tools" / "static" / "dashboard-pages.js").is_file()
     assert (dest / "schemas" / "PAGE_FORMATS.md").is_file()
     assert (dest / "pyproject.toml").is_file()
     assert (dest / "tigermemory_cli.py").is_file()
