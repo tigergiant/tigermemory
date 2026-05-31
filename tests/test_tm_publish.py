@@ -146,6 +146,17 @@ def _build_fake_repo(root: pathlib.Path) -> None:
                 "That npm package is a different Node/TypeScript Claude Code memory server.\n",
                 encoding="utf-8",
             )
+        elif dst == "LICENSE":
+            path.write_text("AGPL-3.0-or-later\n", encoding="utf-8")
+        elif dst == "THIRD_PARTY_NOTICES.md":
+            path.write_text("# Third-Party Notices\n\nTailwind CSS — MIT\n", encoding="utf-8")
+        elif dst == "pyproject.toml":
+            path.write_text(
+                "[project]\n"
+                "name='tigermemory'\n"
+                "license = { text = 'AGPL-3.0-or-later' }\n",
+                encoding="utf-8",
+            )
         elif dst == "wiki/operations/project-canvas.md":
             path.write_text(
                 "---\npublic: true\n---\n\n```mermaid\nstateDiagram-v2\n    [*] --> P0_Setup: done\n```\n",
@@ -248,13 +259,15 @@ def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
     assert plan["top_files"] == sorted([
         ".gitignore",
         "index.md",
-        "pyproject.toml",
         "tigermemory_cli.py",
     ])
     assert set(plan["whole_dirs"]) >= {"schemas", "packages/tigermemory-core/src"}
     assert plan["mapped_files"] == [
         "packages/tigermemory-publish/src/tigermemory_publish/templates/AGENTS.md=>AGENTS.md",
+        "packages/tigermemory-publish/src/tigermemory_publish/templates/LICENSE=>LICENSE",
         "packages/tigermemory-publish/src/tigermemory_publish/templates/README.md=>README.md",
+        "packages/tigermemory-publish/src/tigermemory_publish/templates/THIRD_PARTY_NOTICES.md=>THIRD_PARTY_NOTICES.md",
+        "packages/tigermemory-publish/src/tigermemory_publish/templates/pyproject.toml=>pyproject.toml",
         "packages/tigermemory-publish/src/tigermemory_publish/templates/wiki/operations/project-canvas.md=>wiki/operations/project-canvas.md",
     ]
     assert set(plan["tool_files"]) >= {"tools/tm_io.py", "tools/tm_review_ui.py"}
@@ -322,6 +335,11 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     assert "Do Not Install From npm" in public_readme
     assert "npm install -g tigermemory" in public_readme
     assert "different Node/TypeScript Claude Code memory server" in public_readme
+    public_pyproject = (dest / "pyproject.toml").read_text(encoding="utf-8")
+    assert "AGPL-3.0-or-later" in public_pyproject
+    assert "Internal; open-source release pending" not in public_pyproject
+    assert (dest / "LICENSE").read_text(encoding="utf-8").startswith("AGPL-3.0-or-later")
+    assert "Tailwind CSS" in (dest / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
     public_canvas = (dest / "wiki" / "operations" / "project-canvas.md").read_text(encoding="utf-8")
     assert "stateDiagram-v2" in public_canvas
     assert "TigerMemory 当前项目拓扑" not in public_canvas

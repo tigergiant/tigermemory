@@ -23,13 +23,18 @@ import sys
 
 PUBLISH_TOP_FILES = (
     "index.md",
-    "pyproject.toml",
     "tigermemory_cli.py",
     ".gitignore",
 )
 
 PUBLISH_MAPPED_FILES = (
     ("packages/tigermemory-publish/src/tigermemory_publish/templates/AGENTS.md", "AGENTS.md"),
+    ("packages/tigermemory-publish/src/tigermemory_publish/templates/LICENSE", "LICENSE"),
+    (
+        "packages/tigermemory-publish/src/tigermemory_publish/templates/THIRD_PARTY_NOTICES.md",
+        "THIRD_PARTY_NOTICES.md",
+    ),
+    ("packages/tigermemory-publish/src/tigermemory_publish/templates/pyproject.toml", "pyproject.toml"),
     (
         "packages/tigermemory-publish/src/tigermemory_publish/templates/wiki/operations/project-canvas.md",
         "wiki/operations/project-canvas.md",

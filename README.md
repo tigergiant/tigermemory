@@ -30,6 +30,13 @@ py -m pip install -e .
 If TigerMemory later offers an npm installer, it must use a scoped or different
 package name and this README will say so explicitly.
 
+## Public Snapshot License Boundary
+
+The public framework snapshot is prepared with AGPL-3.0-or-later metadata,
+`LICENSE`, and `THIRD_PARTY_NOTICES.md`. This private development worktree does
+not place a root `LICENSE` over all local data because private notes, runtime
+state, and non-public research are outside the public release boundary.
+
 ## Quick Start From GitHub
 
 ```powershell

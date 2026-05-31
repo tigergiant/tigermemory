@@ -8,7 +8,7 @@ version = "0.4.0"
 description = "Local-first LLM wiki and memory runtime."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Internal; open-source release pending publish guard clearance" }
+license = { text = "AGPL-3.0-or-later" }
 dependencies = [
   "fastapi>=0.100",
   "pydantic>=2",
@@ -30,16 +30,13 @@ py-modules = ["tigermemory_cli"]
 
 [tool.setuptools.packages.find]
 where = [
-  "packages/tigerledger/src",
   "packages/tigermemory-answer/src",
   "packages/tigermemory-config/src",
   "packages/tigermemory-core/src",
   "packages/tigermemory-digest/src",
   "packages/tigermemory-doctor/src",
-  "packages/tigermemory-eval/src",
   "packages/tigermemory-index/src",
   "packages/tigermemory-lessons/src",
-  "packages/tigermemory-minimax/src",
   "packages/tigermemory-persona/src",
   "packages/tigermemory-protocols/src",
   "packages/tigermemory-publish/src",
