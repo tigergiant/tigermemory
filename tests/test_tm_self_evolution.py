@@ -83,6 +83,8 @@ def test_collect_infers_three_event_types_for_date(tmp_path, capsys):
     assert types["lesson_searched"] == 1
     assert types["handoff_missing"] == 1
     assert all(item["outcome"] is None for item in data["events"])
+    pending = next(item for item in data["events"] if item["event_type"] == "handoff_missing")
+    assert pending["evidence_ref"] == ".tmp/pending-handoff.json:1"
     for item in data["events"]:
         assert set(item.keys()) == {
             "ts",
@@ -256,3 +258,165 @@ def test_collect_uses_record_timestamp_not_log_file_mtime(tmp_path, capsys):
         "hook_blocked",
         "lesson_searched",
     ]
+
+
+def test_analyze_outputs_expected_schema(tmp_path, capsys):
+    root = tmp_path
+    _write_jsonl(
+        _tmp_file(root, ".tmp/guard-rejects.jsonl"),
+        [
+            {
+                "ts": "2026-06-01T12:00:00+08:00",
+                "agent": "codex",
+                "session_id": "s1",
+                "guard": "owner",
+                "msg": "first",
+            },
+        ],
+    )
+    _write_jsonl(
+        _tmp_file(root, ".tmp/preflight-lessons.log"),
+        [
+            {
+                "ts": "2026-06-01T12:30:00+08:00",
+                "agent": "cascade",
+                "session_id": "s2",
+                "query": "git status",
+                "hits": 1,
+                "top": ["one"],
+            },
+        ],
+    )
+
+    code = tm_self_evolution.main(
+        [
+            "analyze",
+            "--date",
+            "2026-06-01",
+            "--root",
+            str(root),
+            "--json",
+            "--dry-run",
+        ]
+    )
+    data = json.loads(capsys.readouterr().out)
+
+    assert code == 0
+    assert data["schema_version"] == "self-evolution-audit-v1"
+    assert data["run_id"].startswith("analyze:2026-06-01:")
+    assert data["window"] == {
+        "start": "2026-06-01",
+        "end": "2026-06-01",
+    }
+    assert len(data["items"]) == 2
+
+    required_keys = {
+        "event_ids",
+        "event_type",
+        "outcome_proposed",
+        "confidence",
+        "evidence_refs",
+        "risk_tier",
+        "proposed_action",
+        "auto_applicable",
+        "deterministic_checks",
+        "rollback_plan",
+        "rationale",
+    }
+    for item in data["items"]:
+        assert set(item.keys()) == required_keys
+        assert item["auto_applicable"] is False
+        assert isinstance(item["event_ids"], list)
+        assert item["event_ids"][0].startswith("sha256:")
+        assert isinstance(item["deterministic_checks"], list)
+        assert isinstance(item["evidence_refs"], list)
+        assert item["risk_tier"] == "propose_only"
+        assert set(item["proposed_action"].keys()) == {"kind", "target_paths", "summary"}
+
+
+def test_analyze_marks_missing_evidence_as_unresolved(tmp_path, capsys, monkeypatch):
+    def _fake_collect(date: str, root: object | None = None) -> dict:
+        return {
+            "date": "2026-06-01",
+            "event_count": 1,
+            "events": [
+                {
+                    "ts": "2026-06-01T12:00:00+08:00",
+                    "session_id": "codex-20260601-0900",
+                    "agent": "codex",
+                    "event_type": "hook_blocked",
+                    "rule_id": "owner",
+                    "outcome": None,
+                    "evidence_ref": ".tmp/guard-rejects.jsonl:999",
+                    "redacted_summary": "missing evidence row",
+                },
+            ],
+        }
+
+    monkeypatch.setattr(tm_self_evolution, "collect_events_for_date", _fake_collect)
+
+    code = tm_self_evolution.main(
+        [
+            "analyze",
+            "--date",
+            "2026-06-01",
+            "--root",
+            str(tmp_path),
+            "--json",
+            "--dry-run",
+        ]
+    )
+    data = json.loads(capsys.readouterr().out)
+
+    assert code == 0
+    assert data["items"][0]["outcome_proposed"] == "unresolved"
+    assert data["items"][0]["evidence_refs"] == [".tmp/guard-rejects.jsonl:999"]
+    assert data["items"][0]["risk_tier"] == "propose_only"
+    assert data["items"][0]["auto_applicable"] is False
+
+
+def test_analyze_dry_run_does_not_write_events_path(tmp_path, capsys):
+    root = tmp_path
+    _write_jsonl(
+        _tmp_file(root, ".tmp/guard-rejects.jsonl"),
+        [
+            {
+                "ts": "2026-06-01T12:00:00+08:00",
+                "agent": "codex",
+                "session_id": "s1",
+                "guard": "owner",
+            },
+        ],
+    )
+
+    code = tm_self_evolution.main(
+        [
+            "analyze",
+            "--date",
+            "2026-06-01",
+            "--root",
+            str(root),
+            "--json",
+            "--dry-run",
+        ]
+    )
+    _ = json.loads(capsys.readouterr().out)
+
+    assert code == 0
+    assert not (root / ".tmp" / "self-evolution" / "events").exists()
+
+
+def test_analyze_rejects_invalid_date(tmp_path, capsys):
+    code = tm_self_evolution.main(
+        [
+            "analyze",
+            "--date",
+            "2026/06/01",
+            "--root",
+            str(tmp_path),
+            "--json",
+            "--dry-run",
+        ]
+    )
+    assert code == 2
+    assert "error:" in capsys.readouterr().err
