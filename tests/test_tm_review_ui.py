@@ -304,6 +304,43 @@ def test_api_digest_parses_expected_sections(tmp_path, monkeypatch):
     assert data["digest"]["proposals"][0]["id"] == "proposal-2026-05-21-001"
 
 
+def test_api_digest_returns_self_evolution_summary_not_raw_events(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    _write_digest(tmp_path)
+    monkeypatch.setattr(
+        tm_review_ui,
+        "_build_self_evolution_payload",
+        lambda *_args, **_kwargs: {
+            "source": "live",
+            "date": "2026-05-21",
+            "event_count": 2,
+            "counts": {"hook_blocked": 2},
+            "outcome_pending": 2,
+            "samples": [
+                {
+                    "event_type": "hook_blocked",
+                    "agent": "codex",
+                    "session_id": "s1",
+                    "rule_id": "owner",
+                    "evidence_ref": ".tmp/guard-rejects.jsonl:1",
+                    "summary": "blocked owner rule",
+                }
+            ],
+            "inbox_route": "AGENTS.md section 9.3 topic=selfevolution",
+        },
+    )
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/api/digest/2026-05-21", headers=HOST)
+
+    digest = response.json()["digest"]
+    assert digest["self_evolution"]["event_count"] == 2
+    assert digest["self_evolution"]["counts"] == {"hook_blocked": 2}
+    assert "events" not in digest["self_evolution"]
+    assert len(digest["self_evolution"]["samples"]) == 1
+
+
 def test_api_digest_uses_live_inbox_not_stale_report_rows(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_digest(tmp_path)

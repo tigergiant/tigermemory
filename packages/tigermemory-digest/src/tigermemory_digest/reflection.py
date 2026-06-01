@@ -48,6 +48,7 @@ INBOX_REVIEW_CACHE = REPO_ROOT / ".tmp" / "inbox-review-metadata-cache.json"
 MAX_PREVIEW_CHARS = 160
 STALE_INBOX_DAYS = 14
 MISSING_SUMMARY_PREFIX = "未提供中文摘要"
+SELF_EVOLUTION_HEADING = "🧭 Self-Evolution 候选"
 
 INBOX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-\d{4}-([^-]+)-([^.]+)\.md$")
 INBOX_REVIEW_PROMPT = """你是 tigermemory 的 inbox 审批摘要助手。
@@ -705,6 +706,41 @@ def _load_mem0_dedup_candidates(date: str, *, audit_root: pathlib.Path = MEM0_AU
     return data if isinstance(data, list) else []
 
 
+def _empty_self_evolution_summary(date: str) -> dict[str, Any]:
+    return {
+        "date": date,
+        "event_count": 0,
+        "counts": {},
+        "outcome_pending": 0,
+        "samples": [],
+        "inbox_route": "AGENTS.md section 9.3 topic=selfevolution",
+    }
+
+
+def _collect_self_evolution_summary_for_date(
+    date: str,
+    *,
+    repo_root: pathlib.Path = REPO_ROOT,
+) -> dict[str, Any]:
+    """Collect optional self-evolution summary for a daily report section.
+
+    Return an empty summary when collector module/JSON is unavailable.
+    """
+    try:
+        from tm_self_evolution import collect_summary_for_date
+    except Exception:
+        return _empty_self_evolution_summary(date)
+
+    try:
+        payload = collect_summary_for_date(date, root=repo_root)
+    except Exception:
+        return _empty_self_evolution_summary(date)
+
+    if not isinstance(payload, dict):
+        return _empty_self_evolution_summary(date)
+    return payload
+
+
 def _append_mem0_dedup_row(lines: list[str], row: dict[str, Any]) -> None:
     lines.extend([
         f"- `{row.get('candidate_id')}` :: agent={row.get('agent')} topic={row.get('topic')} dist={row.get('signature_distance')}",
@@ -717,6 +753,37 @@ def _append_mem0_dedup_row(lines: list[str], row: dict[str, Any]) -> None:
 
 def _details_block(summary: str, body: list[str]) -> list[str]:
     return ["<details>", f"<summary>{summary}</summary>", "", *body, "", "</details>"]
+
+
+def _append_self_evolution_section(lines: list[str], summary: dict[str, Any]) -> None:
+    event_count = int(summary.get("event_count") or 0)
+    if event_count <= 0:
+        return
+    counts = summary.get("counts") if isinstance(summary.get("counts"), dict) else {}
+    samples = summary.get("samples") if isinstance(summary.get("samples"), list) else []
+    lines.extend([
+        "",
+        f"## {SELF_EVOLUTION_HEADING}",
+        "",
+        f"- 只读证据事件：{event_count} 条",
+        f"- 类型分布：`{json.dumps(counts, ensure_ascii=False, sort_keys=True)}`",
+        f"- outcome 待回填：{int(summary.get('outcome_pending') or 0)} 条",
+        "- 治理路径：规则 / lesson 提案统一走 AGENTS.md §9.3 的 selfevolution inbox，不直接写 lessons。",
+    ])
+    sample_body: list[str] = []
+    for row in samples:
+        if not isinstance(row, dict):
+            continue
+        sample_body.append(
+            "- "
+            f"`{row.get('event_type')}` agent={row.get('agent')} "
+            f"rule={row.get('rule_id')} evidence={row.get('evidence_ref')} :: "
+            f"{row.get('summary') or ''}"
+        )
+    if not sample_body:
+        sample_body.append("- none")
+    lines.extend([""])
+    lines.extend(_details_block(f"self-evolution 样本（{len(sample_body)} 条）", sample_body))
 
 
 def render_daily_report(
@@ -738,6 +805,8 @@ def render_daily_report(
     mem0_dedup_candidates = _load_mem0_dedup_candidates(date, audit_root=mem0_audit_root)
     proposals = load_proposals(date, proposal_root=proposal_root)
     applied = [row for row in _applied_rows(proposal_root=proposal_root) if str(row.get("applied_at") or "").startswith(date)]
+    self_evolution_summary = _collect_self_evolution_summary_for_date(date, repo_root=REPO_ROOT)
+    self_evolution_count = int(self_evolution_summary.get("event_count") or 0)
     archive_rows, promote_rows, keep_rows = _inbox_action_groups(inbox_all)
     stale_count = sum(1 for row in archive_rows if row.stale_archive)
     promote_count = len(promote_rows)
@@ -759,6 +828,7 @@ def render_daily_report(
         f"stale_archive_count: {stale_count}",
         f"promote_candidate_count: {promote_count}",
         f"mem0_audit_candidate_count: {len(mem0_dedup_candidates)}",
+        f"self_evolution_count: {self_evolution_count}",
         "---",
         "",
         f"# Memory Digest {date}",
@@ -776,7 +846,8 @@ def render_daily_report(
         (
             f"{date} 记忆路由日报：Mem0 正式写入 {len(mem0_rows)} 条，"
             f"inbox 当日新增 {len(inbox_today)} 条，discard quarantine {len(discard_events)} 条；"
-            f"路由质量自评分 {quality_score}/100，Proposed Changes {len(proposals)} 条。"
+            f"路由质量自评分 {quality_score}/100，Proposed Changes {len(proposals)} 条；"
+            f"Self-Evolution 候选 {self_evolution_count} 条。"
         ),
         "",
         "## 📊 当日三源汇总",
@@ -888,6 +959,8 @@ def render_daily_report(
     else:
         lines.append("- none")
 
+    _append_self_evolution_section(lines, self_evolution_summary)
+
     lines.extend([
         "",
         "## 📈 自评指标",
@@ -935,6 +1008,7 @@ def render_daily_report(
         "- `tools/tm_mem0_audit.py`",
         "- `tools/tm_route_replay.py`",
         "- `tools/tm_cron_apply.py`",
+        "- `tools/tm_self_evolution.py`",
         "- `wiki/operations/cron-daily-report.md`",
         "",
     ])

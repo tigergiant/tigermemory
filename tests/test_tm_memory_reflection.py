@@ -366,3 +366,44 @@ def test_daily_digest_visible_lines_stay_compact(tmp_path):
     outside_details = [line for line in _strip_details(report) if line.strip()]
     assert len(outside_details) <= 100
     assert not re.search(r"memory \d+", "\n".join(outside_details))
+
+
+def test_daily_digest_embeds_self_evolution_summary_without_raw_events(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        tm_memory_reflection,
+        "_collect_self_evolution_summary_for_date",
+        lambda *_args, **_kwargs: {
+            "date": "2026-05-15",
+            "event_count": 2,
+            "counts": {"hook_blocked": 1, "lesson_searched": 1},
+            "outcome_pending": 2,
+            "samples": [
+                {
+                    "event_type": "hook_blocked",
+                    "agent": "codex",
+                    "session_id": "s1",
+                    "rule_id": "owner",
+                    "outcome": None,
+                    "evidence_ref": ".tmp/guard-rejects.jsonl:1",
+                    "summary": "blocked owner rule",
+                }
+            ],
+            "inbox_route": "AGENTS.md section 9.3 topic=selfevolution",
+        },
+    )
+
+    report = tm_memory_reflection.render_daily_report(
+        date="2026-05-15",
+        now_iso="2026-05-15T23:55:00+08:00",
+        mem0_items=[],
+        inbox_dir=tmp_path / "inbox",
+        audit_root=tmp_path / "discard-root",
+        proposal_root=tmp_path / "cron-proposals",
+    )
+
+    assert "self_evolution_count: 2" in report
+    assert "Self-Evolution 候选 2 条" in report
+    assert "## 🧭 Self-Evolution 候选" in report
+    assert "只读证据事件：2 条" in report
+    assert "AGENTS.md §9.3 的 selfevolution inbox" in report
+    assert "```json" not in report
