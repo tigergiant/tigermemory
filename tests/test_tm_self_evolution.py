@@ -5,6 +5,8 @@ import pathlib
 import sys
 from collections import Counter
 
+import pytest
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
@@ -420,3 +422,90 @@ def test_analyze_rejects_invalid_date(tmp_path, capsys):
     )
     assert code == 2
     assert "error:" in capsys.readouterr().err
+
+
+def _write_telemetry(root: pathlib.Path, date: str, rows: list[dict]) -> pathlib.Path:
+    file = _tmp_file(root, f".tmp/self-evolution/telemetry/{date}.jsonl")
+    _write_jsonl(file, rows)
+    return file
+
+
+def test_load_telemetry_counts_aggregates_tool_calls_and_sessions(tmp_path):
+    root = tmp_path
+    _write_telemetry(
+        root,
+        "2026-06-01",
+        [
+            {"ts": "2026-06-01T08:00:00", "ide": "codex", "kind": "tool_call", "tool": "shell"},
+            {"ts": "2026-06-01T08:01:00", "ide": "codex", "kind": "tool_call", "tool": "shell"},
+            {"ts": "2026-06-01T08:02:00", "ide": "cascade", "kind": "tool_call", "tool": "edit"},
+            {"ts": "2026-06-01T09:00:00", "ide": "codex", "kind": "session_close"},
+        ],
+    )
+
+    counts = tm_self_evolution.load_telemetry_counts("2026-06-01", root=root)
+
+    assert counts["date"] == "2026-06-01"
+    assert counts["tool_calls"]["total"] == 3
+    assert counts["tool_calls"]["by_ide"] == {"codex": 2, "cascade": 1}
+    assert counts["tool_calls"]["by_tool"] == {"shell": 2, "edit": 1}
+    assert counts["session_closes"]["total"] == 1
+    assert counts["session_closes"]["by_ide"] == {"codex": 1}
+
+
+def test_load_telemetry_counts_missing_file_returns_zeros(tmp_path):
+    counts = tm_self_evolution.load_telemetry_counts("2026-06-01", root=tmp_path)
+
+    assert counts["tool_calls"]["total"] == 0
+    assert counts["tool_calls"]["by_ide"] == {}
+    assert counts["tool_calls"]["by_tool"] == {}
+    assert counts["session_closes"]["total"] == 0
+    assert counts["session_closes"]["by_ide"] == {}
+
+
+def test_load_telemetry_counts_skips_bad_lines_and_unknown_kinds(tmp_path):
+    root = tmp_path
+    file = _tmp_file(root, ".tmp/self-evolution/telemetry/2026-06-01.jsonl")
+    file.write_text(
+        "\n".join(
+            [
+                json.dumps({"ts": "2026-06-01T08:00:00", "ide": "codex", "kind": "tool_call", "tool": "shell"}),
+                "not-json",
+                json.dumps(["not", "a", "dict"]),
+                json.dumps({"ide": "codex", "kind": "heartbeat"}),
+                json.dumps({"kind": "tool_call"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    counts = tm_self_evolution.load_telemetry_counts("2026-06-01", root=root)
+
+    assert counts["tool_calls"]["total"] == 2
+    assert counts["tool_calls"]["by_ide"] == {"codex": 1, "unknown": 1}
+    assert counts["session_closes"]["total"] == 0
+
+
+def test_load_telemetry_counts_only_reads_requested_date(tmp_path):
+    root = tmp_path
+    _write_telemetry(
+        root,
+        "2026-05-31",
+        [{"ts": "2026-05-31T08:00:00", "ide": "codex", "kind": "tool_call", "tool": "shell"}],
+    )
+    _write_telemetry(
+        root,
+        "2026-06-01",
+        [{"ts": "2026-06-01T08:00:00", "ide": "codex", "kind": "tool_call", "tool": "edit"}],
+    )
+
+    counts = tm_self_evolution.load_telemetry_counts("2026-06-01", root=root)
+
+    assert counts["tool_calls"]["total"] == 1
+    assert counts["tool_calls"]["by_tool"] == {"edit": 1}
+
+
+def test_load_telemetry_counts_rejects_invalid_date(tmp_path):
+    with pytest.raises(ValueError):
+        tm_self_evolution.load_telemetry_counts("2026/06/01", root=tmp_path)
