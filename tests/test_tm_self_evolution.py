@@ -509,3 +509,162 @@ def test_load_telemetry_counts_only_reads_requested_date(tmp_path):
 def test_load_telemetry_counts_rejects_invalid_date(tmp_path):
     with pytest.raises(ValueError):
         tm_self_evolution.load_telemetry_counts("2026/06/01", root=tmp_path)
+
+
+def test_build_repeated_event_proposals_marks_high_confidence_group(tmp_path):
+    root = tmp_path
+    _write_jsonl(
+        _tmp_file(root, ".tmp/guard-rejects.jsonl"),
+        [
+            {"ts": "2026-06-01T08:00:00+08:00", "agent": "codex", "session_id": "s1", "guard": "routed_by"},
+            {"ts": "2026-06-01T09:00:00+08:00", "agent": "codex", "session_id": "s2", "guard": "routed_by"},
+            {"ts": "2026-06-01T10:00:00+08:00", "agent": "codex", "session_id": "s3", "guard": "routed_by"},
+        ],
+    )
+
+    payload = tm_self_evolution.build_repeated_event_proposals(
+        "2026-06-01",
+        root=root,
+        days=1,
+        min_repeats=3,
+        min_confidence=0.75,
+    )
+
+    assert payload["schema_version"] == "self-evolution-proposals-v1"
+    assert len(payload["proposals"]) == 1
+    proposal = payload["proposals"][0]
+    assert proposal["eligible_for_inbox"] is True
+    assert proposal["repeat_count"] == 3
+    assert proposal["confidence"] == 0.75
+    assert proposal["risk_tier"] == "propose_only"
+    assert proposal["auto_applicable"] is False
+
+
+def test_write_inbox_proposals_aggregates_to_one_file(tmp_path):
+    root = tmp_path
+    (root / "inbox").mkdir()
+    proposals = {
+        "schema_version": "self-evolution-proposals-v1",
+        "run_id": "propose:2026-06-01:test",
+        "window": {"start": "2026-06-01", "end": "2026-06-01", "days": 1},
+        "thresholds": {"min_repeats": 3, "min_confidence": 0.75},
+        "proposals": [
+            {
+                "proposal_id": "se-test",
+                "event_type": "hook_blocked",
+                "agent": "codex",
+                "rule_id": "routed_by",
+                "repeat_count": 3,
+                "evidence_refs": [".tmp/guard-rejects.jsonl:1"],
+                "eligible_for_inbox": True,
+                "proposed_action": {"kind": "inbox_proposal", "target_paths": [], "summary": "review it"},
+            }
+        ],
+    }
+
+    result = tm_self_evolution.write_inbox_proposals(proposals, root=root)
+
+    assert result["written"][0]["proposal_count"] == "1"
+    inbox_file = root / result["written"][0]["path"]
+    text = inbox_file.read_text(encoding="utf-8")
+    assert "routed_by: tigermemory" in text
+    assert "proposal_type: self-evolution" in text
+    assert "## Evidence Refs" in text
+
+
+def test_build_and_write_baseline_snapshot(tmp_path):
+    root = tmp_path
+    _write_jsonl(
+        _tmp_file(root, ".tmp/guard-rejects.jsonl"),
+        [{"ts": "2026-06-01T08:00:00+08:00", "agent": "codex", "session_id": "s1", "guard": "owner"}],
+    )
+    _write_telemetry(
+        root,
+        "2026-06-01",
+        [
+            {"ts": "2026-06-01T08:00:00", "ide": "codex", "kind": "tool_call", "tool": "shell"},
+            {"ts": "2026-06-01T08:10:00", "ide": "codex", "kind": "session_close"},
+        ],
+    )
+
+    snapshot = tm_self_evolution.build_baseline_snapshot(
+        "2026-06-01",
+        root=root,
+        days=1,
+        min_tool_calls=1,
+        min_session_closes=1,
+    )
+    path = tm_self_evolution.write_baseline_snapshot(snapshot, root=root)
+
+    assert snapshot["sample_status"] == ["ok"]
+    assert snapshot["rates"]["hook_block_rate"] == 1.0
+    assert path == ".tmp/self-evolution/baselines/2026-06-01.json"
+    assert (root / path).exists()
+
+
+def test_apply_safe_dry_run_apply_and_rollback(tmp_path):
+    root = tmp_path
+    plan = {
+        "run_id": "apply:test",
+        "items": [
+            {
+                "event_ids": ["sha256:abc"],
+                "risk_tier": "b_auto_1",
+                "auto_applicable": True,
+                "proposed_action": {
+                    "kind": "write_json",
+                    "target_paths": [".tmp/self-evolution/derived/test.json"],
+                    "payload": {"ok": True},
+                },
+            }
+        ],
+    }
+
+    dry = tm_self_evolution.apply_safe_plan(plan, root=root, mode="semi_auto", dry_run=True)
+    target = root / ".tmp/self-evolution/derived/test.json"
+    assert dry["actions"][0]["status"] == "would_apply"
+    assert not target.exists()
+
+    applied = tm_self_evolution.apply_safe_plan(plan, root=root, mode="semi_auto", dry_run=False)
+    assert applied["actions"][0]["status"] == "applied"
+    assert json.loads(target.read_text(encoding="utf-8")) == {"ok": True}
+
+    rollback = tm_self_evolution.rollback_apply_safe("apply:test", root=root)
+    assert rollback["restored"][0]["status"] == "removed"
+    assert not target.exists()
+
+
+def test_apply_safe_rejects_protected_paths(tmp_path):
+    plan = {
+        "run_id": "apply:test",
+        "items": [
+            {
+                "event_ids": ["sha256:abc"],
+                "risk_tier": "b_auto_1",
+                "auto_applicable": True,
+                "proposed_action": {
+                    "kind": "write_text",
+                    "target_paths": ["AGENTS.md"],
+                    "payload": "no",
+                },
+            }
+        ],
+    }
+
+    result = tm_self_evolution.apply_safe_plan(plan, root=tmp_path, mode="full_auto", dry_run=False)
+
+    assert result["actions"][0]["status"] == "rejected"
+    assert "protected target path" in result["actions"][0]["reason"]
+
+
+def test_scheduler_plan_windows_is_dry_run_render_only(tmp_path):
+    plan = tm_self_evolution.build_scheduler_plan(
+        root=tmp_path,
+        platform="windows",
+        time="03:40",
+        weekly_day="SUN",
+    )
+
+    assert plan["platform"] == "windows"
+    assert plan["task_name"] == "TigermemorySelfEvolutionAuditor"
+    assert plan["commands"][0][0] == "schtasks"
