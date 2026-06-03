@@ -1913,13 +1913,33 @@ def test_quality_page_hides_unready_trace_metrics():
     quality_html = (tm_review_ui.STATIC_DIR / "quality.html").read_text(encoding="utf-8")
     pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
 
+    assert 'id="route-section"' in quality_html
     assert 'id="status-section"' in quality_html
     assert 'id="failure-section"' in quality_html
+    assert 'id="quality-empty-state"' in quality_html
     assert "hasDuration" in pages_js
     assert "有回答记录后显示耗时" in pages_js
-    assert "暂无回答记录" in pages_js
+    assert "等待真实回答记录" in pages_js
+    assert "今天还没有可用于质量判断的整理或回答记录" in pages_js
+    assert "已忽略数" not in pages_js
     assert "statusSection.classList.add('hidden')" in pages_js
+    assert "routeSection.classList.add('hidden')" in pages_js
     assert "section.classList.add('hidden')" in pages_js
+
+
+def test_canvas_star_map_uses_stable_compact_layout():
+    canvas_html = (tm_review_ui.STATIC_DIR / "canvas.html").read_text(encoding="utf-8")
+    pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
+
+    assert ".canvas-graph-toolbar" in canvas_html
+    assert "grid-template-columns: minmax(0, 1fr) auto" in canvas_html
+    assert ".canvas-graph-hint" in canvas_html
+    assert "-webkit-line-clamp: 2" in canvas_html
+    assert "Math.random" not in pages_js
+    assert "graphWorld: {width: 1680, height: 1000}" in pages_js
+    assert "const minFitScale = rect.width < 560 ? 0.18 : 0.34" in pages_js
+    assert "const spacing = 64" in pages_js
+    assert "const iterations = 96" in pages_js
 
 
 def test_health_page_compacts_optional_advanced_services_for_local_mode():
