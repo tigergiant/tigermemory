@@ -506,6 +506,37 @@ def test_load_telemetry_counts_only_reads_requested_date(tmp_path):
     assert counts["tool_calls"]["by_tool"] == {"edit": 1}
 
 
+def test_load_telemetry_counts_merges_extra_roots(tmp_path):
+    primary = tmp_path / "primary"
+    external = tmp_path / "external"
+    _write_telemetry(
+        primary,
+        "2026-06-01",
+        [{"ts": "2026-06-01T08:00:00", "ide": "wsl", "kind": "tool_call", "tool": "shell"}],
+    )
+    _write_telemetry(
+        external,
+        "2026-06-01",
+        [
+            {"ts": "2026-06-01T09:00:00", "ide": "codex", "kind": "tool_call", "tool": "Bash"},
+            {"ts": "2026-06-01T09:10:00", "ide": "codex", "kind": "session_close"},
+        ],
+    )
+
+    counts = tm_self_evolution.load_telemetry_counts(
+        "2026-06-01",
+        root=primary,
+        extra_roots=[external],
+    )
+
+    assert counts["tool_calls"]["total"] == 2
+    assert counts["tool_calls"]["by_ide"] == {"wsl": 1, "codex": 1}
+    assert counts["session_closes"]["total"] == 1
+    assert counts["sources"][0]["label"] == "primary"
+    assert counts["sources"][1]["label"] == "external:external"
+    assert counts["sources"][1]["tool_calls"] == 1
+
+
 def test_load_telemetry_counts_rejects_invalid_date(tmp_path):
     with pytest.raises(ValueError):
         tm_self_evolution.load_telemetry_counts("2026/06/01", root=tmp_path)
@@ -538,6 +569,33 @@ def test_build_repeated_event_proposals_marks_high_confidence_group(tmp_path):
     assert proposal["confidence"] == 0.75
     assert proposal["risk_tier"] == "propose_only"
     assert proposal["auto_applicable"] is False
+
+
+def test_build_repeated_event_proposals_reads_extra_event_roots(tmp_path):
+    primary = tmp_path / "primary"
+    external = tmp_path / "external"
+    _write_jsonl(
+        _tmp_file(external, ".tmp/guard-rejects.jsonl"),
+        [
+            {"ts": "2026-06-01T08:00:00+08:00", "agent": "codex", "session_id": "s1", "guard": "routed_by"},
+            {"ts": "2026-06-01T09:00:00+08:00", "agent": "codex", "session_id": "s2", "guard": "routed_by"},
+            {"ts": "2026-06-01T10:00:00+08:00", "agent": "codex", "session_id": "s3", "guard": "routed_by"},
+        ],
+    )
+
+    payload = tm_self_evolution.build_repeated_event_proposals(
+        "2026-06-01",
+        root=primary,
+        extra_roots=[external],
+        days=1,
+        min_repeats=3,
+        min_confidence=0.75,
+    )
+
+    assert len(payload["proposals"]) == 1
+    proposal = payload["proposals"][0]
+    assert proposal["eligible_for_inbox"] is True
+    assert all(ref.startswith("external:external:.tmp/guard-rejects.jsonl:") for ref in proposal["evidence_refs"])
 
 
 def test_write_inbox_proposals_aggregates_to_one_file(tmp_path):
