@@ -34,6 +34,10 @@ class _FakeOpener:
         return _FakeResponse()
 
 
+def _use_hybrid_profile(monkeypatch):
+    monkeypatch.setenv("TIGERMEMORY_PROFILE", tm_core.TIGERMEMORY_PROFILE_HYBRID)
+
+
 def test_render_inbox_body_adds_summary_cn_from_agent_chinese_line():
     body = "这条待审记忆说明：日报审批 UI 需要直接显示中文摘要。\nOriginal English details."
 
@@ -94,6 +98,7 @@ def test_render_inbox_body_overrides_bad_frontmatter_title():
 
 
 def test_mem0_request_bypasses_default_proxy_opener(monkeypatch):
+    _use_hybrid_profile(monkeypatch)
     fake_opener = _FakeOpener()
 
     def fail_urlopen(*_args, **_kwargs):
@@ -113,6 +118,7 @@ def test_mem0_request_bypasses_default_proxy_opener(monkeypatch):
 
 
 def test_mem0_search_uses_openmemory_search_query_param(monkeypatch):
+    _use_hybrid_profile(monkeypatch)
     captured = {}
 
     def fake_request(url, *, timeout):
@@ -135,6 +141,7 @@ def test_mem0_search_uses_openmemory_search_query_param(monkeypatch):
 
 
 def test_mem0_search_allows_explicit_substring_match_mode(monkeypatch):
+    _use_hybrid_profile(monkeypatch)
     captured = {}
 
     def fake_request(url, *, timeout):
@@ -151,6 +158,7 @@ def test_mem0_search_allows_explicit_substring_match_mode(monkeypatch):
 
 
 def test_verify_memory_id_active_hit_with_digest(monkeypatch, tmp_path):
+    _use_hybrid_profile(monkeypatch)
     mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"
     created = int(datetime.datetime(2026, 5, 16, 3, 23, 5, tzinfo=tm_core.TZ_CN).timestamp())
     text = "2026-05-16 T-X3.5 000001.DAT 242 rows"
@@ -187,6 +195,7 @@ def test_verify_memory_id_active_hit_with_digest(monkeypatch, tmp_path):
 
 
 def test_verify_memory_id_explains_outside_digest_window(monkeypatch, tmp_path):
+    _use_hybrid_profile(monkeypatch)
     mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"
     created = int(datetime.datetime(2026, 5, 16, 3, 23, 5, tzinfo=tm_core.TZ_CN).timestamp())
 
@@ -207,6 +216,7 @@ def test_verify_memory_id_explains_outside_digest_window(monkeypatch, tmp_path):
 
 
 def test_verify_memory_id_distinguishes_not_found_and_unreachable(monkeypatch):
+    _use_hybrid_profile(monkeypatch)
     mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"
 
     monkeypatch.setattr(tm_core, "mem0_get", lambda _id: (_ for _ in ()).throw(RuntimeError("Mem0 HTTP 404: nope")))
@@ -220,6 +230,7 @@ def test_verify_memory_id_distinguishes_not_found_and_unreachable(monkeypatch):
 
 
 def test_mem0_update_content_puts_content_only(monkeypatch):
+    _use_hybrid_profile(monkeypatch)
     mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"
     captured = {}
 
