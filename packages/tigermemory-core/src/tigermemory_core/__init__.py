@@ -2107,6 +2107,9 @@ def _rank_search_hit(
             score += 20
     if title_lower and all(_group_in_text(group, title_lower) for group in term_groups):
         score += 80
+        title_token_count = len([token for token in re.split(r"\W+", title_lower) if token])
+        if title_token_count <= len(term_groups) + 2:
+            score += 120
     if alias_text and all(_group_in_text(group, alias_text) for group in term_groups):
         score += 40
     if _is_person_profile_query(term_groups):

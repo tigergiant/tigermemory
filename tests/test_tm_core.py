@@ -300,6 +300,41 @@ investment portfolio family holdings investment portfolio family holdings invest
     assert results[0]["path"] == "wiki/investment/portfolio-overview.md"
 
 
+def test_search_wiki_ranks_exact_short_title_above_repeated_body_terms(monkeypatch, tmp_path):
+    wiki = tmp_path / "wiki"
+    (wiki / "operations").mkdir(parents=True)
+    (wiki / "systems").mkdir(parents=True)
+    (wiki / "operations" / "project-canvas.md").write_text(
+        """---
+owner: codex
+status: active
+---
+
+# Project Canvas
+
+The project state map.
+""",
+        encoding="utf-8",
+    )
+    (wiki / "systems" / "mermaid-task-canvas-protocol.md").write_text(
+        """---
+owner: codex
+status: active
+---
+
+# Mermaid Task Canvas Protocol
+
+Project canvas project canvas project canvas project canvas project canvas.
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+
+    results = tm_core.search_wiki("Project Canvas", size=2, include_sources=False)
+
+    assert results[0]["path"] == "wiki/operations/project-canvas.md"
+
+
 def test_search_wiki_explain_includes_lexical_breakdown(monkeypatch, tmp_path):
     wiki = tmp_path / "wiki"
     (wiki / "systems").mkdir(parents=True)
