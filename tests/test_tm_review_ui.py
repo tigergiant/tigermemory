@@ -537,10 +537,22 @@ def test_dashboard_shell_pages_are_no_store(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     client.get("/", headers=HOST, follow_redirects=False)
 
-    for path in ["/health", "/quality", "/canvas", "/settings"]:
+    for path in ["/review", "/health", "/quality", "/canvas", "/settings"]:
         response = client.get(path, headers=HOST)
         assert response.status_code == 200
         assert response.headers["Cache-Control"].startswith("no-store")
+
+
+def test_review_route_returns_page_shell_not_bare_json(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/review", headers=HOST)
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "<body" in response.text
+    assert "detail" not in response.text[:120]
 
 
 def test_dashboard_git_helpers_do_not_climb_to_parent_repo(tmp_path, monkeypatch):
@@ -557,6 +569,50 @@ def test_dashboard_git_helpers_do_not_climb_to_parent_repo(tmp_path, monkeypatch
     assert dirty["dirty"] is False
     assert dirty["error"] is None
     assert dirty["git_present"] is False
+
+
+def test_dashboard_worktree_check_discloses_runtime_source(tmp_path, monkeypatch):
+    class Proc:
+        returncode = 0
+
+        def __init__(self, stdout: str) -> None:
+            self.stdout = stdout
+
+    def fake_run(args, timeout=0.5):
+        if args[:3] == ["git", "branch", "--show-current"]:
+            return Proc("master\n")
+        if args[:3] == ["git", "rev-parse", "--short"]:
+            return Proc("abcdef1\n")
+        if args[:4] == ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name"]:
+            return Proc("origin/master\n")
+        if args[:3] == ["git", "rev-list", "--left-right"]:
+            return Proc("0 0\n")
+        return Proc("")
+
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        tm_review_ui,
+        "_worktree_dirty_state",
+        lambda: {"dirty": False, "status_count": 0, "sample": [], "error": None},
+    )
+    monkeypatch.setattr(tm_review_ui, "_is_wsl_runtime", lambda: False)
+    monkeypatch.setattr(tm_review_ui.tm_core, "tigermemory_profile", lambda: "local")
+    monkeypatch.setattr(tm_review_ui, "_run", fake_run)
+
+    check = tm_review_ui._dashboard_worktree_check()
+
+    assert check["repo_root"] == str(tmp_path)
+    assert check["runtime_profile"] == "local"
+    assert check["runtime_side"] == "Windows"
+    assert check["status"] == "ok"
+
+
+def test_health_worktree_renderer_discloses_source_path():
+    pages_js = (REPO_ROOT / "tools" / "static" / "dashboard-pages.js").read_text(encoding="utf-8")
+
+    assert "worktree-root" in pages_js
+    assert "check.repo_root" in pages_js
+    assert "check.runtime_side" in pages_js
 
 
 def test_agent_status_degrades_when_connect_helper_missing(tmp_path, monkeypatch):
@@ -618,6 +674,52 @@ def test_dashboard_data_pages_return_fast_shells(tmp_path, monkeypatch):
     assert settings.status_code == 200
     assert '"loading": true' in settings.text
     assert "window.tmPages.settings.init" in settings.text
+
+
+def test_self_evolution_page_returns_fast_loading_shell(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        tm_review_ui,
+        "self_evolution_data",
+        lambda date=None: (_ for _ in ()).throw(RuntimeError("slow self-evolution should be api-only")),
+    )
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    page = client.get("/self-evolution", headers=HOST)
+
+    assert page.status_code == 200
+    assert '"loading": true' in page.text
+    assert "window.tmPages.selfEvolution.init" in page.text
+    assert "self-evolution-data" in page.text
+
+
+def test_self_evolution_data_uses_dedicated_cache_ttl(monkeypatch):
+    seen = {}
+
+    def fake_cache_get(key, ttl):
+        seen["key"] = key
+        seen["ttl"] = ttl
+        return {"ok": True, "date": "2026-05-21", "cached": True}, True
+
+    monkeypatch.setattr(tm_review_ui, "_run_cache_get", fake_cache_get)
+
+    data = tm_review_ui.self_evolution_data("2026-05-21")
+
+    assert data["cached"] is True
+    assert seen["key"] == "api:self-evolution:2026-05-21"
+    assert seen["ttl"] == tm_review_ui.SELF_EVOLUTION_CACHE_TTL
+    assert tm_review_ui.SELF_EVOLUTION_CACHE_TTL > tm_review_ui.API_CACHE_TTL
+
+
+def test_self_evolution_shell_reuses_cached_payload(monkeypatch):
+    cached = {"ok": True, "date": "2026-05-21", "cached": True, "loading": False}
+    monkeypatch.setattr(tm_review_ui, "today", lambda: "2026-05-21")
+    monkeypatch.setattr(tm_review_ui, "_run_cache_get", lambda key, ttl: (cached, True))
+
+    shell = tm_review_ui._self_evolution_shell()
+
+    assert shell == cached
 
 
 def test_dashboard_modularization_rules(tmp_path, monkeypatch):
@@ -1933,6 +2035,27 @@ def test_dashboard_smoke_script_execution(monkeypatch):
                 "repo_dirty": False,
                 "mermaid_src": "flowchart LR\nA-->B",
                 "active_modules": [],
+            }
+            return FakeResponse(json.dumps(payload).encode("utf-8"))
+        elif "/api/self-evolution/" in url:
+            payload = {
+                "ok": True,
+                "date": "2026-05-30",
+                "generated_at": "2026-05-30T00:00:00+08:00",
+                "mode": "propose_only",
+                "summary": {"event_count": 0, "counts": {}, "samples": []},
+                "proposal_summary": {"total": 0, "eligible": 0, "min_repeats": 3, "min_confidence": 0.75},
+                "proposal_run": {"run_id": "self-evolution-2026-05-30", "window": {}},
+                "proposals": [],
+                "baseline": {"status": "ok", "counts": {}, "rates": {}},
+                "evidence_sources": {"events": [], "telemetry": [], "env": "TM_SELF_EVOLUTION_EVIDENCE_ROOTS"},
+                "warnings": [],
+                "errors": [],
+                "latency_ms": 1,
+                "cached": False,
+                "stale": False,
+                "source": "self-evolution evidence",
+                "cache": {"hit": False, "ttl_seconds": 300},
             }
             return FakeResponse(json.dumps(payload).encode("utf-8"))
         elif "digest" in url:

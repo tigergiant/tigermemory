@@ -72,11 +72,11 @@ def _has_field(payload, path):
     return True
 
 
-def _safe_request_json(opener, url, headers):
+def _safe_request_json(opener, url, headers, timeout=5):
     start = time.time()
     try:
         req = urllib.request.Request(url, headers=headers)
-        with opener.open(req, timeout=5) as response:
+        with opener.open(req, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
             if not isinstance(payload, dict):
                 return {
@@ -150,6 +150,19 @@ def _check_canvas_payload(payload, checks):
         checks[field] = _has_field(payload, field)
     checks["active_modules_is_list"] = isinstance(payload.get("active_modules"), list)
     checks["mermaid_non_empty"] = bool(str(payload.get("mermaid_src") or "").strip())
+
+
+def _check_self_evolution_payload(payload, checks):
+    required = [
+        "ok", "date", "generated_at", "mode", "summary", "proposal_summary",
+        "proposals", "baseline", "evidence_sources", "warnings", "errors",
+        "latency_ms", "cached", "stale", "cache", "cache.hit", "cache.ttl_seconds",
+    ]
+    for field in required:
+        checks[field] = _has_field(payload, field)
+    checks["summary_event_count_present"] = _has_field(payload, "summary.event_count")
+    checks["proposals_is_list"] = isinstance(payload.get("proposals"), list)
+    checks["mode_is_read_only"] = payload.get("mode") == "propose_only"
 
 
 def run_http_smoke(base_url, token=None):
@@ -265,14 +278,15 @@ def run_http_smoke(base_url, token=None):
     # JSON APIs
     today = dt.date.today().strftime("%Y-%m-%d")
     api_endpoints = [
-        ("/api/health/summary", _check_health_summary_payload),
-        ("/api/quality/memory", _check_quality_payload),
-        (f"/api/digest/{today}", _check_digest_payload),
-        ("/api/canvas", _check_canvas_payload),
+        ("/api/health/summary", _check_health_summary_payload, 5),
+        ("/api/quality/memory", _check_quality_payload, 5),
+        (f"/api/digest/{today}", _check_digest_payload, 5),
+        ("/api/canvas", _check_canvas_payload, 5),
+        (f"/api/self-evolution/{today}", _check_self_evolution_payload, 45),
     ]
-    for path, checker in api_endpoints:
+    for path, checker, timeout in api_endpoints:
         api_url = f"{base_url.rstrip('/')}{path}"
-        api_result, payload = _safe_request_json(opener, api_url, headers)
+        api_result, payload = _safe_request_json(opener, api_url, headers, timeout=timeout)
         if not api_result["ok"]:
             results[path] = {
                 "ok": False,
