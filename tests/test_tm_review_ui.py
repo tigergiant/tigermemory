@@ -1953,6 +1953,9 @@ def test_dashboard_smoke_script_execution(monkeypatch):
         elif "canvas" in url:
             html = '<body data-page="canvas"><header></header><a class="nav-tab" data-target-page="canvas"></a><code id="sha-pill">ea7f5b2</code></body>'
             return FakeResponse(html.encode("utf-8"))
+        elif "self-evolution" in url:
+            html = '<body data-page="self-evolution"><header></header><a class="nav-tab" data-target-page="self-evolution"></a><code id="sha-pill">ea7f5b2</code></body>'
+            return FakeResponse(html.encode("utf-8"))
         return FakeResponse(b"")
 
     class FakeOpener:

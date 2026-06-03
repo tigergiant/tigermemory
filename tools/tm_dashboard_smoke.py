@@ -51,7 +51,7 @@ class DashboardHTMLParser(HTMLParser):
 def check_sha_format(sha):
     if not sha:
         return False
-    return bool(re.match(r"^[0-9a-fA-F]{7}$|^[0-9a-fA-F]{40}$|^-+$", sha))
+    return bool(re.match(r"^[0-9a-fA-F]{7,40}$|^-+$", sha))
 
 
 def _safe_print(text):
@@ -189,6 +189,7 @@ def run_http_smoke(base_url, token=None):
         ("/agent-tools", "agent-tools"),
         ("/settings", "settings"),
         ("/canvas", "canvas"),
+        ("/self-evolution", "self-evolution"),
     ]
 
     for path, expected_page in pages:
@@ -217,6 +218,7 @@ def run_http_smoke(base_url, token=None):
                     "__HEALTH_JSON__",
                     "__QUALITY_JSON__",
                     "__SETTINGS_JSON__",
+                    "__SELF_EVOLUTION_JSON__",
                 ]
                 leaks = [placeholder for placeholder in placeholders if placeholder in content]
                 page_results["checks"]["placeholder_leak_free"] = len(leaks) == 0
