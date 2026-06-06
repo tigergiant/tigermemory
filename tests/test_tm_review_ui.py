@@ -1720,6 +1720,45 @@ def test_dashboard_memory_quality_falls_back_to_live_inbox(tmp_path, monkeypatch
     assert data["counts"]["mem0"] is None
     assert data["counts"]["inbox"] == 2
     assert "digest not found" in data["digest_error"]
+    assert data["counts"]["inbox_pending"] == 2
+    assert data["counts"]["inbox_today"] == 0
+    flow = data["route_flow"]
+    assert "input_total" in flow and "sources" in flow and "outputs" in flow
+    outputs = {slot["key"]: slot for slot in flow["outputs"]}
+    assert {"mem0", "wiki", "inbox", "discard", "issue"} <= set(outputs)
+    assert outputs["inbox"]["value"] == data["counts"]["inbox_today"]
+
+
+def test_dashboard_memory_quality_digest_backfill_uses_frontmatter_and_live_rows(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    _write_digest(tmp_path, "2026-05-27")
+    _write_inbox(tmp_path, "2026-05-27-1200-codex-systems.md")
+    _write_inbox(tmp_path, "2026-05-26-1200-codex-systems.md")
+    monkeypatch.setattr(
+        tm_review_ui.tm_answer_trace,
+        "load_trace_rows",
+        lambda **_kwargs: ([], []),
+    )
+    monkeypatch.setattr(
+        tm_review_ui.tm_answer_trace,
+        "summarize_rows",
+        lambda *_args, **_kwargs: {"duration_ms": {}, "status_counts": {"not_found": 1}, "latest": []},
+    )
+
+    data = tm_review_ui.dashboard_memory_quality("2026-05-27")
+
+    assert data["digest_available"] is True
+    assert data["fallback_mode"] is False
+    assert data["counts"]["mem0"] == 2
+    assert data["counts"]["inbox"] == 2
+    assert data["counts"]["inbox_pending"] == 2
+    assert data["counts"]["inbox_today"] == 1
+    assert data["counts"]["wiki"] == 0
+    flow = data["route_flow"]
+    output_map = {slot["key"]: slot for slot in flow["outputs"]}
+    assert {"mem0", "wiki", "inbox", "discard", "issue"} <= set(output_map)
+    assert output_map["inbox"]["value"] == 1
+    assert output_map["issue"]["value"] == 1
 
 
 def test_api_health_memory_overview_endpoint(tmp_path, monkeypatch):
@@ -1909,7 +1948,7 @@ def test_dashboard_memory_overview_mem0_offline_subline():
     assert "mem0Available" in pages_js
 
 
-def test_quality_page_hides_unready_trace_metrics():
+def test_quality_page_flow_panel_keeps_all_routes_visible():
     quality_html = (tm_review_ui.STATIC_DIR / "quality.html").read_text(encoding="utf-8")
     pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
 
@@ -1923,8 +1962,12 @@ def test_quality_page_hides_unready_trace_metrics():
     assert "今天还没有可用于质量判断的整理或回答记录" in pages_js
     assert "已忽略数" not in pages_js
     assert "statusSection.classList.add('hidden')" in pages_js
-    assert "routeSection.classList.add('hidden')" in pages_js
-    assert "section.classList.add('hidden')" in pages_js
+    assert "renderFlowPanel(memory)" in pages_js
+    assert "if (routeSection) routeSection.classList.remove('hidden')" in pages_js
+    assert "routeSection.classList.add('hidden')" not in pages_js
+    assert "const flowSummaryCards = [" in pages_js
+    assert "const outputCards = model.outputs.map((slot) =>" in pages_js
+    assert "const pct = knownValue && flowTotal > 0 ? Math.round((slot.value || 0) * 100 / flowTotal) : (knownValue ? 0 : null);" in pages_js
 
 
 def test_canvas_star_map_uses_stable_compact_layout():
