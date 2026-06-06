@@ -1955,13 +1955,15 @@ def test_quality_page_flow_panel_keeps_all_routes_visible():
     assert 'id="route-section"' in quality_html
     assert 'id="status-section"' in quality_html
     assert 'id="failure-section"' in quality_html
+    assert 'id="quality-alert"' in quality_html
     assert 'id="quality-empty-state"' in quality_html
     assert "hasDuration" in pages_js
     assert "有回答记录后显示耗时" in pages_js
     assert "等待真实回答记录" in pages_js
     assert "今天还没有可用于质量判断的整理或回答记录" in pages_js
     assert "已忽略数" not in pages_js
-    assert "statusSection.classList.add('hidden')" in pages_js
+    assert "statusSection.classList.add('hidden')" not in pages_js
+    assert "暂无失败样本" in pages_js
     assert "renderFlowPanel(memory)" in pages_js
     assert "if (routeSection) routeSection.classList.remove('hidden')" in pages_js
     assert "routeSection.classList.add('hidden')" not in pages_js
