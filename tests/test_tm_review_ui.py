@@ -1931,6 +1931,30 @@ def test_dashboard_write_actions_do_not_block_event_loop():
     assert "await run_in_threadpool(_locked_write_action, execute_batch_inbox_action, req)" in source
 
 
+def test_quality_cache_warmer_runs_without_browser_request(monkeypatch):
+    calls: list[str | None] = []
+    monkeypatch.setattr(tm_review_ui, "today", lambda: "2026-05-27")
+    monkeypatch.setattr(
+        tm_review_ui,
+        "dashboard_memory_quality",
+        lambda date=None: calls.append(date) or {"ok": True, "date": date, "cached": False},
+    )
+
+    result = tm_review_ui._warm_quality_cache_once()
+
+    assert calls == ["2026-05-27"]
+    assert result["ok"] is True
+    assert result["date"] == "2026-05-27"
+    assert result["cached"] is False
+
+
+def test_dashboard_main_starts_quality_cache_warmer():
+    source = pathlib.Path(tm_review_ui.__file__).read_text(encoding="utf-8")
+    assert "TM_DASHBOARD_QUALITY_WARM_INTERVAL" in source
+    assert "TM_DASHBOARD_BACKGROUND" in source
+    assert "start_quality_cache_warmer()" in source
+
+
 def test_dashboard_action_controls_and_toast_static_guards():
     pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
     review_html = (tm_review_ui.STATIC_DIR / "review.html").read_text(encoding="utf-8")
