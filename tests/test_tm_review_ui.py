@@ -492,7 +492,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v21" in response.text
+    assert "tigermemory-memory-ops-v22" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -1711,6 +1711,9 @@ def test_dashboard_memory_quality_falls_back_to_live_inbox(tmp_path, monkeypatch
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_inbox(tmp_path, "2026-05-01-1200-codex-systems.md")
     _write_inbox(tmp_path, "2026-05-02-1200-codex-systems.md")
+    monkeypatch.setattr(tm_review_ui, "_mem0_payload", lambda *_args, **_kwargs: {"count": 8, "items": [], "results": [], "latency_ms": 12})
+    monkeypatch.setattr(tm_review_ui.tm_memory_ops, "fetch_mem0_items_by_date_range", lambda *_args, **_kwargs: [{"id": "m1"}, {"id": "m2"}])
+    monkeypatch.setattr(tm_review_ui.tm_memory_reflection, "discard_events_for_dates", lambda *_args, **_kwargs: [{"event_id": "d1"}])
     monkeypatch.setattr(tm_review_ui.tm_answer_trace, "load_trace_rows", lambda **_kwargs: ([], []))
     monkeypatch.setattr(tm_review_ui.tm_answer_trace, "summarize_rows", lambda *_args, **_kwargs: {"duration_ms": {}, "status_counts": {}, "latest": []})
 
@@ -1718,8 +1721,11 @@ def test_dashboard_memory_quality_falls_back_to_live_inbox(tmp_path, monkeypatch
 
     assert data["digest_available"] is False
     assert data["fallback_mode"] is True
-    assert data["counts"]["mem0"] is None
+    assert data["counts"]["mem0"] == 2
     assert data["counts"]["inbox"] == 2
+    assert data["counts"]["wiki"] == 0
+    assert data["counts"]["wiki_count_source"] == "live_not_connected"
+    assert data["counts"]["discard"] == 1
     assert "digest not found" in data["digest_error"]
     assert data["counts"]["inbox_pending"] == 2
     assert data["counts"]["inbox_today"] == 0
@@ -1727,7 +1733,10 @@ def test_dashboard_memory_quality_falls_back_to_live_inbox(tmp_path, monkeypatch
     assert "input_total" in flow and "sources" in flow and "outputs" in flow
     outputs = {slot["key"]: slot for slot in flow["outputs"]}
     assert {"mem0", "wiki", "inbox", "discard", "issue"} <= set(outputs)
+    assert outputs["mem0"]["value"] == 2
+    assert outputs["wiki"]["value"] == 0
     assert outputs["inbox"]["value"] == data["counts"]["inbox_today"]
+    assert outputs["discard"]["value"] == 1
 
 
 def test_dashboard_memory_quality_digest_backfill_uses_frontmatter_and_live_rows(tmp_path, monkeypatch):
@@ -1908,7 +1917,7 @@ def test_dashboard_p0_i18n_static_guards():
     assert ".chip, [data-chip-key], [data-action]" in i18n_js
     assert "next.includes(target)" in i18n_js
     assert "data.hint || data.error" in pages_js
-    assert "未接入的低频指标不会占位" in pages_js
+    assert "实时模式：当前直接读取 Mem0、收件箱、回答轨迹和 discard 审计" in pages_js
     assert "renderStatusBars" in pages_js
 
 
@@ -1961,7 +1970,13 @@ def test_quality_page_flow_panel_keeps_all_routes_visible():
     assert "hasDuration" in pages_js
     assert "有回答记录后显示耗时" in pages_js
     assert "等待真实回答记录" in pages_js
-    assert "今天还没有可用于质量判断的整理或回答记录" in pages_js
+    assert "今天还没有可用于质量判断的实时写入或回答记录" in pages_js
+    assert "今日整理尚未生成" not in pages_js
+    assert "每日整理" not in pages_js
+    assert "实时模式：当前直接读取 Mem0、收件箱、回答轨迹和 discard 审计" in pages_js
+    assert "实时统计 ${memory.date || '-'}" in pages_js
+    assert "['即时记忆', sourceValues.daily" in pages_js
+    assert "'未接入'" in pages_js
     assert "已忽略数" not in pages_js
     assert "statusSection.classList.add('hidden')" not in pages_js
     assert "暂无失败样本" in pages_js
