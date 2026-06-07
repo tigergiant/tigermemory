@@ -42,6 +42,30 @@ def test_routedecision_as_metadata_unreviewed_flag():
     assert meta["unreviewed"] is True
 
 
+def test_routedecision_as_metadata_includes_knowledge_target_fields():
+    decision = route.RouteDecision(
+        route="inbox", score=88, topic_inferred="systems",
+        issues=[], reasons="stable contract",
+        is_transient=False, is_sensitive=False, needs_human_review=True,
+        knowledge_target="wiki_proposal",
+        target_confidence=93,
+        wiki_partition="systems",
+        wiki_slug_hint="unified-knowledge-routing",
+        wiki_action="create",
+        review_reason="canonical system rule",
+        score_breakdown={"durability": 95},
+    )
+    meta = decision.as_metadata()
+    assert meta["knowledge_target"] == "wiki_proposal"
+    assert meta["target_confidence"] == 93
+    assert meta["wiki_partition"] == "systems"
+    assert meta["wiki_slug_hint"] == "unified-knowledge-routing"
+    assert meta["wiki_action"] == "create"
+    assert meta["review_reason"] == "canonical system rule"
+    assert meta["needs_human_review"] is True
+    assert meta["score_breakdown"] == {"durability": 95}
+
+
 def test_empty_text_is_discarded_without_llm_call():
     """Empty text short-circuits before any tigermemory_core call."""
     decision = route.route_memory("", "systems", "cascade")

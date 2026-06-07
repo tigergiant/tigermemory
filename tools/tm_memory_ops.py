@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import urllib.parse
+from dataclasses import replace
 from typing import Any, Callable
 
 import tigermemory_core as tm_core
@@ -25,6 +26,8 @@ import tm_route_audit
 DIGEST_DEBOUNCE_SECONDS = int(os.environ.get("TM_DIGEST_DEBOUNCE_SECONDS", "180"))
 EMBED_REFRESH_DEBOUNCE_SECONDS = int(os.environ.get("TM_EMBED_REFRESH_DEBOUNCE_SECONDS", "180"))
 EMBED_REFRESH_TIMEOUT_SECONDS = int(os.environ.get("TM_EMBED_REFRESH_TIMEOUT_SECONDS", "300"))
+WIKI_PROPOSAL_WRITE_RESERVE_SECONDS = int(os.environ.get("TM_WIKI_PROPOSAL_WRITE_RESERVE_SECONDS", "5"))
+WIKI_PROPOSAL_MIN_REVIEW_SECONDS = int(os.environ.get("TM_WIKI_PROPOSAL_MIN_REVIEW_SECONDS", "8"))
 _digest_timer: threading.Timer | None = None
 _digest_lock = threading.Lock()
 _embed_timers: dict[str, threading.Timer] = {}
@@ -313,6 +316,7 @@ def _to_inbox(
     requested_topic: str,
     storage_topic: str,
     metadata_extra: dict[str, Any] | None = None,
+    outcome: str | None = None,
 ) -> dict[str, Any]:
     fm_extra = decision.as_metadata()
     if metadata_extra:
@@ -339,6 +343,157 @@ def _to_inbox(
         "topic_inferred": decision.topic_inferred,
         "reasons": decision.reasons,
         "unreviewed": decision.unreviewed,
+    }
+    if outcome:
+        result["outcome"] = outcome
+    result.update(_public_route_metadata(decision))
+    if metadata_extra:
+        result.update(metadata_extra)
+    return result
+
+
+def _topic_from_wiki_partition(partition: str, fallback: str) -> str:
+    topic = partition.replace("-", "")
+    if topic in tm_core.TOPICS:
+        return topic
+    return fallback if fallback in tm_core.TOPICS else "systems"
+
+
+def _default_wiki_partition(
+    requested_topic: str,
+    decision: tm_route.RouteDecision,
+    storage_topic: str,
+) -> str:
+    if decision.wiki_partition in tm_core.PARTITION_OWNERS:
+        return str(decision.wiki_partition)
+    if storage_topic == "selfevolution":
+        return "self-evolution"
+    if storage_topic in tm_core.PARTITION_OWNERS:
+        return storage_topic
+    if decision.topic_inferred == "selfevolution":
+        return "self-evolution"
+    if decision.topic_inferred in tm_core.PARTITION_OWNERS:
+        return decision.topic_inferred
+    if requested_topic == "selfevolution":
+        return "self-evolution"
+    if requested_topic in tm_core.PARTITION_OWNERS:
+        return requested_topic
+    return "systems"
+
+
+def _slugify_hint(value: str | None, *, fallback: str) -> str:
+    raw = (value or "").strip().lower()
+    raw = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
+    if not raw:
+        raw = fallback
+    raw = raw[:80].strip("-") or fallback
+    if not tm_core.SLUG_RE.fullmatch(raw):
+        raw = fallback
+    return raw
+
+
+def _to_wiki_proposal(
+    decision: tm_route.RouteDecision,
+    agent: str,
+    text: str,
+    *,
+    requested_topic: str,
+    storage_topic: str,
+    metadata_extra: dict[str, Any] | None = None,
+    review_timeout: int | None = None,
+    skip_review_reason: str | None = None,
+) -> dict[str, Any]:
+    """Write a proposal-shaped inbox item for stable Wiki knowledge.
+
+    Phase 1 deliberately does not direct-write wiki pages from write_memory.
+    """
+    import tm_review
+
+    partition = _default_wiki_partition(requested_topic, decision, storage_topic)
+    action = decision.wiki_action if decision.wiki_action in {"create", "update"} else "create"
+    fallback_slug = f"write-memory-proposal-{tm_core.now('%Y%m%d-%H%M')}"
+    slug = _slugify_hint(decision.wiki_slug_hint, fallback=fallback_slug)
+    if skip_review_reason:
+        review = {
+            "score": None,
+            "issues": [],
+            "suggestions": [],
+            "ready_for_compile": True,
+            "review_skipped": True,
+            "reason": skip_review_reason,
+        }
+    elif review_timeout is not None:
+        review = tm_review.review_draft(text, timeout=review_timeout)
+    else:
+        review = tm_review.review_draft(text)
+    review_score = review.get("score")
+    review_skipped = bool(review.get("review_skipped"))
+    review_issues = review.get("issues") if isinstance(review.get("issues"), list) else []
+    review_suggestions = review.get("suggestions") if isinstance(review.get("suggestions"), list) else []
+    issues_md = "\n".join(f"- {i}" for i in review_issues) or "- (none)"
+    suggestions_md = "\n".join(f"- {s}" for s in review_suggestions) or "- (none)"
+    body = (
+        f"# Wiki proposal: wiki/{partition}/{slug}.md\n\n"
+        "## Router decision\n\n"
+        f"- knowledge_target: wiki_proposal\n"
+        f"- requested_topic: {requested_topic}\n"
+        f"- topic_inferred: {decision.topic_inferred}\n"
+        f"- wiki_action: {action}\n"
+        f"- target_confidence: {decision.target_confidence}\n"
+        f"- route_score: {decision.score}\n"
+        f"- reason: {decision.reasons}\n\n"
+        f"## L2 review\n\n"
+        f"- score: {review_score}\n"
+        f"- review_skipped: {review_skipped}\n"
+        f"- ready_for_compile: {review.get('ready_for_compile')}\n\n"
+        f"- reason: {review.get('reason')}\n\n"
+        f"### Issues\n\n{issues_md}\n\n"
+        f"### Suggestions\n\n{suggestions_md}\n\n"
+        "## Proposed Wiki body\n\n"
+        f"{text}\n"
+    )
+    fm_extra = decision.as_metadata()
+    if metadata_extra:
+        fm_extra.update(metadata_extra)
+    fm_extra.update({
+        "route_requested_topic": requested_topic,
+        "stored_topic": _topic_from_wiki_partition(partition, storage_topic),
+        "routed_by": "tigermemory",
+        "route_decision_reason": decision.reasons,
+        "proposal_kind": "wiki",
+        "wiki_partition": partition,
+        "wiki_slug_hint": slug,
+        "wiki_action": action,
+        "l2_review_score": review_score,
+        "l2_review_skipped": review_skipped,
+    })
+    proposal_topic = _topic_from_wiki_partition(partition, storage_topic)
+    rel, sha = tm_core.write_and_commit_inbox(
+        agent,
+        proposal_topic,
+        f"Wiki proposal {decision.score}",
+        body,
+        frontmatter_extra=fm_extra,
+    )
+    schedule_digest_refresh()
+    result = {
+        "route": "inbox",
+        "outcome": "wiki_proposal",
+        "path": rel,
+        "commit_sha": sha,
+        "url": tm_core.git_remote_blob_url(rel),
+        "score": decision.score,
+        "topic": proposal_topic,
+        "topic_inferred": decision.topic_inferred,
+        "reasons": decision.reasons,
+        "unreviewed": decision.unreviewed,
+        "knowledge_target": "wiki_proposal",
+        "proposal_kind": "wiki",
+        "target_confidence": decision.target_confidence,
+        "wiki_partition": partition,
+        "wiki_slug_hint": slug,
+        "wiki_action": action,
+        "review": review,
     }
     if metadata_extra:
         result.update(metadata_extra)
@@ -371,6 +526,25 @@ def _route_metadata(
         meta.update(metadata_extra)
     meta["route_requested_topic"] = requested_topic
     meta["stored_topic"] = storage_topic
+    return meta
+
+
+def _public_route_metadata(decision: tm_route.RouteDecision) -> dict[str, Any]:
+    meta: dict[str, Any] = {}
+    for key in (
+        "knowledge_target",
+        "target_confidence",
+        "wiki_partition",
+        "wiki_slug_hint",
+        "wiki_action",
+        "review_reason",
+        "score_breakdown",
+    ):
+        value = getattr(decision, key, None)
+        if value is not None:
+            meta[key] = value
+    if decision.needs_human_review:
+        meta["needs_human_review"] = True
     return meta
 
 
@@ -518,6 +692,7 @@ def write_memory_with_review(
                 is_sensitive=False,
                 needs_human_review=False,
                 unreviewed=False,
+                knowledge_target=None,
             )
             route_metadata_extra = {
                 "light_bypass": True,
@@ -529,16 +704,12 @@ def write_memory_with_review(
     else:
         decision = tm_route.route_memory(text, topic, agent)
     if force_inbox:
-        decision = tm_route.RouteDecision(
+        decision = replace(
+            decision,
             route="inbox",
-            score=decision.score,
-            topic_inferred=decision.topic_inferred,
-            issues=decision.issues,
             reasons=f"force_inbox override: {decision.reasons}",
-            is_transient=decision.is_transient,
-            is_sensitive=decision.is_sensitive,
-            needs_human_review=decision.needs_human_review,
-            unreviewed=decision.unreviewed,
+            knowledge_target="human_review",
+            review_reason=decision.review_reason or "force_inbox requested by caller",
         )
 
     if decision.route == "discard":
@@ -550,6 +721,7 @@ def write_memory_with_review(
             "issues": decision.issues,
             "reasons": decision.reasons,
         }
+        result.update(_public_route_metadata(decision))
         audit = _record_discard_audit(
             agent=agent,
             requested_topic=topic,
@@ -565,6 +737,46 @@ def write_memory_with_review(
         preserve_requested_topic=preserve_requested_topic,
     )
 
+    if decision.knowledge_target == "wiki_proposal":
+        review_timeout: int | None = None
+        skip_review_reason: str | None = None
+        if total_budget_s is not None:
+            elapsed = time.monotonic() - t0
+            remaining = total_budget_s - elapsed
+            review_window = int(remaining - WIKI_PROPOSAL_WRITE_RESERVE_SECONDS)
+            if review_window < WIKI_PROPOSAL_MIN_REVIEW_SECONDS:
+                skip_review_reason = (
+                    "write_memory budget left too little time for L2 review "
+                    f"({remaining:.1f}s remaining)"
+                )
+            else:
+                review_timeout = review_window
+        result = _to_wiki_proposal(
+            decision,
+            agent,
+            text,
+            requested_topic=topic,
+            storage_topic=storage_topic,
+            metadata_extra=route_metadata_extra,
+            review_timeout=review_timeout,
+            skip_review_reason=skip_review_reason,
+        )
+        result.setdefault("warnings", []).extend(_topic_warnings(topic, decision, result["topic"]))
+        return result
+
+    if decision.knowledge_target == "human_review":
+        result = _to_inbox(
+            decision,
+            agent,
+            text,
+            requested_topic=topic,
+            storage_topic=storage_topic,
+            metadata_extra=route_metadata_extra,
+            outcome="human_review",
+        )
+        result.setdefault("warnings", []).extend(_topic_warnings(topic, decision, storage_topic))
+        return result
+
     if decision.route == "mem0":
         remaining: float | None = None
         if total_budget_s is not None:
@@ -579,19 +791,16 @@ def write_memory_with_review(
                         "elapsed": elapsed,
                         "total_budget_s": total_budget_s,
                     })
-                decision = tm_route.RouteDecision(
+                fallback_target = "retry_error" if decision.knowledge_target == "mem0" else decision.knowledge_target
+                decision = replace(
+                    decision,
                     route="inbox",
-                    score=decision.score,
-                    topic_inferred=decision.topic_inferred,
-                    issues=decision.issues,
                     reasons=(
                         f"budget exhausted by route ({elapsed:.1f}s/{total_budget_s}s); "
                         f"fallback to inbox | original: {decision.reasons}"
                     ),
-                    is_transient=decision.is_transient,
-                    is_sensitive=decision.is_sensitive,
-                    needs_human_review=decision.needs_human_review,
-                    unreviewed=decision.unreviewed,
+                    knowledge_target=fallback_target,
+                    review_reason=decision.review_reason or "mem0 write skipped because route budget was exhausted",
                 )
         if decision.route == "mem0":
             timeout = tm_core.MEM0_WRITE_TIMEOUT
@@ -617,6 +826,7 @@ def write_memory_with_review(
                 data["topic"] = storage_topic
                 data["topic_inferred"] = decision.topic_inferred
                 data["reasons"] = decision.reasons
+                data.update(_public_route_metadata(decision))
                 if route_metadata_extra:
                     data.update(route_metadata_extra)
                 if not isinstance(data.get("warnings"), list):
@@ -639,16 +849,13 @@ def write_memory_with_review(
                         "text_len": len(text),
                         "error": err,
                     })
-                decision = tm_route.RouteDecision(
+                fallback_target = "retry_error" if decision.knowledge_target == "mem0" else decision.knowledge_target
+                decision = replace(
+                    decision,
                     route="inbox",
-                    score=decision.score,
-                    topic_inferred=decision.topic_inferred,
-                    issues=decision.issues,
                     reasons=f"mem0 write failed, fallback to inbox: {err[:120]} | original: {decision.reasons}",
-                    is_transient=decision.is_transient,
-                    is_sensitive=decision.is_sensitive,
-                    needs_human_review=decision.needs_human_review,
-                    unreviewed=decision.unreviewed,
+                    knowledge_target=fallback_target,
+                    review_reason=decision.review_reason or "mem0 write failed after router chose mem0",
                 )
 
     storage_topic = _storage_topic(
@@ -656,6 +863,7 @@ def write_memory_with_review(
         decision,
         preserve_requested_topic=preserve_requested_topic,
     )
+    outcome = "retry_error" if decision.knowledge_target == "retry_error" else None
     result = _to_inbox(
         decision,
         agent,
@@ -663,6 +871,7 @@ def write_memory_with_review(
         requested_topic=topic,
         storage_topic=storage_topic,
         metadata_extra=route_metadata_extra,
+        outcome=outcome,
     )
     result.setdefault("warnings", []).extend(_topic_warnings(topic, decision, storage_topic))
     return result

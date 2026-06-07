@@ -740,7 +740,11 @@ def memory_answer(
 @mcp.tool()
 def write_memory(agent: str, topic: str, text: str, force_inbox: bool = False, light: bool = False) -> dict[str, Any]:
     _require_writer()
-    """Single canonical entry for agent memory writes. Server-side LLM routes to mem0 / inbox / discard.
+    """Single canonical entry for agent memory writes.
+
+    Server-side unified knowledge routing may target Mem0, Wiki proposal,
+    human review, discard, or retry/error. Wiki output is proposal-only here;
+    agents still call write_memory and do not get a manual Wiki-vs-Mem0 selector.
 
     If the text may need human review, start it with one concise Chinese sentence
     summarizing the item. Inbox files store that sentence as summary_cn for the
@@ -755,8 +759,8 @@ def write_memory(agent: str, topic: str, text: str, force_inbox: bool = False, l
         light: If True, skip DeepSeek routing for allowlisted low-risk pointer writes
 
     Returns:
-        {"route": "mem0", "id": "..."} or {"route": "inbox", "path": "...", "commit_sha": "..."}
-        or {"route": "discard", "score": int, "issues": [...]}
+        {"route": "mem0", "id": "..."} or {"route": "wiki_proposal"|"human_review"|"retry_error",
+        "path": "...", "commit_sha": "..."} or {"route": "discard", "score": int, "issues": [...]}
     """
     return tm_memory_ops.write_memory_with_review(
         agent,

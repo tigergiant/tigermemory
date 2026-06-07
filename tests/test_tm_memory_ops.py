@@ -11,19 +11,22 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import tm_memory_ops  # type: ignore[import-not-found]
 import tm_route  # type: ignore[import-not-found]
+import tm_review  # type: ignore[import-not-found]
 
 
-def _decision(route: str = "mem0") -> tm_route.RouteDecision:
-    return tm_route.RouteDecision(
-        route=route,
-        score=95,
-        topic_inferred="systems",
-        issues=[],
-        reasons="test route",
-        is_transient=False,
-        is_sensitive=False,
-        needs_human_review=False,
-    )
+def _decision(route: str = "mem0", **kwargs) -> tm_route.RouteDecision:
+    data = {
+        "route": route,
+        "score": 95,
+        "topic_inferred": "systems",
+        "issues": [],
+        "reasons": "test route",
+        "is_transient": False,
+        "is_sensitive": False,
+        "needs_human_review": False,
+    }
+    data.update(kwargs)
+    return tm_route.RouteDecision(**data)
 
 
 def test_write_memory_success_adds_verified_readback(monkeypatch):
@@ -429,6 +432,155 @@ def test_write_memory_budget_exhaustion_skips_mem0(monkeypatch):
     assert result["route"] == "inbox"
     assert calls["mem0"] == 0
     assert "budget exhausted" in result["reasons"]
+
+
+def test_write_memory_wiki_proposal_target_writes_marked_inbox(monkeypatch):
+    captured = {}
+    decision = _decision(
+        route="inbox",
+        knowledge_target="wiki_proposal",
+        target_confidence=92,
+        wiki_partition="systems",
+        wiki_slug_hint="Unified Knowledge Routing",
+        wiki_action="update",
+    )
+
+    def fake_write_and_commit_inbox(agent, topic, title, body, frontmatter_extra=None):
+        captured.update({
+            "agent": agent,
+            "topic": topic,
+            "title": title,
+            "body": body,
+            "frontmatter_extra": frontmatter_extra,
+        })
+        return "inbox/wiki-proposal.md", "abc123"
+
+    monkeypatch.setattr(tm_memory_ops.tm_route, "route_memory", lambda *_args, **_kwargs: decision)
+    monkeypatch.setattr(tm_review, "review_draft", lambda _body: {
+        "score": 83,
+        "issues": [],
+        "suggestions": ["add sources"],
+        "ready_for_compile": True,
+        "review_skipped": False,
+    })
+    monkeypatch.setattr(tm_memory_ops.tm_core, "write_and_commit_inbox", fake_write_and_commit_inbox)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "git_remote_blob_url", lambda rel: f"https://example/{rel}")
+    monkeypatch.setattr(tm_memory_ops, "schedule_digest_refresh", lambda: None)
+
+    result = tm_memory_ops.write_memory_with_review("codex", "systems", "stable routing rule")
+
+    assert result["route"] == "inbox"
+    assert result["outcome"] == "wiki_proposal"
+    assert result["path"] == "inbox/wiki-proposal.md"
+    assert result["knowledge_target"] == "wiki_proposal"
+    assert result["proposal_kind"] == "wiki"
+    assert result["wiki_partition"] == "systems"
+    assert result["wiki_slug_hint"] == "unified-knowledge-routing"
+    assert result["wiki_action"] == "update"
+    assert result["review"]["score"] == 83
+    assert captured["topic"] == "systems"
+    assert captured["title"] == "Wiki proposal 95"
+    assert "Wiki proposal: wiki/systems/unified-knowledge-routing.md" in captured["body"]
+    assert captured["frontmatter_extra"]["proposal_kind"] == "wiki"
+    assert captured["frontmatter_extra"]["knowledge_target"] == "wiki_proposal"
+    assert captured["frontmatter_extra"]["l2_review_score"] == 83
+
+
+def test_write_memory_wiki_proposal_skips_review_when_budget_is_exhausted(monkeypatch):
+    captured = {}
+    decision = _decision(
+        route="inbox",
+        knowledge_target="wiki_proposal",
+        target_confidence=92,
+        wiki_partition="systems",
+        wiki_slug_hint="budget-aware-routing",
+        wiki_action="create",
+    )
+
+    def fail_review(*_args, **_kwargs):
+        raise AssertionError("budget-exhausted wiki proposal must skip L2 review")
+
+    def fake_write_and_commit_inbox(agent, topic, title, body, frontmatter_extra=None):
+        captured.update({
+            "body": body,
+            "frontmatter_extra": frontmatter_extra,
+        })
+        return "inbox/wiki-budget.md", "abc123"
+
+    monkeypatch.setattr(tm_memory_ops.tm_route, "route_memory", lambda *_args, **_kwargs: decision)
+    monkeypatch.setattr(tm_review, "review_draft", fail_review)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "write_and_commit_inbox", fake_write_and_commit_inbox)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "git_remote_blob_url", lambda rel: f"https://example/{rel}")
+    monkeypatch.setattr(tm_memory_ops, "schedule_digest_refresh", lambda: None)
+
+    result = tm_memory_ops.write_memory_with_review(
+        "codex",
+        "systems",
+        "stable routing rule",
+        total_budget_s=0,
+    )
+
+    assert result["route"] == "inbox"
+    assert result["outcome"] == "wiki_proposal"
+    assert result["review"]["review_skipped"] is True
+    assert "budget left too little time" in result["review"]["reason"]
+    assert captured["frontmatter_extra"]["l2_review_skipped"] is True
+    assert "budget left too little time" in captured["body"]
+
+
+def test_write_memory_human_review_target_returns_inbox_with_outcome(monkeypatch):
+    captured = {}
+    decision = _decision(
+        route="inbox",
+        knowledge_target="human_review",
+        target_confidence=71,
+        review_reason="authority conflict",
+        needs_human_review=True,
+    )
+
+    def fake_write_and_commit_inbox(agent, topic, title, text, frontmatter_extra=None):
+        captured["topic"] = topic
+        captured["frontmatter_extra"] = frontmatter_extra
+        return "inbox/review.md", "abc123"
+
+    monkeypatch.setattr(tm_memory_ops.tm_route, "route_memory", lambda *_args, **_kwargs: decision)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "write_and_commit_inbox", fake_write_and_commit_inbox)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "git_remote_blob_url", lambda rel: f"https://example/{rel}")
+    monkeypatch.setattr(tm_memory_ops, "schedule_digest_refresh", lambda: None)
+
+    result = tm_memory_ops.write_memory_with_review("codex", "systems", "conflicting authority claim")
+
+    assert result["route"] == "inbox"
+    assert result["outcome"] == "human_review"
+    assert result["knowledge_target"] == "human_review"
+    assert result["review_reason"] == "authority conflict"
+    assert captured["frontmatter_extra"]["knowledge_target"] == "human_review"
+    assert captured["frontmatter_extra"]["needs_human_review"] is True
+
+
+def test_mem0_target_failure_returns_inbox_with_retry_error_outcome(monkeypatch):
+    captured = {}
+    decision = _decision(route="mem0", knowledge_target="mem0", target_confidence=88)
+
+    def fake_write_and_commit_inbox(agent, topic, title, text, frontmatter_extra=None):
+        captured["frontmatter_extra"] = frontmatter_extra
+        return "inbox/retry.md", "abc123"
+
+    monkeypatch.setattr(tm_memory_ops.tm_route, "route_memory", lambda *_args, **_kwargs: decision)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "mem0_write", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("down")))
+    monkeypatch.setattr(tm_memory_ops.tm_core, "write_and_commit_inbox", fake_write_and_commit_inbox)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "git_remote_blob_url", lambda rel: f"https://example/{rel}")
+    monkeypatch.setattr(tm_memory_ops, "schedule_digest_refresh", lambda: None)
+
+    result = tm_memory_ops.write_memory_with_review("codex", "systems", "atomic fact")
+
+    assert result["route"] == "inbox"
+    assert result["outcome"] == "retry_error"
+    assert result["path"] == "inbox/retry.md"
+    assert result["knowledge_target"] == "retry_error"
+    assert "mem0 write failed" in result["reasons"]
+    assert captured["frontmatter_extra"]["knowledge_target"] == "retry_error"
+    assert captured["frontmatter_extra"]["review_reason"] == "mem0 write failed after router chose mem0"
 
 
 def test_schedule_embed_refresh_debounces_by_scope(monkeypatch):

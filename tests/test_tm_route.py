@@ -51,6 +51,10 @@ def test_route_memory_passes_requested_topic_and_taxonomy_context(monkeypatch):
     assert "含具体版本签名" in captured["prompt"]
     assert "含具体文件路径" in captured["prompt"]
     assert "含具体验证证据" in captured["prompt"]
+    assert "知识策展路由员" in captured["prompt"]
+    assert "knowledge_target" in captured["prompt"]
+    assert "wiki_proposal" in captured["prompt"]
+    assert "human_review only" not in captured["prompt"]
 
 
 def test_curated_workflow_radar_summary_is_not_discarded_as_transient(monkeypatch):
@@ -219,3 +223,176 @@ def test_vague_progress_without_evidence_is_discarded_as_transient(monkeypatch):
 
     assert decision.route == "discard"
     assert decision.is_transient is True
+
+
+def test_wiki_proposal_target_routes_to_inbox_with_metadata(monkeypatch):
+    def fake_call(prompt, content, **kwargs):
+        return True, {
+            "score": 86,
+            "topic_inferred": "systems",
+            "is_transient": False,
+            "is_sensitive": False,
+            "needs_human_review": False,
+            "knowledge_target": "wiki_proposal",
+            "target_confidence": 91,
+            "wiki_partition": "systems",
+            "wiki_slug_hint": "unified-knowledge-routing",
+            "wiki_action": "create",
+            "review_reason": "",
+            "score_breakdown": {
+                "signal": 90,
+                "specificity": 80,
+                "durability": 95,
+                "canonicality": 92,
+                "evidence": 78,
+                "scope": 88,
+                "risk_review": 20,
+            },
+            "issues": [],
+            "reasons": "stable routing contract",
+        }
+
+    monkeypatch.setattr(tm_route.tm_core, "_call_deepseek_json", fake_call)
+
+    decision = tm_route.route_memory(
+        "write_memory 统一路由契约成为长期系统规则，应沉淀为 Wiki 提案。",
+        "systems",
+        "codex",
+    )
+
+    assert decision.route == "inbox"
+    assert decision.knowledge_target == "wiki_proposal"
+    assert decision.target_confidence == 91
+    assert decision.wiki_partition == "systems"
+    assert decision.wiki_slug_hint == "unified-knowledge-routing"
+    assert decision.wiki_action == "create"
+    assert decision.score_breakdown["canonicality"] == 92
+
+
+def test_daily_health_explicit_wiki_target_stays_inbox_not_mem0(monkeypatch):
+    def fake_call(prompt, content, **kwargs):
+        return True, {
+            "score": 86,
+            "topic_inferred": "operations",
+            "is_transient": False,
+            "is_sensitive": False,
+            "needs_human_review": False,
+            "knowledge_target": "wiki_proposal",
+            "target_confidence": 91,
+            "wiki_partition": "operations",
+            "wiki_slug_hint": "daily-health-routing",
+            "wiki_action": "update",
+            "issues": [],
+            "reasons": "daily health routing should update wiki summary",
+        }
+
+    monkeypatch.setattr(tm_route.tm_core, "_call_deepseek_json", fake_call)
+
+    decision = tm_route.route_memory(
+        "每日巡检总清单已更新；详见 wiki/operations/daily-health/2026-06-07.md",
+        "operations",
+        "codex",
+    )
+
+    assert decision.route == "inbox"
+    assert decision.knowledge_target == "wiki_proposal"
+    assert decision.wiki_partition == "operations"
+
+
+def test_explicit_mem0_target_can_accept_medium_score_without_lazy_inbox(monkeypatch):
+    def fake_call(prompt, content, **kwargs):
+        return True, {
+            "score": 62,
+            "topic_inferred": "systems",
+            "is_transient": False,
+            "is_sensitive": False,
+            "needs_human_review": False,
+            "knowledge_target": "mem0",
+            "target_confidence": 76,
+            "issues": [],
+            "reasons": "atomic reusable handoff fact",
+        }
+
+    monkeypatch.setattr(tm_route.tm_core, "_call_deepseek_json", fake_call)
+
+    decision = tm_route.route_memory("2026-06-07 short reusable handoff fact.", "systems", "codex")
+
+    assert decision.route == "mem0"
+    assert decision.knowledge_target == "mem0"
+    assert "target mem0" in decision.reasons
+
+
+def test_sensitive_content_forces_human_review_target(monkeypatch):
+    def fake_call(prompt, content, **kwargs):
+        return True, {
+            "score": 95,
+            "topic_inferred": "systems",
+            "is_transient": False,
+            "is_sensitive": True,
+            "needs_human_review": False,
+            "knowledge_target": "mem0",
+            "target_confidence": 80,
+            "issues": ["contains phone"],
+            "reasons": "specific but sensitive",
+        }
+
+    monkeypatch.setattr(tm_route.tm_core, "_call_deepseek_json", fake_call)
+
+    decision = tm_route.route_memory("联系 13800138000", "systems", "codex")
+
+    assert decision.route == "inbox"
+    assert decision.knowledge_target == "human_review"
+
+
+def test_model_emitted_retry_error_is_ignored_as_content_target(monkeypatch):
+    def fake_call(prompt, content, **kwargs):
+        return True, {
+            "score": 88,
+            "topic_inferred": "systems",
+            "is_transient": False,
+            "is_sensitive": False,
+            "needs_human_review": False,
+            "knowledge_target": "retry_error",
+            "target_confidence": 99,
+            "issues": [],
+            "reasons": "model incorrectly tried to classify normal content as retry",
+        }
+
+    monkeypatch.setattr(tm_route.tm_core, "_call_deepseek_json", fake_call)
+
+    decision = tm_route.route_memory(
+        "2026-06-07 routed memory contract keeps retry_error host-only.",
+        "systems",
+        "codex",
+    )
+
+    assert decision.route == "mem0"
+    assert decision.knowledge_target is None
+    assert "high score (88)" in decision.reasons
+
+
+def test_person_wiki_partition_forces_human_review_target(monkeypatch):
+    def fake_call(prompt, content, **kwargs):
+        return True, {
+            "score": 91,
+            "topic_inferred": "systems",
+            "is_transient": False,
+            "is_sensitive": False,
+            "needs_human_review": False,
+            "knowledge_target": "wiki_proposal",
+            "target_confidence": 90,
+            "wiki_partition": "person",
+            "wiki_slug_hint": "person-preference",
+            "wiki_action": "create",
+            "issues": [],
+            "reasons": "person-like stable fact",
+        }
+
+    monkeypatch.setattr(tm_route.tm_core, "_call_deepseek_json", fake_call)
+
+    decision = tm_route.route_memory("虎哥的个人偏好应由人工确认。", "systems", "codex")
+
+    assert decision.route == "inbox"
+    assert decision.knowledge_target == "human_review"
+    assert decision.wiki_partition == "person"
+    assert "person partition requires human review" in decision.reasons

@@ -127,9 +127,17 @@ class MemoryAnswerResponse(BaseModel):
 
 class WriteMemoryResponse(BaseModel):
     route: str
+    outcome: str | None = None
     score: int | None = None
     topic: str | None = None
     topic_inferred: str | None = None
+    knowledge_target: str | None = None
+    target_confidence: int | None = None
+    proposal_kind: str | None = None
+    wiki_partition: str | None = None
+    wiki_slug_hint: str | None = None
+    wiki_action: str | None = None
+    review_reason: str | None = None
     id: str | None = None
     path: str | None = None
     commit_sha: str | None = None
@@ -414,7 +422,8 @@ def _build_mcp(auth_mode: str, public_base: str, link_secret: str | None, store_
         "instructions": (
             "Narrow connector for tigermemory. Use search first, then fetch by id. "
             "For durable notes, use write_memory; the tigermemory service routes it "
-            "to mem0, inbox, or discard. This facade intentionally does not expose "
+            "to Mem0, Wiki proposal, human review, discard, or retry/error. "
+            "This facade intentionally does not expose "
             "wiki/source/admin/media/expense tools. For write_memory, choose topic by "
             "the user's domain, not by implementation words: IPFB, brand, copywriting, "
             "campaign, product, and WeChat content belong to brand."
@@ -546,9 +555,17 @@ def _write_memory_via_router(topic: str, text: str) -> WriteMemoryResponse:
     )
     return WriteMemoryResponse(
         route=str(data.get("route") or ""),
+        outcome=data.get("outcome") if isinstance(data.get("outcome"), str) else None,
         score=data.get("score") if isinstance(data.get("score"), int) else None,
         topic=data.get("topic") if isinstance(data.get("topic"), str) else None,
         topic_inferred=data.get("topic_inferred") if isinstance(data.get("topic_inferred"), str) else None,
+        knowledge_target=data.get("knowledge_target") if isinstance(data.get("knowledge_target"), str) else None,
+        target_confidence=data.get("target_confidence") if isinstance(data.get("target_confidence"), int) else None,
+        proposal_kind=data.get("proposal_kind") if isinstance(data.get("proposal_kind"), str) else None,
+        wiki_partition=data.get("wiki_partition") if isinstance(data.get("wiki_partition"), str) else None,
+        wiki_slug_hint=data.get("wiki_slug_hint") if isinstance(data.get("wiki_slug_hint"), str) else None,
+        wiki_action=data.get("wiki_action") if isinstance(data.get("wiki_action"), str) else None,
+        review_reason=data.get("review_reason") if isinstance(data.get("review_reason"), str) else None,
         id=data.get("id") if isinstance(data.get("id"), str) else None,
         path=data.get("path") if isinstance(data.get("path"), str) else None,
         commit_sha=data.get("commit_sha") if isinstance(data.get("commit_sha"), str) else None,
@@ -1041,12 +1058,13 @@ def register_tools(server: FastMCP, *, max_fetch_chars: int) -> None:
         title="Write tigermemory memory",
         description=(
             "Write a durable note through tigermemory's server-side router. "
-            "The service may store it in Mem0, route it to inbox for review, or discard it. "
+            "The service may store it in Mem0, create a Wiki proposal, route it to human review, "
+            "discard it, or mark retry/error fallback. "
             "This does not grant direct wiki, source, admin, media, expense, or filesystem writes. "
             "Pick topic by the user's domain: IPFB/brand/copywriting/campaign/product/WeChat content "
             "should use topic=brand even if the note mentions SVG, editor, code, or workflow. "
             "Start durable notes with YYYY-MM-DD; if omitted, the server adds today's date. "
-            "Keep Mem0 notes concise and reusable; long stable specs should later be promoted to wiki."
+            "Keep Mem0 notes concise and reusable; long stable specs may be routed to proposal-only Wiki review."
         ),
         annotations=WRITE_MEMORY_TOOL,
         meta=_tool_meta([WRITE_MEMORY_SCOPE]),

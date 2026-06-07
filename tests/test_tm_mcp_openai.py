@@ -127,9 +127,12 @@ def test_write_memory_via_router_uses_fixed_chatgpt_agent(monkeypatch):
         calls.append((agent, topic, text, kwargs))
         return {
             "route": "mem0",
+            "outcome": None,
             "score": 88,
             "topic": topic,
             "topic_inferred": "systems",
+            "knowledge_target": "mem0",
+            "target_confidence": 91,
             "id": "mem-id",
             "reasons": "accepted",
             "verified": {"direct_readback_ok": True},
@@ -146,6 +149,8 @@ def test_write_memory_via_router_uses_fixed_chatgpt_agent(monkeypatch):
     assert result.route == "mem0"
     assert result.id == "mem-id"
     assert result.topic == "systems"
+    assert result.knowledge_target == "mem0"
+    assert result.target_confidence == 91
     assert result.warnings == []
     assert calls == [(
         "chatgpt",
@@ -376,3 +381,5 @@ def test_openai_facade_exposes_narrow_chatgpt_tools_only():
     assert by_name["write_memory"].annotations.readOnlyHint is False
     assert by_name["write_memory"].annotations.destructiveHint is False
     assert by_name["write_memory"].annotations.openWorldHint is False
+    assert "Wiki proposal" in by_name["write_memory"].description
+    assert "propose_wiki_page" not in by_name["write_memory"].description
