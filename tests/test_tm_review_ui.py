@@ -492,10 +492,11 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v20" in response.text
+    assert "tigermemory-memory-ops-v21" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
+    assert "client.navigate(client.url)" in response.text
     assert response.headers["Cache-Control"].startswith("no-store")
 
 
