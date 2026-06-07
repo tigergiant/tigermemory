@@ -492,7 +492,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v22" in response.text
+    assert "tigermemory-memory-ops-v23" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -1931,6 +1931,17 @@ def test_dashboard_write_actions_do_not_block_event_loop():
     assert "await run_in_threadpool(_locked_write_action, execute_batch_inbox_action, req)" in source
 
 
+def test_locked_write_action_logs_elapsed(capsys):
+    class Req:
+        action = "promote_mem0"
+        paths = ["inbox/a.md", "inbox/b.md"]
+
+    result = tm_review_ui._locked_write_action(lambda _req: {"ok": True}, Req())
+
+    assert result == {"ok": True}
+    assert "write action done action=promote_mem0 count=2 ok=True" in capsys.readouterr().err
+
+
 def test_quality_cache_warmer_runs_without_browser_request(monkeypatch):
     calls: list[str | None] = []
     monkeypatch.setattr(tm_review_ui, "today", lambda: "2026-05-27")
@@ -1964,6 +1975,9 @@ def test_dashboard_action_controls_and_toast_static_guards():
     assert "enqueueWriteJob" in pages_js
     assert "scheduleWriteQueue" in pages_js
     assert "batchableQueuedJobs" in pages_js
+    assert "actionTimeoutMs(action, count = 1)" in pages_js
+    assert "45000 + itemCount * 30000" in pages_js
+    assert "this.actionTimeoutMs(action, paths.length)" in pages_js
     assert "/api/inbox/batch-action" in pages_js
     assert "processWriteQueue" in pages_js
     assert "处理队列" in pages_js
