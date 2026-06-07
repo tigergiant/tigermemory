@@ -297,11 +297,56 @@ def test_api_digest_parses_expected_sections(tmp_path, monkeypatch):
     assert "快速判断" in data["digest"]["inbox_rows"][0]["preview_cn"]
     assert data["digest"]["inbox_rows"][0]["raw_summary"] == "commit pushed pytest passed"
     assert data["digest"]["inbox_rows"][0]["codex_recommended_action"] == "归档"
-    assert "日常审阅队列" in data["digest"]["inbox_rows"][0]["codex_recommended_reason"]
+    assert "建议先归档" in data["digest"]["inbox_rows"][0]["codex_recommended_reason"]
     assert data["digest"]["inbox_rows"][0]["wiki_target"]["partition"] == "systems"
     assert data["digest"]["inbox_rows"][0]["wiki_target"]["path"].startswith("wiki/systems/")
     assert data["digest"]["inbox_rows"][0]["wiki_target"]["similar"][0]["path"] == "wiki/systems/review-ui-approval.md"
     assert data["digest"]["proposals"][0]["id"] == "proposal-2026-05-21-001"
+
+
+def test_live_inbox_rows_forwards_route_fields_for_frontend_payload(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+
+    class FakeRecord:
+        def __init__(self) -> None:
+            self.path = str(tmp_path / "inbox" / "2026-06-06-1200-codex-systems.md")
+            self.stale_archive = False
+            self.age_days = 3
+            self.title_cn = "路由字段透传"
+            self.preview_cn = "用于验收 route_* 字段透传"
+            self.summary_cn = "路由字段透传"
+            self.summary = "for route field assertions"
+            self.action = "promote_to_mem0"
+            self.reason = "tmp route reason"
+            self.codex_recommended_action = "写入 Mem0"
+            self.codex_recommended_reason = "基线检查"
+            self.topic = "systems"
+            self.route_target = "mem0"
+            self.route_label = "写入 Mem0"
+            self.route_confidence = 93
+            self.route_reason = "近期记忆更稳妥"
+            self.route_flags = ("from_worker", "high_priority")
+            self.route_hard_rule = True
+
+    monkeypatch.setattr(tm_review_ui, "_load_kept_paths", lambda _date: set())
+    monkeypatch.setattr(tm_review_ui.tm_memory_reflection, "audit_inbox", lambda *_, **__: [FakeRecord()])
+    monkeypatch.setattr(
+        tm_review_ui,
+        "_wiki_target_suggestions",
+        lambda *_args, **_kwargs: {"partition": "systems", "slug": "x", "path": "wiki/systems/x.md"},
+    )
+
+    visible, hidden = tm_review_ui._live_inbox_rows("2026-06-06")
+
+    assert hidden == []
+    assert len(visible) == 1
+    row = visible[0]
+    assert row["route_target"] == "mem0"
+    assert row["route_label"] == "写入 Mem0"
+    assert row["route_confidence"] == 93
+    assert row["route_reason"] == "近期记忆更稳妥"
+    assert row["route_flags"] == ["from_worker", "high_priority"]
+    assert row["route_hard_rule"] is True
 
 
 def test_api_digest_returns_self_evolution_summary_not_raw_events(tmp_path, monkeypatch):
@@ -492,7 +537,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v23" in response.text
+    assert "tigermemory-memory-ops-v24" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -1988,6 +2033,23 @@ def test_dashboard_action_controls_and_toast_static_guards():
     assert "tmBusySheen" in style_css
     assert "tmQueueSheen" in style_css
     assert "tmQueueBar" not in style_css
+
+
+def test_review_pages_js_exposes_approval_target_fields():
+    pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
+
+    assert "审批建议目标" in pages_js
+    assert "routeRecommendationLabel(row)" in pages_js
+    assert "routeTargetText(row)" in pages_js
+    assert "routeFlagsText(row)" in pages_js
+    assert "route_hard_rule" in pages_js
+    assert "route_target" in pages_js
+    assert "route_flags" in pages_js
+    assert "审批建议：" in pages_js
+    assert "置信度" in pages_js
+    assert "未命中具体目标" in pages_js
+    assert "hardRuleAllowsAction(row, action)" in pages_js
+    assert "审批建议硬性约束不推荐执行此动作" in pages_js
 
 
 def test_dashboard_memory_overview_mem0_offline_subline():

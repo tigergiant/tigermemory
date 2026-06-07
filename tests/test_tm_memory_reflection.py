@@ -29,6 +29,22 @@ def _write_inbox(path: pathlib.Path, body: str, summary_cn: str | None = None) -
         fh.write(text)
 
 
+def _write_raw_inbox(path: pathlib.Path, body: str, fm_lines: list[str] | None = None) -> None:
+    lines = [
+        "---",
+        "owner: codex",
+        "status: active",
+        "updated: 2026-05-01",
+        "topic: systems",
+        *(fm_lines or []),
+        "---",
+        "",
+        body,
+        "",
+    ]
+    path.write_text("\n".join(lines), encoding="utf-8", newline="\n")
+
+
 def _strip_details(text: str) -> list[str]:
     visible: list[str] = []
     inside = False
@@ -160,6 +176,111 @@ def test_legacy_inbox_extracts_existing_chinese_line(tmp_path):
     )
 
     assert "中文标题：这条历史 inbox 已经自带中文说明。" in report
+
+
+def test_codex_route_recommendation_investment_longform_prefers_wiki(tmp_path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    _write_inbox(
+        inbox / "2026-05-15-1200-codex-investment.md",
+        "新疆天业研究纪要：新能源企业研究，标的代码 600338，证券代码 600338。该研究为投研长文，给出长期结论与风险提示。",
+        summary_cn="新疆天业研究纪要：新能源企业研究",
+    )
+
+    rows = tm_memory_reflection.audit_inbox(date="2026-05-15", inbox_dir=inbox, proposal_root=tmp_path / "cron-proposals")
+    row = rows[0]
+
+    assert row.route_target == "wiki"
+    assert row.route_label == "写入 Wiki"
+    assert row.route_confidence >= 80
+    assert "investment_longform" in row.route_reason
+    assert row.route_hard_rule is True
+    assert row.codex_recommended_action == "写入 Wiki"
+
+
+def test_codex_route_recommendation_alerts_to_inbox(tmp_path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    _write_inbox(
+        inbox / "2026-05-15-1200-codex-systems.md",
+        "QMT 告警：connect failed，前置条件未满足，已暂时跳过该告警未恢复，未发通知。",
+        summary_cn="QMT 告警",
+    )
+
+    rows = tm_memory_reflection.audit_inbox(date="2026-05-15", inbox_dir=inbox, proposal_root=tmp_path / "cron-proposals")
+    row = rows[0]
+
+    assert row.route_target == "inbox"
+    assert row.route_label == "转人工 inbox"
+    assert row.route_confidence >= 88
+    assert row.route_hard_rule is True
+    assert row.route_reason.startswith("涉及故障/告警")
+
+
+def test_codex_route_recommendation_benign_handoff_skip_phrases_stays_mem0(tmp_path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    _write_raw_inbox(
+        inbox / "2026-05-15-1200-codex-systems.md",
+        "\n".join([
+            "# Routed memory 65",
+            "## Task",
+            "完成 session-handoff：跳过无关文件，未创建临时文件，commit 与测试通过。",
+            "## Evidence Refs",
+            "pytest passed",
+        ]),
+        fm_lines=["title: session-handoff", "summary_cn: session-handoff"],
+    )
+
+    rows = tm_memory_reflection.audit_inbox(date="2026-05-15", inbox_dir=inbox, proposal_root=tmp_path / "cron-proposals")
+    row = rows[0]
+
+    assert row.route_target == "mem0"
+    assert row.route_label == "写入 Mem0"
+    assert row.route_hard_rule is False
+    assert "needs_manual_inbox" not in row.route_flags
+
+
+def test_codex_route_recommendation_low_score_capture_prefers_discard(tmp_path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    _write_raw_inbox(
+        inbox / "2026-05-15-1200-codex-systems.md",
+        "## Routed memory 0\nopenclaw-turn-capture-low-score raw capture turn capture.",
+        fm_lines=["summary_cn: Routed memory 0/low-score capture"],
+    )
+
+    rows = tm_memory_reflection.audit_inbox(date="2026-05-15", inbox_dir=inbox, proposal_root=tmp_path / "cron-proposals")
+    row = rows[0]
+
+    assert row.route_target == "discard"
+    assert row.route_label == "归档"
+    assert "low-quality-capture" in row.route_flags
+    assert row.route_hard_rule is True
+    assert "低分/raw" in row.codex_recommended_reason
+
+
+def test_codex_route_recommendation_extracts_session_handoff_task_title(tmp_path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    _write_raw_inbox(
+        inbox / "2026-05-15-1200-codex-systems.md",
+        "\n".join([
+            "# Routed memory 65",
+            "## Task",
+            "请处理 session-handoff，包含会话收尾与 commit 记录。",
+            "## 详情",
+            "原始内容略。"
+        ]),
+        fm_lines=["title: session-handoff", "summary_cn: session-handoff"],
+    )
+
+    rows = tm_memory_reflection.audit_inbox(date="2026-05-15", inbox_dir=inbox, proposal_root=tmp_path / "cron-proposals")
+    row = rows[0]
+
+    assert row.title_cn.startswith("请处理 session-handoff")
+    assert row.route_target == "mem0"
+    assert row.codex_recommended_action == "写入 Mem0"
 
 
 def test_inbox_audit_replaces_generic_title_frontmatter(tmp_path):

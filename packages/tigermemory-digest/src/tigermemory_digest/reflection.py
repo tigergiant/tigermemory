@@ -79,8 +79,47 @@ class InboxAuditRow:
     reason: str
     codex_recommended_action: str
     codex_recommended_reason: str
+    route_target: str = "inbox"
+    route_label: str = "转人工 inbox"
+    route_confidence: int = 72
+    route_reason: str = ""
+    route_flags: tuple[str, ...] = ()
+    route_hard_rule: bool = False
     stale_archive: bool = False
     already_applied: bool = False
+
+
+_INBOX_REVIEW_LABEL_PREFIX = (
+    "routed memory",
+    "session-handoff",
+)
+
+
+def _extract_session_task_title(body: str) -> tuple[str, str]:
+    lines = body.splitlines()
+    task_title = ""
+    task_previews: list[str] = []
+    inside_task = False
+    for raw in lines:
+        text = raw.strip()
+        if not text:
+            continue
+        if re.match(r"^\s*#{1,3}\s*Task\b", text, flags=re.I):
+            inside_task = True
+            continue
+        if inside_task:
+            if re.match(r"^\s*#{1,6}\s+\S+", text):
+                break
+            clean = tm_core._clean_inbox_summary(tm_core._strip_inbox_review_label(text), limit=88)
+            if not clean or tm_core.inbox_review_cn_is_low_quality(clean):
+                continue
+            if not task_title:
+                task_title = clean
+                continue
+            if len(task_previews) < 3:
+                task_previews.append(clean)
+            continue
+    return task_title, " ".join(task_previews)
 
 
 def today_local() -> str:
@@ -290,6 +329,7 @@ def inbox_records(*, inbox_dir: pathlib.Path = INBOX_DIR, use_llm: bool = False)
         fm, body = _frontmatter(text)
         title_cn = fm.get("title_cn") or fm.get("summary_cn")
         preview_cn = fm.get("preview_cn") or fm.get("summary_cn")
+        task_title, task_preview = _extract_session_task_title(body)
         if title_cn:
             title_cn = tm_core._strip_inbox_review_label(str(title_cn))
         if preview_cn:
@@ -309,6 +349,12 @@ def inbox_records(*, inbox_dir: pathlib.Path = INBOX_DIR, use_llm: bool = False)
                 title_cn = derived_title
             if not preview_cn:
                 preview_cn = derived_preview
+        if not title_cn and task_title:
+            title_cn = task_title
+        if not preview_cn and task_preview:
+            preview_cn = task_preview
+        if any(prefix in str(title_cn).lower() for prefix in _INBOX_REVIEW_LABEL_PREFIX) and task_title:
+            title_cn = task_title
         summary_cn = fm.get("summary_cn") or title_cn
         if tm_core.inbox_review_cn_is_low_quality(summary_cn):
             summary_cn = title_cn
@@ -510,13 +556,22 @@ def audit_inbox(
             action = "keep_in_inbox"
             reason = "not older than 14 days; keep for daily review"
             stale = False
-        recommended_action, recommended_reason = _codex_recommendation(
+        (
+            route_target,
+            route_label,
+            route_confidence,
+            route_flags,
+            route_reason,
+            route_hard_rule,
+        ) = _codex_route_recommendation(
             record,
             action=action,
             reason=reason,
             age_days=age,
             stale=stale,
         )
+        recommended_action = route_label
+        recommended_reason = route_reason
         rows.append(InboxAuditRow(
             path=str(record["path"]),
             created_date=str(record["created_date"]),
@@ -531,6 +586,12 @@ def audit_inbox(
             reason=reason,
             codex_recommended_action=recommended_action,
             codex_recommended_reason=recommended_reason,
+            route_target=route_target,
+            route_label=route_label,
+            route_confidence=route_confidence,
+            route_reason=route_reason,
+            route_flags=route_flags,
+            route_hard_rule=route_hard_rule,
             stale_archive=stale,
             already_applied=already_applied,
         ))
@@ -650,26 +711,171 @@ def _score_quality(mem0_count: int, inbox_count: int, discard_count: int, candid
     return max(0, min(100, score))
 
 
-def _codex_recommendation(record: dict[str, Any], *, action: str, reason: str, age_days: int, stale: bool) -> tuple[str, str]:
+def _codex_route_recommendation(
+    record: dict[str, Any],
+    *,
+    action: str,
+    reason: str,
+    age_days: int,
+    stale: bool,
+) -> tuple[str, str, int, tuple[str, ...], str, bool]:
     title = str(record.get("title_cn") or "")
     preview = str(record.get("preview_cn") or "")
     raw = str(record.get("summary") or "")
     route_reason = str(record.get("route_decision_reason") or "")
-    text = " ".join([title, preview, raw, route_reason]).lower()
+    reason_text = str(reason or "")
+    topic = str(record.get("topic") or "")
+    path = str(record.get("path") or "")
+    route_score = str(record.get("route_score") or "").strip()
+    try:
+        route_score_value = int(route_score)
+    except (TypeError, ValueError):
+        route_score_value = None
+
+    text = " ".join([title, preview, raw, route_reason, reason_text, topic, path]).lower()
 
     if action == "archive" or stale:
-        return "归档", f"已停留 {age_days} 天且没有 apply 记录，超过 14 天兜底线；建议先隐藏出日常审阅队列。"
-    if action == "promote_to_mem0":
-        return "写入 Mem0", "这条更像近期偏好、反馈或会话结论，适合放进短期记忆库供最近任务调用。"
-    if action == "promote_to_wiki":
-        return "写入 Wiki", "这条包含长期规则、流程或稳定事实，适合沉淀进长期事实记忆库。"
-    if any(keyword in text for keyword in ("规则", "契约", "长期", "policy", "runbook", "prompt", "边界", "流程", "标准")):
-        return "写入 Wiki", "内容像规则、流程或系统边界；若确认不是临时状态，建议升格到 Wiki 长期事实库。"
-    if any(keyword in text for keyword in ("偏好", "反馈", "近期", "本次", "会话", "closeout", "commit", "push", "测试通过", "完成")):
-        return "写入 Mem0", "内容像近期反馈或开发收尾结论；若仍有复用价值，建议写入 Mem0 短期记忆库。"
-    if any(keyword in text for keyword in ("lint", "l4", "巡检", "日报", "报表")):
-        return "保留观察", "这是巡检/报表型待处理项，未到 14 天兜底时先保留给每日审阅或等待对应修复。"
-    return "保留观察", "暂未看到足够证据可以直接归档或升格，建议继续留在 inbox 每日复审。"
+        return (
+            "discard",
+            "归档",
+            96,
+            ("stale-archive",),
+            f"已停留 {age_days} 天且没有 apply 记录，超过 14 天兜底线；建议先归档。",
+            True,
+        )
+
+    route_flags: list[str] = []
+
+    # Low-score raw capture and low-value routed memory should not进入 mem0/wiki
+    if route_score_value is not None and route_score_value <= 30:
+        return (
+            "discard",
+            "归档",
+            93,
+            ("route_score_low",),
+            f"判定 route_score={route_score_value}，疑似 low-score capture，优先归档。",
+            True,
+        )
+    if any(
+        marker in text
+        for marker in (
+            "openclaw-turn-capture-low-score",
+            "routed memory 0",
+            "openclaw turn capture",
+            "turn capture",
+            "low-score",
+        )
+    ):
+        route_flags.append("low-quality-capture")
+        return (
+            "discard",
+            "归档",
+            92,
+            tuple(route_flags),
+            "低分/raw capture 型样本，建议 discard（避免污染 mem0/wiki）。",
+            True,
+        )
+
+    # 投研长文 / 研究纪要 / 标的 / 证券代码：不进 Mem0，默认沉到 wiki
+    is_investment_context = topic == "investment" or "-investment" in path or "/investment" in path
+    has_investment_signal = any(
+        keyword in text
+        for keyword in ("投研", "研究纪要", "标的", "证券代码", "交易代码", "ticker", "investment longform", "投资长文", "组合复核", "研报")
+    )
+    if is_investment_context and has_investment_signal:
+        route_flags.append("investment_longform")
+        return (
+            "wiki",
+            "写入 Wiki",
+            88,
+            tuple(route_flags),
+            "investment_longform 风险说明：这类内容偏长期研究资料，不建议写入 Mem0；倾向沉淀到 Wiki。",
+            True,
+        )
+
+    # 临时故障、告警、前置条件未满足等：人工介入（inbox）
+    has_fault_context = any(
+        keyword in text
+        for keyword in ("临时故障", "告警", "前置条件未满足", "blocked", "paused", "connect failed", "连接失败", "失败", "未满足")
+    )
+    has_fault_followup = any(keyword in text for keyword in ("跳过", "未恢复", "未创建", "未发通知"))
+    has_fault_anchor = any(
+        keyword in text
+        for keyword in ("告警", "失败", "blocked", "前置", "connect", "通知", "恢复", "cron", "qmt", "xtquant")
+    )
+    if has_fault_context or (has_fault_followup and has_fault_anchor):
+        route_flags.append("needs_manual_inbox")
+        return (
+            "inbox",
+            "转人工 inbox",
+            90,
+            tuple(route_flags),
+            "涉及故障/告警/预检未通过项，建议先转人工 inbox 判断，不直接写入 Mem0/Wiki。",
+            True,
+        )
+
+    # 稳定规则/流程/runbook/policy/边界：wiki
+    if any(
+        keyword in text
+        for keyword in ("规则", "契约", "长期", "policy", "runbook", "prompt", "边界", "流程", "标准")
+    ):
+        route_flags.append("policy_or_stable")
+        return (
+            "wiki",
+            "写入 Wiki",
+            86,
+            tuple(route_flags),
+            "内容像稳定规则/边界描述，适合沉淀到 wiki 长期事实库。",
+            False,
+        )
+
+    # 近期反馈 / 会话收尾 / commit/push / 测试通过：mem0
+    if any(
+        keyword in text
+        for keyword in (
+            "偏好",
+            "反馈",
+            "近期",
+            "本次",
+            "会话",
+            "session-handoff",
+            "session handoff",
+            "closeout",
+            "commit",
+            "push",
+            "测试通过",
+            "完成",
+        )
+    ):
+        route_flags.append("short_term_feedback")
+        return (
+            "mem0",
+            "写入 Mem0",
+            85,
+            tuple(route_flags),
+            "近期反馈/会话收尾/变更收尾类内容，适合进入短期记忆。",
+            False,
+        )
+
+    return (
+        "inbox",
+        "转人工 inbox",
+        76,
+        ("unresolved",),
+        "未命中高置信关键模式，先保留人工复核。",
+        False,
+    )
+
+
+def _codex_recommendation(record: dict[str, Any], *, action: str, reason: str, age_days: int, stale: bool) -> tuple[str, str]:
+    route_target, route_label, _route_confidence, _route_flags, route_reason, _route_hard_rule = _codex_route_recommendation(
+        record,
+        action=action,
+        reason=reason,
+        age_days=age_days,
+        stale=stale,
+    )
+    return route_label, route_reason
 
 
 def _inbox_action_groups(rows: list[InboxAuditRow]) -> tuple[list[InboxAuditRow], list[InboxAuditRow], list[InboxAuditRow]]:
@@ -689,6 +895,11 @@ def _append_inbox_row(lines: list[str], row: InboxAuditRow) -> None:
         f"  - 原文预览：{row.summary}",
         f"  - Codex 推荐操作：{row.codex_recommended_action}",
         f"  - Codex 推荐理由：{row.codex_recommended_reason}",
+        f"  - 路由建议：{row.route_label}",
+        f"  - 路由置信度：{row.route_confidence}",
+        f"  - 路由标记：{','.join(row.route_flags) if row.route_flags else '无'}",
+        f"  - 路由解释：{row.route_reason or row.codex_recommended_reason}",
+        f"  - 硬规则触发：{'是' if row.route_hard_rule else '否'}",
         f"  - cron 建议动作：{row.action}",
         f"  - 建议理由：{row.reason}",
         "  - 虎哥裁决：[ ] apply  [ ] reject",
