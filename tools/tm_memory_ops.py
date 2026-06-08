@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import pathlib
 import re
 import subprocess
 import sys
@@ -392,6 +393,55 @@ def _slugify_hint(value: str | None, *, fallback: str) -> str:
     return raw
 
 
+def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
+    if not text.startswith("---\n"):
+        return {}, text
+    end = text.find("\n---\n", 4)
+    if end < 0:
+        return {}, text
+    fm: dict[str, str] = {}
+    for raw in text[4:end].splitlines():
+        if ":" not in raw:
+            continue
+        key, value = raw.split(":", 1)
+        fm[key.strip()] = value.strip().strip('"')
+    return fm, text[end + 5 :]
+
+
+def _find_existing_wiki_proposal(partition: str, slug: str, *, date: str | None = None) -> pathlib.Path | None:
+    inbox_dir = tm_core.REPO_ROOT / "inbox"
+    if not inbox_dir.is_dir():
+        return None
+    prefix = date or tm_core.now("%Y-%m-%d")
+    for path in sorted(inbox_dir.glob(f"{prefix}-*.md"), reverse=True):
+        try:
+            fm, _body = _split_frontmatter(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if (
+            fm.get("proposal_kind") == "wiki"
+            and fm.get("wiki_partition") == partition
+            and fm.get("wiki_slug_hint") == slug
+        ):
+            return path
+    return None
+
+
+def _append_existing_wiki_proposal(path: pathlib.Path, body: str, agent: str, score: int) -> tuple[str, str]:
+    rel = str(path.relative_to(tm_core.REPO_ROOT)).replace("\\", "/")
+    text = path.read_text(encoding="utf-8")
+    appended = (
+        text.rstrip()
+        + "\n\n---\n\n"
+        + f"## Merged routed write {tm_core.now('%Y-%m-%d %H:%M')}\n\n"
+        + body.strip()
+        + "\n"
+    )
+    path.write_text(appended, encoding="utf-8", newline="\n")
+    sha = tm_core.git_commit_push([rel], f"[{agent}] update: Wiki proposal {score}")
+    return rel, sha
+
+
 def _to_wiki_proposal(
     decision: tm_route.RouteDecision,
     agent: str,
@@ -468,13 +518,18 @@ def _to_wiki_proposal(
         "l2_review_skipped": review_skipped,
     })
     proposal_topic = _topic_from_wiki_partition(partition, storage_topic)
-    rel, sha = tm_core.write_and_commit_inbox(
-        agent,
-        proposal_topic,
-        f"Wiki proposal {decision.score}",
-        body,
-        frontmatter_extra=fm_extra,
-    )
+    existing = _find_existing_wiki_proposal(partition, slug)
+    merged_existing = existing is not None
+    if existing is not None:
+        rel, sha = _append_existing_wiki_proposal(existing, body, agent, decision.score)
+    else:
+        rel, sha = tm_core.write_and_commit_inbox(
+            agent,
+            proposal_topic,
+            f"Wiki proposal {decision.score}",
+            body,
+            frontmatter_extra=fm_extra,
+        )
     schedule_digest_refresh()
     result = {
         "route": "inbox",
@@ -495,6 +550,9 @@ def _to_wiki_proposal(
         "wiki_action": action,
         "review": review,
     }
+    if merged_existing:
+        result["deduped"] = True
+        result["dedupe_reason"] = "merged into same-day wiki proposal for target page"
     if metadata_extra:
         result.update(metadata_extra)
     return result

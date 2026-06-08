@@ -134,6 +134,16 @@ def _write_memory_with_review(
 
 
 def _write_inbox_with_review(agent: str, topic: str, title: str, body: str, reason: str) -> dict[str, Any]:
+    if _should_discard_low_value_openclaw_inbox(agent, title, body, reason):
+        return {
+            "path": None,
+            "commit_sha": None,
+            "url": None,
+            "memory_route": "discard",
+            "route": "discard",
+            "discarded": True,
+            "discard_reason": "low_value_openclaw_turn_capture",
+        }
     fm_extra = {
         "routed_by": "tigermemory",
         "route_decision_reason": reason.strip()[:200],
@@ -146,6 +156,27 @@ def _write_inbox_with_review(agent: str, topic: str, title: str, body: str, reas
         "url": tm_core.git_remote_blob_url(rel),
         "memory_route": "inbox",
     }
+
+
+def _should_discard_low_value_openclaw_inbox(agent: str, title: str, body: str, reason: str) -> bool:
+    if agent != "openclaw":
+        return False
+    surface = " ".join([title, body, reason]).lower()
+    if not any(marker in surface for marker in ("openclaw-turn-capture-low-score", "openclaw turn capture", "low-score")):
+        return False
+    score_match = re.search(r"(?:l2\s*)?score\D{0,12}(\d{1,3})", surface)
+    if score_match and int(score_match.group(1)) > 20:
+        return False
+    low_value_markers = (
+        "reply exactly",
+        "delivery test",
+        "explicit reply-to",
+        "test reply",
+        "测试回复",
+        "无实际信息",
+        "信噪比极低",
+    )
+    return any(marker in surface for marker in low_value_markers)
 
 
 try:

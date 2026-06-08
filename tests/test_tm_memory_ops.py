@@ -486,6 +486,72 @@ def test_write_memory_wiki_proposal_target_writes_marked_inbox(monkeypatch):
     assert captured["frontmatter_extra"]["l2_review_score"] == 83
 
 
+def test_write_memory_wiki_proposal_merges_same_day_target(monkeypatch, tmp_path):
+    monkeypatch.setattr(tm_memory_ops.tm_core, "REPO_ROOT", tmp_path)
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    existing = inbox / "2026-06-08-1200-codex-systems.md"
+    existing.write_text(
+        "\n".join([
+            "---",
+            "owner: codex",
+            "status: draft",
+            "updated: 2026-06-08",
+            "routed_by: tigermemory",
+            "proposal_kind: wiki",
+            "wiki_partition: systems",
+            "wiki_slug_hint: unified-knowledge-routing",
+            "---",
+            "",
+            "# Wiki proposal 90",
+            "",
+            "existing body",
+        ]),
+        encoding="utf-8",
+    )
+    decision = _decision(
+        route="inbox",
+        knowledge_target="wiki_proposal",
+        target_confidence=92,
+        wiki_partition="systems",
+        wiki_slug_hint="Unified Knowledge Routing",
+        wiki_action="update",
+    )
+    commits = []
+
+    def fake_now(fmt: str = "%Y-%m-%d") -> str:
+        return {
+            "%Y-%m-%d": "2026-06-08",
+            "%Y-%m-%d %H:%M": "2026-06-08 23:20",
+            "%Y%m%d-%H%M": "20260608-2320",
+        }.get(fmt, "2026-06-08")
+
+    monkeypatch.setattr(tm_memory_ops.tm_core, "now", fake_now)
+    monkeypatch.setattr(tm_memory_ops.tm_route, "route_memory", lambda *_args, **_kwargs: decision)
+    monkeypatch.setattr(tm_review, "review_draft", lambda _body: {
+        "score": 83,
+        "issues": [],
+        "suggestions": [],
+        "ready_for_compile": True,
+        "review_skipped": False,
+    })
+    monkeypatch.setattr(tm_memory_ops.tm_core, "git_commit_push", lambda files, msg: commits.append((files, msg)) or "def456")
+    monkeypatch.setattr(tm_memory_ops.tm_core, "git_remote_blob_url", lambda rel: f"https://example/{rel}")
+    monkeypatch.setattr(tm_memory_ops, "schedule_digest_refresh", lambda: None)
+
+    result = tm_memory_ops.write_memory_with_review("codex", "systems", "new proposal body")
+
+    assert result["route"] == "inbox"
+    assert result["outcome"] == "wiki_proposal"
+    assert result["path"] == "inbox/2026-06-08-1200-codex-systems.md"
+    assert result["deduped"] is True
+    assert commits == [(["inbox/2026-06-08-1200-codex-systems.md"], "[codex] update: Wiki proposal 95")]
+    merged = existing.read_text(encoding="utf-8")
+    assert "existing body" in merged
+    assert "## Merged routed write 2026-06-08 23:20" in merged
+    assert "new proposal body" in merged
+
+
 def test_write_memory_wiki_proposal_skips_review_when_budget_is_exhausted(monkeypatch):
     captured = {}
     decision = _decision(

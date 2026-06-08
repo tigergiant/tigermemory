@@ -140,6 +140,25 @@ def test_write_memory_endpoint_rejects_force_inbox_light_conflict(monkeypatch):
     assert calls == []
 
 
+def test_write_inbox_discards_low_value_openclaw_turn_capture(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tm_http.tm_core, "write_and_commit_inbox", lambda *_args, **_kwargs: calls.append("write"))
+
+    result = tm_http._write_inbox_with_review(
+        "openclaw",
+        "cross",
+        "openclaw-turn-capture-low-score",
+        "OpenClaw turn capture:\nuser: Reply exactly: [OpenClaw explicit reply-to delivery test]\nassistant: [OpenClaw explicit reply-to delivery test]",
+        "L2 score 10 below threshold 30",
+    )
+
+    assert result["route"] == "discard"
+    assert result["memory_route"] == "discard"
+    assert result["discarded"] is True
+    assert result["discard_reason"] == "low_value_openclaw_turn_capture"
+    assert calls == []
+
+
 def test_mem0_api_probe_reports_latency_and_error(monkeypatch):
     calls = {}
 
