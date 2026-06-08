@@ -14,6 +14,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 import pathlib
 import re
 import sys
@@ -43,6 +44,18 @@ INBOX_DIR = REPO_ROOT / "inbox"
 OPERATIONS_DIR = REPO_ROOT / "wiki" / "operations"
 PROPOSAL_ROOT = REPO_ROOT / ".tmp" / "cron-proposals"
 DISCARD_ROOT = tm_route_audit.DEFAULT_AUDIT_ROOT
+WSL_DISCARD_ROOT = pathlib.Path(
+    os.environ.get("TM_WSL_DISCARD_ROOT")
+    or str(
+        pathlib.Path("\\\\" + "wsl.localhost")
+        / "Ubuntu"
+        / "home"
+        / (os.environ.get("TM_WSL_USER") or pathlib.Path.home().name.lower())
+        / "tigermemory"
+        / ".tmp"
+        / "memory-discard-quarantine"
+    )
+)
 MEM0_AUDIT_ROOT = REPO_ROOT / ".tmp" / "mem0-audit"
 INBOX_REVIEW_CACHE = REPO_ROOT / ".tmp" / "inbox-review-metadata-cache.json"
 MAX_PREVIEW_CHARS = 160
@@ -608,9 +621,34 @@ def discard_events_for_dates(
     audit_root: pathlib.Path = DISCARD_ROOT,
 ) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
-    for date in dates:
-        events.extend(tm_route_audit.load_discard_events(date=date, audit_root=audit_root))
+    seen: set[tuple[str, str]] = set()
+    for root in _candidate_discard_roots(audit_root):
+        for date in dates:
+            for row in tm_route_audit.load_discard_events(date=date, audit_root=root):
+                key = _discard_event_key(row)
+                if key in seen:
+                    continue
+                seen.add(key)
+                events.append(row)
     return events
+
+
+def _candidate_discard_roots(primary: pathlib.Path) -> list[pathlib.Path]:
+    roots = [primary]
+    if WSL_DISCARD_ROOT != primary and WSL_DISCARD_ROOT.exists():
+        roots.append(WSL_DISCARD_ROOT)
+    return roots
+
+
+def _discard_event_key(row: dict[str, Any]) -> tuple[str, str]:
+    event_id = str(row.get("event_id") or "").strip()
+    if event_id:
+        return ("event_id", event_id)
+    text_sha = str(row.get("text_sha256_12") or "").strip()
+    if text_sha:
+        return ("text_sha256_12", text_sha)
+    payload = json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+    return ("row_sha256", hashlib.sha256(payload.encode("utf-8")).hexdigest())
 
 
 def discard_review_candidates(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1028,6 +1066,75 @@ def _append_self_evolution_section(lines: list[str], summary: dict[str, Any]) ->
     lines.extend(_details_block(f"self-evolution 样本（{len(sample_body)} 条）", sample_body))
 
 
+def _learning_card_lines(
+    *,
+    date: str,
+    mem0_count: int,
+    inbox_today_count: int,
+    discard_count: int,
+    candidate_count: int,
+    stale_count: int,
+    proposal_count: int,
+    mem0_audit_count: int,
+    self_evolution_count: int,
+) -> list[str]:
+    issues: list[str] = []
+    if proposal_count:
+        issues.append(f"有 {proposal_count} 个 Proposed Change 需要裁决")
+    if candidate_count:
+        issues.append(f"有 {candidate_count} 条 discard 可能误判")
+    if stale_count:
+        issues.append(f"有 {stale_count} 条 inbox 达到 14 天兜底")
+    if mem0_audit_count:
+        issues.append(f"有 {mem0_audit_count} 条 Mem0 重复 / 误判候选")
+
+    if issues:
+        conclusion = f"{date} 的重点不是新增记忆数量，而是处理：" + "；".join(issues) + "。"
+    elif mem0_count == 0 and inbox_today_count == 0 and discard_count == 0:
+        conclusion = f"{date} 没有新增三源记忆，日报主要承担连续性检查和历史 inbox 复审。"
+    else:
+        conclusion = f"{date} 路由总体平稳，未发现需要立即升级的误判信号。"
+
+    new_issue = "无明确新增问题。"
+    if candidate_count:
+        new_issue = "discard 候选需要复核，确认是否有重要内容被误判为瞬态。"
+    elif mem0_audit_count:
+        new_issue = "Mem0 audit 出现候选，需要判断是否重复、低密度或 topic 错分。"
+    elif proposal_count:
+        new_issue = "存在未裁决 proposal，需要 apply / reject，避免长期悬空。"
+
+    repeated_issue = "无重复问题。"
+    if stale_count:
+        repeated_issue = "inbox 继续积压，14 天兜底项应优先归档或明确保留理由。"
+    elif self_evolution_count:
+        repeated_issue = "self-evolution 事件持续产生，应在周报中只抽取模式，不重复阅读原始事件。"
+
+    action = "继续观察。"
+    if proposal_count:
+        action = "优先裁决 Proposed Changes。"
+    elif stale_count:
+        action = "优先处理 14 天兜底 archive。"
+    elif candidate_count or mem0_audit_count:
+        action = "优先复核误判 / 重复候选。"
+
+    sediment = "无新沉淀。"
+    if proposal_count or candidate_count:
+        sediment = "将误判模式沉淀为 prompt / test / policy 提案。"
+    elif self_evolution_count:
+        sediment = "将重复 self-evolution 模式沉淀为 lesson 或治理提案。"
+
+    return [
+        "## 🧩 今日沉淀卡",
+        "",
+        f"- 结论：{conclusion}",
+        f"- 新问题：{new_issue}",
+        f"- 重复问题：{repeated_issue}",
+        f"- 建议行动：{action}",
+        f"- 应沉淀内容：{sediment}",
+        "",
+    ]
+
+
 def render_daily_report(
     *,
     date: str,
@@ -1092,6 +1199,17 @@ def render_daily_report(
             f"Self-Evolution 候选 {self_evolution_count} 条。"
         ),
         "",
+        *_learning_card_lines(
+            date=date,
+            mem0_count=len(mem0_rows),
+            inbox_today_count=len(inbox_today),
+            discard_count=len(discard_events),
+            candidate_count=len(candidates),
+            stale_count=stale_count,
+            proposal_count=len(proposals),
+            mem0_audit_count=len(mem0_dedup_candidates),
+            self_evolution_count=self_evolution_count,
+        ),
         "## 📊 当日三源汇总",
         "",
         "| 源 | count | 链接 |",

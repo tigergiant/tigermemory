@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 
 from tigermemory_digest import reflection
 
@@ -35,6 +36,38 @@ def test_discard_review_candidates_keeps_high_signal_events_only():
     assert len(candidates) == 1
     assert candidates[0]["event_id"] == "high"
     assert candidates[0]["reason"] == "high_score_discard"
+
+
+def _write_discard_event(root, date: str, row: dict) -> None:
+    path = root / date / "discard" / "events.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def test_discard_events_for_dates_merges_primary_and_wsl_roots(tmp_path, monkeypatch):
+    primary = tmp_path / "primary"
+    wsl = tmp_path / "wsl"
+    _write_discard_event(primary, "2026-06-04", {"event_id": "d-root", "score": 10})
+    _write_discard_event(wsl, "2026-06-04", {"event_id": "wsl-root", "score": 80})
+    monkeypatch.setattr(reflection, "WSL_DISCARD_ROOT", wsl)
+
+    rows = reflection.discard_events_for_dates(["2026-06-04"], audit_root=primary)
+
+    assert [row["event_id"] for row in rows] == ["d-root", "wsl-root"]
+
+
+def test_discard_events_for_dates_deduplicates_cross_root_events(tmp_path, monkeypatch):
+    primary = tmp_path / "primary"
+    wsl = tmp_path / "wsl"
+    event = {"event_id": "same", "text_sha256_12": "abc123", "score": 90}
+    _write_discard_event(primary, "2026-06-04", event)
+    _write_discard_event(wsl, "2026-06-04", event)
+    monkeypatch.setattr(reflection, "WSL_DISCARD_ROOT", wsl)
+
+    rows = reflection.discard_events_for_dates(["2026-06-04"], audit_root=primary)
+
+    assert len(rows) == 1
+    assert rows[0]["event_id"] == "same"
 
 
 def test_inbox_action_groups_split_archive_promote_and_keep_rows():

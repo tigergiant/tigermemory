@@ -91,6 +91,10 @@ def test_daily_digest_decision_block_and_frontmatter_counts(tmp_path):
     assert "🔵 Proposed Changes：1 条" in first_30
     assert "🟢 Mem0 重复 / 误判候选：0 条" in first_30
     assert "⚪ discard 误判候选：0 条" in first_30
+    assert "## 🧩 今日沉淀卡" in report
+    assert "有 1 个 Proposed Change 需要裁决" in report
+    assert "有 1 条 inbox 达到 14 天兜底" in report
+    assert "建议行动：优先裁决 Proposed Changes。" in report
 
 
 def test_daily_digest_renders_mem0_audit_candidates(tmp_path):
