@@ -246,6 +246,9 @@ def test_digest_with_cookie_returns_html_and_embedded_json(tmp_path, monkeypatch
     assert "@keyframes fadeIn" in response.text
     assert "https://cdn.tailwindcss.com" not in response.text
     assert "digest-data" in response.text
+    assert "cron-intake-data" in response.text
+    assert "cron-intake-section" in response.text
+    assert "cron 承接卡" in response.text
 
 
 def test_i18n_assets_are_public(tmp_path, monkeypatch):
@@ -354,6 +357,19 @@ def test_api_cron_intake_rejects_invalid_date(tmp_path, monkeypatch):
 
     assert response.status_code == 400
     assert response.json()["ok"] is False
+
+
+def test_daily_page_static_assets_wire_cron_intake_card():
+    review_html = (tm_review_ui.STATIC_DIR / "review.html").read_text(encoding="utf-8")
+    pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
+
+    assert 'id="cron-intake-section"' in review_html
+    assert 'id="cron-intake-data"' in review_html
+    assert 'id="cron-intake-section" data-no-i18n' in review_html
+    assert "renderCronIntake" in pages_js
+    assert "/api/cron/intake/" in pages_js
+    assert "cron-intake-summary" in pages_js
+    assert "font-mono" in pages_js
 
 
 def test_live_inbox_rows_forwards_route_fields_for_frontend_payload(tmp_path, monkeypatch):
