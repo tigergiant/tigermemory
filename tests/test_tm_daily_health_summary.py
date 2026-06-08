@@ -186,22 +186,42 @@ def test_audit_session_handoff_cards_requires_codex_and_windsurf_cards():
             "content": (
                 "---\n"
                 "memory_type: session-handoff\n"
+                "session_id: codex-20260601-0900\n"
+                "repo: D:\\tigermemory\n"
                 "ide: codex\n"
                 "agent: codex\n"
+                "confidence: high\n"
                 "source: agent\n"
                 "---\n"
+                "\n"
+                "## Evidence Refs\n"
+                "- commit: abc123\n"
+                "- files: tools/x.py\n"
+                "- test: pass\n"
+                "- canvas_patch: none\n"
             ),
+            "verified": {"direct_readback_ok": True},
         },
         {
             "id": "windsurf-1",
             "content": (
                 "---\n"
                 "memory_type: session-handoff\n"
+                "session_id: windsurf-20260601-0900\n"
+                "repo: D:\\tigermemory\n"
                 "ide: windsurf\n"
                 "agent: cascade\n"
+                "confidence: high\n"
                 "source: hook_auto\n"
                 "---\n"
+                "\n"
+                "## Evidence Refs\n"
+                "- commit: def456\n"
+                "- files: hooks/x.ps1\n"
+                "- test: pass\n"
+                "- canvas_patch: none\n"
             ),
+            "verified": {"direct_readback_ok": True},
         },
     ])
 
@@ -210,6 +230,64 @@ def test_audit_session_handoff_cards_requires_codex_and_windsurf_cards():
     assert report["passed_count"] == 2
     assert report["missing_ids"] == []
     assert report["by_ide"] == {"codex": 1, "windsurf": 1}
+    assert report["coverage_slo"]["handoff_coverage_rate"] == 1.0
+    assert report["coverage_slo"]["agent_written_rate"] == 0.5
+    assert report["coverage_slo"]["fallback_rate"] == 0.0
+    assert report["coverage_slo"]["verified_write_rate"] == 1.0
+    assert report["metadata_contract"]["missing_count"] == 0
+    assert report["evidence_refs"]["low_quality_count"] == 0
+
+
+def test_audit_session_handoff_cards_strict_evidence_flags_low_quality():
+    report = tm_daily_health_summary.audit_session_handoff_cards(
+        [
+            {
+                "id": "codex-1",
+                "content": (
+                    "---\n"
+                    "memory_type: session-handoff\n"
+                    "session_id: codex-20260601-0900\n"
+                    "repo: D:\\tigermemory\n"
+                    "ide: codex\n"
+                    "agent: codex\n"
+                    "confidence: high\n"
+                    "source: agent\n"
+                    "---\n"
+                    "\n"
+                    "## Evidence Refs\n"
+                    "- files: tools/x.py\n"
+                ),
+            },
+            {
+                "id": "windsurf-1",
+                "content": (
+                    "---\n"
+                    "memory_type: session-handoff\n"
+                    "session_id: windsurf-20260601-0900\n"
+                    "repo: D:\\tigermemory\n"
+                    "ide: windsurf\n"
+                    "agent: cascade\n"
+                    "confidence: high\n"
+                    "source: hook_auto\n"
+                    "---\n"
+                    "\n"
+                    "## Evidence Refs\n"
+                    "- commit: def456\n"
+                    "- files: hooks/x.ps1\n"
+                    "- test: pass\n"
+                    "- canvas_patch: none\n"
+                ),
+            },
+        ],
+        strict_evidence=True,
+    )
+
+    assert report["status"] == "fail"
+    assert report["evidence_refs"]["strict"] is True
+    assert report["evidence_refs"]["low_quality_count"] == 1
+    low_quality = [row for row in report["evidence_refs"]["items"] if row["quality"] == "low"]
+    assert low_quality[0]["card_id"] == "codex-1"
+    assert "has_commit_ref" in low_quality[0]["missing"]
 
 
 def test_audit_session_handoff_cards_reports_missing_windsurf_card():

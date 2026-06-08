@@ -102,3 +102,25 @@ def test_write_agent_from_pending_prefers_allowed_agent():
     assert generator.write_agent_from_pending({"ide": "codex"}) == "codex"
     assert generator.write_agent_from_pending({"agent": "cascade", "ide": "windsurf"}) == "codex"
     assert generator.write_agent_from_pending({"ide": "windsurf"}) == "codex"
+
+
+def test_generate_card_includes_structured_repo_field():
+    generator = load_generator()
+
+    card = generator.generate_card([], {"session_id": "codex-20260608-0900", "ide": "codex"})
+
+    assert "memory_type: session-handoff" in card
+    assert f"repo: {generator.tm_core.REPO_ROOT}" in card
+
+
+def test_generate_card_maps_windsurf_ide_to_cascade_agent():
+    generator = load_generator()
+
+    card = generator.generate_card(
+        [],
+        {"session_id": "windsurf-20260608-0900", "ide": "windsurf", "agent": "cascade"},
+    )
+
+    assert "ide: windsurf" in card
+    assert "agent: cascade" in card
+    assert "agent: windsurf" not in card

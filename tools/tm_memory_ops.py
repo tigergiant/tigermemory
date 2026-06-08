@@ -262,6 +262,46 @@ def _verified_summary(memory_id: str, *, include_readback: bool) -> dict[str, An
     }
 
 
+def _handoff_frontmatter_value(text: str, key: str) -> str | None:
+    match = re.search(rf"(?m)^{re.escape(key)}:\s*(.+?)\s*$", text)
+    if not match:
+        return None
+    return match.group(1).strip().strip('"').strip("'")
+
+
+def _is_session_handoff_card(text: str) -> bool:
+    return _handoff_frontmatter_value(text, "memory_type") == "session-handoff"
+
+
+def _attach_handoff_verification(
+    result: dict[str, Any],
+    text: str,
+    *,
+    failure_reason: str | None = None,
+) -> dict[str, Any]:
+    """Expose verified handoff state for PostToolUse pending cleanup."""
+    if not _is_session_handoff_card(text):
+        return result
+    verified = result.get("verified") if isinstance(result.get("verified"), dict) else {}
+    direct_readback_ok = verified.get("direct_readback_ok")
+    handoff_verified = (
+        result.get("route") == "mem0"
+        and bool(result.get("id"))
+        and direct_readback_ok is True
+    )
+    if not handoff_verified and not failure_reason:
+        failure_reason = result.get("reasons") or result.get("error") or "handoff was not written to verified mem0"
+    source = _handoff_frontmatter_value(text, "source") or "unknown"
+    result["handoff_verified"] = handoff_verified
+    result["handoff_verification"] = {
+        "is_handoff_card": True,
+        "source": source,
+        "direct_readback_ok": direct_readback_ok,
+        "failure_reason": None if handoff_verified else failure_reason,
+    }
+    return result
+
+
 def _light_sensitive_hits(text: str) -> list[dict[str, str]]:
     hits: list[dict[str, str]] = []
     if PHONE_RE.search(text):
@@ -680,6 +720,7 @@ def _auto_wrap_handoff_card(agent: str, text: str) -> str:
             break
     wrapped = (
         f"---\nmemory_type: session-handoff\nsession_id: {session_id}\n"
+        f"repo: {tm_core.REPO_ROOT}\n"
         f"ide: mcp\nagent: {agent}\npersona_primary: executor\n"
         f"confidence: low\nsource: server_auto_wrap\nprivacy_level: normal\n---\n\n"
         f"## Task\n{task_line}\n\n"
@@ -787,7 +828,8 @@ def write_memory_with_review(
             decision=decision,
             warn=warn,
         )
-        return _attach_discard_audit(result, audit)
+        result = _attach_discard_audit(result, audit)
+        return _attach_handoff_verification(result, text, failure_reason=decision.reasons)
 
     storage_topic = _storage_topic(
         topic,
@@ -820,7 +862,7 @@ def write_memory_with_review(
             skip_review_reason=skip_review_reason,
         )
         result.setdefault("warnings", []).extend(_topic_warnings(topic, decision, result["topic"]))
-        return result
+        return _attach_handoff_verification(result, text, failure_reason=result.get("reasons"))
 
     if decision.knowledge_target == "human_review":
         result = _to_inbox(
@@ -833,7 +875,7 @@ def write_memory_with_review(
             outcome="human_review",
         )
         result.setdefault("warnings", []).extend(_topic_warnings(topic, decision, storage_topic))
-        return result
+        return _attach_handoff_verification(result, text, failure_reason=result.get("reasons"))
 
     if decision.route == "mem0":
         remaining: float | None = None
@@ -895,6 +937,7 @@ def write_memory_with_review(
                 except Exception as exc:
                     data["verified"] = {"direct_readback_ok": False, "error": str(exc)}
                     data.setdefault("warnings", []).append(f"direct readback failed: {exc}")
+                _attach_handoff_verification(data, text)
                 schedule_digest_refresh()
                 return data
             except Exception as exc:
@@ -932,4 +975,4 @@ def write_memory_with_review(
         outcome=outcome,
     )
     result.setdefault("warnings", []).extend(_topic_warnings(topic, decision, storage_topic))
-    return result
+    return _attach_handoff_verification(result, text, failure_reason=result.get("reasons"))

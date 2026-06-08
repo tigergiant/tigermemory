@@ -55,6 +55,7 @@ def test_write_memory_success_adds_verified_readback(monkeypatch):
     assert result["id"] == mem_id
     assert result["verified"]["direct_readback_ok"] is True
     assert result["verified"]["search_by_id_self_hit"] is True
+    assert "handoff_verified" not in result
 
 
 def test_write_memory_with_review_local_profile_persists_sqlite(monkeypatch, tmp_path):
@@ -74,6 +75,9 @@ def test_write_memory_with_review_local_profile_persists_sqlite(monkeypatch, tmp
     )
 
     assert result["route"] == "mem0"
+    assert result["handoff_verified"] is True
+    assert result["handoff_verification"]["source"] == "unknown"
+    assert result["handoff_verification"]["failure_reason"] is None
     assert result["verified"]["direct_readback_ok"] is True
     assert result["verified"]["search_by_id_self_hit"] is True
     assert result["verified"]["digest_inclusion_reason"].startswith("n/a: local backend")
@@ -638,10 +642,25 @@ def test_mem0_target_failure_returns_inbox_with_retry_error_outcome(monkeypatch)
     monkeypatch.setattr(tm_memory_ops.tm_core, "git_remote_blob_url", lambda rel: f"https://example/{rel}")
     monkeypatch.setattr(tm_memory_ops, "schedule_digest_refresh", lambda: None)
 
-    result = tm_memory_ops.write_memory_with_review("codex", "systems", "atomic fact")
+    result = tm_memory_ops.write_memory_with_review(
+        "codex",
+        "systems",
+        "---\n"
+        "memory_type: session-handoff\n"
+        "session_id: codex-20260608-0900\n"
+        "repo: D:\\tigermemory\n"
+        "ide: codex\n"
+        "agent: codex\n"
+        "source: agent\n"
+        "---\n"
+        "atomic fact",
+    )
 
     assert result["route"] == "inbox"
     assert result["outcome"] == "retry_error"
+    assert result["handoff_verified"] is False
+    assert result["handoff_verification"]["source"] == "agent"
+    assert "mem0 write failed" in result["handoff_verification"]["failure_reason"]
     assert result["path"] == "inbox/retry.md"
     assert result["knowledge_target"] == "retry_error"
     assert "mem0 write failed" in result["reasons"]

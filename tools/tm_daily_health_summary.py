@@ -82,6 +82,14 @@ SESSION_HANDOFF_REQUIRED = (
         "description": "Windsurf post_cascade_response Session Handoff Card",
     },
 )
+SESSION_HANDOFF_STRUCTURED_FIELDS = (
+    "session_id",
+    "repo",
+    "ide",
+    "agent",
+    "source",
+    "confidence",
+)
 REQUIRED_CHINESE_REPORT_MARKERS = (
     "## 中文总览",
     "已验证",
@@ -971,7 +979,7 @@ def _frontmatter_value(text: str, key: str) -> str | None:
 def session_handoff_cards_from_memories(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     cards: list[dict[str, Any]] = []
     for item in items:
-        text = str(item.get("content") or item.get("memory") or "")
+        text = str(item.get("content") or item.get("memory") or item.get("text") or "")
         if _frontmatter_value(text, "memory_type") != "session-handoff":
             continue
         cards.append(
@@ -979,16 +987,61 @@ def session_handoff_cards_from_memories(items: list[dict[str, Any]]) -> list[dic
                 "id": item.get("id"),
                 "created_at": item.get("created_at"),
                 "session_id": _frontmatter_value(text, "session_id"),
+                "repo": _frontmatter_value(text, "repo"),
                 "ide": _frontmatter_value(text, "ide"),
                 "agent": _frontmatter_value(text, "agent"),
                 "source": _frontmatter_value(text, "source"),
                 "confidence": _frontmatter_value(text, "confidence"),
+                "text": text,
             }
         )
     return cards
 
 
-def audit_session_handoff_cards(items: list[dict[str, Any]]) -> dict[str, Any]:
+def _rate(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return round(numerator / denominator, 4)
+
+
+def _pending_handoff_status(root: pathlib.Path = REPO_ROOT) -> dict[str, Any]:
+    path = root / ".tmp" / "pending-handoff.json"
+    return {
+        "path": str(path),
+        "exists": path.exists(),
+        "status": "pending" if path.exists() else "clear",
+    }
+
+
+def _handoff_evidence_quality(card: dict[str, Any], *, strict: bool = False) -> dict[str, Any]:
+    text = str(card.get("text") or "")
+    marker = re.search(r"(?ims)^##\s+Evidence Refs\s*(.*?)(?:\n##\s+|\Z)", text)
+    body = marker.group(1) if marker else ""
+    checks = {
+        "has_evidence_refs": bool(marker and body.strip()),
+        "has_commit_ref": bool(re.search(r"(?im)^\s*-\s*commit\s*:", body)),
+        "has_file_ref": bool(re.search(r"(?im)^\s*-\s*files?\s*:", body)),
+        "has_test_ref": bool(re.search(r"(?im)^\s*-\s*tests?\s*:", body)),
+        "has_canvas_ref": bool(re.search(r"(?im)^\s*-\s*canvas(?:_patch)?\s*:", body)),
+    }
+    missing = [key for key, ok in checks.items() if not ok]
+    quality = "ok" if not missing else ("low" if strict else "advisory")
+    return {
+        "card_id": card.get("id"),
+        "strict": strict,
+        "quality": quality,
+        "ok": not missing if strict else True,
+        "checks": checks,
+        "missing": missing,
+    }
+
+
+def audit_session_handoff_cards(
+    items: list[dict[str, Any]],
+    *,
+    strict_evidence: bool = False,
+    root: pathlib.Path = REPO_ROOT,
+) -> dict[str, Any]:
     cards = session_handoff_cards_from_memories(items)
     required = []
     missing = []
@@ -1013,9 +1066,33 @@ def audit_session_handoff_cards(items: list[dict[str, Any]]) -> dict[str, Any]:
             missing.append(row)
     by_source = Counter(str(card.get("source") or "unknown") for card in cards)
     by_ide = Counter(str(card.get("ide") or "unknown") for card in cards)
+    fallback_count = by_source.get("auto_fallback", 0) + by_source.get("server_auto_wrap", 0)
+    agent_written_count = by_source.get("agent", 0)
+    verified_count = sum(
+        1
+        for item in items
+        if isinstance(item.get("verified"), dict)
+        and item["verified"].get("direct_readback_ok") is True
+    )
+    structured_missing = [
+        {
+            "id": card.get("id"),
+            "missing_fields": [
+                field for field in SESSION_HANDOFF_STRUCTURED_FIELDS if not card.get(field)
+            ],
+        }
+        for card in cards
+        if any(not card.get(field) for field in SESSION_HANDOFF_STRUCTURED_FIELDS)
+    ]
+    evidence_quality = [
+        _handoff_evidence_quality(card, strict=strict_evidence)
+        for card in cards
+    ]
+    low_quality = [row for row in evidence_quality if not row["ok"]]
+    status = "ok" if not missing and not low_quality else "fail"
     return {
         "schema_version": SESSION_HANDOFF_AUDIT_SCHEMA,
-        "status": "ok" if not missing else "fail",
+        "status": status,
         "memory_count": len(items),
         "card_count": len(cards),
         "required_count": len(required),
@@ -1025,6 +1102,23 @@ def audit_session_handoff_cards(items: list[dict[str, Any]]) -> dict[str, Any]:
         "required": required,
         "by_source": dict(sorted(by_source.items())),
         "by_ide": dict(sorted(by_ide.items())),
+        "pending_handoff": _pending_handoff_status(root),
+        "coverage_slo": {
+            "handoff_coverage_rate": _rate(len(required) - len(missing), len(required)),
+            "agent_written_rate": _rate(agent_written_count, len(cards)),
+            "fallback_rate": _rate(fallback_count, len(cards)),
+            "verified_write_rate": _rate(verified_count, len(cards)),
+        },
+        "metadata_contract": {
+            "required_fields": list(SESSION_HANDOFF_STRUCTURED_FIELDS),
+            "missing_count": len(structured_missing),
+            "missing": structured_missing,
+        },
+        "evidence_refs": {
+            "strict": strict_evidence,
+            "low_quality_count": len(low_quality),
+            "items": evidence_quality,
+        },
     }
 
 
@@ -1109,7 +1203,10 @@ def cmd_session_handoff_audit(args: argparse.Namespace) -> int:
                 items = []
         else:
             items = fetch_mem0_memories(page_size=args.page_size, max_pages=args.max_pages)
-        report = audit_session_handoff_cards([item for item in items if isinstance(item, dict)])
+        report = audit_session_handoff_cards(
+            [item for item in items if isinstance(item, dict)],
+            strict_evidence=args.strict_evidence,
+        )
     except Exception as exc:
         report = {
             "schema_version": SESSION_HANDOFF_AUDIT_SCHEMA,
@@ -1123,6 +1220,23 @@ def cmd_session_handoff_audit(args: argparse.Namespace) -> int:
             "required": [],
             "by_source": {},
             "by_ide": {},
+            "pending_handoff": _pending_handoff_status(),
+            "coverage_slo": {
+                "handoff_coverage_rate": 0.0,
+                "agent_written_rate": None,
+                "fallback_rate": None,
+                "verified_write_rate": None,
+            },
+            "metadata_contract": {
+                "required_fields": list(SESSION_HANDOFF_STRUCTURED_FIELDS),
+                "missing_count": 0,
+                "missing": [],
+            },
+            "evidence_refs": {
+                "strict": getattr(args, "strict_evidence", False),
+                "low_quality_count": 0,
+                "items": [],
+            },
             "errors": [str(exc)[:240]],
         }
     if args.json:
@@ -1265,6 +1379,7 @@ def main() -> None:
     handoff_p.add_argument("--page-size", type=int, default=100)
     handoff_p.add_argument("--max-pages", type=int, default=20)
     handoff_p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    handoff_p.add_argument("--strict-evidence", action="store_true", help="fail cards with incomplete Evidence Refs")
     handoff_p.set_defaults(func=cmd_session_handoff_audit)
 
     trend_p = sub.add_parser("trend", help="summarize historical daily-health machine summaries")

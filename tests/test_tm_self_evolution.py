@@ -164,6 +164,73 @@ def test_collect_summary_returns_counts_and_limited_samples(tmp_path):
     assert summary["inbox_route"] == "AGENTS.md section 9.3 topic=selfevolution"
 
 
+def test_guidance_effectiveness_report_is_unscored_without_outcome(tmp_path):
+    root = tmp_path
+    _write_jsonl(
+        _tmp_file(root, ".tmp/guard-rejects.jsonl"),
+        [
+            {
+                "ts": "2026-06-01T12:00:00+08:00",
+                "agent": "codex",
+                "session_id": "s1",
+                "guard": "powershell-operators",
+                "msg": "blocked command shape",
+            },
+        ],
+    )
+
+    report = tm_self_evolution.build_guidance_effectiveness_report(
+        "2026-06-01",
+        root=root,
+    )
+
+    assert report["schema_version"] == "agent-guidance-effectiveness-v1"
+    assert report["summary_target"] == "wiki/systems/agent-guidance-effectiveness.md"
+    assert report["by_surface"] == {"global-hooks": 1}
+    assert report["by_score_status"] == {"unscored": 1}
+    row = report["items"][0]
+    assert row["helpfulness_score"] is None
+    assert row["friction_score"] is None
+    assert row["recommendation"] == "keep as evidence candidate; do not score until reviewed"
+
+
+def test_guidance_effectiveness_separates_hooks2_external_root(tmp_path):
+    root = tmp_path / "repo"
+    codex_root = tmp_path / ".codex"
+    _write_jsonl(
+        _tmp_file(root, ".tmp/guard-rejects.jsonl"),
+        [
+            {
+                "ts": "2026-06-01T12:00:00+08:00",
+                "agent": "codex",
+                "session_id": "s1",
+                "guard": "git-bypass",
+                "msg": "blocked in normal workspace",
+            },
+        ],
+    )
+    _write_jsonl(
+        _tmp_file(codex_root, ".tmp/guard-rejects.jsonl"),
+        [
+            {
+                "ts": "2026-06-01T12:01:00+08:00",
+                "agent": "codex",
+                "session_id": "s2",
+                "guard": "git-bypass",
+                "msg": "blocked in codex workspace",
+            },
+        ],
+    )
+
+    report = tm_self_evolution.build_guidance_effectiveness_report(
+        "2026-06-01",
+        root=root,
+        extra_roots=[codex_root],
+    )
+
+    assert report["by_surface"] == {"global-hooks": 1, "hooks2": 1}
+
+
 def test_write_events_only_writes_to_self_evolution_dir(tmp_path, capsys):
     root = tmp_path
     _write_jsonl(
