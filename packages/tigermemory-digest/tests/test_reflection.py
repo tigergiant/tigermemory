@@ -140,8 +140,10 @@ def test_build_cron_intake_reads_compact_cards(tmp_path):
     assert "处理 1 个 14 天 inbox archive 候选" in result["action_items"]
     rendered = reflection.render_cron_intake(result)
     assert "今天需要处理 proposal" in rendered
+    assert "tm-http 正常" in rendered
     assert "AI 雷达" in rendered
     assert "高信号工具" in rendered
+    assert "## 来源" in rendered
 
 
 def test_write_cron_intake_card_persists_wiki_page(tmp_path, monkeypatch):
@@ -173,6 +175,8 @@ def test_write_cron_intake_card_persists_wiki_page(tmp_path, monkeypatch):
     assert 'intake_status: "warn"' in text
     assert "# Cron 承接卡 2026-06-09 system-health" in text
     assert "处理 daily-health red" in text
+    assert "daily-health color is red" in text
+    assert "## 来源" in text
 
 
 def test_build_cron_intake_surfaces_missing_ai_radar_artifact(tmp_path):

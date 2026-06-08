@@ -1730,9 +1730,21 @@ def render_cron_intake(result: dict[str, Any]) -> str:
     digest = next((row for row in result.get("reports", []) if row.get("kind") == "memory_digest"), None)
     if digest and digest.get("learning_card"):
         lines.extend(str(x) for x in digest["learning_card"])
+    daily_health = next((row for row in result.get("reports", []) if row.get("kind") == "daily_health"), None)
+    if daily_health and daily_health.get("summary"):
+        lines.extend(["", "### Daily Health", *[str(x) for x in daily_health["summary"]]])
+    weekly = next((row for row in result.get("reports", []) if row.get("kind") == "weekly_review"), None)
+    if weekly and weekly.get("summary"):
+        lines.extend(["", "### Weekly Review", *[str(x) for x in weekly["summary"]]])
     radar = next((row for row in result.get("reports", []) if row.get("kind") == "ai_agent_radar"), None)
     if radar and radar.get("friendly_closeout"):
         lines.extend(["", "### AI 雷达", *[str(x) for x in radar["friendly_closeout"]]])
+    if lines[-1] == "## 沉淀摘要":
+        lines.extend(["", "- 无可沉淀摘要。"])
+    lines.extend(["", "## 来源", ""])
+    for row in result.get("reports", []):
+        if row.get("path"):
+            lines.append(f"- `{row['path']}`")
     return "\n".join(lines).rstrip() + "\n"
 
 
