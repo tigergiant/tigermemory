@@ -21,6 +21,7 @@ Usage:
   tm_io.py cron-rollback COMMIT_SHA
   tm_io.py cron-daily-report [--date YYYY-MM-DD]
   tm_io.py cron-weekly-report [--date YYYY-MM-DD]
+  tm_io.py cron-intake [--date YYYY-MM-DD] [--json]
   tm_io.py agent-doctor    [--json]
   tm_io.py lint-page    <path>
   tm_io.py status       [--json]
@@ -411,6 +412,14 @@ def cmd_cron_weekly_report(args: argparse.Namespace) -> None:
         sys.exit(code)
 
 
+def cmd_cron_intake(args: argparse.Namespace) -> None:
+    import tm_memory_reflection
+
+    code = tm_memory_reflection.cmd_intake(args)
+    if code:
+        sys.exit(code)
+
+
 def _run_cron_apply(tm_cron_apply, func, args: argparse.Namespace) -> int:
     try:
         return int(func(args))
@@ -603,6 +612,13 @@ def main() -> None:
     cwr = sub.add_parser("cron-weekly-report", help="render the weekly memory route reflection report")
     cwr.add_argument("--date")
     cwr.set_defaults(func=cmd_cron_weekly_report)
+
+    ci = sub.add_parser("cron-intake", help="render a compact cron follow-up card from persisted reports")
+    ci.add_argument("--date")
+    ci.add_argument("--json", action="store_true")
+    ci.add_argument("--no-ai", action="store_true", help="skip AI/Agent radar artifact check")
+    ci.add_argument("--codex-home", help="override Codex home for AI radar report lookup")
+    ci.set_defaults(func=cmd_cron_intake)
 
     pb = sub.add_parser(
         "publish",

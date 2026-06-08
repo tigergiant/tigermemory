@@ -1397,6 +1397,254 @@ def _frontmatter_counts(path: pathlib.Path) -> dict[str, int]:
     return counts
 
 
+def _section_body(text: str, heading_contains: str) -> str:
+    """Return the body under the first H2 heading containing a marker."""
+    lines = text.splitlines()
+    start: int | None = None
+    for idx, line in enumerate(lines):
+        if line.startswith("## ") and heading_contains in line:
+            start = idx + 1
+            break
+    if start is None:
+        return ""
+    end = len(lines)
+    for idx in range(start, len(lines)):
+        if lines[idx].startswith("## "):
+            end = idx
+            break
+    return "\n".join(line.rstrip() for line in lines[start:end]).strip()
+
+
+def _compact_section_lines(section: str, *, limit: int = 8) -> list[str]:
+    out: list[str] = []
+    for raw in section.splitlines():
+        line = raw.strip()
+        if not line or line in {"<details>", "</details>"} or line.startswith("<summary>"):
+            continue
+        out.append(line)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _report_path(rel_or_abs: pathlib.Path) -> str:
+    try:
+        return str(rel_or_abs.resolve().relative_to(REPO_ROOT.resolve())).replace("\\", "/")
+    except ValueError:
+        return str(rel_or_abs)
+
+
+def _daily_digest_intake(date: str, *, operations_dir: pathlib.Path = OPERATIONS_DIR) -> dict[str, Any]:
+    path = operations_dir / f"daily-memory-digest-{date}.md"
+    report: dict[str, Any] = {
+        "kind": "memory_digest",
+        "date": date,
+        "path": _report_path(path),
+        "exists": path.exists(),
+        "status": "missing",
+        "counts": {},
+        "learning_card": [],
+        "decision_items": [],
+        "issues": [],
+    }
+    if not path.exists():
+        report["issues"].append("daily-memory-digest file missing")
+        return report
+    text = path.read_text(encoding="utf-8")
+    fm, _ = _frontmatter(text)
+    counts: dict[str, int] = {}
+    for key in (
+        "mem0_count",
+        "inbox_count",
+        "discard_count",
+        "proposal_count",
+        "applied_count",
+        "stale_archive_count",
+        "promote_candidate_count",
+        "mem0_audit_candidate_count",
+        "self_evolution_count",
+    ):
+        try:
+            counts[key] = int(fm.get(key, "0"))
+        except ValueError:
+            counts[key] = 0
+    learning_card = _compact_section_lines(_section_body(text, "今日沉淀卡"), limit=8)
+    decision_items = _compact_section_lines(_section_body(text, "今日要决策"), limit=8)
+    report.update({
+        "status": "ok" if learning_card else "warn",
+        "counts": counts,
+        "learning_card": learning_card,
+        "decision_items": decision_items,
+    })
+    if not learning_card:
+        report["issues"].append("missing 今日沉淀卡")
+    if counts.get("proposal_count", 0):
+        report["issues"].append(f"{counts['proposal_count']} pending proposal(s)")
+    if counts.get("stale_archive_count", 0):
+        report["issues"].append(f"{counts['stale_archive_count']} stale inbox archive candidate(s)")
+    return report
+
+
+def _daily_health_intake(date: str, *, operations_dir: pathlib.Path = OPERATIONS_DIR) -> dict[str, Any]:
+    path = operations_dir / "daily-health" / f"{date}.md"
+    report: dict[str, Any] = {
+        "kind": "daily_health",
+        "date": date,
+        "path": _report_path(path),
+        "exists": path.exists(),
+        "status": "missing",
+        "summary": [],
+        "issues": [],
+    }
+    if not path.exists():
+        report["issues"].append("daily-health file missing")
+        return report
+    text = path.read_text(encoding="utf-8")
+    summary = _compact_section_lines(_section_body(text, "摘要"), limit=6)
+    if not summary:
+        summary = _compact_section_lines(text, limit=6)
+    report.update({"status": "ok", "summary": summary})
+    return report
+
+
+def _weekly_review_intake(date: str, *, operations_dir: pathlib.Path = OPERATIONS_DIR) -> dict[str, Any]:
+    anchor = _parse_date(date)
+    iso_year, iso_week, _ = anchor.isocalendar()
+    label = f"{iso_year}-{iso_week:02d}"
+    path = operations_dir / f"weekly-memory-review-{label}.md"
+    report: dict[str, Any] = {
+        "kind": "weekly_review",
+        "date": date,
+        "week": label,
+        "path": _report_path(path),
+        "exists": path.exists(),
+        "status": "missing",
+        "summary": [],
+        "drift_signals": [],
+        "focus": [],
+        "issues": [],
+    }
+    if not path.exists():
+        report["issues"].append("weekly-memory-review file missing")
+        return report
+    text = path.read_text(encoding="utf-8")
+    report.update({
+        "status": "ok",
+        "summary": _compact_section_lines(_section_body(text, "摘要"), limit=5),
+        "drift_signals": _compact_section_lines(_section_body(text, "漂移信号"), limit=8),
+        "focus": _compact_section_lines(_section_body(text, "下周关注重点"), limit=5),
+    })
+    return report
+
+
+def _ai_radar_candidates(date: str, *, codex_home: pathlib.Path) -> list[pathlib.Path]:
+    return [
+        codex_home / "reports" / f"daily-ai-agent-radar-{date}.md",
+        codex_home / "reports" / f"daily-ai-and-agent-radar-{date}.md",
+        codex_home / "automations" / "daily-ai-and-agent-radar" / f"daily-ai-agent-radar-{date}.md",
+    ]
+
+
+def _ai_radar_intake(date: str, *, codex_home: pathlib.Path | None = None) -> dict[str, Any]:
+    codex_home = codex_home or (pathlib.Path.home() / ".codex")
+    candidates = _ai_radar_candidates(date, codex_home=codex_home)
+    existing = next((path for path in candidates if path.exists()), None)
+    report: dict[str, Any] = {
+        "kind": "ai_agent_radar",
+        "date": date,
+        "path": str(existing or candidates[0]),
+        "exists": existing is not None,
+        "status": "missing",
+        "friendly_closeout": [],
+        "actions": [],
+        "issues": [],
+    }
+    if existing is None:
+        report["issues"].append("AI radar report is not persisted to a known local file")
+        return report
+    text = existing.read_text(encoding="utf-8")
+    closeout = _compact_section_lines(_section_body(text, "记忆友好收尾摘要"), limit=6)
+    actions = _compact_section_lines(_section_body(text, "建议动作"), limit=8)
+    report.update({
+        "status": "ok" if closeout else "warn",
+        "friendly_closeout": closeout,
+        "actions": actions,
+    })
+    if not closeout:
+        report["issues"].append("missing 记忆友好收尾摘要")
+    return report
+
+
+def build_cron_intake(
+    *,
+    date: str,
+    include_ai: bool = True,
+    operations_dir: pathlib.Path = OPERATIONS_DIR,
+    codex_home: pathlib.Path | None = None,
+) -> dict[str, Any]:
+    """Build a compact read-only intake card for cron heartbeat follow-up."""
+    reports = [
+        _daily_digest_intake(date, operations_dir=operations_dir),
+        _daily_health_intake(date, operations_dir=operations_dir),
+        _weekly_review_intake(date, operations_dir=operations_dir),
+    ]
+    if include_ai:
+        reports.append(_ai_radar_intake(date, codex_home=codex_home))
+    missing = [row for row in reports if not row.get("exists")]
+    warnings = [f"{row['kind']}: {issue}" for row in reports for issue in row.get("issues", [])]
+    action_items: list[str] = []
+    digest = reports[0]
+    counts = digest.get("counts") or {}
+    if counts.get("proposal_count"):
+        action_items.append(f"裁决 {counts['proposal_count']} 个 memory digest proposal")
+    if counts.get("stale_archive_count"):
+        action_items.append(f"处理 {counts['stale_archive_count']} 个 14 天 inbox archive 候选")
+    if reports[-1].get("kind") == "ai_agent_radar" and not reports[-1].get("exists"):
+        action_items.append("让 AI 雷达落本地短报告，否则 20:30 心跳只能依赖聊天上下文")
+    if not action_items:
+        action_items.append("无立即动作，继续观察")
+    status = "ok"
+    if missing:
+        status = "partial"
+    if any(row.get("status") == "warn" for row in reports):
+        status = "warn"
+    return {
+        "status": status,
+        "date": date,
+        "summary": f"{date} cron 承接摘要：{len(reports) - len(missing)}/{len(reports)} 个产物可读取，{len(warnings)} 条警告。",
+        "reports": reports,
+        "warnings": warnings,
+        "action_items": action_items,
+    }
+
+
+def render_cron_intake(result: dict[str, Any]) -> str:
+    lines = [
+        f"# Cron Intake {result['date']}",
+        "",
+        f"- 状态：{result['status']}",
+        f"- 摘要：{result['summary']}",
+        "",
+        "## 建议动作",
+        "",
+    ]
+    for item in result.get("action_items", []):
+        lines.append(f"- {item}")
+    lines.extend(["", "## 产物状态", ""])
+    for row in result.get("reports", []):
+        lines.append(f"- {row['kind']}：{row['status']}，path={row['path']}")
+        for issue in row.get("issues", [])[:3]:
+            lines.append(f"  - 警告：{issue}")
+    lines.extend(["", "## 沉淀摘要", ""])
+    digest = next((row for row in result.get("reports", []) if row.get("kind") == "memory_digest"), None)
+    if digest and digest.get("learning_card"):
+        lines.extend(str(x) for x in digest["learning_card"])
+    radar = next((row for row in result.get("reports", []) if row.get("kind") == "ai_agent_radar"), None)
+    if radar and radar.get("friendly_closeout"):
+        lines.extend(["", "### AI 雷达", *[str(x) for x in radar["friendly_closeout"]]])
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def _proposal_status_counts(dates: Iterable[str], *, proposal_root: pathlib.Path = PROPOSAL_ROOT) -> dict[str, int]:
     proposals = applied = rejected = 0
     for date in dates:
@@ -1666,6 +1914,19 @@ def cmd_enrich_inbox(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_intake(args: argparse.Namespace) -> int:
+    result = build_cron_intake(
+        date=args.date or today_local(),
+        include_ai=not args.no_ai,
+        codex_home=pathlib.Path(args.codex_home) if args.codex_home else None,
+    )
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(render_cron_intake(result), end="")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Render memory route reflection reports")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -1684,6 +1945,13 @@ def build_parser() -> argparse.ArgumentParser:
     enrich.add_argument("--dry-run", action="store_true")
     enrich.add_argument("--no-llm", action="store_true", help="Only use deterministic extraction; skip DeepSeek fallback")
     enrich.set_defaults(func=cmd_enrich_inbox)
+
+    intake = sub.add_parser("intake", help="Render a compact cron follow-up card from persisted reports")
+    intake.add_argument("--date")
+    intake.add_argument("--json", action="store_true")
+    intake.add_argument("--no-ai", action="store_true", help="Skip AI/Agent radar artifact check")
+    intake.add_argument("--codex-home", help="Override Codex home for AI radar report lookup")
+    intake.set_defaults(func=cmd_intake)
     return parser
 
 

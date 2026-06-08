@@ -82,3 +82,82 @@ def test_inbox_action_groups_split_archive_promote_and_keep_rows():
     assert [row.path for row in archive] == ["archive.md"]
     assert [row.path for row in promote] == ["promote.md"]
     assert [row.path for row in keep] == ["keep.md"]
+
+
+def test_build_cron_intake_reads_compact_cards(tmp_path):
+    operations = tmp_path / "wiki" / "operations"
+    operations.mkdir(parents=True)
+    (operations / "daily-health").mkdir()
+    (operations / "daily-memory-digest-2026-06-09.md").write_text(
+        "\n".join([
+            "---",
+            "mem0_count: 1",
+            "inbox_count: 2",
+            "discard_count: 3",
+            "proposal_count: 1",
+            "applied_count: 0",
+            "stale_archive_count: 1",
+            "promote_candidate_count: 0",
+            "mem0_audit_candidate_count: 0",
+            "self_evolution_count: 0",
+            "---",
+            "",
+            "## ⚡ 今日要决策",
+            "",
+            "- 🔵 Proposed Changes：1 条",
+            "",
+            "## 🧩 今日沉淀卡",
+            "",
+            "- 结论：今天需要处理 proposal。",
+            "- 建议行动：优先裁决 Proposed Changes。",
+        ]),
+        encoding="utf-8",
+    )
+    (operations / "daily-health" / "2026-06-09.md").write_text(
+        "# Daily Health\n\n## 摘要\n\n- tm-http 正常。\n",
+        encoding="utf-8",
+    )
+    (operations / "weekly-memory-review-2026-24.md").write_text(
+        "# Weekly\n\n## 摘要\n\n- 本周稳定。\n\n## 漂移信号\n\n- none\n\n## 下周关注重点\n\n- 继续观察。\n",
+        encoding="utf-8",
+    )
+    codex_home = tmp_path / ".codex"
+    (codex_home / "reports").mkdir(parents=True)
+    (codex_home / "reports" / "daily-ai-agent-radar-2026-06-09.md").write_text(
+        "# Radar\n\n## 记忆友好收尾摘要\n\n今天 AI 雷达发现一个高信号工具，建议加入观察。\n\n## 建议动作\n\n- 加入观察。\n",
+        encoding="utf-8",
+    )
+
+    result = reflection.build_cron_intake(
+        date="2026-06-09",
+        operations_dir=operations,
+        codex_home=codex_home,
+    )
+
+    assert result["status"] == "ok"
+    assert "4/4 个产物可读取" in result["summary"]
+    assert "裁决 1 个 memory digest proposal" in result["action_items"]
+    assert "处理 1 个 14 天 inbox archive 候选" in result["action_items"]
+    rendered = reflection.render_cron_intake(result)
+    assert "今天需要处理 proposal" in rendered
+    assert "AI 雷达" in rendered
+    assert "高信号工具" in rendered
+
+
+def test_build_cron_intake_surfaces_missing_ai_radar_artifact(tmp_path):
+    operations = tmp_path / "wiki" / "operations"
+    operations.mkdir(parents=True)
+    (operations / "daily-memory-digest-2026-06-09.md").write_text(
+        "---\nproposal_count: 0\nstale_archive_count: 0\n---\n\n## 🧩 今日沉淀卡\n\n- 结论：无新沉淀。\n",
+        encoding="utf-8",
+    )
+
+    result = reflection.build_cron_intake(
+        date="2026-06-09",
+        operations_dir=operations,
+        codex_home=tmp_path / ".codex",
+    )
+
+    assert result["status"] == "partial"
+    assert any("AI radar report is not persisted" in warning for warning in result["warnings"])
+    assert any("AI 雷达落本地短报告" in action for action in result["action_items"])
