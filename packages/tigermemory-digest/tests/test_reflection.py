@@ -241,6 +241,12 @@ def test_build_cron_intake_filters_reports_by_window(tmp_path):
         operations_dir=operations,
         codex_home=codex_home,
     )
+    monday_health = reflection.build_cron_intake(
+        date="2026-06-08",
+        window="system-health",
+        operations_dir=operations,
+        codex_home=codex_home,
+    )
     radar = reflection.build_cron_intake(
         date="2026-06-09",
         window="ai-radar",
@@ -249,9 +255,47 @@ def test_build_cron_intake_filters_reports_by_window(tmp_path):
     )
 
     assert [row["kind"] for row in digest["reports"]] == ["memory_digest"]
-    assert [row["kind"] for row in health["reports"]] == ["daily_health", "weekly_review"]
+    assert [row["kind"] for row in health["reports"]] == ["daily_health"]
+    assert [row["kind"] for row in monday_health["reports"]] == ["daily_health", "weekly_review"]
     assert [row["kind"] for row in radar["reports"]] == ["ai_agent_radar"]
     assert digest["status"] == health["status"] == radar["status"] == "ok"
+    assert monday_health["status"] == "partial"
+
+
+def test_build_cron_intake_surfaces_missing_memory_digest_action(tmp_path):
+    operations = tmp_path / "wiki" / "operations"
+    operations.mkdir(parents=True)
+
+    result = reflection.build_cron_intake(
+        date="2026-06-08",
+        window="memory-digest",
+        operations_dir=operations,
+    )
+
+    assert result["status"] == "partial"
+    assert any("tigermemory-memory-route-reflection" in item for item in result["action_items"])
+    assert not any(item == "无立即动作，继续观察" for item in result["action_items"])
+
+
+def test_build_cron_intake_surfaces_red_daily_health_action(tmp_path):
+    operations = tmp_path / "wiki" / "operations"
+    (operations / "daily-health").mkdir(parents=True)
+    (operations / "daily-health" / "2026-06-09.md").write_text(
+        "# Daily Health\n\n## 摘要\n\n本轮巡检结论暂定为 red。\n\n## 中文总览\n\n- 健康色：`red`\n",
+        encoding="utf-8",
+    )
+
+    result = reflection.build_cron_intake(
+        date="2026-06-09",
+        window="system-health",
+        operations_dir=operations,
+    )
+
+    assert result["status"] == "warn"
+    report = result["reports"][0]
+    assert report["health_color"] == "red"
+    assert any("daily-health red" in item for item in result["action_items"])
+    assert not any(item == "无立即动作，继续观察" for item in result["action_items"])
 
 
 def test_default_intake_date_uses_yesterday_for_memory_digest(monkeypatch):

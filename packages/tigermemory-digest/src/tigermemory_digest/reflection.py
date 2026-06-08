@@ -1515,6 +1515,7 @@ def _daily_health_intake(date: str, *, operations_dir: pathlib.Path = OPERATIONS
         "path": _report_path(path),
         "exists": path.exists(),
         "status": "missing",
+        "health_color": None,
         "summary": [],
         "issues": [],
     }
@@ -1525,8 +1526,24 @@ def _daily_health_intake(date: str, *, operations_dir: pathlib.Path = OPERATIONS
     summary = _compact_section_lines(_section_body(text, "摘要"), limit=6)
     if not summary:
         summary = _compact_section_lines(text, limit=6)
-    report.update({"status": "ok", "summary": summary})
+    health_color = _daily_health_color(text)
+    status = "warn" if health_color in {"red", "yellow"} else "ok"
+    report.update({"status": status, "health_color": health_color, "summary": summary})
+    if health_color in {"red", "yellow"}:
+        report["issues"].append(f"daily-health color is {health_color}")
     return report
+
+
+def _daily_health_color(text: str) -> str | None:
+    match = re.search(r"健康色：`?([a-z]+)`?", text, flags=re.I)
+    if not match:
+        match = re.search(r"巡检结论[^。\n]*\b(red|yellow|green)\b", text, flags=re.I)
+    if not match:
+        return None
+    value = match.group(1).lower()
+    if value in {"red", "yellow", "green"}:
+        return value
+    return None
 
 
 def _weekly_review_intake(date: str, *, operations_dir: pathlib.Path = OPERATIONS_DIR) -> dict[str, Any]:
@@ -1626,6 +1643,17 @@ def default_intake_date(window: str | None = None) -> str:
     return today_local()
 
 
+def _include_weekly_review_for_intake(date: str, window: str) -> bool:
+    if window == "all":
+        return True
+    if window != "system-health":
+        return False
+    try:
+        return dt.date.fromisoformat(date).weekday() == 0
+    except ValueError:
+        return False
+
+
 def build_cron_intake(
     *,
     date: str,
@@ -1640,10 +1668,9 @@ def build_cron_intake(
     if window in {"all", "memory-digest"}:
         reports.append(_daily_digest_intake(date, operations_dir=operations_dir))
     if window in {"all", "system-health"}:
-        reports.extend([
-            _daily_health_intake(date, operations_dir=operations_dir),
-            _weekly_review_intake(date, operations_dir=operations_dir),
-        ])
+        reports.append(_daily_health_intake(date, operations_dir=operations_dir))
+        if _include_weekly_review_for_intake(date, window):
+            reports.append(_weekly_review_intake(date, operations_dir=operations_dir))
     if include_ai and window in {"all", "ai-radar"}:
         reports.append(_ai_radar_intake(date, codex_home=codex_home))
     missing = [row for row in reports if not row.get("exists")]
@@ -1651,10 +1678,15 @@ def build_cron_intake(
     action_items: list[str] = []
     digest = next((row for row in reports if row.get("kind") == "memory_digest"), {})
     counts = digest.get("counts") or {}
+    if digest and not digest.get("exists"):
+        action_items.append(f"补跑或检查 tigermemory-memory-route-reflection：缺少 {digest.get('path')}")
     if counts.get("proposal_count"):
         action_items.append(f"裁决 {counts['proposal_count']} 个 memory digest proposal")
     if counts.get("stale_archive_count"):
         action_items.append(f"处理 {counts['stale_archive_count']} 个 14 天 inbox archive 候选")
+    for row in reports:
+        if row.get("kind") == "daily_health" and row.get("health_color") in {"red", "yellow"}:
+            action_items.append(f"处理 daily-health {row['health_color']}：查看 {row.get('path')} 的阻塞项和 known debt")
     if reports and reports[-1].get("kind") == "ai_agent_radar" and not reports[-1].get("exists"):
         action_items.append("让 AI 雷达落本地短报告，否则 20:30 心跳只能依赖聊天上下文")
     if not action_items:
