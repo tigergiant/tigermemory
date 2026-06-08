@@ -577,7 +577,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v44" in response.text
+    assert "tigermemory-memory-ops-v45" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -1063,7 +1063,7 @@ def test_dashboard_transition_css_is_shared():
     assert "body.tm-page-ready main" in css
     assert "tmContentIn" in css
     assert "prefers-reduced-motion: reduce" in css
-    assert "body.tm-page-leaving main" not in css
+    assert "body.tm-page-leaving main" in css
     assert "filter: blur" not in css.replace("backdrop-filter", "")
 
 
