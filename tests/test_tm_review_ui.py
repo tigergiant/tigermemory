@@ -53,6 +53,11 @@ def _write_digest(root: pathlib.Path, date: str = "2026-05-21") -> pathlib.Path:
             "",
             "fixture summary",
             "",
+            "## 🧩 今日沉淀卡",
+            "",
+            "- 结论：fixture digest 可用于审批测试。",
+            "- 建议行动：优先裁决 Proposed Changes。",
+            "",
             "## 📝 inbox 决策区",
             "",
             "### 🔴 建议 archive",
@@ -302,6 +307,53 @@ def test_api_digest_parses_expected_sections(tmp_path, monkeypatch):
     assert data["digest"]["inbox_rows"][0]["wiki_target"]["path"].startswith("wiki/systems/")
     assert data["digest"]["inbox_rows"][0]["wiki_target"]["similar"][0]["path"] == "wiki/systems/review-ui-approval.md"
     assert data["digest"]["proposals"][0]["id"] == "proposal-2026-05-21-001"
+
+
+def test_api_cron_intake_returns_compact_persisted_report_summary(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+    _write_digest(tmp_path, "2026-05-21")
+    health_dir = tmp_path / "wiki" / "operations" / "daily-health"
+    health_dir.mkdir(parents=True, exist_ok=True)
+    (health_dir / "2026-05-21.md").write_text(
+        "# Daily Health\n\n## 摘要\n\n- 服务正常。\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "wiki" / "operations" / "weekly-memory-review-2026-21.md").write_text(
+        "# Weekly\n\n## 摘要\n\n- 周报正常。\n\n## 漂移信号\n\n- none\n\n## 下周关注重点\n\n- 继续观察。\n",
+        encoding="utf-8",
+    )
+    radar_dir = tmp_path / ".codex" / "reports"
+    radar_dir.mkdir(parents=True)
+    (radar_dir / "daily-ai-agent-radar-2026-05-21.md").write_text(
+        "# Radar\n\n## 记忆友好收尾摘要\n\n2026-05-21 AI 雷达发现一个高信号 agent runtime 更新，建议加入观察。\n",
+        encoding="utf-8",
+    )
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/api/cron/intake/2026-05-21", headers=HOST)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    intake = data["intake"]
+    assert intake["status"] == "ok"
+    assert "4/4 个产物可读取" in intake["summary"]
+    assert any("memory_digest" == report["kind"] for report in intake["reports"])
+    radar = next(report for report in intake["reports"] if report["kind"] == "ai_agent_radar")
+    assert "高信号 agent runtime" in "\n".join(radar["friendly_closeout"])
+    assert "no-store" in response.headers["cache-control"]
+
+
+def test_api_cron_intake_rejects_invalid_date(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/api/cron/intake/not-a-date", headers=HOST)
+
+    assert response.status_code == 400
+    assert response.json()["ok"] is False
 
 
 def test_live_inbox_rows_forwards_route_fields_for_frontend_payload(tmp_path, monkeypatch):
