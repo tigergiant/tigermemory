@@ -615,6 +615,7 @@ def main() -> None:
 
     ci = sub.add_parser("cron-intake", help="render a compact cron follow-up card from persisted reports")
     ci.add_argument("--date")
+    ci.add_argument("--window", choices=["ai-radar", "all", "memory-digest", "system-health"], default="all")
     ci.add_argument("--json", action="store_true")
     ci.add_argument("--no-ai", action="store_true", help="skip AI/Agent radar artifact check")
     ci.add_argument("--codex-home", help="override Codex home for AI radar report lookup")

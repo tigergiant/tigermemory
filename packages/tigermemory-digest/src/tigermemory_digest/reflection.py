@@ -139,6 +139,10 @@ def today_local() -> str:
     return dt.datetime.now(tm_core.TZ_CN).strftime("%Y-%m-%d")
 
 
+def _yesterday_local() -> str:
+    return (dt.datetime.now(tm_core.TZ_CN).date() - dt.timedelta(days=1)).isoformat()
+
+
 def _parse_date(value: str) -> dt.date:
     return dt.date.fromisoformat(value)
 
@@ -1593,31 +1597,65 @@ def _ai_radar_intake(date: str, *, codex_home: pathlib.Path | None = None) -> di
     return report
 
 
+INTAKE_WINDOWS = {"all", "memory-digest", "system-health", "ai-radar"}
+
+
+def _normalize_intake_window(window: str | None) -> str:
+    value = (window or "all").strip().lower().replace("_", "-")
+    aliases = {
+        "memory": "memory-digest",
+        "daily": "memory-digest",
+        "digest": "memory-digest",
+        "daily-health": "system-health",
+        "health": "system-health",
+        "weekly": "system-health",
+        "weekly-review": "system-health",
+        "radar": "ai-radar",
+        "ai": "ai-radar",
+    }
+    value = aliases.get(value, value)
+    if value not in INTAKE_WINDOWS:
+        raise ValueError(f"unknown cron intake window: {window}")
+    return value
+
+
+def default_intake_date(window: str | None = None) -> str:
+    normalized = _normalize_intake_window(window)
+    if normalized == "memory-digest":
+        return _yesterday_local()
+    return today_local()
+
+
 def build_cron_intake(
     *,
     date: str,
+    window: str = "all",
     include_ai: bool = True,
     operations_dir: pathlib.Path = OPERATIONS_DIR,
     codex_home: pathlib.Path | None = None,
 ) -> dict[str, Any]:
     """Build a compact read-only intake card for cron heartbeat follow-up."""
-    reports = [
-        _daily_digest_intake(date, operations_dir=operations_dir),
-        _daily_health_intake(date, operations_dir=operations_dir),
-        _weekly_review_intake(date, operations_dir=operations_dir),
-    ]
-    if include_ai:
+    window = _normalize_intake_window(window)
+    reports: list[dict[str, Any]] = []
+    if window in {"all", "memory-digest"}:
+        reports.append(_daily_digest_intake(date, operations_dir=operations_dir))
+    if window in {"all", "system-health"}:
+        reports.extend([
+            _daily_health_intake(date, operations_dir=operations_dir),
+            _weekly_review_intake(date, operations_dir=operations_dir),
+        ])
+    if include_ai and window in {"all", "ai-radar"}:
         reports.append(_ai_radar_intake(date, codex_home=codex_home))
     missing = [row for row in reports if not row.get("exists")]
     warnings = [f"{row['kind']}: {issue}" for row in reports for issue in row.get("issues", [])]
     action_items: list[str] = []
-    digest = reports[0]
+    digest = next((row for row in reports if row.get("kind") == "memory_digest"), {})
     counts = digest.get("counts") or {}
     if counts.get("proposal_count"):
         action_items.append(f"裁决 {counts['proposal_count']} 个 memory digest proposal")
     if counts.get("stale_archive_count"):
         action_items.append(f"处理 {counts['stale_archive_count']} 个 14 天 inbox archive 候选")
-    if reports[-1].get("kind") == "ai_agent_radar" and not reports[-1].get("exists"):
+    if reports and reports[-1].get("kind") == "ai_agent_radar" and not reports[-1].get("exists"):
         action_items.append("让 AI 雷达落本地短报告，否则 20:30 心跳只能依赖聊天上下文")
     if not action_items:
         action_items.append("无立即动作，继续观察")
@@ -1629,7 +1667,8 @@ def build_cron_intake(
     return {
         "status": status,
         "date": date,
-        "summary": f"{date} cron 承接摘要：{len(reports) - len(missing)}/{len(reports)} 个产物可读取，{len(warnings)} 条警告。",
+        "window": window,
+        "summary": f"{date} {window} cron 承接摘要：{len(reports) - len(missing)}/{len(reports)} 个产物可读取，{len(warnings)} 条警告。",
         "reports": reports,
         "warnings": warnings,
         "action_items": action_items,
@@ -1933,8 +1972,10 @@ def cmd_enrich_inbox(args: argparse.Namespace) -> int:
 
 
 def cmd_intake(args: argparse.Namespace) -> int:
+    window = _normalize_intake_window(getattr(args, "window", "all"))
     result = build_cron_intake(
-        date=args.date or today_local(),
+        date=args.date or default_intake_date(window),
+        window=window,
         include_ai=not args.no_ai,
         codex_home=pathlib.Path(args.codex_home) if args.codex_home else None,
     )
@@ -1966,6 +2007,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     intake = sub.add_parser("intake", help="Render a compact cron follow-up card from persisted reports")
     intake.add_argument("--date")
+    intake.add_argument("--window", choices=sorted(INTAKE_WINDOWS), default="all")
     intake.add_argument("--json", action="store_true")
     intake.add_argument("--no-ai", action="store_true", help="Skip AI/Agent radar artifact check")
     intake.add_argument("--codex-home", help="Override Codex home for AI radar report lookup")

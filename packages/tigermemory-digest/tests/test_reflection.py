@@ -204,3 +204,60 @@ def test_build_cron_intake_accepts_bold_ai_radar_sections(tmp_path):
     assert "立即评估 headroom" in "\n".join(radar["actions"])
     assert not any("missing 记忆友好收尾摘要" in warning for warning in result["warnings"])
     assert all("investment" not in report["kind"] for report in result["reports"])
+
+
+def test_build_cron_intake_filters_reports_by_window(tmp_path):
+    operations = tmp_path / "wiki" / "operations"
+    operations.mkdir(parents=True)
+    (operations / "daily-memory-digest-2026-06-08.md").write_text(
+        "---\nproposal_count: 0\nstale_archive_count: 0\n---\n\n## 🧩 今日沉淀卡\n\n- 结论：日报可读。\n",
+        encoding="utf-8",
+    )
+    (operations / "daily-health").mkdir(parents=True)
+    (operations / "daily-health" / "2026-06-09.md").write_text(
+        "# Daily Health\n\n## 摘要\n\n- 体检可读。\n",
+        encoding="utf-8",
+    )
+    (operations / "weekly-memory-review-2026-24.md").write_text(
+        "# Weekly\n\n## 摘要\n\n- 周报可读。\n",
+        encoding="utf-8",
+    )
+    codex_home = tmp_path / ".codex"
+    (codex_home / "reports").mkdir(parents=True)
+    (codex_home / "reports" / "daily-ai-agent-radar-2026-06-09.md").write_text(
+        "# Radar\n\n**记忆友好收尾摘要**\n\n2026-06-09 AI 雷达有高信号。\n",
+        encoding="utf-8",
+    )
+
+    digest = reflection.build_cron_intake(
+        date="2026-06-08",
+        window="memory-digest",
+        operations_dir=operations,
+        codex_home=codex_home,
+    )
+    health = reflection.build_cron_intake(
+        date="2026-06-09",
+        window="system-health",
+        operations_dir=operations,
+        codex_home=codex_home,
+    )
+    radar = reflection.build_cron_intake(
+        date="2026-06-09",
+        window="ai-radar",
+        operations_dir=operations,
+        codex_home=codex_home,
+    )
+
+    assert [row["kind"] for row in digest["reports"]] == ["memory_digest"]
+    assert [row["kind"] for row in health["reports"]] == ["daily_health", "weekly_review"]
+    assert [row["kind"] for row in radar["reports"]] == ["ai_agent_radar"]
+    assert digest["status"] == health["status"] == radar["status"] == "ok"
+
+
+def test_default_intake_date_uses_yesterday_for_memory_digest(monkeypatch):
+    monkeypatch.setattr(reflection, "_yesterday_local", lambda: "2026-06-08")
+    monkeypatch.setattr(reflection, "today_local", lambda: "2026-06-09")
+
+    assert reflection.default_intake_date("memory-digest") == "2026-06-08"
+    assert reflection.default_intake_date("system-health") == "2026-06-09"
+    assert reflection.default_intake_date("ai-radar") == "2026-06-09"
