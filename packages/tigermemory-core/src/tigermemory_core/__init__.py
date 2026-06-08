@@ -2095,6 +2095,7 @@ def _rank_search_hit(
     title_lower = title.lower()
     slug_words = set(_slug_search_text(rel).split())
     alias_text = " ".join(aliases or []).lower()
+    query_phrase = " ".join(group[0] for group in term_groups if group and group[0]).strip()
 
     # Slug/title/alias hits are strong signals for canonical pages. Body-only
     # counts otherwise let indexes and overview pages dominate through repeats.
@@ -2112,6 +2113,11 @@ def _rank_search_hit(
             score += 120
     if alias_text and all(_group_in_text(group, alias_text) for group in term_groups):
         score += 40
+    if query_phrase:
+        if query_phrase in title_lower:
+            score += 120
+        if query_phrase in alias_text:
+            score += 120
     if _is_person_profile_query(term_groups):
         if rel.startswith("wiki/person/") and not rel.endswith("/index.md"):
             score += 300

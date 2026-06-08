@@ -311,6 +311,45 @@ investment portfolio family holdings investment portfolio family holdings invest
     assert results[0]["path"] == "wiki/investment/portfolio-overview.md"
 
 
+def test_search_wiki_ranks_exact_alias_phrase_above_related_spec(monkeypatch, tmp_path):
+    wiki = tmp_path / "wiki"
+    (wiki / "systems").mkdir(parents=True)
+    (wiki / "systems" / "api-notes.md").write_text(
+        """---
+owner: codex
+status: active
+updated: 2026-06-09
+aliases: ["OpenClaw CE API notes plugin"]
+title: "OpenClaw CE API notes"
+---
+# OpenClaw CE API notes
+
+API baseline.
+""",
+        encoding="utf-8",
+    )
+    (wiki / "systems" / "plugin-spec.md").write_text(
+        """---
+owner: codex
+status: active
+updated: 2026-06-09
+aliases: ["OpenClaw CE plugin spec"]
+title: "OpenClaw CE plugin spec"
+---
+# OpenClaw CE plugin spec
+
+OpenClaw CE API notes plugin OpenClaw CE plugin OpenClaw context engine plugin.
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+
+    results = tm_core.search_wiki("OpenClaw CE API notes plugin", size=2, include_sources=False)
+
+    assert results[0]["path"] == "wiki/systems/api-notes.md"
+
+
 def test_search_wiki_ranks_exact_short_title_above_repeated_body_terms(monkeypatch, tmp_path):
     wiki = tmp_path / "wiki"
     (wiki / "operations").mkdir(parents=True)
