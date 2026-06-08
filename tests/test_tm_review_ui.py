@@ -2144,6 +2144,154 @@ def test_canvas_star_map_uses_stable_compact_layout():
     assert "const iterations = 96" in pages_js
 
 
+def test_canvas_payload_includes_canvas_update_candidates(monkeypatch):
+    raw_card = {
+        "id": "m-canvas-1",
+        "created_at": "2026-06-09T09:00:00Z",
+        "memory": (
+            "---\n"
+            "memory_type: session-handoff\n"
+            "session_id: codex-20260609-0900\n"
+            "ide: codex\n"
+            "agent: codex\n"
+            "confidence: high\n"
+            "source: agent\n"
+            "---\n"
+            "\n"
+            "## Task\n"
+            "Patch the project canvas state for the current run.\n"
+            "\n"
+            "## Decisions\n"
+            "Keep the canvas patch as a reviewed candidate.\n"
+            "\n"
+            "## Blockers\n"
+            "none\n"
+            "\n"
+            "## Handoff\n"
+            "Review before editing the verified project canvas.\n"
+            "\n"
+            "## Evidence Refs\n"
+            "- canvas_patch: P2_RollingSummary updated with canvas_patch evidence\n"
+            "- files: wiki/operations/project-canvas.md\n"
+        ),
+    }
+    monkeypatch.setattr(tm_review_ui, "_worktree_dirty_state", lambda: {"dirty": False, "status_count": 0})
+    monkeypatch.setattr(tm_review_ui, "_mem0_payload", lambda *_args, **_kwargs: {"items": [raw_card], "count": 1})
+    tm_review_ui._API_CACHE.clear()
+    assert hasattr(tm_review_ui._load_session_rolling_summary_module(), "build_canvas_update_candidates")
+
+    payload = tm_review_ui._load_canvas_payload()
+
+    assert payload["ok"] is True
+    assert payload["candidate_count"] == 1, {
+        "warnings": payload.get("candidate_warnings"),
+        "candidates": payload.get("canvas_candidates"),
+        "source": payload.get("candidate_source"),
+    }
+    assert payload["candidate_source"] == "mem0:session-handoff + session-rolling-summary.py"
+    assert payload["candidate_warnings"] == []
+    assert len(payload["active_modules"]) > payload["candidate_count"]
+
+    candidate = payload["canvas_candidates"][0]
+    assert candidate["decision"] == "propose_canvas_update"
+    assert candidate["review_state"] == "建议纳入"
+    assert candidate["target_module"] == "P2_RollingSummary"
+    assert candidate["summary"] == "Patch the project canvas state for the current run."
+    assert candidate["reason"] == "canvas_patch evidence: P2_RollingSummary updated with canvas_patch evidence"
+    assert candidate["evidence_count"] == 3
+    assert candidate["source"] == "agent"
+    assert candidate["confidence"] == "high"
+
+
+def test_canvas_candidates_are_short_ttl_cached(monkeypatch):
+    calls = {"count": 0}
+
+    def fake_mem0_payload(*_args, **_kwargs):
+        calls["count"] += 1
+        return {"items": [], "count": 0}
+
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(tm_review_ui, "_mem0_payload", fake_mem0_payload)
+    tm_review_ui._API_CACHE.clear()
+
+    first = tm_review_ui._load_canvas_candidates()
+    second = tm_review_ui._load_canvas_candidates()
+
+    assert calls["count"] == 1
+    assert first["candidate_cached"] is False
+    assert second["candidate_cached"] is True
+    assert first["canvas_candidates"] == []
+    assert second["canvas_candidates"] == []
+
+
+def test_canvas_payload_returns_candidate_warning_when_mem0_unavailable(tmp_path, monkeypatch):
+    missing_canvas_path = tmp_path / "wiki" / "operations" / "project-canvas.md"
+    monkeypatch.setattr(tm_review_ui, "CANVAS_SOURCE_PATH", missing_canvas_path)
+    monkeypatch.setattr(tm_review_ui, "_worktree_dirty_state", lambda: {"dirty": False, "status_count": 0})
+    monkeypatch.setattr(tm_review_ui, "_mem0_payload", lambda *_args, **_kwargs: {"items": [], "error": "connection refused"})
+    tm_review_ui._API_CACHE.clear()
+
+    payload = tm_review_ui._load_canvas_payload()
+
+    assert payload["ok"] is False
+    assert payload["canvas_candidates"] == []
+    assert payload["candidate_count"] == 0
+    assert payload["candidate_source"] == "mem0:session-handoff"
+    assert payload["candidate_warnings"] == ["待纳入星图候选读取失败：connection refused"]
+
+
+def test_canvas_candidate_mem0_payload_can_use_env_fallback(monkeypatch):
+    seen = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps({"count": 1, "results": [{"id": "m1"}]}).encode("utf-8")
+
+    def fake_urlopen(req, timeout):
+        seen["url"] = req.full_url
+        seen["auth"] = req.get_header("Authorization")
+        seen["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setenv("MEM0_URL", "http://127.0.0.1:8765")
+    monkeypatch.setenv("MEM0_API_KEY", "test-key")
+    monkeypatch.setattr(tm_review_ui.urllib.request, "urlopen", fake_urlopen)
+
+    payload = tm_review_ui._canvas_candidates_mem0_payload_from_env(
+        "memory_type: session-handoff",
+        size=3,
+        timeout=1.5,
+    )
+
+    assert payload is not None
+    assert payload["count"] == 1
+    assert len(payload["items"]) == 1
+    assert "search_query=memory_type%3A+session-handoff" in seen["url"]
+    assert seen["auth"] == "Bearer test-key"
+    assert seen["timeout"] == 1.5
+
+
+def test_canvas_candidate_shelf_is_separate_from_star_map():
+    canvas_html = (tm_review_ui.STATIC_DIR / "canvas.html").read_text(encoding="utf-8")
+    pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
+    canvas_controller = pages_js.split("window.tmPages.canvas = {", 1)[1]
+    graph_builder = pages_js.split("buildGraphModel(stages)", 1)[1].split("drawGraph", 1)[0]
+
+    assert "待纳入星图" in canvas_html
+    assert 'id="canvas-candidates"' in canvas_html
+    assert "canvas-candidate-count" in canvas_html
+    assert "canvasCandidates" in canvas_controller
+    assert "renderCandidates(data)" in canvas_controller
+    assert "canvas_candidates" not in graph_builder
+    assert "candidate_count" not in pages_js.split("canvas-module-count", 1)[1].split("renderCandidates", 1)[0]
+
+
 def test_health_page_compacts_optional_advanced_services_for_local_mode():
     pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
 
