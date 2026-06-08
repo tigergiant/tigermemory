@@ -223,7 +223,7 @@ def test_build_cron_intake_accepts_bold_ai_radar_sections(tmp_path):
     (codex_home / "reports" / "daily-ai-agent-radar-2026-06-09.md").write_text(
         "# Radar\n\n**记忆友好收尾摘要**\n"
         "2026-06-09 AI 雷达发现 headroom 与 LongMINT 高信号，适合补强 tigermemory 评测。\n\n"
-        "**建议动作**\n\n- 立即评估 headroom。\n- 加入观察 LongMINT。\n",
+        "**建议动作**\n\n- 立即评估 headroom。\n- 加入观察 LongMINT。\n- 立即评估 TradingAgents-AShare。\n",
         encoding="utf-8",
     )
 
@@ -237,6 +237,11 @@ def test_build_cron_intake_accepts_bold_ai_radar_sections(tmp_path):
     assert radar["status"] == "ok"
     assert "headroom" in "\n".join(radar["friendly_closeout"])
     assert "立即评估 headroom" in "\n".join(radar["actions"])
+    assert any("AI 雷达建议：立即评估 headroom" in item for item in result["action_items"])
+    assert any("AI 雷达建议：加入观察 LongMINT" in item for item in result["action_items"])
+    assert any("投资专线转交：立即评估 TradingAgents-AShare" in item for item in result["action_items"])
+    assert not any("AI 雷达建议：立即评估 TradingAgents-AShare" in item for item in result["action_items"])
+    assert not any(item == "无立即动作，继续观察" for item in result["action_items"])
     assert not any("missing 记忆友好收尾摘要" in warning for warning in result["warnings"])
     assert all("investment" not in report["kind"] for report in result["reports"])
 

@@ -1614,6 +1614,25 @@ def _ai_radar_intake(date: str, *, codex_home: pathlib.Path | None = None) -> di
     return report
 
 
+def _is_investment_radar_action(text: str) -> bool:
+    lower = text.lower()
+    markers = (
+        "tradingagents",
+        "tradingagent",
+        "bqmt",
+        "mini qmt",
+        "miniqmt",
+        "a-share",
+        "ashare",
+        "a股",
+        "投研",
+        "投资",
+        "交易",
+        "下单",
+    )
+    return any(marker in lower for marker in markers)
+
+
 INTAKE_WINDOWS = {"all", "memory-digest", "system-health", "ai-radar"}
 
 
@@ -1689,6 +1708,16 @@ def build_cron_intake(
             action_items.append(f"处理 daily-health {row['health_color']}：查看 {row.get('path')} 的阻塞项和 known debt")
     if reports and reports[-1].get("kind") == "ai_agent_radar" and not reports[-1].get("exists"):
         action_items.append("让 AI 雷达落本地短报告，否则 20:30 心跳只能依赖聊天上下文")
+    for row in reports:
+        if row.get("kind") == "ai_agent_radar" and row.get("exists"):
+            for action in row.get("actions", [])[:6]:
+                action_text = str(action).strip()
+                if action_text:
+                    action_text = action_text.lstrip("- ").strip()
+                    if _is_investment_radar_action(action_text):
+                        action_items.append(f"投资专线转交：{action_text}")
+                    else:
+                        action_items.append(f"AI 雷达建议：{action_text}")
     if not action_items:
         action_items.append("无立即动作，继续观察")
     status = "ok"
