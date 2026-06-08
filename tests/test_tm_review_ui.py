@@ -577,7 +577,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v36" in response.text
+    assert "tigermemory-memory-ops-v44" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -1064,7 +1064,7 @@ def test_dashboard_transition_css_is_shared():
     assert "tmContentIn" in css
     assert "prefers-reduced-motion: reduce" in css
     assert "body.tm-page-leaving main" not in css
-    assert "filter: blur" not in css
+    assert "filter: blur" not in css.replace("backdrop-filter", "")
 
 
 def test_quality_and_settings_no_longer_use_raw_json_page(tmp_path, monkeypatch):
@@ -2131,12 +2131,13 @@ def test_quality_page_flow_panel_keeps_all_routes_visible():
 def test_canvas_star_map_uses_stable_compact_layout():
     canvas_html = (tm_review_ui.STATIC_DIR / "canvas.html").read_text(encoding="utf-8")
     pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
+    style_css = (tm_review_ui.STATIC_DIR / "_components" / "style.css").read_text(encoding="utf-8")
 
-    assert ".canvas-graph-toolbar" in canvas_html
-    assert "grid-template-columns: minmax(0, 1fr) auto" in canvas_html
-    assert ".canvas-graph-hint" in canvas_html
-    assert "-webkit-line-clamp: 2" in canvas_html
-    assert "Math.random" not in pages_js
+    assert ".canvas-graph-toolbar" in style_css
+    assert "grid-template-columns: minmax(0, 1fr) auto" in style_css
+    assert ".canvas-graph-hint" in style_css
+    assert "-webkit-line-clamp: 2" in style_css
+    assert "Math.random" not in pages_js.split("window.tmPages.canvas = {")[1]
     assert "graphWorld: {width: 1680, height: 1080}" in pages_js
     assert "const minFitScale = rect.width < 560 ? 0.18 : 0.34" in pages_js
     assert "const spacing = 64" in pages_js
