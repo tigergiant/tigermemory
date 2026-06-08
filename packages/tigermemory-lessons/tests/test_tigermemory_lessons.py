@@ -65,6 +65,52 @@ hook body body
         "title_hits": 1,
         "alias_hits": 1,
         "body_hits": 3,
+        "exact_title_bonus": 0,
+        "exact_alias_bonus": 0,
         "matched_terms": ["commit", "hook", "body"],
         "final_score": score,
     }
+
+
+def test_score_lesson_prefers_exact_title_alias_over_repeated_generic_term():
+    generic = """---
+title: PowerShell command shape
+aliases: ["PowerShell"]
+---
+
+PowerShell PowerShell PowerShell PowerShell PowerShell PowerShell PowerShell
+PowerShell PowerShell PowerShell PowerShell PowerShell PowerShell PowerShell
+PowerShell PowerShell PowerShell PowerShell PowerShell PowerShell PowerShell
+"""
+    specific = """---
+title: PowerShell buffer undercount
+aliases: ["PowerShell buffer undercount"]
+---
+
+Always count full status lines.
+"""
+
+    generic_score, *_ = tm_lessons._score_lesson(generic, ["powershell", "buffer", "undercount"])
+    specific_score, *_ = tm_lessons._score_lesson(specific, ["powershell", "buffer", "undercount"])
+
+    assert specific_score > generic_score
+
+
+def test_score_lesson_explain_reports_exact_alias_bonus():
+    text = """---
+title: Worktree Pull Discipline
+aliases: ["cross worktree pull omission"]
+---
+
+cross worktree drift
+"""
+
+    score, _title, _aliases, breakdown = tm_lessons._score_lesson(
+        text,
+        ["cross", "worktree", "pull", "omission"],
+        explain=True,
+    )
+
+    assert breakdown is not None
+    assert breakdown["exact_alias_bonus"] == 60
+    assert breakdown["final_score"] == score

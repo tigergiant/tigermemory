@@ -129,12 +129,18 @@ def _score_lesson(
                 and term not in matched_terms
             ):
                 matched_terms.append(term)
+    query_phrase = " ".join(token.lower() for token in query_tokens if token).strip()
+    exact_title_bonus = 80 if query_phrase and query_phrase in title_lc else 0
+    exact_alias_bonus = 60 if query_phrase and query_phrase in aliases_lc else 0
+    score += exact_title_bonus + exact_alias_bonus
     breakdown = None
     if explain:
         breakdown = {
             "title_hits": total_title_hits,
             "alias_hits": total_alias_hits,
             "body_hits": total_body_hits,
+            "exact_title_bonus": exact_title_bonus,
+            "exact_alias_bonus": exact_alias_bonus,
             "matched_terms": matched_terms,
             "final_score": score,
         }
