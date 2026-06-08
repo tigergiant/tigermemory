@@ -144,6 +144,37 @@ def test_build_cron_intake_reads_compact_cards(tmp_path):
     assert "高信号工具" in rendered
 
 
+def test_write_cron_intake_card_persists_wiki_page(tmp_path, monkeypatch):
+    monkeypatch.setattr(reflection, "today_local", lambda: "2026-06-09")
+    operations = tmp_path / "wiki" / "operations"
+    result = {
+        "status": "warn",
+        "date": "2026-06-09",
+        "window": "system-health",
+        "summary": "2026-06-09 system-health cron 承接摘要。",
+        "reports": [
+            {
+                "kind": "daily_health",
+                "status": "warn",
+                "path": "wiki/operations/daily-health/2026-06-09.md",
+                "issues": ["daily-health color is red"],
+            }
+        ],
+        "warnings": ["daily_health: daily-health color is red"],
+        "action_items": ["处理 daily-health red：查看阻塞项和 known debt"],
+    }
+
+    path = reflection.write_cron_intake_card(result, operations_dir=operations)
+    text = path.read_text(encoding="utf-8")
+
+    assert path == operations / "cron-intake" / "2026-06-09-system-health.md"
+    assert "owner: codex" in text
+    assert 'title: "Cron 承接卡 2026-06-09 system-health"' in text
+    assert 'intake_status: "warn"' in text
+    assert "# Cron 承接卡 2026-06-09 system-health" in text
+    assert "处理 daily-health red" in text
+
+
 def test_build_cron_intake_surfaces_missing_ai_radar_artifact(tmp_path):
     operations = tmp_path / "wiki" / "operations"
     operations.mkdir(parents=True)

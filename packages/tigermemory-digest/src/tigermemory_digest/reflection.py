@@ -1709,7 +1709,9 @@ def build_cron_intake(
 
 def render_cron_intake(result: dict[str, Any]) -> str:
     lines = [
-        f"# Cron Intake {result['date']}",
+        f"# Cron 承接卡 {result['date']} {result['window']}",
+        "",
+        "## 摘要",
         "",
         f"- 状态：{result['status']}",
         f"- 摘要：{result['summary']}",
@@ -1732,6 +1734,47 @@ def render_cron_intake(result: dict[str, Any]) -> str:
     if radar and radar.get("friendly_closeout"):
         lines.extend(["", "### AI 雷达", *[str(x) for x in radar["friendly_closeout"]]])
     return "\n".join(lines).rstrip() + "\n"
+
+
+def cron_intake_card_path(
+    *,
+    date: str,
+    window: str,
+    operations_dir: pathlib.Path = OPERATIONS_DIR,
+) -> pathlib.Path:
+    return operations_dir / "cron-intake" / f"{date}-{_normalize_intake_window(window)}.md"
+
+
+def render_cron_intake_card(result: dict[str, Any]) -> str:
+    title = f"Cron 承接卡 {result['date']} {result['window']}"
+    body = render_cron_intake(result)
+    return "\n".join([
+        "---",
+        "owner: codex",
+        "status: active",
+        f"updated: {today_local()}",
+        f'title: "{title}"',
+        "aliases:",
+        f'  - "cron intake {result["date"]} {result["window"]}"',
+        f'cron_date: "{result["date"]}"',
+        f'window: "{result["window"]}"',
+        f'intake_status: "{result["status"]}"',
+        "---",
+        "",
+        body.rstrip(),
+        "",
+    ])
+
+
+def write_cron_intake_card(
+    result: dict[str, Any],
+    *,
+    operations_dir: pathlib.Path = OPERATIONS_DIR,
+) -> pathlib.Path:
+    path = cron_intake_card_path(date=result["date"], window=result["window"], operations_dir=operations_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_cron_intake_card(result), encoding="utf-8", newline="\n")
+    return path
 
 
 def _proposal_status_counts(dates: Iterable[str], *, proposal_root: pathlib.Path = PROPOSAL_ROOT) -> dict[str, int]:
@@ -2011,10 +2054,14 @@ def cmd_intake(args: argparse.Namespace) -> int:
         include_ai=not args.no_ai,
         codex_home=pathlib.Path(args.codex_home) if args.codex_home else None,
     )
+    if getattr(args, "write_card", False):
+        result["written_path"] = _relpath(write_cron_intake_card(result))
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         print(render_cron_intake(result), end="")
+        if result.get("written_path"):
+            print(f"\n写入：{result['written_path']}")
     return 0
 
 
@@ -2043,6 +2090,7 @@ def build_parser() -> argparse.ArgumentParser:
     intake.add_argument("--json", action="store_true")
     intake.add_argument("--no-ai", action="store_true", help="Skip AI/Agent radar artifact check")
     intake.add_argument("--codex-home", help="Override Codex home for AI radar report lookup")
+    intake.add_argument("--write-card", action="store_true", help="Write the intake card to wiki/operations/cron-intake/")
     intake.set_defaults(func=cmd_intake)
     return parser
 

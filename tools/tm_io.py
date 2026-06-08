@@ -21,7 +21,7 @@ Usage:
   tm_io.py cron-rollback COMMIT_SHA
   tm_io.py cron-daily-report [--date YYYY-MM-DD]
   tm_io.py cron-weekly-report [--date YYYY-MM-DD]
-  tm_io.py cron-intake [--date YYYY-MM-DD] [--json]
+  tm_io.py cron-intake [--date YYYY-MM-DD] [--window memory-digest|system-health|ai-radar] [--json] [--write-card]
   tm_io.py agent-doctor    [--json]
   tm_io.py lint-page    <path>
   tm_io.py status       [--json]
@@ -619,6 +619,7 @@ def main() -> None:
     ci.add_argument("--json", action="store_true")
     ci.add_argument("--no-ai", action="store_true", help="skip AI/Agent radar artifact check")
     ci.add_argument("--codex-home", help="override Codex home for AI radar report lookup")
+    ci.add_argument("--write-card", action="store_true", help="write the intake card to wiki/operations/cron-intake/")
     ci.set_defaults(func=cmd_cron_intake)
 
     pb = sub.add_parser(
