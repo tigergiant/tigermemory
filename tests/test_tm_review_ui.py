@@ -2229,6 +2229,7 @@ def test_canvas_payload_includes_canvas_update_candidates(monkeypatch):
     }
     monkeypatch.setattr(tm_review_ui, "_worktree_dirty_state", lambda: {"dirty": False, "status_count": 0})
     monkeypatch.setattr(tm_review_ui, "_mem0_payload", lambda *_args, **_kwargs: {"items": [raw_card], "count": 1})
+    monkeypatch.setattr(tm_review_ui, "_local_inbox_handoff_items", lambda *_args, **_kwargs: [])
     tm_review_ui._API_CACHE.clear()
     assert hasattr(tm_review_ui._load_session_rolling_summary_module(), "build_canvas_update_candidates")
 
@@ -2240,7 +2241,7 @@ def test_canvas_payload_includes_canvas_update_candidates(monkeypatch):
         "candidates": payload.get("canvas_candidates"),
         "source": payload.get("candidate_source"),
     }
-    assert payload["candidate_source"] == "mem0:session-handoff + session-rolling-summary.py"
+    assert payload["candidate_source"] == "mem0:session-handoff + inbox/wiki_proposal + session-rolling-summary.py"
     assert payload["candidate_warnings"] == []
     assert len(payload["active_modules"]) > payload["candidate_count"]
 
@@ -2255,6 +2256,62 @@ def test_canvas_payload_includes_canvas_update_candidates(monkeypatch):
     assert candidate["confidence"] == "high"
 
 
+def test_canvas_candidates_include_routed_inbox_handoff_when_mem0_empty(tmp_path, monkeypatch):
+    inbox = tmp_path / "inbox" / "2026-06-09-0408-codex-operations.md"
+    inbox.parent.mkdir(parents=True)
+    inbox.write_text(
+        "\n".join([
+            "---",
+            "routed_by: tigermemory",
+            "knowledge_target: wiki_proposal",
+            "---",
+            "",
+            "# Wiki proposal 82",
+            "",
+            "## Proposed Wiki body",
+            "",
+            "---",
+            "memory_type: session-handoff",
+            "session_id: codex-20260609-merge-canvas-candidates",
+            "ide: codex",
+            "agent: codex",
+            "confidence: high",
+            "source: agent",
+            "---",
+            "",
+            "## Task",
+            "Merged the candidate shelf into the dashboard.",
+            "",
+            "## Decisions",
+            "Keep canvas changes human reviewed.",
+            "",
+            "## Blockers",
+            "none",
+            "",
+            "## Handoff",
+            "Review the candidate before editing the formal canvas.",
+            "",
+            "## Evidence Refs",
+            "- canvas_patch: DashboardProjectCanvasCandidateShelf ready for review",
+            "- commit: 138f76ff",
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_ui, "_mem0_payload", lambda *_args, **_kwargs: {"items": [], "count": 0})
+    tm_review_ui._API_CACHE.clear()
+
+    payload = tm_review_ui._load_canvas_candidates()
+
+    assert payload["candidate_count"] == 1
+    assert payload["candidate_source"] == "mem0:session-handoff + inbox/wiki_proposal + session-rolling-summary.py"
+    assert payload["candidate_warnings"] == []
+    candidate = payload["canvas_candidates"][0]
+    assert candidate["target_module"] == "DashboardProjectCanvasCandidateShelf"
+    assert candidate["source"] == "agent"
+    assert candidate["evidence_refs"][0] == "memory:inbox:inbox/2026-06-09-0408-codex-operations.md"
+
+
 def test_canvas_candidates_are_short_ttl_cached(monkeypatch):
     calls = {"count": 0}
 
@@ -2264,6 +2321,7 @@ def test_canvas_candidates_are_short_ttl_cached(monkeypatch):
 
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     monkeypatch.setattr(tm_review_ui, "_mem0_payload", fake_mem0_payload)
+    monkeypatch.setattr(tm_review_ui, "_local_inbox_handoff_items", lambda *_args, **_kwargs: [])
     tm_review_ui._API_CACHE.clear()
 
     first = tm_review_ui._load_canvas_candidates()
@@ -2281,6 +2339,7 @@ def test_canvas_payload_returns_candidate_warning_when_mem0_unavailable(tmp_path
     monkeypatch.setattr(tm_review_ui, "CANVAS_SOURCE_PATH", missing_canvas_path)
     monkeypatch.setattr(tm_review_ui, "_worktree_dirty_state", lambda: {"dirty": False, "status_count": 0})
     monkeypatch.setattr(tm_review_ui, "_mem0_payload", lambda *_args, **_kwargs: {"items": [], "error": "connection refused"})
+    monkeypatch.setattr(tm_review_ui, "_local_inbox_handoff_items", lambda *_args, **_kwargs: [])
     tm_review_ui._API_CACHE.clear()
 
     payload = tm_review_ui._load_canvas_payload()
