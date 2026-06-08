@@ -1398,21 +1398,39 @@ def _frontmatter_counts(path: pathlib.Path) -> dict[str, int]:
 
 
 def _section_body(text: str, heading_contains: str) -> str:
-    """Return the body under the first H2 heading containing a marker."""
+    """Return the body under the first report section containing a marker."""
     lines = text.splitlines()
     start: int | None = None
     for idx, line in enumerate(lines):
-        if line.startswith("## ") and heading_contains in line:
+        if _is_section_heading(line, heading_contains):
             start = idx + 1
             break
     if start is None:
         return ""
     end = len(lines)
     for idx in range(start, len(lines)):
-        if lines[idx].startswith("## "):
+        if _is_section_boundary(lines[idx]):
             end = idx
             break
     return "\n".join(line.rstrip() for line in lines[start:end]).strip()
+
+
+def _is_section_heading(line: str, marker: str) -> bool:
+    stripped = line.strip()
+    if stripped.startswith("## ") and marker in stripped:
+        return True
+    if stripped.startswith("**") and stripped.endswith("**") and marker in stripped.strip("*").strip():
+        return True
+    return False
+
+
+def _is_section_boundary(line: str) -> bool:
+    stripped = line.strip()
+    if stripped.startswith("## "):
+        return True
+    if stripped.startswith("**") and stripped.endswith("**") and 2 <= len(stripped.strip("*").strip()) <= 40:
+        return True
+    return False
 
 
 def _compact_section_lines(section: str, *, limit: int = 8) -> list[str]:

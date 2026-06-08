@@ -161,3 +161,46 @@ def test_build_cron_intake_surfaces_missing_ai_radar_artifact(tmp_path):
     assert result["status"] == "partial"
     assert any("AI radar report is not persisted" in warning for warning in result["warnings"])
     assert any("AI 雷达落本地短报告" in action for action in result["action_items"])
+
+
+def test_build_cron_intake_accepts_bold_ai_radar_sections(tmp_path):
+    operations = tmp_path / "wiki" / "operations"
+    operations.mkdir(parents=True)
+    (operations / "daily-memory-digest-2026-06-09.md").write_text(
+        "---\nproposal_count: 0\nstale_archive_count: 0\n---\n\n## 🧩 今日沉淀卡\n\n- 结论：无新沉淀。\n",
+        encoding="utf-8",
+    )
+    (operations / "daily-health").mkdir(parents=True)
+    (operations / "daily-health" / "2026-06-09.md").write_text(
+        "# Daily Health\n\n## 摘要\n\n- tm-http 正常。\n",
+        encoding="utf-8",
+    )
+    (operations / "weekly-memory-review-2026-24.md").write_text(
+        "# Weekly\n\n## 摘要\n\n- 本周稳定。\n",
+        encoding="utf-8",
+    )
+    (operations / "family-investment-daily-health-2026-06-09.md").write_text(
+        "# Investment\n\n这份报告属于投资专线，不应进入 tigermemory 系统 cron 承接短卡。\n",
+        encoding="utf-8",
+    )
+    codex_home = tmp_path / ".codex"
+    (codex_home / "reports").mkdir(parents=True)
+    (codex_home / "reports" / "daily-ai-agent-radar-2026-06-09.md").write_text(
+        "# Radar\n\n**记忆友好收尾摘要**\n"
+        "2026-06-09 AI 雷达发现 headroom 与 LongMINT 高信号，适合补强 tigermemory 评测。\n\n"
+        "**建议动作**\n\n- 立即评估 headroom。\n- 加入观察 LongMINT。\n",
+        encoding="utf-8",
+    )
+
+    result = reflection.build_cron_intake(
+        date="2026-06-09",
+        operations_dir=operations,
+        codex_home=codex_home,
+    )
+
+    radar = next(report for report in result["reports"] if report["kind"] == "ai_agent_radar")
+    assert radar["status"] == "ok"
+    assert "headroom" in "\n".join(radar["friendly_closeout"])
+    assert "立即评估 headroom" in "\n".join(radar["actions"])
+    assert not any("missing 记忆友好收尾摘要" in warning for warning in result["warnings"])
+    assert all("investment" not in report["kind"] for report in result["reports"])

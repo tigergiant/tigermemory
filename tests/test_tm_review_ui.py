@@ -329,7 +329,7 @@ def test_api_cron_intake_returns_compact_persisted_report_summary(tmp_path, monk
     radar_dir = tmp_path / ".codex" / "reports"
     radar_dir.mkdir(parents=True)
     (radar_dir / "daily-ai-agent-radar-2026-05-21.md").write_text(
-        "# Radar\n\n## 记忆友好收尾摘要\n\n2026-05-21 AI 雷达发现一个高信号 agent runtime 更新，建议加入观察。\n",
+        "# Radar\n\n**记忆友好收尾摘要**\n\n2026-05-21 AI 雷达发现一个高信号 agent runtime 更新，建议加入观察。\n",
         encoding="utf-8",
     )
     client = _client(tmp_path, monkeypatch)
