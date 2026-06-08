@@ -537,7 +537,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v27" in response.text
+    assert "tigermemory-memory-ops-v28" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -2097,7 +2097,7 @@ def test_canvas_star_map_uses_stable_compact_layout():
     assert ".canvas-graph-hint" in canvas_html
     assert "-webkit-line-clamp: 2" in canvas_html
     assert "Math.random" not in pages_js
-    assert "graphWorld: {width: 1680, height: 1000}" in pages_js
+    assert "graphWorld: {width: 1680, height: 1080}" in pages_js
     assert "const minFitScale = rect.width < 560 ? 0.18 : 0.34" in pages_js
     assert "const spacing = 64" in pages_js
     assert "const iterations = 96" in pages_js
