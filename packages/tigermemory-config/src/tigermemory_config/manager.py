@@ -74,7 +74,28 @@ def _default_wsl_home() -> pathlib.Path:
     explicit = os.environ.get("TIGERMEMORY_MANAGER_WSL_HOME")
     if explicit:
         return pathlib.Path(explicit)
-    return pathlib.Path.home()
+    home = pathlib.Path.home()
+    if os.name == "nt":
+        detected = _windows_wsl_home(home)
+        if detected is not None:
+            return detected
+    return home
+
+
+def _wsl_unc_candidates(home: pathlib.Path) -> list[pathlib.Path]:
+    distro = os.environ.get("TIGERMEMORY_MANAGER_WSL_DISTRO") or os.environ.get("TM_WSL_DISTRO") or "Ubuntu"
+    user = os.environ.get("TIGERMEMORY_MANAGER_WSL_USER") or os.environ.get("TM_WSL_USER") or home.name.lower()
+    return [
+        pathlib.Path("\\\\" + "wsl.localhost") / distro / "home" / user,
+        pathlib.Path("\\\\" + "wsl$") / distro / "home" / user,
+    ]
+
+
+def _windows_wsl_home(home: pathlib.Path) -> pathlib.Path | None:
+    for candidate in _wsl_unc_candidates(home):
+        if candidate.is_dir():
+            return candidate
+    return None
 
 
 def _sha256_bytes(data: bytes) -> str:

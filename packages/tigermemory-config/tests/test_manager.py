@@ -52,6 +52,25 @@ def _wsl_home(tmp_path: pathlib.Path) -> pathlib.Path:
     return home
 
 
+def test_windows_wsl_home_prefers_existing_unc_candidate(tmp_path: pathlib.Path, monkeypatch) -> None:
+    missing = tmp_path / "missing"
+    existing = tmp_path / "home" / "giant"
+    existing.mkdir(parents=True)
+    monkeypatch.setattr(manager, "_wsl_unc_candidates", lambda home: [missing, existing])
+
+    assert manager._windows_wsl_home(tmp_path / "Users" / "Giant") == existing
+
+
+def test_wsl_unc_candidates_use_env_overrides(monkeypatch) -> None:
+    monkeypatch.setenv("TIGERMEMORY_MANAGER_WSL_DISTRO", "Ubuntu-Test")
+    monkeypatch.setenv("TIGERMEMORY_MANAGER_WSL_USER", "tiger")
+
+    candidates = [str(path) for path in manager._wsl_unc_candidates(pathlib.Path("C:/Users/Giant"))]
+
+    assert "\\\\wsl.localhost\\Ubuntu-Test\\home\\tiger" in candidates
+    assert "\\\\wsl$\\Ubuntu-Test\\home\\tiger" in candidates
+
+
 def test_plan_reports_openclaw_hermes_targets_without_writing(tmp_path: pathlib.Path) -> None:
     repo = _repo(tmp_path)
     home = _wsl_home(tmp_path)
