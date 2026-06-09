@@ -2353,6 +2353,11 @@ def test_dashboard_memory_quality_range_keeps_digest_mem0_when_live_mem0_times_o
     _write_digest(tmp_path, "2026-06-09")
     monkeypatch.setattr(tm_review_ui, "_mem0_payload", lambda *_args, **_kwargs: {"error": "timed out", "latency_ms": 1000})
     monkeypatch.setattr(
+        tm_review_ui.tm_core,
+        "mem0_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("timed out")),
+    )
+    monkeypatch.setattr(
         tm_review_ui,
         "_live_digest_fallback",
         lambda *_args, **_kwargs: {
@@ -2381,6 +2386,28 @@ def test_dashboard_memory_quality_range_keeps_digest_mem0_when_live_mem0_times_o
 
     assert data["counts"]["mem0"] == 2
     assert "今日实时增量未计入" in data["counts"]["mem0_basis"]
+
+
+def test_quality_live_mem0_count_uses_server_date_filter(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_mem0_request(url: str, *, timeout: float):
+        captured["url"] = url
+        captured["timeout"] = timeout
+        return json.dumps({"total": 24, "items": [{"id": "m1"}]})
+
+    monkeypatch.setattr(tm_review_ui.tm_core, "mem0_base", lambda: "http://mem0.local")
+    monkeypatch.setattr(tm_review_ui.tm_core, "mem0_user_id", lambda: "tiger")
+    monkeypatch.setattr(tm_review_ui.tm_core, "mem0_request", fake_mem0_request)
+
+    count, basis = tm_review_ui._quality_live_mem0_count("2026-06-10", {})
+
+    assert count == 24
+    assert "服务端日期过滤" in basis
+    assert "from_date=" in str(captured["url"])
+    assert "to_date=" in str(captured["url"])
+    assert "sort_column=created_at" in str(captured["url"])
+    assert captured["timeout"] == 2.0
 
 
 def test_quality_route_flow_prefers_route_recommendation_distribution():
