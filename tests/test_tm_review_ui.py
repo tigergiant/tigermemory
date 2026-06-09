@@ -2385,9 +2385,12 @@ def test_quality_route_flow_filters_recommendations_by_date_range():
     )
 
     output_map = {slot["key"]: slot for slot in flow["outputs"]}
+    assert flow["flow_source"] == "range"
+    assert flow["input_total"] == 2
     assert flow["route_recommendation_counts"] == {"mem0": 1, "wiki": 1, "inbox": 0, "discard": 0}
-    assert output_map["mem0"]["value"] == 1
-    assert output_map["wiki"]["value"] == 1
+    assert output_map["mem0"]["value"] == 0
+    assert output_map["wiki"]["value"] == 0
+    assert output_map["inbox"]["value"] == 2
     assert output_map["discard"]["value"] == 0
 
 
