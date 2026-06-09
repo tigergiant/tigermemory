@@ -386,6 +386,7 @@ def test_daily_page_static_assets_wire_cron_intake_card():
     assert "wikiTargetFromLedgerRow" in pages_js
     assert "openWikiProposalBatchModal" in pages_js
     assert "completeCard" in pages_js
+    assert "refreshDigestThenCompleteCards" in pages_js
     assert "markCompletedIfPathGoneAfterError" in pages_js
     assert "90000" in pages_js
     assert "markCompletedIfPathGone" in pages_js
