@@ -832,7 +832,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v55" in response.text
+    assert "tigermemory-memory-ops-v56" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -2705,6 +2705,8 @@ def test_quality_page_flow_panel_keeps_all_routes_visible():
     assert "renderQualityLoading(nextRange)" in pages_js
     assert "先暂停旧范围数字展示" in pages_js
     assert "进入每日审批" in pages_js
+    assert "prefetchQualityRanges()" in pages_js
+    assert "quality range prefetch failed" in pages_js
     assert "const eventOptions = this.abortController ? { signal: this.abortController.signal } : undefined;" in pages_js
     assert "}, eventOptions);" in pages_js
     assert "['即时记忆', sourceValues.daily" in pages_js
