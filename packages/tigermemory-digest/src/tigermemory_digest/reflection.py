@@ -803,6 +803,26 @@ def _codex_route_recommendation(
 
     route_flags: list[str] = []
 
+    is_session_handoff = any(
+        marker in text
+        for marker in (
+            "memory_type: session-handoff",
+            "memory_type=session-handoff",
+            "session-handoff",
+            "session handoff",
+        )
+    )
+    if is_session_handoff:
+        route_flags.append("legacy_session_handoff")
+        return (
+            "mem0",
+            "旧交接卡",
+            94,
+            tuple(route_flags),
+            "历史 Session Handoff Card 已由新 fast path 接管；旧 inbox 项默认折叠，不再进入每日人工决策主队列。",
+            True,
+        )
+
     if (
         topic == "investment"
         and knowledge_target == "wiki_proposal"
@@ -956,6 +976,13 @@ def _inbox_action_groups(rows: list[InboxAuditRow]) -> tuple[list[InboxAuditRow]
     promote_rows = [row for row in rows if row.action in {"promote_to_mem0", "promote_to_wiki"}]
     keep_rows = [row for row in rows if row.action not in {"archive", "promote_to_mem0", "promote_to_wiki"}]
     return archive_rows, promote_rows, keep_rows
+
+
+def _is_low_priority_inbox_noise(row: InboxAuditRow) -> bool:
+    return any(
+        flag in {"legacy_session_handoff", "auto-generated-investment-log"}
+        for flag in row.route_flags
+    )
 
 
 def _append_inbox_row(lines: list[str], row: InboxAuditRow) -> None:
@@ -1161,6 +1188,8 @@ def render_daily_report(
     self_evolution_summary = _collect_self_evolution_summary_for_date(date, repo_root=REPO_ROOT)
     self_evolution_count = int(self_evolution_summary.get("event_count") or 0)
     archive_rows, promote_rows, keep_rows = _inbox_action_groups(inbox_all)
+    low_priority_rows = [row for row in keep_rows if _is_low_priority_inbox_noise(row)]
+    keep_rows = [row for row in keep_rows if not _is_low_priority_inbox_noise(row)]
     stale_count = sum(1 for row in archive_rows if row.stale_archive)
     promote_count = len(promote_rows)
     quality_score = _score_quality(len(mem0_rows), len(inbox_today), len(discard_events), len(candidates), stale_count)
@@ -1180,6 +1209,7 @@ def render_daily_report(
         f"applied_count: {len(applied)}",
         f"stale_archive_count: {stale_count}",
         f"promote_candidate_count: {promote_count}",
+        f"low_priority_inbox_count: {len(low_priority_rows)}",
         f"mem0_audit_candidate_count: {len(mem0_dedup_candidates)}",
         f"self_evolution_count: {self_evolution_count}",
         "---",
@@ -1257,6 +1287,14 @@ def render_daily_report(
         keep_body.append("- none")
     lines.extend(["", "### ⚪ 仅观察 keep_in_inbox", ""])
     lines.extend(_details_block(f"展开 {len(keep_rows)} 条 keep_in_inbox", keep_body))
+    low_priority_body: list[str] = []
+    if low_priority_rows:
+        for row in low_priority_rows:
+            _append_inbox_row(low_priority_body, row)
+    else:
+        low_priority_body.append("- none")
+    lines.extend(["", "### 💤 自动折叠：旧交接 / 自动流水", ""])
+    lines.extend(_details_block(f"展开 {len(low_priority_rows)} 条低优先级历史项", low_priority_body))
 
     lines.extend([
         "",

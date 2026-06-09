@@ -162,7 +162,42 @@ def test_daily_digest_groups_inbox_actions_and_wraps_keep_rows(tmp_path):
     assert "Codex 推荐操作：归档" in report
     assert "Codex 推荐理由：已停留 14 天且没有 apply 记录" in report
     assert "<summary>展开 1 条 keep_in_inbox</summary>" in report
+    assert "### 💤 自动折叠：旧交接 / 自动流水" in report
+    assert "<summary>展开 0 条低优先级历史项</summary>" in report
     assert "2026-05-01-1200-codex-systems.md` **高亮：14 天兜底 archive**" in report
+
+
+def test_daily_digest_folds_legacy_session_handoff_out_of_keep_queue(tmp_path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    _write_raw_inbox(
+        inbox / "2026-05-14-1200-codex-systems.md",
+        "\n".join([
+            "# Routed memory 85",
+            "---",
+            "memory_type: session-handoff",
+            "session_id: codex-20260514-1200",
+            "---",
+            "## Task",
+            "完成系统 cron 承接收尾，包含 commit 与测试证据。",
+        ]),
+        fm_lines=["summary_cn: session-handoff"],
+    )
+
+    report = tm_memory_reflection.render_daily_report(
+        date="2026-05-15",
+        now_iso="2026-05-15T23:55:00+08:00",
+        mem0_items=[],
+        inbox_dir=inbox,
+        audit_root=tmp_path / "discard-root",
+        proposal_root=tmp_path / "cron-proposals",
+    )
+
+    assert "low_priority_inbox_count: 1" in report
+    assert "<summary>展开 0 条 keep_in_inbox</summary>" in report
+    assert "<summary>展开 1 条低优先级历史项</summary>" in report
+    assert "Codex 推荐操作：旧交接卡" in report
+    assert "路由标记：legacy_session_handoff" in report
 
 
 def test_legacy_inbox_extracts_existing_chinese_line(tmp_path):
@@ -265,8 +300,9 @@ def test_codex_route_recommendation_benign_handoff_skip_phrases_stays_mem0(tmp_p
     row = rows[0]
 
     assert row.route_target == "mem0"
-    assert row.route_label == "写入 Mem0"
-    assert row.route_hard_rule is False
+    assert row.route_label == "旧交接卡"
+    assert row.route_hard_rule is True
+    assert "legacy_session_handoff" in row.route_flags
     assert "needs_manual_inbox" not in row.route_flags
 
 
@@ -309,7 +345,8 @@ def test_codex_route_recommendation_extracts_session_handoff_task_title(tmp_path
 
     assert row.title_cn.startswith("请处理 session-handoff")
     assert row.route_target == "mem0"
-    assert row.codex_recommended_action == "写入 Mem0"
+    assert row.codex_recommended_action == "旧交接卡"
+    assert "legacy_session_handoff" in row.route_flags
 
 
 def test_inbox_audit_replaces_generic_title_frontmatter(tmp_path):

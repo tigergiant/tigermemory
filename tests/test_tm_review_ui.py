@@ -457,6 +457,46 @@ def test_live_inbox_rows_hides_auto_generated_investment_logs(tmp_path, monkeypa
     assert hidden[0]["route_flags"] == ["auto-generated-investment-log"]
 
 
+def test_live_inbox_rows_hides_legacy_session_handoff(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+
+    class FakeRecord:
+        def __init__(self) -> None:
+            self.path = str(tmp_path / "inbox" / "2026-06-09-1200-codex-systems.md")
+            self.stale_archive = False
+            self.age_days = 0
+            self.title_cn = "旧交接卡"
+            self.preview_cn = "Session Handoff Card 已由 Mem0 fast path 接管。"
+            self.summary_cn = "旧交接卡"
+            self.summary = "memory_type: session-handoff"
+            self.action = "keep_in_inbox"
+            self.reason = "legacy handoff"
+            self.codex_recommended_action = "旧交接卡"
+            self.codex_recommended_reason = "默认隐藏"
+            self.topic = "systems"
+            self.route_target = "mem0"
+            self.route_label = "旧交接卡"
+            self.route_confidence = 94
+            self.route_reason = "历史交接卡"
+            self.route_flags = ("legacy_session_handoff",)
+            self.route_hard_rule = True
+
+    monkeypatch.setattr(tm_review_ui, "_load_kept_paths", lambda _date: set())
+    monkeypatch.setattr(tm_review_ui.tm_memory_reflection, "audit_inbox", lambda *_, **__: [FakeRecord()])
+    monkeypatch.setattr(
+        tm_review_ui,
+        "_wiki_target_suggestions",
+        lambda *_args, **_kwargs: {"partition": "systems", "slug": "x", "path": "wiki/systems/x.md"},
+    )
+
+    visible, hidden = tm_review_ui._live_inbox_rows("2026-06-09")
+
+    assert visible == []
+    assert len(hidden) == 1
+    assert hidden[0]["hidden_reason"] == "legacy_session_handoff"
+    assert hidden[0]["route_flags"] == ["legacy_session_handoff"]
+
+
 def test_api_digest_returns_self_evolution_summary_not_raw_events(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_digest(tmp_path)
