@@ -832,7 +832,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v56" in response.text
+    assert "tigermemory-memory-ops-v57" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -2251,7 +2251,7 @@ def test_dashboard_memory_quality_falls_back_to_live_inbox(tmp_path, monkeypatch
     assert data["fallback_mode"] is True
     assert data["counts"]["mem0"] == 2
     assert data["counts"]["inbox"] == 2
-    assert data["counts"]["wiki"] == 0
+    assert data["counts"]["wiki"] is None
     assert data["counts"]["wiki_count_source"] == "live_not_connected"
     assert data["counts"]["discard"] == 1
     assert "digest not found" in data["digest_error"]
@@ -2262,8 +2262,9 @@ def test_dashboard_memory_quality_falls_back_to_live_inbox(tmp_path, monkeypatch
     outputs = {slot["key"]: slot for slot in flow["outputs"]}
     assert {"mem0", "wiki", "inbox", "discard", "issue"} <= set(outputs)
     assert outputs["mem0"]["value"] == 2
-    assert outputs["wiki"]["value"] == 0
-    assert outputs["inbox"]["value"] == data["counts"]["inbox_today"]
+    assert outputs["wiki"]["value"] is None
+    assert outputs["inbox"]["value"] == data["counts"]["inbox_pending"]
+    assert "当前待确认队列" in outputs["inbox"]["basis"]
     assert outputs["discard"]["value"] == 1
 
 
@@ -2291,7 +2292,7 @@ def test_dashboard_memory_quality_digest_backfill_uses_frontmatter_and_live_rows
     assert data["counts"]["inbox"] == 2
     assert data["counts"]["inbox_pending"] == 2
     assert data["counts"]["inbox_today"] == 1
-    assert data["counts"]["wiki"] == 0
+    assert data["counts"]["wiki"] is None
     flow = data["route_flow"]
     output_map = {slot["key"]: slot for slot in flow["outputs"]}
     assert {"mem0", "wiki", "inbox", "discard", "issue"} <= set(output_map)
@@ -2339,6 +2340,7 @@ def test_dashboard_memory_quality_range_aggregates_available_digest_dates(tmp_pa
     assert "2026-06-04" in data["missing_dates"]
     assert data["counts"]["mem0"] == 4
     assert data["counts"]["discard"] == 6
+    assert data["counts"]["wiki"] is None
     assert data["counts"]["inbox_pending"] == 2
     assert data["counts"]["inbox_today"] == 2
     assert data["counts"]["review_entered"] == 2
@@ -2746,6 +2748,7 @@ def test_dashboard_memory_overview_mem0_offline_subline():
 def test_quality_page_flow_panel_keeps_all_routes_visible():
     quality_html = (tm_review_ui.STATIC_DIR / "quality.html").read_text(encoding="utf-8")
     pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
+    style_css = (tm_review_ui.STATIC_DIR / "_components" / "style.css").read_text(encoding="utf-8")
 
     assert 'id="route-section"' in quality_html
     assert 'id="status-section"' in quality_html
@@ -2765,11 +2768,14 @@ def test_quality_page_flow_panel_keeps_all_routes_visible():
     assert "new URLSearchParams({ range: this.rangeKey || 'today' })" in pages_js
     assert "统计 ${rangeSpan}" in pages_js
     assert "renderRangeControls(memory)" in pages_js
-    assert "renderQualityLoading(nextRange)" in pages_js
-    assert "先暂停旧范围数字展示" in pages_js
+    assert "setQualityUpdating(nextRange, true)" in pages_js
+    assert "正在更新${c.esc(range.label)}数据" in pages_js
+    assert "当前数字仍是上一范围" in pages_js
+    assert "renderQualityLoading(nextRange)" not in pages_js
     assert "进入每日审批" in pages_js
     assert "prefetchQualityRanges()" in pages_js
     assert "quality range prefetch failed" in pages_js
+    assert ".tm-quality-updating" in style_css
     assert "const eventOptions = this.abortController ? { signal: this.abortController.signal } : undefined;" in pages_js
     assert "}, eventOptions);" in pages_js
     assert "['即时记忆', sourceValues.daily" in pages_js
