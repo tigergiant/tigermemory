@@ -2266,6 +2266,10 @@ def test_review_pages_js_exposes_approval_target_fields():
     assert "未命中具体目标" in pages_js
     assert "hardRuleAllowsAction(row, action)" in pages_js
     assert "审批建议硬性约束不推荐执行此动作" in pages_js
+    assert "hardRuleHint(row)" in pages_js
+    assert "硬性建议：仅可" in pages_js
+    assert "灰色按钮是不推荐路线" in pages_js
+    assert "actionEmphasisClass(row, action)" in pages_js
 
 
 def test_dashboard_memory_overview_mem0_offline_subline():
