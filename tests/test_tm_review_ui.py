@@ -2268,6 +2268,40 @@ def test_dashboard_memory_quality_falls_back_to_live_inbox(tmp_path, monkeypatch
     assert outputs["discard"]["value"] == 1
 
 
+def test_dashboard_memory_quality_cached_live_keeps_unknown_wiki(monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "today", lambda: "2026-06-10")
+    monkeypatch.setattr(tm_review_ui, "_worktree_dirty_state", lambda: {"dirty": False, "status_count": 0, "sample": [], "error": None})
+    monkeypatch.setattr(
+        tm_review_ui,
+        "_run_cache_get",
+        lambda *_args, **_kwargs: ({
+            "ok": True,
+            "date": "2026-06-10",
+            "digest_available": False,
+            "counts": {
+                "mem0": 3,
+                "wiki": None,
+                "inbox": 2,
+                "inbox_pending": 2,
+                "inbox_today": 0,
+                "discard": 0,
+                "wiki_count_source": "live_not_connected",
+            },
+            "trace_summary": {"status_counts": {}, "latest": []},
+            "warnings": [],
+            "errors": [],
+        }, True),
+    )
+
+    data = tm_review_ui.dashboard_memory_quality("2026-06-10")
+
+    assert data["cached"] is True
+    assert data["counts"]["wiki"] is None
+    output_map = {slot["key"]: slot for slot in data["route_flow"]["outputs"]}
+    assert output_map["wiki"]["value"] is None
+    assert output_map["wiki"]["status"] == "warn"
+
+
 def test_dashboard_memory_quality_digest_backfill_uses_frontmatter_and_live_rows(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_digest(tmp_path, "2026-05-27")
