@@ -2307,6 +2307,32 @@ def test_quality_route_flow_prefers_route_recommendation_distribution():
     assert flow["trace_count"] == 10
 
 
+def test_quality_route_flow_preserves_cached_recommendation_distribution():
+    flow = tm_review_ui._build_quality_route_flow(
+        counts={
+            "mem0": 0,
+            "wiki": 0,
+            "inbox_today": 9,
+            "discard": 0,
+            "route_recommendation_counts": {"mem0": 6, "wiki": 1, "inbox": 2, "discard": 0},
+        },
+        report_date="2026-06-09",
+        trace_summary={"status_counts": {"not_found": 12}},
+        trace_rows=[{"trace_id": str(idx)} for idx in range(10)],
+        inbox_rows=[],
+        source_mode="digest",
+    )
+
+    output_map = {slot["key"]: slot for slot in flow["outputs"]}
+    assert flow["flow_source"] == "route_recommendation"
+    assert flow["input_total"] == 9
+    assert output_map["mem0"]["value"] == 6
+    assert output_map["wiki"]["value"] == 1
+    assert output_map["inbox"]["value"] == 2
+    assert output_map["discard"]["value"] == 0
+    assert output_map["issue"]["value"] == 12
+
+
 def test_api_health_memory_overview_endpoint(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     (tmp_path / "wiki" / "systems").mkdir(parents=True)
