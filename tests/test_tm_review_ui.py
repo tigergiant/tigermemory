@@ -832,7 +832,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v53" in response.text
+    assert "tigermemory-memory-ops-v54" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -1364,6 +1364,24 @@ def test_quality_memory_endpoint_reports_trace_latency(tmp_path, monkeypatch):
     assert data["ok"] is True
     assert data["trace_latency_supported"] is True
     assert data["trace_summary"]["duration_ms"]["p95"] == 20
+
+
+def test_quality_memory_endpoint_accepts_range_param(tmp_path, monkeypatch):
+    calls: list[tuple[str | None, str | None]] = []
+
+    def fake_quality(date=None, range_key=None):
+        calls.append((date, range_key))
+        return {"ok": True, "date": date, "range": {"key": range_key}}
+
+    monkeypatch.setattr(tm_review_ui, "dashboard_memory_quality", fake_quality)
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/api/quality/memory?date=2026-06-10&range=30d", headers=HOST)
+
+    assert response.status_code == 200
+    assert response.json()["range"]["key"] == "30d"
+    assert calls == [("2026-06-10", "30d")]
 
 
 def test_settings_preferences_round_trip_uses_sqlite(tmp_path, monkeypatch):
@@ -2281,6 +2299,41 @@ def test_dashboard_memory_quality_digest_backfill_uses_frontmatter_and_live_rows
     assert output_map["issue"]["value"] == 2
 
 
+def test_dashboard_memory_quality_range_aggregates_available_digest_dates(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_ui, "today", lambda: "2026-06-10")
+    _write_digest(tmp_path, "2026-06-09")
+    _write_digest(tmp_path, "2026-06-10")
+    _write_inbox(tmp_path, "2026-06-09-1200-codex-systems.md")
+    _write_inbox(tmp_path, "2026-06-10-1200-codex-systems.md")
+    monkeypatch.setattr(tm_review_ui, "_mem0_payload", lambda *_args, **_kwargs: {"count": 8, "items": [], "results": [], "latency_ms": 12})
+    trace_calls: list[int] = []
+    monkeypatch.setattr(
+        tm_review_ui.tm_answer_trace,
+        "load_trace_rows",
+        lambda **kwargs: trace_calls.append(kwargs["since_hours"]) or ([{"trace_id": "t1", "status": "error"}], []),
+    )
+    monkeypatch.setattr(
+        tm_review_ui.tm_answer_trace,
+        "summarize_rows",
+        lambda *_args, **_kwargs: {"duration_ms": {}, "status_counts": {"error": 1}, "latest": []},
+    )
+
+    data = tm_review_ui.dashboard_memory_quality("2026-06-10", "7d")
+
+    assert data["range"]["key"] == "7d"
+    assert data["range"]["label"] == "近 7 天"
+    assert data["available_dates"] == ["2026-06-09", "2026-06-10"]
+    assert "2026-06-04" in data["missing_dates"]
+    assert data["counts"]["mem0"] == 4
+    assert data["counts"]["discard"] == 6
+    assert data["counts"]["inbox_pending"] == 2
+    assert data["counts"]["inbox_today"] == 2
+    assert data["route_flow"]["period_label"] == "近 7 天"
+    assert data["route_flow"]["trace_period_label"] == "近 7 天"
+    assert trace_calls == [24 * 7]
+
+
 def test_quality_route_flow_prefers_route_recommendation_distribution():
     inbox_rows = []
     for idx in range(6):
@@ -2311,6 +2364,31 @@ def test_quality_route_flow_prefers_route_recommendation_distribution():
     assert output_map["discard"]["value"] == 0
     assert output_map["issue"]["value"] == 1
     assert flow["trace_count"] == 10
+
+
+def test_quality_route_flow_filters_recommendations_by_date_range():
+    inbox_rows = [
+        {"path": "inbox/2026-06-08-1200-codex-systems.md", "route_target": "mem0"},
+        {"path": "inbox/2026-06-09-1200-codex-systems.md", "route_target": "wiki"},
+        {"path": "inbox/2026-06-07-1200-codex-systems.md", "route_target": "discard"},
+    ]
+
+    flow = tm_review_ui._build_quality_route_flow(
+        counts={"mem0": 0, "wiki": 0, "inbox_today": 2, "discard": 0},
+        report_date="2026-06-09",
+        trace_summary={"status_counts": {}},
+        trace_rows=[],
+        inbox_rows=inbox_rows,
+        source_mode="range",
+        date_filter={"2026-06-08", "2026-06-09"},
+        period_label="近 7 天",
+    )
+
+    output_map = {slot["key"]: slot for slot in flow["outputs"]}
+    assert flow["route_recommendation_counts"] == {"mem0": 1, "wiki": 1, "inbox": 0, "discard": 0}
+    assert output_map["mem0"]["value"] == 1
+    assert output_map["wiki"]["value"] == 1
+    assert output_map["discard"]["value"] == 0
 
 
 def test_quality_route_flow_preserves_cached_recommendation_distribution():
@@ -2594,14 +2672,19 @@ def test_quality_page_flow_panel_keeps_all_routes_visible():
     assert 'id="failure-section"' in quality_html
     assert 'id="quality-alert"' in quality_html
     assert 'id="quality-empty-state"' in quality_html
+    assert 'data-quality-range="today"' in quality_html
+    assert 'data-quality-range="7d"' in quality_html
+    assert 'data-quality-range="30d"' in quality_html
     assert "hasDuration" in pages_js
     assert "有回答记录后显示耗时" in pages_js
     assert "等待真实回答记录" in pages_js
-    assert "今天还没有可用于质量判断的实时写入或回答记录" in pages_js
+    assert "还没有可用于质量判断的实时写入或回答记录" in pages_js
     assert "今日整理尚未生成" not in pages_js
     assert "每日整理" not in pages_js
     assert "实时模式：当前直接读取 Mem0、收件箱、回答轨迹和 discard 审计" in pages_js
-    assert "实时统计 ${memory.date || '-'}" in pages_js
+    assert "new URLSearchParams({ range: this.rangeKey || 'today' })" in pages_js
+    assert "统计 ${rangeSpan}" in pages_js
+    assert "renderRangeControls(memory)" in pages_js
     assert "['即时记忆', sourceValues.daily" in pages_js
     assert "'未接入'" in pages_js
     assert "已忽略数" not in pages_js
