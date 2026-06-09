@@ -2347,6 +2347,42 @@ def test_dashboard_memory_quality_range_aggregates_available_digest_dates(tmp_pa
     assert trace_calls == [24 * 7]
 
 
+def test_dashboard_memory_quality_range_keeps_digest_mem0_when_live_mem0_times_out(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_ui, "today", lambda: "2026-06-10")
+    _write_digest(tmp_path, "2026-06-09")
+    monkeypatch.setattr(tm_review_ui, "_mem0_payload", lambda *_args, **_kwargs: {"error": "timed out", "latency_ms": 1000})
+    monkeypatch.setattr(
+        tm_review_ui,
+        "_live_digest_fallback",
+        lambda *_args, **_kwargs: {
+            "counts": {
+                "inbox": 0,
+                "inbox_pending": 0,
+                "inbox_today": 0,
+                "review_hidden": 0,
+                "mem0": 0,
+                "discard": 0,
+                "wiki": 0,
+            },
+            "inbox_rows": [],
+            "hidden_inbox_rows": [],
+            "report_inbox_rows": [],
+        },
+    )
+    monkeypatch.setattr(tm_review_ui.tm_answer_trace, "load_trace_rows", lambda **_kwargs: ([], []))
+    monkeypatch.setattr(
+        tm_review_ui.tm_answer_trace,
+        "summarize_rows",
+        lambda *_args, **_kwargs: {"duration_ms": {}, "status_counts": {}, "latest": []},
+    )
+
+    data = tm_review_ui.dashboard_memory_quality("2026-06-10", "7d")
+
+    assert data["counts"]["mem0"] == 2
+    assert "今日实时增量未计入" in data["counts"]["mem0_basis"]
+
+
 def test_quality_route_flow_prefers_route_recommendation_distribution():
     inbox_rows = []
     for idx in range(6):
