@@ -377,11 +377,17 @@ def test_daily_page_static_assets_wire_cron_intake_card():
     assert "renderCronIntake" in pages_js
     assert "renderWikiProposalLedger" in pages_js
     assert "data-wiki-ledger-action=\"approve-all\"" in pages_js
-    assert "一键写入本线程" in pages_js
+    assert "按推荐批量写入" in pages_js
+    assert "选择落点并写入" in pages_js
     assert "wikiProposalScoreText(row)" in pages_js
     assert "review_label" in pages_js
     assert "sample_items" in pages_js
     assert "runWikiProposalApproval" in pages_js
+    assert "wikiTargetFromLedgerRow" in pages_js
+    assert "openWikiProposalBatchModal" in pages_js
+    assert "completeCard" in pages_js
+    assert "markCompletedIfPathGoneAfterError" in pages_js
+    assert "90000" in pages_js
     assert "markCompletedIfPathGone" in pages_js
     assert "digestHasInboxPath" in pages_js
     assert "/api/cron/intake/" in pages_js
@@ -576,6 +582,8 @@ def test_api_digest_surfaces_wiki_proposal_ledger_and_hides_rows(tmp_path, monke
     assert statuses["wiki/systems/cron-result-intake-learning-plan.md"] == "pending"
     assert statuses["wiki/investment/decision-log/example.md"] == "investment-thread"
     system_row = next(row for row in digest["wiki_proposal_ledger"] if row["status"] == "pending")
+    assert system_row["target_partition"] == "systems"
+    assert system_row["target_slug"] == "cron-result-intake-learning-plan"
     assert system_row["review_label"] == "高可信"
     assert system_row["route_score_min"] == 88
     assert system_row["l2_review_score_min"] == 85
@@ -1554,6 +1562,56 @@ def test_inbox_promote_mem0_uses_review_tool_and_archives(tmp_path, monkeypatch)
     assert not inbox.exists()
     page_text = (tmp_path / "wiki" / "operations" / "inbox-archive" / "2026-05-01.md").read_text(encoding="utf-8")
     assert "- 实际动作：promote_mem0" in page_text
+
+
+def test_inbox_promote_wiki_uses_selected_target_and_archives(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)
+    inbox = _write_inbox(tmp_path)
+    calls: dict[str, object] = {}
+    commits: list[list[str]] = []
+
+    def fake_promote(fact, partition, slug, commit=True):
+        calls["fact"] = fact
+        calls["partition"] = partition
+        calls["slug"] = slug
+        calls["commit"] = commit
+        return {"ok": True, "changed_paths": [f"wiki/{partition}/{slug}.md"]}
+
+    def fake_commit(paths, _message):
+        commits.append(paths)
+        return "abc123"
+
+    monkeypatch.setattr(tm_review_tools, "execute_promote", fake_promote)
+    monkeypatch.setattr(tm_review_ui, "commit_and_push_paths", fake_commit)
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.post(
+        "/api/inbox/action",
+        headers=HOST,
+        json={
+            "path": f"inbox/{inbox.name}",
+            "action": "promote_wiki",
+            "partition": "operations",
+            "slug": "selected-review-target",
+        },
+    )
+
+    data = response.json()
+    assert data["ok"] is True
+    assert data["commit_sha"] == "abc123"
+    assert calls["partition"] == "operations"
+    assert calls["slug"] == "selected-review-target"
+    assert calls["commit"] is False
+    assert not inbox.exists()
+    assert commits == [[
+        "wiki/operations/selected-review-target.md",
+        f"inbox/{inbox.name}",
+        "wiki/operations/inbox-archive/2026-05-01.md",
+    ]]
+    page_text = (tmp_path / "wiki" / "operations" / "inbox-archive" / "2026-05-01.md").read_text(encoding="utf-8")
+    assert "- 实际动作：promote_wiki" in page_text
 
 
 def test_inbox_action_invalid_path_returns_error(tmp_path, monkeypatch):

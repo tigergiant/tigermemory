@@ -1025,14 +1025,23 @@ def _wiki_proposal_target(row: InboxAuditRow) -> str:
     return "(unknown target)"
 
 
+def _wiki_proposal_target_parts(row: InboxAuditRow) -> tuple[str, str]:
+    partition = (row.wiki_partition or row.topic or "").strip().strip("/")
+    slug = row.wiki_slug_hint.strip().strip("/").removesuffix(".md")
+    return partition, slug
+
+
 def _inbox_wiki_proposal_ledger(rows: list[InboxAuditRow]) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     for row in rows:
         target = _wiki_proposal_target(row)
+        target_partition, target_slug = _wiki_proposal_target_parts(row)
         item = grouped.setdefault(
             target,
             {
                 "target": target,
+                "target_partition": target_partition,
+                "target_slug": target_slug,
                 "count": 0,
                 "first_date": row.created_date,
                 "newest_date": row.created_date,
