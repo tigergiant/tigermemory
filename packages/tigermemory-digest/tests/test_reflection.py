@@ -179,6 +179,72 @@ def test_write_cron_intake_card_persists_wiki_page(tmp_path, monkeypatch):
     assert "## 来源" in text
 
 
+def test_write_cron_intake_card_preserves_processing_notes(tmp_path, monkeypatch):
+    monkeypatch.setattr(reflection, "today_local", lambda: "2026-06-09")
+    operations = tmp_path / "wiki" / "operations"
+    card = operations / "cron-intake" / "2026-06-09-system-health.md"
+    card.parent.mkdir(parents=True)
+    card.write_text(
+        "\n".join([
+            "---",
+            "owner: codex",
+            "---",
+            "",
+            "# Cron 承接卡 2026-06-09 system-health",
+            "",
+            "## 建议动作",
+            "",
+            "- 已处理：恢复 WSL `tm-mcp.service`。",
+            "- 已处理：修复 Runtime Config Manager。",
+            "",
+            "## 承接处理记录",
+            "",
+            "- 已处理：恢复 WSL `tm-mcp.service`。",
+            "- 复测结果：`9766/healthz` 返回 `{\"ok\":true}`。",
+            "",
+            "## 来源",
+            "",
+            "- `wiki/operations/daily-health/2026-06-09.md`",
+            "- `wiki/operations/daily-health-known-debt.md`",
+            "- `packages/tigermemory-config/src/tigermemory_config/manager.py`",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    result = {
+        "status": "warn",
+        "date": "2026-06-09",
+        "window": "system-health",
+        "summary": "2026-06-09 system-health cron 承接摘要。",
+        "reports": [
+            {
+                "kind": "daily_health",
+                "status": "warn",
+                "path": "wiki/operations/daily-health/2026-06-09.md",
+                "issues": ["daily-health color is red"],
+                "summary": ["原始日报仍是 red。"],
+            }
+        ],
+        "warnings": ["daily_health: daily-health color is red"],
+        "action_items": ["处理 daily-health red：查看阻塞项和 known debt"],
+    }
+
+    path = reflection.write_cron_intake_card(result, operations_dir=operations)
+    text = path.read_text(encoding="utf-8")
+
+    assert path == card
+    assert "## 承接处理记录" in text
+    assert "已处理：恢复 WSL `tm-mcp.service`" in text
+    assert "已处理：修复 Runtime Config Manager" in text
+    assert "处理 daily-health red：查看阻塞项和 known debt" not in reflection._section_body(text, "建议动作")
+    assert text.index("## 承接处理记录") < text.index("## 来源")
+    assert text.count("## 承接处理记录") == 1
+    sources = reflection._section_body(text, "来源")
+    assert "`wiki/operations/daily-health/2026-06-09.md`" in sources
+    assert "`wiki/operations/daily-health-known-debt.md`" in sources
+    assert "`packages/tigermemory-config/src/tigermemory_config/manager.py`" in sources
+
+
 def test_build_cron_intake_surfaces_missing_ai_radar_artifact(tmp_path):
     operations = tmp_path / "wiki" / "operations"
     operations.mkdir(parents=True)

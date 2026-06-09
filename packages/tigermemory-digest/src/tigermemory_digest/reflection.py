@@ -1959,6 +1959,58 @@ def render_cron_intake_card(result: dict[str, Any]) -> str:
     ])
 
 
+def _preserve_cron_intake_notes(new_text: str, existing_text: str) -> str:
+    notes = _section_body(existing_text, "承接处理记录")
+    if not notes:
+        return new_text
+    existing_actions = _section_body(existing_text, "建议动作")
+    if existing_actions and any(marker in existing_actions for marker in ("已处理", "已确认", "无需", "继续观察")):
+        new_text = _replace_section_body(new_text, "建议动作", existing_actions)
+    new_text = _merge_section_lines(new_text, existing_text, "来源")
+    section = f"## 承接处理记录\n\n{notes.strip()}\n\n"
+    marker = "\n## 来源\n"
+    if marker in new_text:
+        return new_text.replace(marker, f"\n{section}## 来源\n", 1)
+    return new_text.rstrip() + "\n\n" + section
+
+
+def _merge_section_lines(new_text: str, existing_text: str, heading_contains: str) -> str:
+    new_body = _section_body(new_text, heading_contains)
+    existing_body = _section_body(existing_text, heading_contains)
+    if not existing_body:
+        return new_text
+    merged: list[str] = []
+    seen: set[str] = set()
+    for raw in [*new_body.splitlines(), *existing_body.splitlines()]:
+        line = raw.rstrip()
+        key = line.strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(line)
+    if not merged:
+        return new_text
+    return _replace_section_body(new_text, heading_contains, "\n".join(merged))
+
+
+def _replace_section_body(text: str, heading_contains: str, body: str) -> str:
+    lines = text.splitlines()
+    start: int | None = None
+    for idx, line in enumerate(lines):
+        if _is_section_heading(line, heading_contains):
+            start = idx + 1
+            break
+    if start is None:
+        return text
+    end = len(lines)
+    for idx in range(start, len(lines)):
+        if _is_section_boundary(lines[idx]):
+            end = idx
+            break
+    replacement = ["", *body.strip().splitlines(), ""]
+    return "\n".join([*lines[:start], *replacement, *lines[end:]]).rstrip() + "\n"
+
+
 def write_cron_intake_card(
     result: dict[str, Any],
     *,
@@ -1966,7 +2018,10 @@ def write_cron_intake_card(
 ) -> pathlib.Path:
     path = cron_intake_card_path(date=result["date"], window=result["window"], operations_dir=operations_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_cron_intake_card(result), encoding="utf-8", newline="\n")
+    rendered = render_cron_intake_card(result)
+    if path.exists():
+        rendered = _preserve_cron_intake_notes(rendered, path.read_text(encoding="utf-8"))
+    path.write_text(rendered, encoding="utf-8", newline="\n")
     return path
 
 
