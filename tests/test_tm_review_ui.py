@@ -2685,6 +2685,8 @@ def test_quality_page_flow_panel_keeps_all_routes_visible():
     assert "new URLSearchParams({ range: this.rangeKey || 'today' })" in pages_js
     assert "统计 ${rangeSpan}" in pages_js
     assert "renderRangeControls(memory)" in pages_js
+    assert "const eventOptions = this.abortController ? { signal: this.abortController.signal } : undefined;" in pages_js
+    assert "}, eventOptions);" in pages_js
     assert "['即时记忆', sourceValues.daily" in pages_js
     assert "'未接入'" in pages_js
     assert "已忽略数" not in pages_js
