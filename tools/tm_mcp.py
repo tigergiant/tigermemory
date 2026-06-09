@@ -66,6 +66,7 @@ import argparse
 import datetime
 import json
 import os
+import pathlib
 import re
 import subprocess
 import sys
@@ -137,6 +138,39 @@ def _require_writer() -> None:
 def _review_for_memory(text: str) -> dict[str, Any]:
     import tm_review
     return tm_review.review_draft(text)
+
+
+def _mcp_committable_paths(paths: list[str]) -> list[str]:
+    rels: list[str] = []
+    seen: set[str] = set()
+    root = tm_core.REPO_ROOT.resolve()
+    for raw in paths:
+        if not raw:
+            continue
+        path = pathlib.Path(str(raw))
+        if path.is_absolute():
+            try:
+                rel = path.resolve().relative_to(root).as_posix()
+            except ValueError:
+                continue
+        else:
+            rel = str(raw).replace("\\", "/").strip("/")
+        if not rel or rel in seen or rel.startswith("../") or "/../" in rel:
+            continue
+        seen.add(rel)
+        tracked = tm_core.run(["git", "ls-files", "--error-unmatch", "--", rel], check=False).returncode == 0
+        if (tm_core.REPO_ROOT / rel).exists() or tracked:
+            rels.append(rel)
+    return sorted(rels)
+
+
+def _commit_mcp_review_paths(paths: list[str], message: str) -> str | None:
+    rels = _mcp_committable_paths(paths)
+    if not rels:
+        return None
+    sha = tm_core.git_commit_push(rels, message)
+    tm_memory_ops.schedule_digest_refresh()
+    return sha
 
 
 def _review_metadata(review: dict[str, Any], route: str) -> dict[str, Any]:
@@ -1041,7 +1075,7 @@ def approve_fact(
     对单条事实执行审核操作。
     - keep: 标记为已审核保留（记录在 review_log）
     - delete: Mem0 删记录 / inbox 文件 archive 到 archive/deleted/
-    - promote: 转 wiki page（走 L2 review），需给 partition + slug
+    - promote: 转 wiki page（走 L2 review），需给 partition + slug；Wiki 与 digest 日志统一提交
     返回: {"ok": true, "action": "...", "result": {...}}
     """
     try:
@@ -1067,7 +1101,7 @@ def approve_fact(
         elif action == "promote":
             if not promote_partition or not promote_slug:
                 return {"ok": False, "error": "promote requires promote_partition and promote_slug"}
-            result = tm_review_tools.execute_promote(fact, promote_partition, promote_slug)
+            result = tm_review_tools.execute_promote(fact, promote_partition, promote_slug, commit=False)
         else:
             return {"ok": False, "error": f"Invalid action: {action} (must be keep/delete/promote)"}
         
@@ -1080,9 +1114,21 @@ def approve_fact(
         if action == "promote":
             log_entry["promoted_to"] = f"wiki/{promote_partition}/{promote_slug}.md"
         
-        tm_review_tools.append_review_log(date, log_entry)
+        log_written = tm_review_tools.append_review_log(date, log_entry)
+
+        if action == "promote" and log_written:
+            commit_paths = [*(result.get("changed_paths") or []), f"inbox/daily/{date}.md"]
+            commit_sha = _commit_mcp_review_paths(
+                commit_paths,
+                f"[codex] create: MCP promote fact {fact_id} to wiki/{promote_partition}/{promote_slug}.md",
+            )
+            result["commit_sha"] = commit_sha
+            result["committed"] = commit_sha is not None
+            result["mcp_unified_commit"] = True
+            if commit_sha is None:
+                result["commit_warning"] = "no committable paths after promote"
         
-        return {"ok": True, "action": action, "result": result}
+        return {"ok": True, "action": action, "result": result, "review_log_written": log_written}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

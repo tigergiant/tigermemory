@@ -147,6 +147,74 @@ def test_write_memory_uses_shared_memory_ops(monkeypatch):
     assert captured["kwargs"]["include_readback"] is True
 
 
+def test_approve_fact_promote_uses_deferred_unified_commit(tmp_path, monkeypatch):
+    import tm_review_tools  # type: ignore[import-not-found]
+
+    date = "2026-06-09"
+    fact = {"id": "fact-1", "text": "stable fact", "topic": "systems"}
+    promoted_calls = []
+    commit_calls = []
+    refresh_calls = []
+    logged_entries = []
+
+    def fake_load_digest(_date):
+        return {"facts": [fact], "frontmatter": {}, "body": "body"}
+
+    def fake_promote(_fact, partition, slug, **kwargs):
+        promoted_calls.append((_fact, partition, slug, kwargs))
+        path = tmp_path / "wiki" / partition / f"{slug}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("wiki body\n", encoding="utf-8")
+        return {
+            "ok": True,
+            "action": "promote",
+            "wiki_path": f"wiki/{partition}/{slug}.md",
+            "changed_paths": [f"wiki/{partition}/{slug}.md"],
+            "committed": False,
+            "commit_sha": None,
+        }
+
+    def fake_append_review_log(_date, log_entry):
+        logged_entries.append(log_entry)
+        path = tmp_path / "inbox" / "daily" / f"{_date}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("digest with review log\n", encoding="utf-8")
+        return True
+
+    def fake_commit_push(files, message):
+        commit_calls.append((files, message))
+        return "abc123"
+
+    monkeypatch.setattr(tm_mcp.tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_tools, "load_digest", fake_load_digest)
+    monkeypatch.setattr(tm_review_tools, "execute_promote", fake_promote)
+    monkeypatch.setattr(tm_review_tools, "append_review_log", fake_append_review_log)
+    monkeypatch.setattr(tm_mcp.tm_core, "git_commit_push", fake_commit_push)
+    monkeypatch.setattr(tm_mcp.tm_memory_ops, "schedule_digest_refresh", lambda: refresh_calls.append(True))
+
+    old = tm_mcp._ROLE
+    try:
+        tm_mcp._ROLE = "writer"
+        result = tm_mcp.approve_fact(date, "fact-1", "promote", "systems", "mcp-promote")
+    finally:
+        tm_mcp._ROLE = old
+
+    assert result["ok"] is True
+    assert result["review_log_written"] is True
+    assert promoted_calls[0][3]["commit"] is False
+    assert commit_calls == [
+        (
+            ["inbox/daily/2026-06-09.md", "wiki/systems/mcp-promote.md"],
+            "[codex] create: MCP promote fact fact-1 to wiki/systems/mcp-promote.md",
+        )
+    ]
+    assert refresh_calls == [True]
+    assert logged_entries[0]["promoted_to"] == "wiki/systems/mcp-promote.md"
+    assert result["result"]["commit_sha"] == "abc123"
+    assert result["result"]["committed"] is True
+    assert result["result"]["mcp_unified_commit"] is True
+
+
 def test_propose_wiki_page_owner_schedules_embed_refresh(tmp_path, monkeypatch):
     import tm_review  # type: ignore[import-not-found]
 
