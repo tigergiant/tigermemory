@@ -41,6 +41,7 @@ def _write_digest(root: pathlib.Path, date: str = "2026-05-21") -> pathlib.Path:
             "applied_count: 0",
             "stale_archive_count: 1",
             "promote_candidate_count: 0",
+            "wiki_proposal_inbox_count: 1",
             "---",
             "",
             "# Memory Digest 2026-05-21",
@@ -72,6 +73,10 @@ def _write_digest(root: pathlib.Path, date: str = "2026-05-21") -> pathlib.Path:
             "  - cron 建议动作：archive",
             "  - 建议理由：14-day fallback",
             "  - 虎哥裁决：[ ] apply  [ ] reject",
+            "",
+            "## 🧾 Inbox Wiki Proposal 台账",
+            "",
+            "- 待追踪 inbox/wiki_proposal：1 条，聚合为 1 个目标页。",
             "",
             "## 🧠 Proposed Changes",
             "",
@@ -249,6 +254,8 @@ def test_digest_with_cookie_returns_html_and_embedded_json(tmp_path, monkeypatch
     assert "cron-intake-data" in response.text
     assert "cron-intake-section" in response.text
     assert "cron 承接卡" in response.text
+    assert "wiki-proposal-ledger-section" in response.text
+    assert "Wiki 提案台账" in response.text
 
 
 def test_i18n_assets_are_public(tmp_path, monkeypatch):
@@ -366,7 +373,9 @@ def test_daily_page_static_assets_wire_cron_intake_card():
     assert 'id="cron-intake-section"' in review_html
     assert 'id="cron-intake-data"' in review_html
     assert 'id="cron-intake-section" data-no-i18n' in review_html
+    assert 'id="wiki-proposal-ledger-section"' in review_html
     assert "renderCronIntake" in pages_js
+    assert "renderWikiProposalLedger" in pages_js
     assert "/api/cron/intake/" in pages_js
     assert "cron-intake-summary" in pages_js
     assert "font-mono" in pages_js
@@ -495,6 +504,65 @@ def test_live_inbox_rows_hides_legacy_session_handoff(tmp_path, monkeypatch):
     assert len(hidden) == 1
     assert hidden[0]["hidden_reason"] == "legacy_session_handoff"
     assert hidden[0]["route_flags"] == ["legacy_session_handoff"]
+
+
+def test_api_digest_surfaces_wiki_proposal_ledger_and_hides_rows(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    _write_digest(tmp_path)
+
+    class FakeRecord:
+        def __init__(self, topic: str, partition: str, slug: str) -> None:
+            self.path = str(tmp_path / "inbox" / f"2026-06-09-1200-codex-{topic}.md")
+            self.created_date = "2026-06-09"
+            self.stale_archive = False
+            self.age_days = 0
+            self.agent = "codex"
+            self.topic = topic
+            self.title_cn = "Wiki 提案"
+            self.preview_cn = "这条记录已经被路由为 wiki proposal，应进入台账而不是普通待确认列表。"
+            self.summary_cn = "Wiki 提案"
+            self.summary = "wiki proposal fixture"
+            self.action = "keep_in_inbox"
+            self.reason = "wiki proposal ledger"
+            self.codex_recommended_action = "写入 Wiki"
+            self.codex_recommended_reason = "已具备长期沉淀价值"
+            self.route_target = "wiki"
+            self.route_label = "写入 Wiki"
+            self.route_confidence = 90
+            self.route_reason = "长期事实候选"
+            self.route_flags = ()
+            self.route_hard_rule = False
+            self.already_applied = False
+            self.knowledge_target = "wiki_proposal"
+            self.proposal_kind = "wiki"
+            self.wiki_partition = partition
+            self.wiki_slug_hint = slug
+
+    records = [
+        FakeRecord("systems", "systems", "cron-result-intake-learning-plan"),
+        FakeRecord("investment", "investment", "decision-log/example"),
+    ]
+    monkeypatch.setattr(tm_review_ui.tm_memory_reflection, "audit_inbox", lambda *_, **__: records)
+    monkeypatch.setattr(tm_review_ui, "_load_kept_paths", lambda _date: set())
+    monkeypatch.setattr(
+        tm_review_ui,
+        "_wiki_target_suggestions",
+        lambda *_args, **_kwargs: {"partition": "systems", "slug": "x", "path": "wiki/systems/x.md"},
+    )
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/api/digest/2026-05-21", headers=HOST)
+
+    digest = response.json()["digest"]
+    assert digest["inbox_rows"] == []
+    assert {row["hidden_reason"] for row in digest["hidden_inbox_rows"]} == {"wiki_proposal_ledger"}
+    assert digest["counts"]["wiki_proposal_inbox"] == 2
+    assert digest["counts"]["wiki_proposal_groups"] == 2
+    assert len(digest["wiki_proposal_ledger"]) == 2
+    statuses = {row["target"]: row["status"] for row in digest["wiki_proposal_ledger"]}
+    assert statuses["wiki/systems/cron-result-intake-learning-plan.md"] == "pending"
+    assert statuses["wiki/investment/decision-log/example.md"] == "investment-thread"
 
 
 def test_api_digest_returns_self_evolution_summary_not_raw_events(tmp_path, monkeypatch):

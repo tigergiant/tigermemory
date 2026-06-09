@@ -1043,6 +1043,16 @@ def _inbox_wiki_proposal_ledger(rows: list[InboxAuditRow]) -> list[dict[str, Any
     return ledger
 
 
+def inbox_wiki_proposal_ledger(rows: Iterable[InboxAuditRow]) -> list[dict[str, Any]]:
+    """Build the public review ledger for inbox rows that already route to wiki proposals."""
+    wiki_rows = [
+        row
+        for row in rows
+        if _is_inbox_wiki_proposal(row) and not _is_low_priority_inbox_noise(row)
+    ]
+    return _inbox_wiki_proposal_ledger(wiki_rows)
+
+
 def _append_inbox_wiki_proposal_ledger(lines: list[str], ledger: list[dict[str, Any]], *, limit: int = 20) -> None:
     total = sum(int(row["count"]) for row in ledger)
     lines.extend([
