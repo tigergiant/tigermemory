@@ -416,6 +416,7 @@ def test_daily_page_static_assets_wire_cron_intake_card():
     assert "批量写入 Wiki" in pages_js
     assert "写入 Wiki" in pages_js
     assert "wikiProposalScoreText(row)" in pages_js
+    assert "查看技术详情" in pages_js
     assert "review_label" in pages_js
     assert "sample_items" in pages_js
     assert "runWikiProposalApproval" in pages_js
@@ -423,7 +424,8 @@ def test_daily_page_static_assets_wire_cron_intake_card():
     assert "openWikiProposalBatchModal" in pages_js
     assert "investment-archive" in pages_js
     assert "enqueueWikiProposalInvestmentArchive" in pages_js
-    assert "按建议归档" in pages_js
+    assert "移入投资提案归档" in pages_js
+    assert "生成可检索摘要，不写正式投研页" in pages_js
     assert "investment_archive" in pages_js
     assert "投资分类" in pages_js
     assert "建议 Wiki" in pages_js
@@ -826,7 +828,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v49" in response.text
+    assert "tigermemory-memory-ops-v50" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
