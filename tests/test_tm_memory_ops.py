@@ -89,6 +89,97 @@ def test_write_memory_with_review_local_profile_persists_sqlite(monkeypatch, tmp
     assert payload["results"][0]["metadata"]["topic"] == "systems"
 
 
+def test_session_handoff_skips_route_llm_and_targets_verified_mem0(monkeypatch):
+    mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"
+    captured = {}
+
+    def fail_route(*_args, **_kwargs):
+        raise AssertionError("session handoff must not call tm_route.route_memory")
+
+    def fake_mem0_write(agent, topic, text, metadata_extra=None, **kwargs):
+        captured.update({
+            "agent": agent,
+            "topic": topic,
+            "text": text,
+            "metadata_extra": metadata_extra,
+            "kwargs": kwargs,
+        })
+        return json.dumps({"id": mem_id})
+
+    monkeypatch.setattr(tm_memory_ops.tm_route, "route_memory", fail_route)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "mem0_write", fake_mem0_write)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "verify_memory_id", lambda _id: {"direct_readback_ok": True})
+    monkeypatch.setattr(tm_memory_ops, "schedule_digest_refresh", lambda: None)
+
+    text = (
+        "---\n"
+        "memory_type: session-handoff\n"
+        "session_id: codex-20260609-0830\n"
+        "ide: codex\n"
+        "agent: codex\n"
+        "source: agent\n"
+        "---\n\n"
+        "## Task\nFix cron intake handoff routing noise.\n"
+    )
+    result = tm_memory_ops.write_memory_with_review("codex", "systems", text)
+
+    assert result["route"] == "mem0"
+    assert result["id"] == mem_id
+    assert result["knowledge_target"] == "mem0"
+    assert result["route_mode"] == "session_handoff_fast_path"
+    assert result["handoff_deepseek_called"] is False
+    assert result["handoff_sensitive_guard"] is False
+    assert result["handoff_verified"] is True
+    assert result["handoff_verification"]["source"] == "agent"
+    assert captured["topic"] == "systems"
+    assert captured["metadata_extra"]["knowledge_target"] == "mem0"
+    assert captured["metadata_extra"]["route_mode"] == "session_handoff_fast_path"
+    assert captured["metadata_extra"]["handoff_deepseek_called"] is False
+
+
+def test_session_handoff_sensitive_guard_routes_to_inbox_without_llm(monkeypatch):
+    captured = {}
+
+    def fail_route(*_args, **_kwargs):
+        raise AssertionError("sensitive session handoff must not call tm_route.route_memory")
+
+    def fake_write_and_commit_inbox(agent, topic, title, text, frontmatter_extra=None):
+        captured.update({
+            "agent": agent,
+            "topic": topic,
+            "title": title,
+            "text": text,
+            "frontmatter_extra": frontmatter_extra,
+        })
+        return "inbox/handoff-sensitive.md", "abc123"
+
+    monkeypatch.setattr(tm_memory_ops.tm_route, "route_memory", fail_route)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "write_and_commit_inbox", fake_write_and_commit_inbox)
+    monkeypatch.setattr(tm_memory_ops.tm_core, "git_remote_blob_url", lambda rel: f"https://example/{rel}")
+    monkeypatch.setattr(tm_memory_ops, "schedule_digest_refresh", lambda: None)
+
+    text = (
+        "---\n"
+        "memory_type: session-handoff\n"
+        "session_id: codex-20260609-0831\n"
+        "source: agent\n"
+        "---\n\n"
+        "## Evidence Refs\nAuthorization: Bearer abcdefghijklmnopqrstuvwxyz\n"
+    )
+    result = tm_memory_ops.write_memory_with_review("codex", "systems", text)
+
+    assert result["route"] == "inbox"
+    assert result["outcome"] == "human_review"
+    assert result["knowledge_target"] == "human_review"
+    assert result["handoff_verified"] is False
+    assert result["handoff_sensitive_guard"] is True
+    assert result["handoff_sensitive_hit_types"] == ["bearer_token"]
+    assert result["handoff_deepseek_called"] is False
+    assert captured["frontmatter_extra"]["knowledge_target"] == "human_review"
+    assert captured["frontmatter_extra"]["route_mode"] == "session_handoff_fast_path"
+    assert captured["frontmatter_extra"]["handoff_sensitive_hit_types"] == ["bearer_token"]
+
+
 def test_light_write_skips_route_memory_and_adds_metadata(monkeypatch):
     mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"
     captured = {}

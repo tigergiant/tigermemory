@@ -313,6 +313,72 @@ def _light_sensitive_hits(text: str) -> list[dict[str, str]]:
     return hits
 
 
+def _session_handoff_route_override(
+    text: str,
+    topic: str,
+) -> tuple[tm_route.RouteDecision, dict[str, Any]] | None:
+    if not _is_session_handoff_card(text):
+        return None
+    sensitive_hits = _light_sensitive_hits(text)
+    if sensitive_hits:
+        hit_types = [hit["kind"] for hit in sensitive_hits]
+        return (
+            tm_route.RouteDecision(
+                route="inbox",
+                score=0,
+                topic_inferred=topic,
+                issues=[f"handoff_sensitive_regex:{kind}" for kind in hit_types],
+                reasons=(
+                    "session_handoff_sensitive_guard: local sensitive regex matched; "
+                    "DeepSeek skipped; routed to inbox for human review"
+                ),
+                is_transient=False,
+                is_sensitive=True,
+                needs_human_review=True,
+                unreviewed=False,
+                knowledge_target="human_review",
+                review_reason="session handoff contains local sensitive regex hit",
+            ),
+            {
+                "route_mode": "session_handoff_fast_path",
+                "handoff_sensitive_guard": True,
+                "handoff_sensitive_hit_types": hit_types,
+                "handoff_deepseek_called": False,
+            },
+        )
+    return (
+        tm_route.RouteDecision(
+            route="mem0",
+            score=90,
+            topic_inferred=topic,
+            issues=[],
+            reasons=(
+                "session_handoff_fast_path: session handoff cards are "
+                "cross-session operational memory; DeepSeek skipped; route to Mem0 "
+                "for direct readback verification"
+            ),
+            is_transient=False,
+            is_sensitive=False,
+            needs_human_review=False,
+            unreviewed=False,
+            knowledge_target="mem0",
+            target_confidence=95,
+            score_breakdown={
+                "durability": 30,
+                "specificity": 25,
+                "evidence": 20,
+                "operational_value": 15,
+            },
+        ),
+        {
+            "route_mode": "session_handoff_fast_path",
+            "handoff_sensitive_guard": False,
+            "handoff_sensitive_hit_types": [],
+            "handoff_deepseek_called": False,
+        },
+    )
+
+
 def _luhn_valid(digits: str) -> bool:
     if not re.fullmatch(r"\d{16,19}", digits):
         return False
@@ -801,7 +867,11 @@ def write_memory_with_review(
                 "light_deepseek_called": False,
             }
     else:
-        decision = tm_route.route_memory(text, topic, agent)
+        handoff_override = _session_handoff_route_override(text, topic)
+        if handoff_override is not None:
+            decision, route_metadata_extra = handoff_override
+        else:
+            decision = tm_route.route_memory(text, topic, agent)
     if force_inbox:
         decision = replace(
             decision,
