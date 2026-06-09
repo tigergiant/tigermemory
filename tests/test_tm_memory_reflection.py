@@ -83,12 +83,14 @@ def test_daily_digest_decision_block_and_frontmatter_counts(tmp_path):
     assert "stale_archive_count: 1" in report
     assert "promote_candidate_count: 0" in report
     assert "mem0_audit_candidate_count: 0" in report
+    assert "wiki_proposal_inbox_count: 0" in report
     frontmatter_end = report.splitlines().index("---", 1)
     first_30 = "\n".join(report.splitlines()[frontmatter_end + 1 : frontmatter_end + 31])
     assert "## ⚡ 今日要决策" in first_30
     assert "🔴 14 天兜底 archive 候选：1 条" in first_30
     assert "🟡 promote_to_mem0 / promote_to_wiki 候选：0 条" in first_30
     assert "🔵 Proposed Changes：1 条" in first_30
+    assert "🧾 Inbox Wiki Proposal 台账：0 条 / 0 组" in first_30
     assert "🟢 Mem0 重复 / 误判候选：0 条" in first_30
     assert "⚪ discard 误判候选：0 条" in first_30
     assert "## 🧩 今日沉淀卡" in report
@@ -198,6 +200,83 @@ def test_daily_digest_folds_legacy_session_handoff_out_of_keep_queue(tmp_path):
     assert "<summary>展开 1 条低优先级历史项</summary>" in report
     assert "Codex 推荐操作：旧交接卡" in report
     assert "路由标记：legacy_session_handoff" in report
+
+
+def test_daily_digest_groups_inbox_wiki_proposals_into_ledger(tmp_path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    _write_raw_inbox(
+        inbox / "2026-05-14-1200-codex-systems.md",
+        "# Wiki proposal 88\n目标是更新 cron-intake 窗口规则。",
+        fm_lines=[
+            "summary_cn: cron-intake 窗口规则提案",
+            "knowledge_target: wiki_proposal",
+            "proposal_kind: wiki",
+            "wiki_partition: systems",
+            "wiki_slug_hint: cron-intake-window-rules",
+        ],
+    )
+
+    report = tm_memory_reflection.render_daily_report(
+        date="2026-05-15",
+        now_iso="2026-05-15T23:55:00+08:00",
+        mem0_items=[],
+        inbox_dir=inbox,
+        audit_root=tmp_path / "discard-root",
+        proposal_root=tmp_path / "cron-proposals",
+    )
+
+    assert "wiki_proposal_inbox_count: 1" in report
+    assert "🧾 Inbox Wiki Proposal 台账：1 条 / 1 组" in report
+    assert "## 🧾 Inbox Wiki Proposal 台账" in report
+    assert "<summary>展开 1 个 wiki proposal 目标页</summary>" in report
+    assert "`wiki/systems/cron-intake-window-rules.md`" in report
+    assert "2026-05-14-1200-codex-systems.md" in report
+    assert "<summary>展开 0 条 keep_in_inbox</summary>" in report
+
+
+def test_cron_intake_surfaces_inbox_wiki_proposal_action(tmp_path):
+    operations = tmp_path / "wiki" / "operations"
+    operations.mkdir(parents=True)
+    (operations / "daily-memory-digest-2026-05-15.md").write_text(
+        "\n".join([
+            "---",
+            "owner: codex",
+            "status: active",
+            "updated: 2026-05-15",
+            "mem0_count: 0",
+            "inbox_count: 1",
+            "discard_count: 0",
+            "proposal_count: 0",
+            "applied_count: 0",
+            "stale_archive_count: 0",
+            "promote_candidate_count: 0",
+            "wiki_proposal_inbox_count: 3",
+            "mem0_audit_candidate_count: 0",
+            "self_evolution_count: 0",
+            "---",
+            "",
+            "# Memory Digest 2026-05-15",
+            "",
+            "## ⚡ 今日要决策",
+            "",
+            "- 🧾 Inbox Wiki Proposal 台账：3 条 / 2 组 → 见下方 §Inbox Wiki Proposal 台账",
+            "",
+            "## 🧩 今日沉淀卡",
+            "",
+            "- 结论：有 inbox wiki proposal 需要归并。",
+        ]),
+        encoding="utf-8",
+    )
+
+    result = tm_memory_reflection.build_cron_intake(
+        date="2026-05-15",
+        window="memory-digest",
+        operations_dir=operations,
+    )
+
+    assert result["reports"][0]["counts"]["wiki_proposal_inbox_count"] == 3
+    assert "归并或转交 3 个 inbox/wiki_proposal 候选" in result["action_items"]
 
 
 def test_legacy_inbox_extracts_existing_chinese_line(tmp_path):

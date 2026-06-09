@@ -100,6 +100,10 @@ class InboxAuditRow:
     route_hard_rule: bool = False
     stale_archive: bool = False
     already_applied: bool = False
+    knowledge_target: str = ""
+    proposal_kind: str = ""
+    wiki_partition: str = ""
+    wiki_slug_hint: str = ""
 
 
 _INBOX_REVIEW_LABEL_PREFIX = (
@@ -615,6 +619,10 @@ def audit_inbox(
             route_hard_rule=route_hard_rule,
             stale_archive=stale,
             already_applied=already_applied,
+            knowledge_target=str(record.get("knowledge_target") or ""),
+            proposal_kind=str(record.get("proposal_kind") or ""),
+            wiki_partition=str(record.get("wiki_partition") or ""),
+            wiki_slug_hint=str(record.get("wiki_slug_hint") or ""),
         ))
     return rows
 
@@ -985,6 +993,82 @@ def _is_low_priority_inbox_noise(row: InboxAuditRow) -> bool:
     )
 
 
+def _is_inbox_wiki_proposal(row: InboxAuditRow) -> bool:
+    return row.knowledge_target == "wiki_proposal" or row.proposal_kind == "wiki"
+
+
+def _wiki_proposal_target(row: InboxAuditRow) -> str:
+    partition = row.wiki_partition or row.topic
+    slug = row.wiki_slug_hint.strip().strip("/")
+    if partition and slug:
+        return f"wiki/{partition}/{slug.removesuffix('.md')}.md"
+    if partition:
+        return f"wiki/{partition}/(needs-slug)"
+    return "(unknown target)"
+
+
+def _inbox_wiki_proposal_ledger(rows: list[InboxAuditRow]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        target = _wiki_proposal_target(row)
+        item = grouped.setdefault(
+            target,
+            {
+                "target": target,
+                "count": 0,
+                "first_date": row.created_date,
+                "newest_date": row.created_date,
+                "topics": set(),
+                "agents": set(),
+                "paths": [],
+                "status": "pending",
+            },
+        )
+        item["count"] += 1
+        item["first_date"] = min(str(item["first_date"]), row.created_date)
+        item["newest_date"] = max(str(item["newest_date"]), row.created_date)
+        item["topics"].add(row.topic)
+        item["agents"].add(row.agent)
+        if len(item["paths"]) < 3:
+            item["paths"].append(row.path)
+        if row.already_applied:
+            item["status"] = "applied"
+        elif row.topic == "investment" or row.wiki_partition == "investment":
+            item["status"] = "investment-thread"
+    ledger = list(grouped.values())
+    for item in ledger:
+        item["topics"] = ",".join(sorted(item["topics"]))
+        item["agents"] = ",".join(sorted(item["agents"]))
+    ledger.sort(key=lambda item: (-int(item["count"]), str(item["target"])))
+    return ledger
+
+
+def _append_inbox_wiki_proposal_ledger(lines: list[str], ledger: list[dict[str, Any]], *, limit: int = 20) -> None:
+    total = sum(int(row["count"]) for row in ledger)
+    lines.extend([
+        "",
+        "## 🧾 Inbox Wiki Proposal 台账",
+        "",
+        f"- 待追踪 inbox/wiki_proposal：{total} 条，聚合为 {len(ledger)} 个目标页。",
+    ])
+    if not ledger:
+        lines.append("- none")
+        return
+    table: list[str] = [
+        "| 目标页 | 状态 | 数量 | 首次/最新 | 样例 inbox |",
+        "|---|---|---:|---|---|",
+    ]
+    for row in ledger[:limit]:
+        paths = "<br>".join(f"`{path}`" for path in row["paths"])
+        table.append(
+            f"| `{row['target']}` | {row['status']} | {row['count']} | "
+            f"{row['first_date']} / {row['newest_date']} | {paths} |"
+        )
+    if len(ledger) > limit:
+        table.append(f"| ... | truncated | {len(ledger) - limit} 组未展示 | - | - |")
+    lines.extend(_details_block(f"展开 {len(ledger)} 个 wiki proposal 目标页", table))
+
+
 def _append_inbox_row(lines: list[str], row: InboxAuditRow) -> None:
     flag = " **高亮：14 天兜底 archive**" if row.stale_archive else ""
     lines.extend([
@@ -1190,6 +1274,9 @@ def render_daily_report(
     archive_rows, promote_rows, keep_rows = _inbox_action_groups(inbox_all)
     low_priority_rows = [row for row in keep_rows if _is_low_priority_inbox_noise(row)]
     keep_rows = [row for row in keep_rows if not _is_low_priority_inbox_noise(row)]
+    wiki_proposal_rows = [row for row in keep_rows if _is_inbox_wiki_proposal(row)]
+    keep_rows = [row for row in keep_rows if not _is_inbox_wiki_proposal(row)]
+    wiki_proposal_ledger = _inbox_wiki_proposal_ledger(wiki_proposal_rows)
     stale_count = sum(1 for row in archive_rows if row.stale_archive)
     promote_count = len(promote_rows)
     quality_score = _score_quality(len(mem0_rows), len(inbox_today), len(discard_events), len(candidates), stale_count)
@@ -1210,6 +1297,7 @@ def render_daily_report(
         f"stale_archive_count: {stale_count}",
         f"promote_candidate_count: {promote_count}",
         f"low_priority_inbox_count: {len(low_priority_rows)}",
+        f"wiki_proposal_inbox_count: {len(wiki_proposal_rows)}",
         f"mem0_audit_candidate_count: {len(mem0_dedup_candidates)}",
         f"self_evolution_count: {self_evolution_count}",
         "---",
@@ -1221,6 +1309,7 @@ def render_daily_report(
         f"- 🔴 14 天兜底 archive 候选：{stale_count} 条 → 见下方 §inbox 决策区",
         f"- 🟡 promote_to_mem0 / promote_to_wiki 候选：{promote_count} 条 → 见下方 §inbox 决策区",
         f"- 🔵 Proposed Changes：{len(proposals)} 条 → 见下方 §Proposed Changes",
+        f"- 🧾 Inbox Wiki Proposal 台账：{len(wiki_proposal_rows)} 条 / {len(wiki_proposal_ledger)} 组 → 见下方 §Inbox Wiki Proposal 台账",
         f"- 🟢 Mem0 重复 / 误判候选：{len(mem0_dedup_candidates)} 条 → 见下方 §Mem0 重复 / 误判候选",
         f"- ⚪ discard 误判候选：{len(candidates)} 条 → 见下方 §discard 误判候选",
         "",
@@ -1295,6 +1384,8 @@ def render_daily_report(
         low_priority_body.append("- none")
     lines.extend(["", "### 💤 自动折叠：旧交接 / 自动流水", ""])
     lines.extend(_details_block(f"展开 {len(low_priority_rows)} 条低优先级历史项", low_priority_body))
+
+    _append_inbox_wiki_proposal_ledger(lines, wiki_proposal_ledger)
 
     lines.extend([
         "",
@@ -1431,7 +1522,14 @@ def _frontmatter_counts(path: pathlib.Path) -> dict[str, int]:
     except OSError:
         return {}
     counts: dict[str, int] = {}
-    for key in ("mem0_count", "inbox_count", "discard_count", "proposal_count", "applied_count"):
+    for key in (
+        "mem0_count",
+        "inbox_count",
+        "discard_count",
+        "proposal_count",
+        "applied_count",
+        "wiki_proposal_inbox_count",
+    ):
         try:
             counts[key] = int(fm.get(key, "0"))
         except ValueError:
@@ -1521,6 +1619,8 @@ def _daily_digest_intake(date: str, *, operations_dir: pathlib.Path = OPERATIONS
         "applied_count",
         "stale_archive_count",
         "promote_candidate_count",
+        "low_priority_inbox_count",
+        "wiki_proposal_inbox_count",
         "mem0_audit_candidate_count",
         "self_evolution_count",
     ):
@@ -1540,6 +1640,8 @@ def _daily_digest_intake(date: str, *, operations_dir: pathlib.Path = OPERATIONS
         report["issues"].append("missing 今日沉淀卡")
     if counts.get("proposal_count", 0):
         report["issues"].append(f"{counts['proposal_count']} pending proposal(s)")
+    if counts.get("wiki_proposal_inbox_count", 0):
+        report["issues"].append(f"{counts['wiki_proposal_inbox_count']} inbox wiki proposal candidate(s)")
     if counts.get("stale_archive_count", 0):
         report["issues"].append(f"{counts['stale_archive_count']} stale inbox archive candidate(s)")
     return report
@@ -1739,6 +1841,8 @@ def build_cron_intake(
         action_items.append(f"补跑或检查 tigermemory-memory-route-reflection：缺少 {digest.get('path')}")
     if counts.get("proposal_count"):
         action_items.append(f"裁决 {counts['proposal_count']} 个 memory digest proposal")
+    if counts.get("wiki_proposal_inbox_count"):
+        action_items.append(f"归并或转交 {counts['wiki_proposal_inbox_count']} 个 inbox/wiki_proposal 候选")
     if counts.get("stale_archive_count"):
         action_items.append(f"处理 {counts['stale_archive_count']} 个 14 天 inbox archive 候选")
     for row in reports:
