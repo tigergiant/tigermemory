@@ -377,8 +377,8 @@ def test_daily_page_static_assets_wire_cron_intake_card():
     assert "renderCronIntake" in pages_js
     assert "renderWikiProposalLedger" in pages_js
     assert "data-wiki-ledger-action=\"approve-all\"" in pages_js
-    assert "按推荐批量写入" in pages_js
-    assert "选择落点并写入" in pages_js
+    assert "批量写入 Wiki" in pages_js
+    assert "写入 Wiki" in pages_js
     assert "wikiProposalScoreText(row)" in pages_js
     assert "review_label" in pages_js
     assert "sample_items" in pages_js
