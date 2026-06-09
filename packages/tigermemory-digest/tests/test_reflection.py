@@ -264,6 +264,32 @@ def test_build_cron_intake_surfaces_missing_ai_radar_artifact(tmp_path):
     assert any("AI 雷达落本地短报告" in action for action in result["action_items"])
 
 
+def test_memory_digest_intake_warns_when_report_is_before_evening_window(tmp_path):
+    operations = tmp_path / "wiki" / "operations"
+    operations.mkdir(parents=True)
+    (operations / "daily-memory-digest-2026-06-09.md").write_text(
+        "---\n"
+        "last_run_at: 2026-06-09T07:44:56+08:00\n"
+        "proposal_count: 0\n"
+        "stale_archive_count: 0\n"
+        "---\n\n"
+        "## 🧩 今日沉淀卡\n\n"
+        "- 结论：日报可读，但生成时间过早。\n",
+        encoding="utf-8",
+    )
+
+    result = reflection.build_cron_intake(
+        date="2026-06-09",
+        window="memory-digest",
+        operations_dir=operations,
+        codex_home=tmp_path / ".codex",
+    )
+
+    assert result["status"] == "warn"
+    assert any("memory digest may be stale" in warning for warning in result["warnings"])
+    assert any("未按 23:40 触发" in action for action in result["action_items"])
+
+
 def test_build_cron_intake_accepts_bold_ai_radar_sections(tmp_path):
     operations = tmp_path / "wiki" / "operations"
     operations.mkdir(parents=True)

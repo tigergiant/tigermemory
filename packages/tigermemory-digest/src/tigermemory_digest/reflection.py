@@ -1998,14 +1998,17 @@ def _daily_digest_intake(date: str, *, operations_dir: pathlib.Path = OPERATIONS
             counts[key] = 0
     learning_card = _compact_section_lines(_section_body(text, "今日沉淀卡"), limit=8)
     decision_items = _compact_section_lines(_section_body(text, "今日要决策"), limit=8)
+    stale_issue = _memory_digest_freshness_issue(date, fm)
     report.update({
-        "status": "ok" if learning_card else "warn",
+        "status": "ok" if learning_card and not stale_issue else "warn",
         "counts": counts,
         "learning_card": learning_card,
         "decision_items": decision_items,
     })
     if not learning_card:
         report["issues"].append("missing 今日沉淀卡")
+    if stale_issue:
+        report["issues"].append(stale_issue)
     if counts.get("proposal_count", 0):
         report["issues"].append(f"{counts['proposal_count']} pending proposal(s)")
     if counts.get("wiki_proposal_inbox_count", 0):
@@ -2013,6 +2016,21 @@ def _daily_digest_intake(date: str, *, operations_dir: pathlib.Path = OPERATIONS
     if counts.get("stale_archive_count", 0):
         report["issues"].append(f"{counts['stale_archive_count']} stale inbox archive candidate(s)")
     return report
+
+
+def _memory_digest_freshness_issue(date: str, frontmatter: dict[str, str]) -> str | None:
+    last_run = _parse_dt(frontmatter.get("last_run_at"))
+    if last_run is None:
+        return None
+    anchor = _parse_date(date)
+    expected_after = dt.datetime.combine(anchor, dt.time(hour=23, minute=30), tzinfo=tm_core.TZ_CN)
+    if last_run < expected_after:
+        return (
+            "memory digest may be stale: "
+            f"last_run_at={last_run.isoformat()}, "
+            f"expected_after={expected_after.isoformat()}"
+        )
+    return None
 
 
 def _daily_health_intake(date: str, *, operations_dir: pathlib.Path = OPERATIONS_DIR) -> dict[str, Any]:
@@ -2207,6 +2225,8 @@ def build_cron_intake(
     counts = digest.get("counts") or {}
     if digest and not digest.get("exists"):
         action_items.append(f"补跑或检查 tigermemory-memory-route-reflection：缺少 {digest.get('path')}")
+    if digest and any("memory digest may be stale" in str(issue) for issue in digest.get("issues", [])):
+        action_items.append("检查 tigermemory-memory-route-reflection：日报早于预期晚间窗口，可能未按 23:40 触发")
     if counts.get("proposal_count"):
         action_items.append(f"裁决 {counts['proposal_count']} 个 memory digest proposal")
     if counts.get("wiki_proposal_inbox_count"):
