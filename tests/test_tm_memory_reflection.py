@@ -341,6 +341,84 @@ def test_codex_route_recommendation_auto_generated_decision_log_is_hidden_class(
     assert row.route_hard_rule is True
 
 
+def test_investment_wiki_proposal_ledger_adds_triage_metadata():
+    row = tm_memory_reflection.InboxAuditRow(
+        path="inbox/2026-06-09-1200-codex-investment.md",
+        created_date="2026-06-09",
+        age_days=0,
+        agent="codex",
+        topic="investment",
+        title_cn="贵州茅台正式报告",
+        preview_cn=(
+            r"贵州茅台 600519.SH DeerFlow 正式报告 PDF，原始路径 "
+            r"C:\Users\Giant\Documents\New project\reports\maotai-2026-06.pdf"
+        ),
+        summary_cn="贵州茅台正式报告",
+        summary="长期研究结论与风险提示，不含交易执行数据。",
+        action="keep_in_inbox",
+        reason="wiki proposal ledger",
+        codex_recommended_action="写入 Wiki",
+        codex_recommended_reason="长期研究候选",
+        route_target="wiki",
+        route_label="写入 Wiki",
+        route_confidence=90,
+        knowledge_target="wiki_proposal",
+        proposal_kind="wiki",
+        wiki_partition="investment",
+        wiki_slug_hint="research/600519",
+        route_score=88,
+        l2_review_score=84,
+        target_confidence=90,
+        wiki_action="update",
+    )
+
+    ledger = tm_memory_reflection.inbox_wiki_proposal_ledger([row])
+
+    assert len(ledger) == 1
+    item = ledger[0]
+    assert item["status"] == "investment-thread"
+    triage = item["investment_triage"]
+    assert triage["investment_doc_type"] == "report"
+    assert triage["investment_target_path"] == "wiki/investment/research/600519.SH.md"
+    assert triage["investment_review_level"] == "proposal"
+    assert triage["preserve_original"] is True
+    assert triage["copy_only"] is True
+    assert triage["symbol"] == "600519.SH"
+    assert triage["original_paths"] == [r"C:\Users\Giant\Documents\New project\reports\maotai-2026-06.pdf"]
+
+
+def test_investment_wiki_proposal_triage_keeps_qmt_workflow_out_of_trade_log():
+    row = tm_memory_reflection.InboxAuditRow(
+        path="inbox/2026-06-09-1200-codex-investment.md",
+        created_date="2026-06-09",
+        age_days=0,
+        agent="codex",
+        topic="investment",
+        title_cn="MiniQMT 集成状态",
+        preview_cn="miniqmt 数据源和投研工作流接入状态，仅描述系统能力边界。",
+        summary_cn="MiniQMT 集成状态",
+        summary="投研系统规则更新。",
+        action="keep_in_inbox",
+        reason="wiki proposal ledger",
+        codex_recommended_action="写入 Wiki",
+        codex_recommended_reason="长期规则候选",
+        knowledge_target="wiki_proposal",
+        proposal_kind="wiki",
+        wiki_partition="investment",
+        wiki_slug_hint="miniqmt-integration-status",
+        route_score=86,
+        l2_review_score=82,
+        target_confidence=90,
+        wiki_action="update",
+    )
+
+    triage = tm_memory_reflection.inbox_wiki_proposal_ledger([row])[0]["investment_triage"]
+
+    assert triage["investment_doc_type"] == "workflow"
+    assert triage["investment_target_path"] == "wiki/investment/miniqmt-integration-status.md"
+    assert triage["investment_review_level"] == "proposal"
+
+
 def test_codex_route_recommendation_alerts_to_inbox(tmp_path):
     inbox = tmp_path / "inbox"
     inbox.mkdir()

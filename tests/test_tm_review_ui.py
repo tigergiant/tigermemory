@@ -388,6 +388,8 @@ def test_daily_page_static_assets_wire_cron_intake_card():
     assert "investment-handoff" in pages_js
     assert "enqueueWikiProposalInvestmentHandoff" in pages_js
     assert "标记已转交" in pages_js
+    assert "投资分类" in pages_js
+    assert "建议 Wiki" in pages_js
     assert "completeCard" in pages_js
     assert "refreshDigestThenCompleteCards" in pages_js
     assert "markCompletedIfPathGoneAfterError" in pages_js
@@ -592,6 +594,11 @@ def test_api_digest_surfaces_wiki_proposal_ledger_and_hides_rows(tmp_path, monke
     assert system_row["route_score_min"] == 88
     assert system_row["l2_review_score_min"] == 85
     assert system_row["sample_items"][0]["title"] == "Wiki 提案"
+    investment_row = next(row for row in digest["wiki_proposal_ledger"] if row["status"] == "investment-thread")
+    assert investment_row["investment_triage"]["investment_doc_type"] == "decision"
+    assert investment_row["investment_triage"]["investment_review_level"] == "proposal"
+    assert investment_row["investment_triage"]["preserve_original"] is True
+    assert investment_row["investment_triage"]["copy_only"] is True
 
 
 def test_api_digest_returns_self_evolution_summary_not_raw_events(tmp_path, monkeypatch):

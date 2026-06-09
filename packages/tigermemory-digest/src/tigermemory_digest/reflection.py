@@ -1031,6 +1031,201 @@ def _wiki_proposal_target_parts(row: InboxAuditRow) -> tuple[str, str]:
     return partition, slug
 
 
+_INVESTMENT_DOC_TYPE_LABELS = {
+    "rule": "长期投资规则",
+    "workflow": "投研系统规则",
+    "stock_research": "单股长期研究",
+    "decision": "决策记录",
+    "scan": "组合/自动扫描",
+    "private_signal": "私域线索",
+    "trade_log": "交易/账户流水",
+    "report": "PDF/长报告",
+    "raw_evidence": "原始研究证据",
+    "discard": "低价值/占位",
+}
+
+
+_INVESTMENT_REVIEW_LABELS = {
+    "auto_archive": "只归档证据",
+    "proposal": "投资线程审核",
+    "human_review": "人工复核",
+}
+
+
+_A_SHARE_SYMBOL_RE = re.compile(r"\b(?P<code>[036]\d{5})(?:\.(?P<suffix>SH|SZ))?\b", re.IGNORECASE)
+_DECISION_MONTH_RE = re.compile(r"\b(20\d{2}-\d{2})\b")
+_NEW_PROJECT_PATH_RE = re.compile(
+    r"C:\\Users\\Giant\\Documents\\New project\\(?:reports|data|logs|config)\\[^\n\r`\"']+",
+    re.IGNORECASE,
+)
+
+
+def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
+    return any(marker in text for marker in markers)
+
+
+def _investment_symbol(text: str) -> str | None:
+    match = _A_SHARE_SYMBOL_RE.search(text)
+    if not match:
+        return None
+    code = match.group("code")
+    suffix = (match.group("suffix") or "").upper()
+    if suffix:
+        return f"{code}.{suffix}"
+    if code.startswith("6"):
+        return f"{code}.SH"
+    if code.startswith(("0", "3")):
+        return f"{code}.SZ"
+    return code
+
+
+def _investment_decision_month(text: str, fallback_date: str) -> str | None:
+    match = _DECISION_MONTH_RE.search(text)
+    if match:
+        return match.group(1)
+    if re.fullmatch(r"20\d{2}-\d{2}-\d{2}", fallback_date or ""):
+        return fallback_date[:7]
+    return None
+
+
+def _investment_original_paths(text: str) -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+    for match in _NEW_PROJECT_PATH_RE.finditer(text):
+        value = match.group(0).rstrip(" .,;，。；)")
+        if value not in seen:
+            seen.add(value)
+            paths.append(value)
+    return paths
+
+
+def _investment_proposal_text(item: dict[str, Any]) -> str:
+    parts = [
+        str(item.get("target") or ""),
+        str(item.get("target_slug") or ""),
+        str(item.get("wiki_actions") or ""),
+    ]
+    for sample in item.get("sample_items") or []:
+        if isinstance(sample, dict):
+            parts.extend([
+                str(sample.get("path") or ""),
+                str(sample.get("title") or ""),
+                str(sample.get("preview") or ""),
+                str(sample.get("summary") or ""),
+            ])
+    return "\n".join(parts)
+
+
+def _investment_triage_for_item(item: dict[str, Any]) -> dict[str, Any]:
+    raw_text = _investment_proposal_text(item)
+    text = raw_text.lower()
+    target = str(item.get("target") or "")
+    slug = str(item.get("target_slug") or "").strip("/")
+    symbol = _investment_symbol(raw_text)
+    decision_month = _investment_decision_month(raw_text, str(item.get("newest_date") or ""))
+    original_paths = _investment_original_paths(raw_text)
+
+    contains_account_data = _contains_any(
+        text,
+        ("账户", "现金", "净值", "持仓明细", "成交", "委托", "order", "account", "cash", "position detail"),
+    )
+    contains_trade_action = _contains_any(
+        text,
+        ("买入", "卖出", "加仓", "减仓", "清仓", "调仓", "持有", "watch", "buy", "sell", "reduce", "add", "hold"),
+    )
+    contains_private_signal = _contains_any(text, ("飞书", "群聊", "私域", "private-signal", "private_signal", "feishu"))
+
+    doc_type = "stock_research"
+    target_path = target if target.startswith("wiki/investment/") else "wiki/investment/research/(needs-symbol).md"
+    storage_path = ""
+    review_level = "proposal"
+    reason = "投资类 Wiki proposal 需要投资线程确认后再写入长期 Wiki。"
+    evidence_level = "medium" if (symbol or original_paths or (item.get("route_score_min") or 0) >= 70) else "weak"
+
+    if _contains_any(text, ("暂无数据", "占位", "placeholder", "empty")):
+        doc_type = "discard"
+        target_path = ""
+        review_level = "auto_archive"
+        evidence_level = "none"
+        reason = "内容像占位或低信息量流水，投资线程可直接归档，不应进 Wiki。"
+    elif contains_private_signal:
+        doc_type = "private_signal"
+        target_path = ""
+        storage_path = f"sources/investment/private-signals/feishu/{decision_month or 'YYYY-MM'}.jsonl"
+        review_level = "auto_archive"
+        reason = "私域/飞书线索先存原始证据，不直接进入长期 Wiki。"
+    elif contains_account_data or _contains_any(text, ("b_qmt", "交易流水", "委托", "成交", "订单")):
+        doc_type = "trade_log"
+        target_path = ""
+        storage_path = f"sources/investment/trading/{item.get('newest_date') or 'YYYY-MM-DD'}/"
+        review_level = "human_review"
+        reason = "含交易、账户或执行数据，只能由投资线程人工复核后摘要，不自动写 Wiki。"
+    elif _contains_any(text, ("portfolio-fast-scan", "快扫", "扫描", "dsa", "ta scan", "持仓扫描")):
+        doc_type = "scan"
+        target_path = "wiki/investment/decision-log/portfolio-YYYY-MM.md"
+        storage_path = f"sources/investment/scans/{item.get('newest_date') or 'YYYY-MM-DD'}/<run_id>.md"
+        review_level = "auto_archive"
+        reason = "组合快扫默认归档为证据；只有高价值摘要才进入 decision-log 提案。"
+    elif _contains_any(text, ("final_decision", "final decision", "decision-log", "决策", "评级", "动作")) or contains_trade_action:
+        doc_type = "decision"
+        if symbol and decision_month:
+            target_path = f"wiki/investment/decision-log/{symbol}-{decision_month}.md"
+        elif symbol:
+            target_path = f"wiki/investment/decision-log/{symbol}-YYYY-MM.md"
+        else:
+            target_path = "wiki/investment/decision-log/(needs-symbol)-YYYY-MM.md"
+        storage_path = "sources/investment/research-runs/<SYMBOL>/<YYYY-MM-DD>/<run_id>/"
+        review_level = "proposal" if not contains_account_data else "human_review"
+        reason = "决策类内容只能 append 到 decision-log 提案，不能覆盖旧记录。"
+    elif _contains_any(text, ("portfolio-rules", "组合规则", "风控", "阈值", "买卖纪律", "审批边界", "交易权限")):
+        doc_type = "rule"
+        target_path = "wiki/investment/portfolio-rules.md" if "portfolio-rules" in text else f"wiki/investment/rules/{slug or '(needs-slug)'}.md"
+        reason = "长期投资规则可进入 investment Wiki，但需要投资线程审核。"
+    elif _contains_any(text, (".pdf", "pdf", "长报告", "正式报告", "deerflow report", "reports\\")):
+        doc_type = "report"
+        target_path = f"wiki/investment/research/{symbol}.md" if symbol else "wiki/investment/research/(needs-symbol).md"
+        storage_path = "sources/investment/reports/<YYYY-MM-DD>/<run_id>/"
+        reason = "PDF/长报告原件保留原路径，Wiki 只写短摘要和绝对路径链接。"
+    elif _contains_any(text, ("research-workflow", "data-source", "capability-registry", "miniqmt", "openclaw", "hermes", "deerflow", "tushare", "数据源")):
+        doc_type = "workflow"
+        if "miniqmt" in text or "qmt" in text:
+            target_path = "wiki/investment/miniqmt-integration-status.md"
+        elif "data-source" in text or "数据源" in text:
+            target_path = "wiki/investment/data-source-capability-registry.md"
+        else:
+            target_path = "wiki/investment/research-workflow.md"
+        reason = "投研系统规则归到稳定入口页，由投资线程决定如何追加。"
+    elif _contains_any(text, ("fundamentals", "news", "market", "sentiment", "risk_debate", "investment_debate", "research-runs")):
+        doc_type = "raw_evidence"
+        target_path = ""
+        storage_path = "sources/investment/research-runs/<SYMBOL>/<YYYY-MM-DD>/<run_id>/"
+        review_level = "auto_archive"
+        reason = "详细研究产物先作为原始证据归档，不直接进长期 Wiki。"
+    elif symbol:
+        doc_type = "stock_research"
+        target_path = f"wiki/investment/research/{symbol}.md"
+        reason = "单股稳定研究结论可形成 research 页提案，但需要投资线程审核证据边界。"
+
+    return {
+        "investment_doc_type": doc_type,
+        "investment_doc_type_label": _INVESTMENT_DOC_TYPE_LABELS[doc_type],
+        "investment_target_path": target_path,
+        "investment_storage_path": storage_path,
+        "investment_review_level": review_level,
+        "investment_review_label": _INVESTMENT_REVIEW_LABELS[review_level],
+        "reason": reason,
+        "original_paths": original_paths,
+        "preserve_original": True,
+        "copy_only": True,
+        "symbol": symbol,
+        "decision_month": decision_month,
+        "evidence_level": evidence_level,
+        "contains_trade_action": contains_trade_action,
+        "contains_private_signal": contains_private_signal,
+        "contains_account_data": contains_account_data,
+    }
+
+
 def _inbox_wiki_proposal_ledger(rows: list[InboxAuditRow]) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -1075,6 +1270,7 @@ def _inbox_wiki_proposal_ledger(rows: list[InboxAuditRow]) -> list[dict[str, Any
                 "path": row.path,
                 "title": row.title_cn,
                 "preview": row.preview_cn,
+                "summary": row.summary,
                 "route_score": row.route_score,
                 "l2_review_score": row.l2_review_score,
                 "target_confidence": row.target_confidence,
@@ -1099,6 +1295,7 @@ def _inbox_wiki_proposal_ledger(rows: list[InboxAuditRow]) -> list[dict[str, Any
         item["target_confidence_min"] = min(target_confidences) if target_confidences else None
         item["target_confidence_max"] = max(target_confidences) if target_confidences else None
         if item["status"] == "investment-thread":
+            item["investment_triage"] = _investment_triage_for_item(item)
             item["review_level"] = "handoff"
             item["review_label"] = "转投资线程"
         elif (item["route_score_min"] or 0) >= 80 and (item["l2_review_score_min"] or 0) >= 80:
