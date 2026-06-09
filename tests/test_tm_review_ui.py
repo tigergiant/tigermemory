@@ -832,7 +832,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v54" in response.text
+    assert "tigermemory-memory-ops-v55" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -2303,9 +2303,21 @@ def test_dashboard_memory_quality_range_aggregates_available_digest_dates(tmp_pa
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(tm_review_ui, "today", lambda: "2026-06-10")
     _write_digest(tmp_path, "2026-06-09")
-    _write_digest(tmp_path, "2026-06-10")
+    second_digest = _write_digest(tmp_path, "2026-06-10")
+    second_digest.write_text(
+        second_digest.read_text(encoding="utf-8").replace(
+            "inbox/2026-05-01-1200-codex-systems.md",
+            "inbox/2026-06-10-1200-codex-systems.md",
+        ),
+        encoding="utf-8",
+    )
     _write_inbox(tmp_path, "2026-06-09-1200-codex-systems.md")
     _write_inbox(tmp_path, "2026-06-10-1200-codex-systems.md")
+    monkeypatch.setattr(
+        tm_review_ui,
+        "parse_digest",
+        lambda _date: (_ for _ in ()).throw(AssertionError("range quality should use lightweight digest snapshots")),
+    )
     monkeypatch.setattr(tm_review_ui, "_mem0_payload", lambda *_args, **_kwargs: {"count": 8, "items": [], "results": [], "latency_ms": 12})
     trace_calls: list[int] = []
     monkeypatch.setattr(
@@ -2329,6 +2341,7 @@ def test_dashboard_memory_quality_range_aggregates_available_digest_dates(tmp_pa
     assert data["counts"]["discard"] == 6
     assert data["counts"]["inbox_pending"] == 2
     assert data["counts"]["inbox_today"] == 2
+    assert data["counts"]["review_entered"] == 2
     assert data["route_flow"]["period_label"] == "近 7 天"
     assert data["route_flow"]["trace_period_label"] == "近 7 天"
     assert trace_calls == [24 * 7]
@@ -2374,7 +2387,7 @@ def test_quality_route_flow_filters_recommendations_by_date_range():
     ]
 
     flow = tm_review_ui._build_quality_route_flow(
-        counts={"mem0": 0, "wiki": 0, "inbox_today": 2, "discard": 0},
+        counts={"mem0": 0, "wiki": 0, "inbox_today": 2, "discard": 0, "review_entered": 2},
         report_date="2026-06-09",
         trace_summary={"status_counts": {}},
         trace_rows=[],
@@ -2592,20 +2605,21 @@ def test_locked_write_action_logs_elapsed(capsys):
 
 
 def test_quality_cache_warmer_runs_without_browser_request(monkeypatch):
-    calls: list[str | None] = []
+    calls: list[tuple[str | None, str | None]] = []
     monkeypatch.setattr(tm_review_ui, "today", lambda: "2026-05-27")
     monkeypatch.setattr(
         tm_review_ui,
         "dashboard_memory_quality",
-        lambda date=None: calls.append(date) or {"ok": True, "date": date, "cached": False},
+        lambda date=None, range_key=None: calls.append((date, range_key)) or {"ok": True, "date": date, "cached": False},
     )
 
     result = tm_review_ui._warm_quality_cache_once()
 
-    assert calls == ["2026-05-27"]
+    assert calls == [("2026-05-27", None), ("2026-05-27", "7d"), ("2026-05-27", "30d")]
     assert result["ok"] is True
     assert result["date"] == "2026-05-27"
     assert result["cached"] is False
+    assert [item["range"] for item in result["ranges"]] == ["today", "7d", "30d"]
 
 
 def test_dashboard_main_starts_quality_cache_warmer():
@@ -2688,6 +2702,9 @@ def test_quality_page_flow_panel_keeps_all_routes_visible():
     assert "new URLSearchParams({ range: this.rangeKey || 'today' })" in pages_js
     assert "统计 ${rangeSpan}" in pages_js
     assert "renderRangeControls(memory)" in pages_js
+    assert "renderQualityLoading(nextRange)" in pages_js
+    assert "先暂停旧范围数字展示" in pages_js
+    assert "进入每日审批" in pages_js
     assert "const eventOptions = this.abortController ? { signal: this.abortController.signal } : undefined;" in pages_js
     assert "}, eventOptions);" in pages_js
     assert "['即时记忆', sourceValues.daily" in pages_js
