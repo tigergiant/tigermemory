@@ -382,6 +382,199 @@ def test_expand_queries_reads_registry(monkeypatch, tmp_path):
     assert "unit expanded target" in tm_answer.expand_queries("please use unit trigger")
 
 
+def test_query_planner_llm_uses_budgeted_manifest_context(monkeypatch):
+    target = {
+        "path": "wiki/systems/memory-answer-development-plan.md",
+        "title": "Memory Answer 开发计划",
+        "aliases": "记忆问答 自然语言 检索规划",
+    }
+    noise = [
+        {"path": f"wiki/systems/noise-{index}.md", "title": f"Noise {index}"}
+        for index in range(120)
+    ]
+    monkeypatch.setattr(tm_answer, "_query_planner_manifest_pages", lambda: noise + [target])
+    captured = {}
+
+    def fake_deepseek(system_prompt, user_msg, **kwargs):
+        captured["system_prompt"] = system_prompt
+        captured["payload"] = json.loads(user_msg)
+        captured["kwargs"] = kwargs
+        return True, {
+            "retrieval_queries": ["memory answer natural language retrieval"],
+            "evidence_terms": ["Memory Answer"],
+            "path_hints": ["wiki/systems/memory-answer-development-plan.md"],
+        }
+
+    monkeypatch.setattr(tm_answer.tm_core, "_call_deepseek_json", fake_deepseek)
+
+    ok, parsed = tm_answer._call_memory_query_planner_llm(
+        "为什么记忆问答自然语言问题搜不到资料，应该看哪个开发计划",
+        {
+            "intent": "synthesis",
+            "query_class": "synthesis",
+            "freshness_mode": "not_applicable",
+            "expanded_queries": ["为什么记忆问答自然语言问题搜不到资料，应该看哪个开发计划"],
+            "source_budgets": {"wiki": 2},
+        },
+    )
+
+    assert ok is True
+    assert parsed["path_hints"] == ["wiki/systems/memory-answer-development-plan.md"]
+    assert captured["kwargs"]["purpose"] == "memory_query_plan"
+    manifest = captured["payload"]["manifest"]
+    assert "candidate_pages" in manifest
+    assert "pages" not in manifest
+    assert manifest["page_count"] == 121
+    assert len(manifest["candidate_pages"]) <= tm_answer.QUERY_PLANNER_CONTEXT_MAX_ITEMS
+    assert manifest["candidate_pages"][0]["path"] == "wiki/systems/memory-answer-development-plan.md"
+    manifest_payload = json.dumps(manifest, ensure_ascii=False).lower()
+    assert "tests/fixtures" not in manifest_payload
+    assert "expected_evidence_paths" not in manifest_payload
+    assert "answer_key" not in manifest_payload
+
+
+def test_plan_query_uses_deepseek_planner_for_general_rewrite(monkeypatch):
+    query = "请帮我判断记忆问答系统为什么自然语言问题找不到对应资料"
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "1")
+    monkeypatch.setattr(tm_answer, "_manifest_candidate_plan", lambda *_args, **_kwargs: ([], [], []))
+
+    def fake_planner(actual_query, base_plan):
+        assert actual_query == query
+        assert base_plan["expanded_queries"][0] == query
+        return True, {
+            "intent": "synthesis",
+            "retrieval_queries": ["memory answer natural recall"],
+            "evidence_terms": ["memory_answer", "natural recall"],
+            "path_hints": ["wiki/systems/memory-answer-development-plan.md"],
+            "warnings": ["planner used metadata only"],
+        }
+
+    monkeypatch.setattr(tm_answer, "_call_memory_query_planner_llm", fake_planner)
+
+    plan = tm_answer.plan_query(query)
+
+    assert plan["planner_source"] == "llm"
+    assert plan["expanded_queries"][0] == query
+    assert "memory answer natural recall" in plan["expanded_queries"]
+    assert "wiki/systems/memory-answer-development-plan.md" in plan["expanded_queries"]
+    assert plan["evidence_terms"] == ["memory_answer", "natural recall"]
+    assert plan["planner_call"]["ok"] is True
+    assert plan["planner_warnings"] == ["planner used metadata only"]
+
+
+def test_plan_query_falls_back_when_deepseek_planner_fails(monkeypatch):
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "1")
+    monkeypatch.setattr(
+        tm_answer,
+        "_manifest_candidate_plan",
+        lambda *_args, **_kwargs: (["wiki/systems/fallback-plan.md"], ["Fallback Plan"], ["wiki/systems/fallback-plan.md"]),
+    )
+    monkeypatch.setattr(
+        tm_answer,
+        "_call_memory_query_planner_llm",
+        lambda *_args: (False, "offline"),
+    )
+
+    plan = tm_answer.plan_query("为什么自然语言问题找不到对应资料")
+
+    assert plan["planner_source"] == "deterministic"
+    assert plan["planner_call"]["ok"] is False
+    assert plan["expanded_queries"][:2] == ["为什么自然语言问题找不到对应资料", "wiki/systems/fallback-plan.md"]
+    assert plan["evidence_terms"] == ["Fallback Plan"]
+    assert any("memory query planner failed" in warning for warning in plan["planner_warnings"])
+
+
+def test_plan_query_prioritizes_manifest_candidate_before_generic_llm_probe(monkeypatch):
+    query = "为什么自然语言问题应该先看记忆问答开发计划"
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "1")
+    monkeypatch.setattr(
+        tm_answer,
+        "_manifest_candidate_plan",
+        lambda *_args, **_kwargs: (
+            ["wiki/systems/memory-answer-development-plan.md", "Memory Answer 开发计划"],
+            ["Memory Answer 开发计划"],
+            ["wiki/systems/memory-answer-development-plan.md"],
+        ),
+    )
+    monkeypatch.setattr(
+        tm_answer,
+        "_call_memory_query_planner_llm",
+        lambda *_args: (True, {
+            "retrieval_queries": ["tigermemory product vision"],
+            "evidence_terms": ["产品愿景"],
+            "path_hints": ["wiki/systems/tigermemory-product-vision.md"],
+        }),
+    )
+
+    plan = tm_answer.plan_query(query)
+
+    assert plan["planner_source"] == "llm"
+    assert plan["expanded_queries"][:3] == [
+        query,
+        "wiki/systems/memory-answer-development-plan.md",
+        "Memory Answer 开发计划",
+    ]
+    assert "tigermemory product vision" in plan["expanded_queries"]
+    assert "Memory Answer 开发计划" in plan["evidence_terms"]
+
+
+def test_memory_answer_core_uses_llm_planner_queries_and_terms(monkeypatch, tmp_path):
+    query = "请用自然语言问一下系统资料为什么找不到"
+    search_calls = []
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "1")
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(tm_answer, "_manifest_candidate_plan", lambda *_args, **_kwargs: ([], [], []))
+    monkeypatch.setattr(
+        tm_answer,
+        "_call_memory_query_planner_llm",
+        lambda *_args: (True, {
+            "retrieval_queries": ["planner target page"],
+            "evidence_terms": ["semanticneedle"],
+            "warnings": [],
+        }),
+    )
+
+    def fake_search(actual_query, *_args, **_kwargs):
+        search_calls.append(actual_query)
+        if actual_query == "planner target page":
+            return _search_result({
+                "source": "wiki",
+                "path": "wiki/systems/planner-target.md",
+                "title": "Planner Target",
+                "snippet": "semanticneedle grounded answer",
+                "score": 10.0,
+            })
+        return _search_result()
+
+    captured = {}
+
+    def fake_answer_llm(_query, evidence):
+        captured["evidence"] = evidence
+        return True, {
+            "status": "ok",
+            "answer": "Planner found evidence.",
+            "summary": "Found through planner.",
+            "claims": [{"id": "c1", "text": "planner evidence", "support": ["e1"], "confidence": 0.9}],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", fake_search)
+    monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", fake_answer_llm)
+
+    result = tm_answer.memory_answer_core(query, scope="wiki", run_id="planner-unit")
+
+    assert result["status"] == "ok"
+    assert search_calls == [query, "planner target page"]
+    assert captured["evidence"][0]["matched_terms"] == ["semanticneedle"]
+    assert [call["purpose"] for call in result["trace"]["calls"] if call.get("tool") == "DeepSeek"] == [
+        "memory_query_plan",
+        "memory_answer",
+    ]
+    stored_payload = (tmp_path / "trace.jsonl").read_text(encoding="utf-8")
+    assert "semanticneedle" not in stored_payload
+    assert "planner target page" not in stored_payload
+
+
 def test_conflict_scan_reads_registry(monkeypatch, tmp_path):
     registry = tmp_path / "conflict_patterns.json"
     registry.write_text(

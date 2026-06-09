@@ -160,6 +160,55 @@ def test_diagnose_case_classifies_evidence_selection_miss(tmp_path, monkeypatch)
     assert result["answer_evidence_rank"] is None
 
 
+def test_diagnose_case_counts_planner_compensated_hit_as_pass(tmp_path, monkeypatch):
+    expected = tmp_path / "wiki" / "systems" / "planner-compensated.md"
+    expected.parent.mkdir(parents=True)
+    expected.write_text("# Planner Compensated\nalpha", encoding="utf-8")
+    monkeypatch.setattr(tm_answer_eval.tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_answer_eval.tm_core, "search_wiki", lambda *a, **k: [])
+    monkeypatch.setattr(tm_answer_eval.tm_core, "search_wiki_hybrid", lambda *a, **k: [])
+
+    def fake_memory_answer_core(query: str, **kwargs):
+        return {
+            "status": "ok",
+            "answer": "alpha",
+            "summary": "alpha",
+            "claims": [{"id": "c1", "text": "alpha", "support": ["e1"]}],
+            "evidence": [{"id": "e1", "path": "wiki/systems/planner-compensated.md", "excerpt": "alpha"}],
+            "warnings": [],
+            "run_id": kwargs.get("run_id"),
+            "trace_id": "trace-planner",
+            "trace": {
+                "calls": [{"primary_scope": "wiki"}],
+                "evidence_gate": [{
+                    "path": "wiki/systems/planner-compensated.md",
+                    "keep": True,
+                    "reason": "kept by planner",
+                }],
+            },
+        }
+
+    monkeypatch.setattr(tm_answer_eval.tm_answer, "memory_answer_core", fake_memory_answer_core)
+
+    result = tm_answer_eval.diagnose_case(
+        {
+            "id": "planner-compensated",
+            "query": "natural question alpha",
+            "expected_status": "ok",
+            "expected_evidence_paths": ["wiki/systems/planner-compensated.md"],
+            "must_contain": ["alpha"],
+        },
+        run_id="diag-test",
+    )
+
+    assert result["passed"] is True
+    assert result["failure_layer"] == "ok"
+    assert result["raw_retrieval_hit"] is False
+    assert result["planner_compensated_hit"] is True
+    summary = tm_answer_eval.summarize_diagnosis([result])
+    assert summary["planner_compensated_hit"] == 1
+
+
 def test_diagnose_case_flags_mixed_partition_evidence(tmp_path, monkeypatch):
     for rel in [
         "wiki/systems/answer-contract.md",

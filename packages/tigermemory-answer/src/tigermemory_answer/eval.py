@@ -429,6 +429,8 @@ def _compact_diagnosis_row(row: dict[str, Any]) -> dict[str, Any]:
         "anchor_rank",
         "evidence_gate_rank",
         "answer_evidence_rank",
+        "raw_retrieval_hit",
+        "planner_compensated_hit",
         "expected_rank",
         "primary_scope",
         "expected_primary_scope",
@@ -495,6 +497,8 @@ def diagnose_case(
     hybrid_hit = True if not expected_paths else hybrid_rank is not None
     anchor_hit = True if not expected_paths else anchor_rank is not None
     gate_hit = True if not expected_paths else gate_rank is not None
+    raw_retrieval_hit = lexical_hit or hybrid_hit
+    planner_compensated_hit = evidence_hit and not raw_retrieval_hit
     rank_ok = True if expected_rank is None or hybrid_rank is None else hybrid_rank <= expected_rank
     forbidden_ok = not any(path in set(evidence_paths) for path in forbidden_paths)
     must_contain_hit = all(term in answer_text for term in must_contain)
@@ -516,10 +520,6 @@ def diagnose_case(
     checks = {
         "status_ok": status_ok,
         "evidence_hit": evidence_hit,
-        "lexical_hit": lexical_hit,
-        "hybrid_hit": hybrid_hit,
-        "anchor_hit": anchor_hit,
-        "gate_hit": gate_hit,
         "rank_ok": rank_ok,
         "forbidden_ok": forbidden_ok,
         "must_contain_hit": must_contain_hit,
@@ -587,6 +587,8 @@ def diagnose_case(
         "anchor_rank": anchor_rank,
         "evidence_gate_rank": gate_rank,
         "answer_evidence_rank": evidence_rank,
+        "raw_retrieval_hit": raw_retrieval_hit,
+        "planner_compensated_hit": planner_compensated_hit,
         "expected_rank": expected_rank,
         "primary_scope": primary_scope,
         "expected_primary_scope": expected_primary_scope,
@@ -613,6 +615,8 @@ def summarize_diagnosis(results: list[dict[str, Any]]) -> dict[str, Any]:
     anchor_hits = sum(1 for item in expected_path_cases if item.get("anchor_rank") is not None)
     gate_hits = sum(1 for item in expected_path_cases if item.get("evidence_gate_rank") is not None)
     answer_evidence_hits = sum(1 for item in expected_path_cases if item.get("answer_evidence_rank") is not None)
+    raw_retrieval_hits = sum(1 for item in expected_path_cases if item.get("raw_retrieval_hit"))
+    planner_compensated_hits = sum(1 for item in expected_path_cases if item.get("planner_compensated_hit"))
     return {
         "case_count": case_count,
         "passed": passed,
@@ -628,6 +632,10 @@ def summarize_diagnosis(results: list[dict[str, Any]]) -> dict[str, Any]:
         "evidence_gate_hit_rate": gate_hits / len(expected_path_cases) if expected_path_cases else 1.0,
         "answer_evidence_hit": answer_evidence_hits,
         "answer_evidence_hit_rate": answer_evidence_hits / len(expected_path_cases) if expected_path_cases else 1.0,
+        "raw_retrieval_hit": raw_retrieval_hits,
+        "raw_retrieval_hit_rate": raw_retrieval_hits / len(expected_path_cases) if expected_path_cases else 1.0,
+        "planner_compensated_hit": planner_compensated_hits,
+        "planner_compensated_hit_rate": planner_compensated_hits / len(expected_path_cases) if expected_path_cases else 0.0,
         "failure_layer_counts": _count_by_field(results, "failure_layer"),
         "case_count_by_dimension": _count_by_field(results, "eval_dimension"),
         "case_count_by_category": _count_by_field(results, "diagnosis_category"),

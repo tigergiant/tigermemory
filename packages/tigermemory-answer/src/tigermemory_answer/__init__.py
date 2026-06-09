@@ -435,6 +435,7 @@ TRACE_LOG = tm_core.REPO_ROOT / ".tmp" / "memory-answer-trace.jsonl"
 QUERY_EXPANSION_REGISTRY = tm_core.REPO_ROOT / "tools" / "memory_answer" / "query_expansions.json"
 CONFLICT_PATTERN_REGISTRY = tm_core.REPO_ROOT / "tools" / "memory_answer" / "conflict_patterns.json"
 TRACE_RAW_QUERY_ENV = "TM_ANSWER_TRACE_RAW_QUERY"
+QUERY_PLANNER_ENV = "TM_ANSWER_QUERY_PLANNER"
 ANSWER_STATUSES = {"ok", "not_found", "conflict", "error"}
 
 SECRET_PATTERNS = [
@@ -487,6 +488,33 @@ Return strict JSON:
 }
 """
 
+QUERY_PLANNER_PROMPT = """You are tigermemory's memory query planner.
+
+Return strict json. Your job is to rewrite the user's natural-language memory
+question into retrieval probes for the local TigerMemory corpus. Do not answer
+the question. Do not invent facts. Do not use fixture answers or expected paths.
+
+Use the supplied manifest as a map of indexed local memory pages. Path or title
+hints are only search probes, not evidence. Evidence will still be selected by
+the local retrieval and evidence-gate pipeline.
+
+Return strict JSON:
+{
+  "intent": "recall|synthesis|freshness_probe|conflict_audit",
+  "retrieval_queries": ["short local search probe"],
+  "evidence_terms": ["stable noun, slug, code name, or concept"],
+  "path_hints": ["wiki/... optional probe path"],
+  "warnings": []
+}
+"""
+
+QUERY_PLANNER_MAX_RETRIEVAL_QUERIES = 5
+QUERY_PLANNER_MAX_EVIDENCE_TERMS = 12
+QUERY_PLANNER_MAX_PATH_HINTS = 3
+QUERY_PLANNER_MANIFEST_MAX_ITEMS = 1400
+QUERY_PLANNER_CONTEXT_MAX_ITEMS = 80
+_QUERY_PLANNER_MANIFEST_CACHE: str | None = None
+
 
 def redact_secrets(text: str) -> str:
     value = str(text or "")
@@ -507,6 +535,365 @@ def _load_registry(path: Any) -> list[dict[str, Any]]:
     if not isinstance(data, list):
         return []
     return [item for item in data if isinstance(item, dict)]
+
+
+def _clean_planner_text(value: Any, *, max_chars: int = 120, path_hint: bool = False) -> str:
+    text = redact_secrets(str(value or "")).replace("\r\n", "\n").strip()
+    if not text:
+        return ""
+    text = re.sub(r"\s+", " ", text)
+    if path_hint:
+        text = text.replace("\\", "/")
+        if not re.match(r"^(wiki|sources|inbox)/", text):
+            return ""
+    elif "\n" in text:
+        return ""
+    return text[:max_chars].strip()
+
+
+def _dedupe_planner_items(
+    values: Any,
+    *,
+    max_items: int,
+    max_chars: int = 120,
+    path_hint: bool = False,
+) -> list[str]:
+    if isinstance(values, str):
+        iterable: list[Any] = [values]
+    elif isinstance(values, list):
+        iterable = values
+    else:
+        iterable = []
+    unique: list[str] = []
+    seen: set[str] = set()
+    for item in iterable:
+        clean = _clean_planner_text(item, max_chars=max_chars, path_hint=path_hint)
+        if not clean:
+            continue
+        key = clean.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(clean)
+        if len(unique) >= max_items:
+            break
+    return unique
+
+
+def _first_heading(text: str) -> str:
+    for line in _strip_frontmatter(text).splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            return stripped.lstrip("#").strip()
+    return ""
+
+
+def _query_planner_manifest() -> str:
+    global _QUERY_PLANNER_MANIFEST_CACHE
+    if _QUERY_PLANNER_MANIFEST_CACHE is not None:
+        return _QUERY_PLANNER_MANIFEST_CACHE
+
+    pages: list[dict[str, str]] = []
+    for root_name in ("wiki", "sources"):
+        root = tm_core.REPO_ROOT / root_name
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*.md")):
+            rel = path.relative_to(tm_core.REPO_ROOT).as_posix()
+            if rel.startswith("wiki/person/") or rel.startswith("sources/person/"):
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            frontmatter = _parse_frontmatter_map(text)
+            title = frontmatter.get("title") or _first_heading(text) or path.stem.replace("-", " ")
+            item = {
+                "path": rel,
+                "title": _clean_planner_text(title, max_chars=100),
+            }
+            aliases = _clean_planner_text(frontmatter.get("aliases"), max_chars=160)
+            if aliases:
+                item["aliases"] = aliases
+            subtopic = _clean_planner_text(frontmatter.get("subtopic"), max_chars=120)
+            if subtopic:
+                item["subtopic"] = subtopic
+            updated = _clean_planner_text(frontmatter.get("updated") or frontmatter.get("updated_at"), max_chars=30)
+            if updated:
+                item["updated"] = updated
+            pages.append(item)
+            if len(pages) >= QUERY_PLANNER_MANIFEST_MAX_ITEMS:
+                break
+        if len(pages) >= QUERY_PLANNER_MANIFEST_MAX_ITEMS:
+            break
+
+    manifest = {
+        "indexed_surfaces": ["wiki/*.md", "sources/*.md", "lessons", "onboarding", "mem0"],
+        "rules": [
+            "Use path/title/alias hints only as retrieval probes.",
+            "Do not answer from the manifest.",
+            "Prefer stable repo/project/task/path/spec terms over persona-only terms.",
+            "Runtime/current-state questions may need current-state warnings unless evidence is fresh.",
+        ],
+        "pages": pages,
+    }
+    _QUERY_PLANNER_MANIFEST_CACHE = json.dumps(
+        manifest,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return _QUERY_PLANNER_MANIFEST_CACHE
+
+
+def _query_planner_manifest_pages() -> list[dict[str, str]]:
+    try:
+        data = json.loads(_query_planner_manifest())
+    except Exception:
+        return []
+    pages = data.get("pages") if isinstance(data, dict) else None
+    if not isinstance(pages, list):
+        return []
+    return [item for item in pages if isinstance(item, dict)]
+
+
+def _cjk_ngrams(text: str) -> list[str]:
+    grams: list[str] = []
+    for chunk in re.findall(r"[\u4e00-\u9fff]{2,}", text):
+        for size in (2, 3, 4):
+            for index in range(0, max(len(chunk) - size + 1, 0)):
+                grams.append(chunk[index:index + size])
+    return grams
+
+
+def _manifest_query_tokens(query: str) -> list[str]:
+    raw = tm_core.signal_tokens(query) + _cjk_ngrams(query)
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for token in raw:
+        clean = str(token or "").strip().lower()
+        if not clean or clean in seen:
+            continue
+        seen.add(clean)
+        tokens.append(clean)
+    return tokens
+
+
+def _manifest_page_score(page: dict[str, str], tokens: list[str]) -> float:
+    path = str(page.get("path") or "")
+    title = str(page.get("title") or "")
+    if not path or not title:
+        return 0.0
+    text = " ".join(str(value or "") for value in page.values()).lower()
+    score = 0.0
+    for token in tokens:
+        if token in text:
+            score += 1.0 + min(len(token), 8) / 4.0
+            if token in path.lower():
+                score += 1.5
+            if token in title.lower():
+                score += 1.0
+    if path.endswith("/index.md"):
+        score -= 2.0
+    return score
+
+
+def _rank_manifest_pages(query: str, *, limit: int) -> list[dict[str, Any]]:
+    tokens = _manifest_query_tokens(query)
+    if not tokens:
+        return []
+    scored: list[tuple[float, str, dict[str, Any]]] = []
+    for page in _query_planner_manifest_pages():
+        score = _manifest_page_score(page, tokens)
+        if score <= 0:
+            continue
+        ranked_page = dict(page)
+        ranked_page["score"] = round(score, 3)
+        scored.append((score, str(page.get("path") or ""), ranked_page))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [item[2] for item in scored[:limit]]
+
+
+def _manifest_candidate_plan(query: str, *, limit: int = 2) -> tuple[list[str], list[str], list[str]]:
+    selected = _rank_manifest_pages(query, limit=limit)
+    queries: list[str] = []
+    terms: list[str] = []
+    paths: list[str] = []
+    for index, page in enumerate(selected):
+        path = str(page.get("path") or "")
+        title = str(page.get("title") or "")
+        if not path or not title:
+            continue
+        paths.append(path)
+        queries.extend([path, title])
+        if index == 0:
+            terms.append(title)
+            stem = Path(path).stem.replace("-", " ")
+            if stem and stem != "index":
+                terms.append(stem)
+    return (
+        _dedupe_planner_items(queries, max_items=limit * 2, max_chars=180),
+        _dedupe_planner_items(terms, max_items=limit * 2, max_chars=120),
+        _dedupe_planner_items(paths, max_items=limit, max_chars=180, path_hint=True),
+    )
+
+
+def _query_planner_context(query: str, *, limit: int = QUERY_PLANNER_CONTEXT_MAX_ITEMS) -> dict[str, Any]:
+    pages = _query_planner_manifest_pages()
+    return {
+        "indexed_surfaces": ["wiki/*.md", "sources/*.md", "lessons", "onboarding", "mem0"],
+        "rules": [
+            "Use path/title/alias hints only as retrieval probes.",
+            "Do not answer from the manifest.",
+            "Prefer stable repo/project/task/path/spec terms over persona-only terms.",
+            "Runtime/current-state questions may need current-state warnings unless evidence is fresh.",
+            "Candidate pages are selected by local metadata overlap, not by eval fixtures or expected answers.",
+        ],
+        "page_count": len(pages),
+        "candidate_selection": "top local metadata candidates from path/title/alias/subtopic/updated",
+        "candidate_pages": _rank_manifest_pages(query, limit=limit),
+    }
+
+
+def _attach_manifest_candidates(query: str, planner: dict[str, Any]) -> dict[str, Any]:
+    queries, terms, paths = _manifest_candidate_plan(query)
+    if not queries and not terms and not paths:
+        return planner
+    merged = dict(planner)
+    existing = list(merged.get("expanded_queries") or [])
+    expanded: list[str] = []
+    if existing:
+        expanded.append(existing[0])
+    for item in queries + existing[1:]:
+        if item not in expanded:
+            expanded.append(item)
+        if len(expanded) >= QUERY_PLANNER_MAX_RETRIEVAL_QUERIES + 1:
+            break
+    evidence_terms = _dedupe_planner_items(
+        list(merged.get("evidence_terms") or []) + terms,
+        max_items=QUERY_PLANNER_MAX_EVIDENCE_TERMS,
+        max_chars=120,
+    )
+    path_hints = _dedupe_planner_items(
+        list(merged.get("path_hints") or []) + paths,
+        max_items=QUERY_PLANNER_MAX_PATH_HINTS,
+        max_chars=180,
+        path_hint=True,
+    )
+    merged["expanded_queries"] = expanded
+    merged["evidence_terms"] = evidence_terms
+    merged["path_hints"] = path_hints
+    merged["manifest_candidate_count"] = len(paths)
+    merged["subquery_roles"] = [
+        {"index": index, "role": "primary" if index == 0 else "planner_probe"}
+        for index, _ in enumerate(expanded)
+    ]
+    return merged
+
+
+def _query_planner_enabled(query: str, base_plan: dict[str, Any]) -> bool:
+    flag = str(os.environ.get(QUERY_PLANNER_ENV) or "auto").strip().lower()
+    if flag in {"0", "false", "off", "disabled", "no"}:
+        return False
+    if flag in {"1", "true", "on", "enabled", "force", "yes"}:
+        return True
+    if base_plan.get("query_class") == "synthesis" and len(query) >= 18:
+        return True
+    tokens = tm_core.signal_tokens(query)
+    has_cjk_question = bool(re.search(r"[\u4e00-\u9fff]", query)) and any(
+        marker in query for marker in ("什么", "怎么", "如何", "为什么", "哪里", "哪个", "是否", "能不能", "有没有")
+    )
+    if has_cjk_question and len(query) >= 18:
+        return True
+    if len(tokens) >= 8 or len(query) >= 60:
+        return True
+    return False
+
+
+def _call_memory_query_planner_llm(query: str, base_plan: dict[str, Any]) -> tuple[bool, Any]:
+    manifest = _query_planner_context(query)
+    user_msg = json.dumps(
+        {
+            "query": query,
+            "deterministic_plan": {
+                "intent": base_plan.get("intent"),
+                "query_class": base_plan.get("query_class"),
+                "freshness_mode": base_plan.get("freshness_mode"),
+                "expanded_queries": base_plan.get("expanded_queries"),
+                "source_budgets": base_plan.get("source_budgets"),
+            },
+            "manifest": manifest,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return tm_core._call_deepseek_json(
+        QUERY_PLANNER_PROMPT,
+        user_msg,
+        timeout=20,
+        temperature=0.1,
+        max_tokens=1200,
+        purpose="memory_query_plan",
+    )
+
+
+def _merge_llm_query_plan(base_plan: dict[str, Any], parsed: Any) -> tuple[dict[str, Any], list[str]]:
+    warnings: list[str] = []
+    if not isinstance(parsed, dict):
+        return base_plan, ["memory query planner returned non-object json"]
+
+    retrieval_queries = _dedupe_planner_items(
+        parsed.get("retrieval_queries") or parsed.get("query_variants") or parsed.get("search_queries"),
+        max_items=QUERY_PLANNER_MAX_RETRIEVAL_QUERIES,
+        max_chars=160,
+    )
+    evidence_terms = _dedupe_planner_items(
+        parsed.get("evidence_terms") or parsed.get("keywords") or parsed.get("entities"),
+        max_items=QUERY_PLANNER_MAX_EVIDENCE_TERMS,
+        max_chars=80,
+    )
+    path_hints = _dedupe_planner_items(
+        parsed.get("path_hints") or parsed.get("candidate_paths"),
+        max_items=QUERY_PLANNER_MAX_PATH_HINTS,
+        max_chars=180,
+        path_hint=True,
+    )
+    if not retrieval_queries and not evidence_terms and not path_hints:
+        return base_plan, ["memory query planner returned no usable probes"]
+
+    expanded_queries: list[str] = []
+    for item in list(base_plan.get("expanded_queries") or []) + retrieval_queries + path_hints:
+        clean = _clean_planner_text(item, max_chars=180)
+        if clean and clean not in expanded_queries:
+            expanded_queries.append(clean)
+        if len(expanded_queries) >= QUERY_PLANNER_MAX_RETRIEVAL_QUERIES + 1:
+            break
+
+    planner = dict(base_plan)
+    planner["expanded_queries"] = expanded_queries or list(base_plan.get("expanded_queries") or [])
+    planner["evidence_terms"] = evidence_terms
+    planner["path_hints"] = path_hints
+    planner["planner_source"] = "llm"
+    planner["planner_model"] = tm_core.deepseek_model()
+    planner["subquery_roles"] = [
+        {"index": index, "role": "primary" if index == 0 else "llm_probe"}
+        for index, _ in enumerate(planner["expanded_queries"])
+    ]
+    raw_warnings = parsed.get("warnings")
+    if isinstance(raw_warnings, list):
+        warnings.extend(_dedupe_planner_items(raw_warnings, max_items=3, max_chars=160))
+    return planner, warnings
+
+
+def _planner_evidence_query(query: str, planner: dict[str, Any]) -> str:
+    terms = _dedupe_planner_items(
+        planner.get("evidence_terms"),
+        max_items=QUERY_PLANNER_MAX_EVIDENCE_TERMS,
+        max_chars=80,
+    )
+    if not terms:
+        return query
+    return " ".join([query] + terms)
 
 
 def _trace_raw_query_enabled() -> bool:
@@ -1272,7 +1659,7 @@ def expand_queries(query: str) -> list[str]:
 
 
 def plan_query(query: str) -> dict[str, Any]:
-    """Build a lightweight planner snapshot without changing retrieval behavior."""
+    """Build a bounded retrieval plan, using DeepSeek for natural questions."""
     query_class = classify_query(query)
     expanded_queries = expand_queries(query)
     freshness_mode = _query_freshness_mode(query, query_class)
@@ -1311,7 +1698,7 @@ def plan_query(query: str) -> dict[str, Any]:
         {"index": index, "role": "primary" if index == 0 else "expansion"}
         for index, _ in enumerate(expanded_queries)
     ]
-    return {
+    planner = {
         "intent": intent,
         "query_class": query_class,
         "expanded_queries": expanded_queries,
@@ -1320,7 +1707,34 @@ def plan_query(query: str) -> dict[str, Any]:
         "subquery_roles": subquery_roles,
         "needs_stale_check": needs_stale_check,
         "needs_premise_check": needs_premise_check,
+        "planner_source": "deterministic",
+        "evidence_terms": [],
+        "path_hints": [],
     }
+    if not _query_planner_enabled(query, planner):
+        return planner
+
+    ok, parsed = _call_memory_query_planner_llm(query, planner)
+    planner["planner_call"] = {
+        "tool": "DeepSeek",
+        "purpose": "memory_query_plan",
+        "ok": bool(ok),
+        "mode": "budgeted_metadata_manifest",
+    }
+    if not ok:
+        planner["planner_warnings"] = [f"memory query planner failed: {parsed}"]
+        return _attach_manifest_candidates(query, planner)
+    merged, warnings = _merge_llm_query_plan(planner, parsed)
+    merged = _attach_manifest_candidates(query, merged)
+    merged["planner_call"] = {
+        "tool": "DeepSeek",
+        "purpose": "memory_query_plan",
+        "ok": True,
+        "mode": "budgeted_metadata_manifest",
+    }
+    if warnings:
+        merged["planner_warnings"] = warnings
+    return merged
 
 
 def _merge_search_results(query: str, results: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1562,6 +1976,9 @@ TRACE_TEXT_PAYLOAD_KEYS = {
     "memory",
     "raw_text",
     "summary",
+    "evidence_terms",
+    "path_hints",
+    "terms",
     "snippet",
     "text",
     "_snippet",
@@ -1816,11 +2233,16 @@ def memory_answer_core(
     normalized_run_id = normalize_run_id(run_id)
     planner = plan_query(q)
     query_class = planner["query_class"]
+    planner_warnings = [str(item) for item in (planner.get("planner_warnings") or []) if str(item).strip()]
     trace: dict[str, Any] = {
         "run_id": normalized_run_id,
         "query_class": query_class,
         "expanded_queries": planner["expanded_queries"],
-        "planner": {key: value for key, value in planner.items() if key != "expanded_queries"},
+        "planner": {
+            key: value
+            for key, value in planner.items()
+            if key not in {"expanded_queries", "planner_call", "planner_warnings"}
+        },
         "calls": [],
         "evidence_gate": [],
         "authority_scores": [],
@@ -1830,6 +2252,9 @@ def memory_answer_core(
         "evidence_char_budget": evidence_char_budget,
         "duration_ms": 0.0,
     }
+    planner_call = planner.get("planner_call")
+    if isinstance(planner_call, dict):
+        trace["calls"].append(planner_call)
 
     search_results: list[dict[str, Any]] = []
     for search_query in trace["expanded_queries"]:
@@ -1843,9 +2268,10 @@ def memory_answer_core(
             "group_counts": {k: len(v) for k, v in (result.get("groups") or {}).items()},
         })
     search_result = _merge_search_results(q, search_results)
-    warnings = list(search_result.get("warnings") or [])
-    excerpt_query = " ".join(trace["expanded_queries"])
-    evidence, evidence_gate = expand_evidence(excerpt_query, search_result, evidence_limit, query_class)
+    warnings = list(planner_warnings) + list(search_result.get("warnings") or [])
+    evidence_query = _planner_evidence_query(q, planner)
+    trace["planner"]["evidence_query_hash"] = query_hash(evidence_query)
+    evidence, evidence_gate = expand_evidence(evidence_query, search_result, evidence_limit, query_class)
     for warning in search_result.get("warnings") or []:
         warning_text = str(warning)
         if warning_text and warning_text not in warnings:
@@ -1853,7 +2279,7 @@ def memory_answer_core(
     llm_evidence, budget_warnings, trim_metrics = trim_evidence_for_prompt(
         evidence,
         max_chars=evidence_char_budget,
-        query=q,
+        query=evidence_query,
         return_metrics=True,
     )
     trace["trim_metrics"] = _sanitize_trim_metrics_for_trace(trim_metrics)
