@@ -382,6 +382,8 @@ def test_daily_page_static_assets_wire_cron_intake_card():
     assert "review_label" in pages_js
     assert "sample_items" in pages_js
     assert "runWikiProposalApproval" in pages_js
+    assert "markCompletedIfPathGone" in pages_js
+    assert "digestHasInboxPath" in pages_js
     assert "/api/cron/intake/" in pages_js
     assert "cron-intake-summary" in pages_js
     assert "font-mono" in pages_js
@@ -1480,6 +1482,35 @@ def test_inbox_archive_commit_paths_exclude_raw_cache(tmp_path, monkeypatch):
     assert response.json()["ok"] is True
     assert commits == [[f"inbox/{inbox.name}", "wiki/operations/inbox-archive/2026-05-01.md"]]
     assert all(".tmp/inbox-archive-sources" not in path for path in commits[0])
+
+
+def test_committable_paths_skip_missing_untracked_source(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    (tmp_path / ".git").mkdir()
+    archive_page = tmp_path / "wiki" / "operations" / "inbox-archive" / "2026-05-01.md"
+    archive_page.parent.mkdir(parents=True)
+    archive_page.write_text("archive", encoding="utf-8")
+
+    def fake_run(cmd, **_kwargs):
+        return type("Proc", (), {"returncode": 1})()
+
+    monkeypatch.setattr(tm_review_ui, "_run", fake_run)
+
+    assert tm_review_ui._committable_paths([
+        "inbox/2026-05-01-1200-codex-systems.md",
+        "wiki/operations/inbox-archive/2026-05-01.md",
+    ]) == ["wiki/operations/inbox-archive/2026-05-01.md"]
+
+
+def test_locked_write_action_clears_api_cache(monkeypatch):
+    with tm_review_ui._API_CACHE_LOCK:
+        tm_review_ui._API_CACHE["api:digest:test"] = {"payload": {"stale": True}}
+
+    result = tm_review_ui._locked_write_action(lambda: {"ok": True})
+
+    assert result == {"ok": True}
+    with tm_review_ui._API_CACHE_LOCK:
+        assert tm_review_ui._API_CACHE == {}
 
 
 def test_inbox_archive_upserts_duplicate_source_entry(tmp_path, monkeypatch):
