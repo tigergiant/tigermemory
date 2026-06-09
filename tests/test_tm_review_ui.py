@@ -137,6 +137,42 @@ def _write_inbox(root: pathlib.Path, name: str = "2026-05-01-1200-codex-systems.
     return path
 
 
+def _write_investment_wiki_proposal(
+    root: pathlib.Path,
+    name: str = "2026-06-09-1200-codex-investment.md",
+) -> pathlib.Path:
+    path = root / "inbox" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join([
+            "---",
+            "owner: codex",
+            "status: draft",
+            "updated: 2026-06-09",
+            "topic: investment",
+            "title_cn: 贵州茅台正式报告",
+            "preview_cn: 贵州茅台 600519.SH DeerFlow 正式报告 PDF，原始路径 C:\\Users\\Giant\\Documents\\New project\\reports\\maotai-2026-06.pdf",
+            "summary_cn: 贵州茅台正式报告",
+            "routed_by: tigermemory",
+            "knowledge_target: wiki_proposal",
+            "proposal_kind: wiki",
+            "wiki_partition: investment",
+            "wiki_slug_hint: research/600519",
+            "wiki_action: update",
+            "route_score: 88",
+            "l2_review_score: 84",
+            "target_confidence: 90",
+            "---",
+            "",
+            "# 贵州茅台正式报告",
+            "",
+            "长期研究结论与风险提示，不含交易执行数据。",
+        ]),
+        encoding="utf-8",
+    )
+    return path
+
+
 def test_host_header_rejects_non_localhost(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
 
@@ -385,9 +421,10 @@ def test_daily_page_static_assets_wire_cron_intake_card():
     assert "runWikiProposalApproval" in pages_js
     assert "wikiTargetFromLedgerRow" in pages_js
     assert "openWikiProposalBatchModal" in pages_js
-    assert "investment-handoff" in pages_js
-    assert "enqueueWikiProposalInvestmentHandoff" in pages_js
-    assert "标记已转交" in pages_js
+    assert "investment-archive" in pages_js
+    assert "enqueueWikiProposalInvestmentArchive" in pages_js
+    assert "按建议归档" in pages_js
+    assert "investment_archive" in pages_js
     assert "投资分类" in pages_js
     assert "建议 Wiki" in pages_js
     assert "completeCard" in pages_js
@@ -1362,6 +1399,46 @@ def test_inbox_archive_moves_file_and_returns_commit(tmp_path, monkeypatch):
     assert "这是一条用于验证归档摘要页的中文摘要" in page_text
     assert f"<!-- inbox-archive-entry: inbox/{inbox.name} -->" in page_text
     assert (tmp_path / ".tmp" / "inbox-archive-sources" / "2026-05-01" / inbox.name).exists()
+
+
+def test_investment_archive_writes_investment_archive_page_and_removes_inbox(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)
+    inbox = _write_investment_wiki_proposal(tmp_path)
+    commits: list[list[str]] = []
+
+    def fake_commit(paths, _message):
+        commits.append(paths)
+        return "abc123"
+
+    monkeypatch.setattr(tm_review_ui, "commit_and_push_paths", fake_commit)
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.post(
+        "/api/inbox/batch-action",
+        headers=HOST,
+        json={"paths": [f"inbox/{inbox.name}"], "action": "investment_archive"},
+    )
+
+    data = response.json()
+    assert data["ok"] is True
+    assert data["commit_sha"] == "abc123"
+    assert not inbox.exists()
+    archive_page = tmp_path / "wiki" / "investment" / "proposal-archive" / "2026-06-09.md"
+    assert archive_page.exists()
+    page_text = archive_page.read_text(encoding="utf-8")
+    assert "贵州茅台正式报告" in page_text
+    assert "投资分类：PDF/长报告" in page_text
+    assert "建议 Wiki：wiki/investment/research/600519.SH.md" in page_text
+    assert "保留原件；只复制/追加" in page_text
+    assert f"<!-- investment-proposal-archive-entry: inbox/{inbox.name} -->" in page_text
+    assert len(commits) == 1
+    assert set(commits[0]) == {
+        f"inbox/{inbox.name}",
+        "wiki/investment/proposal-archive/2026-06-09.md",
+        "wiki/operations/inbox-archive/2026-06-09.md",
+    }
 
 
 def test_inbox_archive_body_fallback_extracts_clean_summary_section(tmp_path, monkeypatch):

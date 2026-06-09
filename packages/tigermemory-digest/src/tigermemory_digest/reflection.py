@@ -1226,6 +1226,42 @@ def _investment_triage_for_item(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def investment_triage_for_wiki_proposal_row(row: InboxAuditRow) -> dict[str, Any]:
+    """Return conservative investment archive guidance for a single wiki proposal row."""
+    target = _wiki_proposal_target(row)
+    target_partition, target_slug = _wiki_proposal_target_parts(row)
+    item: dict[str, Any] = {
+        "target": target,
+        "target_partition": target_partition,
+        "target_slug": target_slug,
+        "count": 1,
+        "first_date": row.created_date,
+        "newest_date": row.created_date,
+        "topics": row.topic,
+        "agents": row.agent,
+        "paths": [row.path],
+        "sample_items": [{
+            "path": row.path,
+            "title": row.title_cn,
+            "preview": row.preview_cn,
+            "summary": row.summary,
+            "route_score": row.route_score,
+            "l2_review_score": row.l2_review_score,
+            "target_confidence": row.target_confidence,
+            "wiki_action": row.wiki_action,
+        }],
+        "route_score_min": row.route_score,
+        "route_score_max": row.route_score,
+        "l2_review_score_min": row.l2_review_score,
+        "l2_review_score_max": row.l2_review_score,
+        "target_confidence_min": row.target_confidence,
+        "target_confidence_max": row.target_confidence,
+        "wiki_actions": row.wiki_action,
+        "status": "investment-thread",
+    }
+    return _investment_triage_for_item(item)
+
+
 def _inbox_wiki_proposal_ledger(rows: list[InboxAuditRow]) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     for row in rows:
