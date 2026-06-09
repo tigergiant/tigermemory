@@ -2256,7 +2256,7 @@ def test_dashboard_memory_quality_digest_backfill_uses_frontmatter_and_live_rows
     monkeypatch.setattr(
         tm_review_ui.tm_answer_trace,
         "summarize_rows",
-        lambda *_args, **_kwargs: {"duration_ms": {}, "status_counts": {"not_found": 1}, "latest": []},
+        lambda *_args, **_kwargs: {"duration_ms": {}, "status_counts": {"not_found": 1, "error": 2}, "latest": []},
     )
 
     data = tm_review_ui.dashboard_memory_quality("2026-05-27")
@@ -2272,7 +2272,7 @@ def test_dashboard_memory_quality_digest_backfill_uses_frontmatter_and_live_rows
     output_map = {slot["key"]: slot for slot in flow["outputs"]}
     assert {"mem0", "wiki", "inbox", "discard", "issue"} <= set(output_map)
     assert output_map["inbox"]["value"] == 1
-    assert output_map["issue"]["value"] == 1
+    assert output_map["issue"]["value"] == 2
 
 
 def test_quality_route_flow_prefers_route_recommendation_distribution():
@@ -2289,7 +2289,7 @@ def test_quality_route_flow_prefers_route_recommendation_distribution():
     flow = tm_review_ui._build_quality_route_flow(
         counts={"mem0": 0, "wiki": 0, "inbox_today": 9, "discard": 0},
         report_date="2026-06-09",
-        trace_summary={"status_counts": {"not_found": 12}},
+        trace_summary={"status_counts": {"not_found": 12, "error": 1}},
         trace_rows=[{"trace_id": str(idx)} for idx in range(10)],
         inbox_rows=inbox_rows,
         source_mode="digest",
@@ -2303,7 +2303,7 @@ def test_quality_route_flow_prefers_route_recommendation_distribution():
     assert output_map["wiki"]["value"] == 1
     assert output_map["inbox"]["value"] == 2
     assert output_map["discard"]["value"] == 0
-    assert output_map["issue"]["value"] == 12
+    assert output_map["issue"]["value"] == 1
     assert flow["trace_count"] == 10
 
 
@@ -2317,7 +2317,7 @@ def test_quality_route_flow_preserves_cached_recommendation_distribution():
             "route_recommendation_counts": {"mem0": 6, "wiki": 1, "inbox": 2, "discard": 0},
         },
         report_date="2026-06-09",
-        trace_summary={"status_counts": {"not_found": 12}},
+        trace_summary={"status_counts": {"not_found": 12, "error": 1}},
         trace_rows=[{"trace_id": str(idx)} for idx in range(10)],
         inbox_rows=[],
         source_mode="digest",
@@ -2330,7 +2330,7 @@ def test_quality_route_flow_preserves_cached_recommendation_distribution():
     assert output_map["wiki"]["value"] == 1
     assert output_map["inbox"]["value"] == 2
     assert output_map["discard"]["value"] == 0
-    assert output_map["issue"]["value"] == 12
+    assert output_map["issue"]["value"] == 1
 
 
 def test_api_health_memory_overview_endpoint(tmp_path, monkeypatch):
@@ -2606,9 +2606,12 @@ def test_quality_page_flow_panel_keeps_all_routes_visible():
     assert "routeSection.classList.add('hidden')" not in pages_js
     assert "const flowSummaryCards = [" in pages_js
     assert "const outputCards = model.outputs.map((slot) =>" in pages_js
+    assert "const routeOutputs = flowOutputs.filter(slot => !['issue', 'anomaly'].includes(String(slot.key || '').toLowerCase()));" in pages_js
+    assert "['回答失败', outputValues.issue, '未找到另看状态分布']" in pages_js
+    assert "key: 'issue'" not in pages_js
     assert "const pct = knownValue && flowTotal > 0 ? Math.round((slot.value || 0) * 100 / flowTotal) : (knownValue ? 0 : null);" in pages_js
     assert "四条写入路线同时展示" in pages_js
-    assert "回答异常 ${c.numberText(outputValues.issue)} 条来自最近 7 天回答轨迹" in pages_js
+    assert "回答异常 ${c.numberText(outputValues.issue)} 条来自最近 7 天回答轨迹" not in pages_js
     assert "五条路线同时展示" not in pages_js
 
 
