@@ -1047,6 +1047,7 @@ _INVESTMENT_DOC_TYPE_LABELS = {
 
 _INVESTMENT_REVIEW_LABELS = {
     "auto_archive": "只归档证据",
+    "wiki_candidate": "可写入 Wiki",
     "proposal": "投资线程审核",
     "human_review": "人工复核",
 }
@@ -1134,6 +1135,35 @@ def _investment_triage_for_item(item: dict[str, Any]) -> dict[str, Any]:
         ("买入", "卖出", "加仓", "减仓", "清仓", "调仓", "持有", "watch", "buy", "sell", "reduce", "add", "hold"),
     )
     contains_private_signal = _contains_any(text, ("飞书", "群聊", "私域", "private-signal", "private_signal", "feishu"))
+    system_knowledge = _contains_any(
+        text,
+        (
+            "架构",
+            "设计",
+            "系统规则",
+            "稳定规则",
+            "运行模型",
+            "运行经验",
+            "工作流",
+            "workflow",
+            "trading node",
+            "miniqmt",
+            "b_qmt",
+            "qmt",
+            "dashboard",
+            "adapter",
+            "kill switch",
+            "审批",
+            "边界",
+            "诊断",
+            "通知链路",
+            "投票账本",
+            "outcome learning",
+            "资料索引",
+            "research agent",
+            "数据源",
+        ),
+    )
 
     doc_type = "stock_research"
     target_path = target if target.startswith("wiki/investment/") else "wiki/investment/research/(needs-symbol).md"
@@ -1148,6 +1178,20 @@ def _investment_triage_for_item(item: dict[str, Any]) -> dict[str, Any]:
         review_level = "auto_archive"
         evidence_level = "none"
         reason = "内容像占位或低信息量流水，投资线程可直接归档，不应进 Wiki。"
+    elif system_knowledge:
+        doc_type = "workflow"
+        if target.startswith("wiki/investment/"):
+            target_path = target
+        elif "miniqmt" in text or "qmt" in text or "trading node" in text:
+            target_path = "wiki/investment/miniqmt-integration-status.md"
+        elif "data-source" in text or "数据源" in text:
+            target_path = "wiki/investment/data-source-capability-registry.md"
+        elif "dashboard" in text or "cio" in text or "投票账本" in text:
+            target_path = "wiki/investment/investment-dashboard-hub.md"
+        else:
+            target_path = "wiki/investment/research-workflow.md"
+        review_level = "wiki_candidate"
+        reason = "这是投研系统规则、架构边界或运行经验；信息价值优先，可写入 Wiki，并在正文标注来源和待确认点。"
     elif contains_private_signal:
         doc_type = "private_signal"
         target_path = ""
@@ -1180,12 +1224,14 @@ def _investment_triage_for_item(item: dict[str, Any]) -> dict[str, Any]:
     elif _contains_any(text, ("portfolio-rules", "组合规则", "风控", "阈值", "买卖纪律", "审批边界", "交易权限")):
         doc_type = "rule"
         target_path = "wiki/investment/portfolio-rules.md" if "portfolio-rules" in text else f"wiki/investment/rules/{slug or '(needs-slug)'}.md"
-        reason = "长期投资规则可进入 investment Wiki，但需要投资线程审核。"
+        review_level = "wiki_candidate"
+        reason = "长期投资规则可直接形成 Wiki 草稿；缺少证据链时在正文标注待确认，不应只进归档。"
     elif _contains_any(text, (".pdf", "pdf", "长报告", "正式报告", "deerflow report", "reports\\")):
         doc_type = "report"
         target_path = f"wiki/investment/research/{symbol}.md" if symbol else "wiki/investment/research/(needs-symbol).md"
         storage_path = "sources/investment/reports/<YYYY-MM-DD>/<run_id>/"
-        reason = "PDF/长报告原件保留原路径，Wiki 只写短摘要和绝对路径链接。"
+        review_level = "wiki_candidate"
+        reason = "PDF/长报告可进入 Wiki 摘要页；原件路径作为来源保存，缺少细节不阻止沉淀。"
     elif _contains_any(text, ("research-workflow", "data-source", "capability-registry", "miniqmt", "openclaw", "hermes", "deerflow", "tushare", "数据源")):
         doc_type = "workflow"
         if "miniqmt" in text or "qmt" in text:
@@ -1194,7 +1240,8 @@ def _investment_triage_for_item(item: dict[str, Any]) -> dict[str, Any]:
             target_path = "wiki/investment/data-source-capability-registry.md"
         else:
             target_path = "wiki/investment/research-workflow.md"
-        reason = "投研系统规则归到稳定入口页，由投资线程决定如何追加。"
+        review_level = "wiki_candidate"
+        reason = "投研系统规则归到稳定入口页；证据链只影响置信度标注，不应阻止写入。"
     elif _contains_any(text, ("fundamentals", "news", "market", "sentiment", "risk_debate", "investment_debate", "research-runs")):
         doc_type = "raw_evidence"
         target_path = ""
@@ -1331,16 +1378,22 @@ def _inbox_wiki_proposal_ledger(rows: list[InboxAuditRow]) -> list[dict[str, Any
         item["target_confidence_min"] = min(target_confidences) if target_confidences else None
         item["target_confidence_max"] = max(target_confidences) if target_confidences else None
         if item["status"] == "investment-thread":
-            item["investment_triage"] = _investment_triage_for_item(item)
-            item["review_level"] = "handoff"
-            item["review_label"] = "转投资线程"
-        elif (item["route_score_min"] or 0) >= 80 and (item["l2_review_score_min"] or 0) >= 80:
+            triage = _investment_triage_for_item(item)
+            item["investment_triage"] = triage
+            if triage.get("investment_review_level") == "wiki_candidate":
+                item["status"] = "investment-wiki"
+                item["review_level"] = "high" if (item["route_score_min"] or 0) >= 80 and (item["l2_review_score_min"] or 0) >= 80 else "medium"
+                item["review_label"] = "可写入投研 Wiki"
+            else:
+                item["review_level"] = "handoff"
+                item["review_label"] = "投资提案归档"
+        if item["status"] not in {"investment-thread", "investment-wiki"} and (item["route_score_min"] or 0) >= 80 and (item["l2_review_score_min"] or 0) >= 80:
             item["review_level"] = "high"
             item["review_label"] = "高可信"
-        elif (item["route_score_min"] or 0) >= 80 and (item["l2_review_score_min"] or 0) >= 70:
+        elif item["status"] not in {"investment-thread", "investment-wiki"} and (item["route_score_min"] or 0) >= 80 and (item["l2_review_score_min"] or 0) >= 70:
             item["review_level"] = "medium"
             item["review_label"] = "中等可信"
-        else:
+        elif item["status"] not in {"investment-thread", "investment-wiki"}:
             item["review_level"] = "review"
             item["review_label"] = "需复核"
     ledger.sort(key=lambda item: (-int(item["count"]), str(item["target"])))

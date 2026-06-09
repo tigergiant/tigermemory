@@ -376,11 +376,12 @@ def test_investment_wiki_proposal_ledger_adds_triage_metadata():
 
     assert len(ledger) == 1
     item = ledger[0]
-    assert item["status"] == "investment-thread"
+    assert item["status"] == "investment-wiki"
+    assert item["review_label"] == "可写入投研 Wiki"
     triage = item["investment_triage"]
     assert triage["investment_doc_type"] == "report"
     assert triage["investment_target_path"] == "wiki/investment/research/600519.SH.md"
-    assert triage["investment_review_level"] == "proposal"
+    assert triage["investment_review_level"] == "wiki_candidate"
     assert triage["preserve_original"] is True
     assert triage["copy_only"] is True
     assert triage["symbol"] == "600519.SH"
@@ -412,11 +413,13 @@ def test_investment_wiki_proposal_triage_keeps_qmt_workflow_out_of_trade_log():
         wiki_action="update",
     )
 
-    triage = tm_memory_reflection.inbox_wiki_proposal_ledger([row])[0]["investment_triage"]
+    item = tm_memory_reflection.inbox_wiki_proposal_ledger([row])[0]
+    triage = item["investment_triage"]
 
+    assert item["status"] == "investment-wiki"
     assert triage["investment_doc_type"] == "workflow"
     assert triage["investment_target_path"] == "wiki/investment/miniqmt-integration-status.md"
-    assert triage["investment_review_level"] == "proposal"
+    assert triage["investment_review_level"] == "wiki_candidate"
 
 
 def test_codex_route_recommendation_alerts_to_inbox(tmp_path):
