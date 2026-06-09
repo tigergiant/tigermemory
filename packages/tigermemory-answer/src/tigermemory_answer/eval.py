@@ -139,7 +139,12 @@ def _trace_has_flag(trace: Any, flag: str) -> bool:
     return False
 
 
-def eval_case(case: dict[str, Any], *, run_id: str | None = None) -> dict[str, Any]:
+def eval_case(
+    case: dict[str, Any],
+    *,
+    run_id: str | None = None,
+    write_trace: bool = True,
+) -> dict[str, Any]:
     expected_trace_flags = _as_string_list(case.get("expected_trace_flags"))
     result = tm_answer.memory_answer_core(
         str(case["query"]),
@@ -148,6 +153,7 @@ def eval_case(case: dict[str, Any], *, run_id: str | None = None) -> dict[str, A
         max_evidence=int(case.get("max_evidence", 6)),
         include_trace=bool(expected_trace_flags),
         run_id=run_id,
+        write_trace=write_trace,
     )
     expected_status = case.get("expected_status")
     expected_paths = [str(p) for p in case.get("expected_evidence_paths", [])]
@@ -292,10 +298,351 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _normalize_case_path(path: Any) -> str:
+    text = str(path or "").strip().strip('"').strip("'").replace("\\", "/")
+    if not text:
+        return ""
+    repo = str(tm_core.REPO_ROOT).replace("\\", "/").rstrip("/")
+    lower = text.lower()
+    repo_lower = repo.lower()
+    if lower.startswith(repo_lower + "/"):
+        text = text[len(repo) + 1:]
+    while text.startswith("./"):
+        text = text[2:]
+    return text.lstrip("/")
+
+
+def _repo_path_exists(path: str) -> bool:
+    rel = _normalize_case_path(path)
+    if not rel:
+        return False
+    return (tm_core.REPO_ROOT / rel).exists()
+
+
+def _rank_for_expected(paths: list[str], expected_paths: list[str]) -> int | None:
+    normalized_expected = {_normalize_case_path(path) for path in expected_paths if _normalize_case_path(path)}
+    if not normalized_expected:
+        return None
+    for index, path in enumerate(paths, 1):
+        if _normalize_case_path(path) in normalized_expected:
+            return index
+    return None
+
+
+def _paths_from_hits(hits: list[dict[str, Any]]) -> list[str]:
+    return [_normalize_case_path(hit.get("path")) for hit in hits if hit.get("path")]
+
+
+def _anchor_queries_for_expected_paths(expected_paths: list[str]) -> list[str]:
+    queries: list[str] = []
+    for path in expected_paths:
+        rel = _normalize_case_path(path)
+        if not rel:
+            continue
+        queries.append(rel)
+        name = Path(rel).stem
+        if name:
+            queries.append(name)
+            queries.append(name.replace("-", " "))
+    unique: list[str] = []
+    seen: set[str] = set()
+    for query in queries:
+        key = query.strip()
+        if key and key not in seen:
+            unique.append(key)
+            seen.add(key)
+    return unique[:8]
+
+
+def _anchor_rank_for_expected(expected_paths: list[str], top_k: int) -> int | None:
+    best: int | None = None
+    for query in _anchor_queries_for_expected_paths(expected_paths):
+        paths = _paths_from_hits(
+            tm_core.search_wiki_hybrid(query, size=top_k, include_sources=True, include_inbox=False, explain=True)
+        )
+        rank = _rank_for_expected(paths, expected_paths)
+        if rank is not None:
+            best = rank if best is None else min(best, rank)
+    return best
+
+
+def _answer_text(result: dict[str, Any]) -> str:
+    parts = [
+        str(result.get("answer") or ""),
+        str(result.get("summary") or ""),
+    ]
+    for claim in result.get("claims") or []:
+        if isinstance(claim, dict):
+            parts.append(str(claim.get("text") or ""))
+    for evidence in result.get("evidence") or []:
+        if isinstance(evidence, dict):
+            parts.append(str(evidence.get("excerpt") or ""))
+    return "\n".join(parts)
+
+
+def _trace_has_expected_validity(trace: dict[str, Any], markers: list[str]) -> bool:
+    if not markers:
+        return True
+    haystack = json.dumps(trace.get("validity") or {}, ensure_ascii=False)
+    haystack += "\n" + json.dumps(trace.get("evidence_gate") or [], ensure_ascii=False)
+    return all(marker in haystack for marker in markers)
+
+
+def _primary_scope_from_trace(trace: dict[str, Any]) -> str | None:
+    for call in trace.get("calls") or []:
+        if isinstance(call, dict) and call.get("primary_scope"):
+            return str(call.get("primary_scope"))
+    return None
+
+
+def _evidence_gate_paths(trace: dict[str, Any]) -> list[str]:
+    gate = trace.get("evidence_gate") if isinstance(trace, dict) else []
+    if not isinstance(gate, list):
+        return []
+    return [
+        _normalize_case_path(item.get("path"))
+        for item in gate
+        if isinstance(item, dict) and item.get("path")
+    ]
+
+
+def _compact_diagnosis_row(row: dict[str, Any]) -> dict[str, Any]:
+    keep = [
+        "id",
+        "passed",
+        "failure_layer",
+        "failure_reasons",
+        "status",
+        "expected_status",
+        "diagnosis_category",
+        "eval_dimension",
+        "freshness_mode",
+        "case_source",
+        "case_source_ref",
+        "runtime_dependency",
+        "actionability_expectation",
+        "expected_evidence_paths",
+        "missing_expected_paths",
+        "outside_partition_paths",
+        "lexical_rank",
+        "hybrid_rank",
+        "anchor_rank",
+        "evidence_gate_rank",
+        "answer_evidence_rank",
+        "expected_rank",
+        "primary_scope",
+        "expected_primary_scope",
+        "trace_id",
+        "run_id",
+    ]
+    return {key: row.get(key) for key in keep if key in row}
+
+
+def diagnose_case(
+    case: dict[str, Any],
+    *,
+    run_id: str | None = None,
+    write_trace: bool = False,
+    top_k_probe: int | None = None,
+) -> dict[str, Any]:
+    """Run one answer case and attribute failures to the first likely layer."""
+    expected_paths = [_normalize_case_path(path) for path in case.get("expected_evidence_paths", [])]
+    forbidden_paths = [_normalize_case_path(path) for path in case.get("forbidden_evidence_paths", [])]
+    top_k = min(max(int(case.get("top_k", 5)), 1), 10)
+    probe_k = min(max(int(top_k_probe or case.get("top_k_probe", 10)), 1), 20)
+    query = str(case["query"])
+
+    result = tm_answer.memory_answer_core(
+        query,
+        scope=str(case.get("scope", "auto")),
+        top_k=top_k,
+        max_evidence=int(case.get("max_evidence", 6)),
+        include_trace=True,
+        run_id=run_id,
+        write_trace=write_trace,
+    )
+    trace = result.get("trace") if isinstance(result.get("trace"), dict) else {}
+    lexical_hits = tm_core.search_wiki(query, size=probe_k, include_sources=True, include_inbox=False, explain=True)
+    hybrid_hits = tm_core.search_wiki_hybrid(query, size=probe_k, include_sources=True, include_inbox=False, explain=True)
+    lexical_paths = _paths_from_hits(lexical_hits)
+    hybrid_paths = _paths_from_hits(hybrid_hits)
+    gate_paths = _evidence_gate_paths(trace)
+    evidence_paths = [_normalize_case_path(e.get("path")) for e in result.get("evidence", []) if isinstance(e, dict)]
+
+    missing_expected_paths = [path for path in expected_paths if not _repo_path_exists(path)]
+    lexical_rank = _rank_for_expected(lexical_paths, expected_paths)
+    hybrid_rank = _rank_for_expected(hybrid_paths, expected_paths)
+    anchor_rank = _anchor_rank_for_expected(expected_paths, probe_k) if expected_paths else None
+    gate_rank = _rank_for_expected(gate_paths, expected_paths)
+    evidence_rank = _rank_for_expected(evidence_paths, expected_paths)
+    expected_rank_raw = case.get("expected_rank")
+    expected_rank = int(expected_rank_raw) if expected_rank_raw is not None else None
+
+    answer_text = _answer_text(result)
+    must_contain = [str(term) for term in case.get("must_contain", [])]
+    must_not_contain = [str(term) for term in case.get("must_not_contain", [])]
+    expected_warning = _as_string_list(case.get("expected_warning"))
+    expected_trace_flags = _as_string_list(case.get("expected_trace_flags"))
+    expected_validity_markers = _as_string_list(case.get("expected_validity_markers"))
+    warning_text = "\n".join(str(item) for item in result.get("warnings") or [])
+    primary_scope = _primary_scope_from_trace(trace)
+    expected_primary_scope = str(case.get("expected_primary_scope") or "") or None
+    expected_partition = str(case.get("expected_partition") or "") or None
+
+    status_ok = case.get("expected_status") is None or result.get("status") == case.get("expected_status")
+    evidence_hit = True if not expected_paths else evidence_rank is not None
+    lexical_hit = True if not expected_paths else lexical_rank is not None
+    hybrid_hit = True if not expected_paths else hybrid_rank is not None
+    anchor_hit = True if not expected_paths else anchor_rank is not None
+    gate_hit = True if not expected_paths else gate_rank is not None
+    rank_ok = True if expected_rank is None or hybrid_rank is None else hybrid_rank <= expected_rank
+    forbidden_ok = not any(path in set(evidence_paths) for path in forbidden_paths)
+    must_contain_hit = all(term in answer_text for term in must_contain)
+    must_not_contain_hit = all(term not in answer_text for term in must_not_contain)
+    warning_hit = True if not expected_warning else all(term in warning_text for term in expected_warning)
+    trace_flags_hit = True if not expected_trace_flags else all(_trace_has_flag(trace, flag) for flag in expected_trace_flags)
+    validity_hit = _trace_has_expected_validity(trace, expected_validity_markers)
+    primary_scope_ok = True if not expected_primary_scope else primary_scope == expected_primary_scope
+    outside_partition_paths: list[str] = []
+    if expected_partition:
+        outside_partition_paths = [
+            path
+            for path in evidence_paths
+            if path.startswith("wiki/") and not path.startswith(f"wiki/{expected_partition}/")
+        ]
+    partition_ok = not outside_partition_paths
+
+    failure_reasons: list[str] = []
+    checks = {
+        "status_ok": status_ok,
+        "evidence_hit": evidence_hit,
+        "lexical_hit": lexical_hit,
+        "hybrid_hit": hybrid_hit,
+        "anchor_hit": anchor_hit,
+        "gate_hit": gate_hit,
+        "rank_ok": rank_ok,
+        "forbidden_ok": forbidden_ok,
+        "must_contain_hit": must_contain_hit,
+        "must_not_contain_hit": must_not_contain_hit,
+        "warning_hit": warning_hit,
+        "trace_flags_hit": trace_flags_hit,
+        "validity_hit": validity_hit,
+        "primary_scope_ok": primary_scope_ok,
+        "partition_ok": partition_ok,
+    }
+    for key, ok in checks.items():
+        if not ok:
+            failure_reasons.append(key)
+
+    if not failure_reasons:
+        failure_layer = "ok"
+    elif missing_expected_paths:
+        failure_layer = "missing_knowledge"
+    elif not anchor_hit:
+        failure_layer = "knowledge_not_indexed"
+    elif not primary_scope_ok:
+        failure_layer = "scope_partition_routing"
+    elif anchor_hit and not lexical_hit and not hybrid_hit:
+        failure_layer = "natural_query_recall_miss"
+    elif not lexical_hit and hybrid_hit:
+        failure_layer = "lexical_recall_miss"
+    elif not hybrid_hit and not gate_hit and not evidence_hit:
+        failure_layer = "hybrid_recall_miss"
+    elif not rank_ok:
+        failure_layer = "ranking_topk_miss"
+    elif gate_hit and not evidence_hit:
+        failure_layer = "evidence_selection_miss"
+    elif not validity_hit:
+        failure_layer = "freshness_stale_guard_miss"
+    elif not partition_ok or not forbidden_ok:
+        failure_layer = "boundary_violation"
+    elif case.get("runtime_dependency") and not warning_hit:
+        failure_layer = "runtime_grounding_gap"
+    elif case.get("actionability_expectation") and (not must_contain_hit or not must_not_contain_hit):
+        failure_layer = "actionability_gap"
+    else:
+        failure_layer = "answer_synthesis_miss"
+
+    return {
+        "id": case["id"],
+        "query": query,
+        "passed": failure_layer == "ok",
+        "failure_layer": failure_layer,
+        "failure_reasons": failure_reasons,
+        "status": result.get("status"),
+        "expected_status": case.get("expected_status"),
+        "diagnosis_category": case.get("diagnosis_category"),
+        "eval_dimension": case.get("eval_dimension"),
+        "freshness_mode": case.get("freshness_mode"),
+        "case_source": case.get("case_source"),
+        "case_source_ref": case.get("case_source_ref"),
+        "runtime_dependency": bool(case.get("runtime_dependency")),
+        "actionability_expectation": case.get("actionability_expectation"),
+        "expected_evidence_paths": expected_paths,
+        "forbidden_evidence_paths": forbidden_paths,
+        "missing_expected_paths": missing_expected_paths,
+        "outside_partition_paths": outside_partition_paths,
+        "lexical_rank": lexical_rank,
+        "hybrid_rank": hybrid_rank,
+        "anchor_rank": anchor_rank,
+        "evidence_gate_rank": gate_rank,
+        "answer_evidence_rank": evidence_rank,
+        "expected_rank": expected_rank,
+        "primary_scope": primary_scope,
+        "expected_primary_scope": expected_primary_scope,
+        "checks": checks,
+        "trace_id": result.get("trace_id"),
+        "run_id": result.get("run_id"),
+    }
+
+
+def _count_by_field(results: list[dict[str, Any]], field: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in results:
+        label = str(item.get(field) or "__unset__")
+        counts[label] = counts.get(label, 0) + 1
+    return counts
+
+
+def summarize_diagnosis(results: list[dict[str, Any]]) -> dict[str, Any]:
+    case_count = len(results)
+    passed = sum(1 for item in results if item.get("passed"))
+    expected_path_cases = [item for item in results if item.get("expected_evidence_paths")]
+    lexical_hits = sum(1 for item in expected_path_cases if item.get("lexical_rank") is not None)
+    hybrid_hits = sum(1 for item in expected_path_cases if item.get("hybrid_rank") is not None)
+    anchor_hits = sum(1 for item in expected_path_cases if item.get("anchor_rank") is not None)
+    gate_hits = sum(1 for item in expected_path_cases if item.get("evidence_gate_rank") is not None)
+    answer_evidence_hits = sum(1 for item in expected_path_cases if item.get("answer_evidence_rank") is not None)
+    return {
+        "case_count": case_count,
+        "passed": passed,
+        "pass_rate": passed / case_count if case_count else 0.0,
+        "expected_path_case_count": len(expected_path_cases),
+        "lexical_hit": lexical_hits,
+        "lexical_hit_rate": lexical_hits / len(expected_path_cases) if expected_path_cases else 1.0,
+        "hybrid_hit": hybrid_hits,
+        "hybrid_hit_rate": hybrid_hits / len(expected_path_cases) if expected_path_cases else 1.0,
+        "anchor_hit": anchor_hits,
+        "anchor_hit_rate": anchor_hits / len(expected_path_cases) if expected_path_cases else 1.0,
+        "evidence_gate_hit": gate_hits,
+        "evidence_gate_hit_rate": gate_hits / len(expected_path_cases) if expected_path_cases else 1.0,
+        "answer_evidence_hit": answer_evidence_hits,
+        "answer_evidence_hit_rate": answer_evidence_hits / len(expected_path_cases) if expected_path_cases else 1.0,
+        "failure_layer_counts": _count_by_field(results, "failure_layer"),
+        "case_count_by_dimension": _count_by_field(results, "eval_dimension"),
+        "case_count_by_category": _count_by_field(results, "diagnosis_category"),
+        "action_seed_count": sum(1 for item in results if item.get("eval_dimension") == "action_grounding_seed"),
+        "runtime_dependency_count": sum(1 for item in results if item.get("runtime_dependency")),
+    }
+
+
 def cmd_eval(args: argparse.Namespace) -> int:
     cases = load_cases(args.cases, allow_paper_seed_tmp=args.allow_paper_seed_tmp)
     run_id = tm_answer.normalize_run_id(args.run_id) or default_run_id()
-    results = [eval_case(case, run_id=run_id) for case in cases]
+    results = [
+        eval_case(case, run_id=run_id, write_trace=not getattr(args, "no_write_trace", False))
+        for case in cases
+    ]
     summary = summarize(results)
     failures = [
         item for item in results
@@ -337,6 +684,45 @@ def cmd_eval(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_diagnose(args: argparse.Namespace) -> int:
+    cases = load_cases(args.cases, allow_paper_seed_tmp=args.allow_paper_seed_tmp)
+    if args.limit is not None:
+        cases = cases[: max(0, int(args.limit))]
+    run_id = tm_answer.normalize_run_id(args.run_id) or default_run_id().replace("answer-eval", "answer-diagnosis")
+    results = [
+        diagnose_case(
+            case,
+            run_id=run_id,
+            write_trace=bool(args.write_trace),
+            top_k_probe=args.top_k_probe,
+        )
+        for case in cases
+    ]
+    summary = summarize_diagnosis(results)
+    failures = [item for item in results if not item.get("passed")]
+    report = {
+        **summary,
+        "run_id": run_id,
+        "failures": [_compact_diagnosis_row(item) for item in failures] if args.compact else failures,
+    }
+    if not args.compact:
+        report["results"] = results
+    if args.json:
+        sys.stdout.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    else:
+        print(
+            f"cases={report['case_count']} passed={report['passed']}/{report['case_count']} "
+            f"lexical={report['lexical_hit']}/{report['expected_path_case_count']} "
+            f"hybrid={report['hybrid_hit']}/{report['expected_path_case_count']} "
+            f"anchor={report['anchor_hit']}/{report['expected_path_case_count']} "
+            f"evidence={report['answer_evidence_hit']}/{report['expected_path_case_count']}"
+        )
+        for layer, count in report["failure_layer_counts"].items():
+            if layer != "ok":
+                print(f"- {layer}: {count}")
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="tm_answer_eval.py", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -345,12 +731,27 @@ def main() -> None:
     eval_p.add_argument("--json", action="store_true")
     eval_p.add_argument("--compact", action="store_true", help="omit per-case successes; keep summary and failures")
     eval_p.add_argument("--run-id", default=None, help="optional run id shared by all memory_answer trace rows")
+    eval_p.add_argument("--no-write-trace", action="store_true", help="do not append eval rows to .tmp/memory-answer-trace.jsonl")
     eval_p.add_argument(
         "--allow-paper-seed-tmp",
         action="store_true",
         help="allow experimental paper_seed_tmp cases from .tmp fixtures",
     )
     eval_p.set_defaults(func=cmd_eval)
+    diag_p = sub.add_parser("diagnose", help="run answer cases and attribute failures by layer")
+    diag_p.add_argument("--cases", default="tests/fixtures/memory_answer_diagnosis_100.jsonl")
+    diag_p.add_argument("--json", action="store_true")
+    diag_p.add_argument("--compact", action="store_true", help="omit raw queries and success rows")
+    diag_p.add_argument("--run-id", default=None, help="optional run id shared by all memory_answer calls")
+    diag_p.add_argument("--write-trace", action="store_true", help="append diagnosis rows to .tmp/memory-answer-trace.jsonl")
+    diag_p.add_argument("--top-k-probe", type=int, default=10, help="lexical/hybrid diagnostic probe depth")
+    diag_p.add_argument("--limit", type=int, default=None, help="run only the first N cases")
+    diag_p.add_argument(
+        "--allow-paper-seed-tmp",
+        action="store_true",
+        help="allow experimental paper_seed_tmp cases from .tmp fixtures",
+    )
+    diag_p.set_defaults(func=cmd_diagnose)
     args = parser.parse_args()
     raise SystemExit(args.func(args))
 
