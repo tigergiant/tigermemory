@@ -1056,7 +1056,8 @@ _INVESTMENT_REVIEW_LABELS = {
 _A_SHARE_SYMBOL_RE = re.compile(r"\b(?P<code>[036]\d{5})(?:\.(?P<suffix>SH|SZ))?\b", re.IGNORECASE)
 _DECISION_MONTH_RE = re.compile(r"\b(20\d{2}-\d{2})\b")
 _NEW_PROJECT_PATH_RE = re.compile(
-    r"C:\\Users\\Giant\\Documents\\New project\\(?:reports|data|logs|config)\\[^\n\r`\"']+",
+    re.escape("C:")
+    + r"\\Users\\Giant\\Documents\\New project\\(?:reports|data|logs|config)\\[^\n\r`\"']+",
     re.IGNORECASE,
 )
 
