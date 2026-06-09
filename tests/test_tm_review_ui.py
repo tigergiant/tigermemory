@@ -425,6 +425,7 @@ def test_daily_page_static_assets_wire_cron_intake_card():
     assert "investment-archive" in pages_js
     assert "enqueueWikiProposalInvestmentArchive" in pages_js
     assert "移入投资提案归档" in pages_js
+    assert "投资提案归档" in pages_js
     assert "生成可检索摘要，不写正式投研页" in pages_js
     assert "investment_archive" in pages_js
     assert "投资分类" in pages_js
