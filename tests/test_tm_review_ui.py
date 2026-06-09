@@ -385,6 +385,9 @@ def test_daily_page_static_assets_wire_cron_intake_card():
     assert "runWikiProposalApproval" in pages_js
     assert "wikiTargetFromLedgerRow" in pages_js
     assert "openWikiProposalBatchModal" in pages_js
+    assert "investment-handoff" in pages_js
+    assert "enqueueWikiProposalInvestmentHandoff" in pages_js
+    assert "标记已转交" in pages_js
     assert "completeCard" in pages_js
     assert "refreshDigestThenCompleteCards" in pages_js
     assert "markCompletedIfPathGoneAfterError" in pages_js
