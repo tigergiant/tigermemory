@@ -14,6 +14,7 @@ Depends-on (must-have): tigermemory_core._call_deepseek_json (DeepSeek LLM 评�
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any
 
 import tigermemory_core as tm_core
@@ -62,6 +63,71 @@ RADAR_DURABLE_SIGNAL_MARKERS = (
 
 KNOWLEDGE_TARGETS = {"mem0", "wiki_proposal", "human_review", "discard"}
 WIKI_ACTIONS = {"create", "update"}
+
+EVIDENCE_SOURCE_MARKERS = (
+    "http://",
+    "https://",
+    "wiki/",
+    "sources/",
+    "tools/",
+    "tests/",
+    "scripts/",
+    "D:\\",
+    "C:\\",
+    "/home/",
+    "commit",
+    "git_sha",
+    "log",
+    "report",
+    "报告",
+    "日志",
+    "来源",
+    "路径",
+)
+
+EVIDENCE_VALIDATION_MARKERS = (
+    "pytest",
+    "passed",
+    "验证",
+    "测试",
+    "health",
+    "返回码",
+    "status",
+    "截图",
+    "confirmed",
+    "已确认",
+    "已验证",
+    "待确认",
+)
+
+INVESTMENT_MARKERS = (
+    "investment",
+    "投研",
+    "投资",
+    "交易",
+    "持仓",
+    "账户",
+    "qmt",
+    "miniqmt",
+    "b_qmt",
+    "decision-log",
+    "股票",
+    "组合",
+)
+
+INVESTMENT_RUN_MARKERS = (
+    "run_id",
+    "order_id",
+    "订单",
+    "委托",
+    "成交",
+    "账户",
+    "流水",
+    "回测",
+    "验证",
+)
+
+DATE_MARKER_RE = re.compile(r"\b20\d{2}-\d{2}(?:-\d{2})?\b")
 
 
 ROUTE_PROMPT = """你是 tigermemory 的知识策展路由员。你的任务不是“能不能存”，而是把 agent 调用 write_memory
@@ -117,6 +183,11 @@ Hermes、DeerFlow、TradingAgents、agent runtime、浏览器边界、评测方�
 - knowledge_target="human_review"：敏感/person、事实冲突、权限/所有权不清、低证据但高影响、投资/生产高风险、第三方权威待核验。不要把普通 medium confidence 当成人工复核。
 - knowledge_target="discard"：低信噪、瞬态、重复、无具体证据、只表达“正在做/准备做/可能”。
 
+【证据链提示】
+- 证据链很重要，但不是唯一门槛。长期有价值的信息不要仅因证据不完整就偷懒转 human_review 或 discard。
+- 当内容适合 wiki_proposal 但缺来源、日期、验证结果、run_id/order_id、文件路径等证据时，保持正确 knowledge_target，并在 evidence_hints 里列出要补的证据。
+- evidence_hints 是给写入 agent 的即时提醒，不是人工审核理由；每条不超过 80 字，最多 4 条。
+
 【Wiki 提案字段】
 当 knowledge_target="wiki_proposal" 时：
 - wiki_partition 从 [brand, investment, operations, production, systems, person, self-evolution] 选一个；不能确定时优先用 topic_inferred 对应分区。
@@ -136,6 +207,7 @@ Hermes、DeerFlow、TradingAgents、agent runtime、浏览器边界、评测方�
   "wiki_slug_hint": "<wiki_proposal 时填写，否则可为空>",
   "wiki_action": "create | update | null",
   "review_reason": "<human_review 时说明必须人工复核的具体原因；否则可为空>",
+  "evidence_hints": [<缺证据时填写；每条不超过80字；没有则空数组>],
   "score_breakdown": {
     "signal": <0-100>,
     "specificity": <0-100>,
@@ -178,6 +250,7 @@ class RouteDecision:
     wiki_slug_hint: str | None = None
     wiki_action: str | None = None
     review_reason: str | None = None
+    evidence_hints: list[str] | None = None
     score_breakdown: dict[str, Any] | None = None
 
     def as_metadata(self) -> dict[str, Any]:
@@ -203,6 +276,8 @@ class RouteDecision:
             meta["review_reason"] = self.review_reason
         if self.needs_human_review:
             meta["needs_human_review"] = True
+        if self.evidence_hints:
+            meta["evidence_hints"] = self.evidence_hints
         if self.score_breakdown:
             meta["score_breakdown"] = self.score_breakdown
         return meta
@@ -293,6 +368,83 @@ def _clean_score_breakdown(value: Any) -> dict[str, Any] | None:
         if score is not None:
             cleaned[key] = score
     return cleaned or None
+
+
+def _clean_evidence_hints(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    cleaned: list[str] = []
+    for raw in value:
+        if not isinstance(raw, str):
+            continue
+        hint = " ".join(raw.strip().split())
+        if not hint or hint in cleaned:
+            continue
+        cleaned.append(hint[:120])
+        if len(cleaned) >= 4:
+            break
+    return cleaned
+
+
+def _append_hint(hints: list[str], hint: str) -> None:
+    if hint not in hints and len(hints) < 4:
+        hints.append(hint)
+
+
+def _is_investment_like(text: str, requested_topic: str, wiki_partition: str | None) -> bool:
+    return (
+        requested_topic == "investment"
+        or wiki_partition == "investment"
+        or _has_any_marker(text, INVESTMENT_MARKERS)
+    )
+
+
+def _build_evidence_hints(
+    text: str,
+    *,
+    requested_topic: str,
+    knowledge_target: str | None,
+    wiki_partition: str | None,
+    score_breakdown: dict[str, Any] | None,
+    model_hints: list[str],
+) -> list[str] | None:
+    """Return non-blocking evidence prompts for write callers.
+
+    Evidence hygiene should improve future writes without downgrading durable
+    information into human review just because a source reference is missing.
+    """
+    hints = list(model_hints)
+    if knowledge_target != "wiki_proposal":
+        return hints or None
+
+    evidence_score = None
+    if isinstance(score_breakdown, dict):
+        evidence_score = score_breakdown.get("evidence")
+    has_source = _has_any_marker(text, EVIDENCE_SOURCE_MARKERS)
+    has_validation = _has_any_marker(text, EVIDENCE_VALIDATION_MARKERS)
+
+    if not has_source:
+        _append_hint(
+            hints,
+            "evidence_hint: add source path, URL, log, report, or commit reference before final Wiki compile",
+        )
+    if not has_validation or (isinstance(evidence_score, int) and evidence_score < 70):
+        _append_hint(
+            hints,
+            "evidence_hint: add validation result or mark unverified claims as pending",
+        )
+    if _is_investment_like(text, requested_topic, wiki_partition):
+        if not DATE_MARKER_RE.search(text):
+            _append_hint(
+                hints,
+                "evidence_hint: add investment decision date, run date, or target month",
+            )
+        if not _has_any_marker(text, INVESTMENT_RUN_MARKERS):
+            _append_hint(
+                hints,
+                "evidence_hint: add symbol, account/order/run id, or research artifact reference when applicable",
+            )
+    return hints or None
 
 
 def _is_curated_workflow_radar_summary(text: str, topic: str) -> bool:
@@ -395,6 +547,14 @@ def route_memory(
     wiki_action = _clean_wiki_action(parsed.get("wiki_action"))
     review_reason = _clean_optional_text(parsed.get("review_reason"), max_len=240)
     score_breakdown = _clean_score_breakdown(parsed.get("score_breakdown"))
+    evidence_hints = _build_evidence_hints(
+        text,
+        requested_topic=topic,
+        knowledge_target=knowledge_target,
+        wiki_partition=wiki_partition,
+        score_breakdown=score_breakdown,
+        model_hints=_clean_evidence_hints(parsed.get("evidence_hints")),
+    )
     has_explicit_knowledge_target = knowledge_target is not None
     if needs_human_review and knowledge_target == "mem0":
         knowledge_target = "human_review"
@@ -417,6 +577,7 @@ def route_memory(
         "wiki_slug_hint": wiki_slug_hint,
         "wiki_action": wiki_action,
         "review_reason": review_reason,
+        "evidence_hints": evidence_hints,
         "score_breakdown": score_breakdown,
     }
 

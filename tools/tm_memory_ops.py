@@ -588,6 +588,8 @@ def _to_wiki_proposal(
     review_suggestions = review.get("suggestions") if isinstance(review.get("suggestions"), list) else []
     issues_md = "\n".join(f"- {i}" for i in review_issues) or "- (none)"
     suggestions_md = "\n".join(f"- {s}" for s in review_suggestions) or "- (none)"
+    evidence_hints = decision.evidence_hints if isinstance(decision.evidence_hints, list) else []
+    evidence_hints_md = "\n".join(f"- {h}" for h in evidence_hints) or "- (none)"
     body = (
         f"# Wiki proposal: wiki/{partition}/{slug}.md\n\n"
         "## Router decision\n\n"
@@ -598,6 +600,7 @@ def _to_wiki_proposal(
         f"- target_confidence: {decision.target_confidence}\n"
         f"- route_score: {decision.score}\n"
         f"- reason: {decision.reasons}\n\n"
+        f"## Evidence hints\n\n{evidence_hints_md}\n\n"
         f"## L2 review\n\n"
         f"- score: {review_score}\n"
         f"- review_skipped: {review_skipped}\n"
@@ -656,6 +659,8 @@ def _to_wiki_proposal(
         "wiki_action": action,
         "review": review,
     }
+    if evidence_hints:
+        result["evidence_hints"] = evidence_hints
     if merged_existing:
         result["deduped"] = True
         result["dedupe_reason"] = "merged into same-day wiki proposal for target page"
@@ -702,6 +707,7 @@ def _public_route_metadata(decision: tm_route.RouteDecision) -> dict[str, Any]:
         "wiki_slug_hint",
         "wiki_action",
         "review_reason",
+        "evidence_hints",
         "score_breakdown",
     ):
         value = getattr(decision, key, None)
@@ -723,6 +729,19 @@ def _topic_warnings(
         f"topic mismatch: requested_topic={requested_topic}, "
         f"topic_inferred={decision.topic_inferred}, stored_topic={storage_topic}"
     )]
+
+
+def _route_warnings(
+    requested_topic: str,
+    decision: tm_route.RouteDecision,
+    storage_topic: str,
+) -> list[str]:
+    warnings: list[str] = []
+    evidence_hints = getattr(decision, "evidence_hints", None)
+    if isinstance(evidence_hints, list):
+        warnings.extend(str(hint) for hint in evidence_hints if hint)
+    warnings.extend(_topic_warnings(requested_topic, decision, storage_topic))
+    return warnings
 
 
 def _record_discard_audit(
@@ -931,7 +950,7 @@ def write_memory_with_review(
             review_timeout=review_timeout,
             skip_review_reason=skip_review_reason,
         )
-        result.setdefault("warnings", []).extend(_topic_warnings(topic, decision, result["topic"]))
+        result.setdefault("warnings", []).extend(_route_warnings(topic, decision, result["topic"]))
         return _attach_handoff_verification(result, text, failure_reason=result.get("reasons"))
 
     if decision.knowledge_target == "human_review":
@@ -944,7 +963,7 @@ def write_memory_with_review(
             metadata_extra=route_metadata_extra,
             outcome="human_review",
         )
-        result.setdefault("warnings", []).extend(_topic_warnings(topic, decision, storage_topic))
+        result.setdefault("warnings", []).extend(_route_warnings(topic, decision, storage_topic))
         return _attach_handoff_verification(result, text, failure_reason=result.get("reasons"))
 
     if decision.route == "mem0":
@@ -1001,7 +1020,7 @@ def write_memory_with_review(
                     data.update(route_metadata_extra)
                 if not isinstance(data.get("warnings"), list):
                     data["warnings"] = []
-                data["warnings"].extend(_topic_warnings(topic, decision, storage_topic))
+                data["warnings"].extend(_route_warnings(topic, decision, storage_topic))
                 try:
                     data["verified"] = _verified_summary(memory_id, include_readback=include_readback)
                 except Exception as exc:
@@ -1044,5 +1063,5 @@ def write_memory_with_review(
         metadata_extra=route_metadata_extra,
         outcome=outcome,
     )
-    result.setdefault("warnings", []).extend(_topic_warnings(topic, decision, storage_topic))
+    result.setdefault("warnings", []).extend(_route_warnings(topic, decision, storage_topic))
     return _attach_handoff_verification(result, text, failure_reason=result.get("reasons"))

@@ -538,6 +538,7 @@ def test_write_memory_wiki_proposal_target_writes_marked_inbox(monkeypatch):
         wiki_partition="systems",
         wiki_slug_hint="Unified Knowledge Routing",
         wiki_action="update",
+        evidence_hints=["evidence_hint: add source path before final Wiki compile"],
     )
 
     def fake_write_and_commit_inbox(agent, topic, title, body, frontmatter_extra=None):
@@ -572,12 +573,19 @@ def test_write_memory_wiki_proposal_target_writes_marked_inbox(monkeypatch):
     assert result["wiki_partition"] == "systems"
     assert result["wiki_slug_hint"] == "unified-knowledge-routing"
     assert result["wiki_action"] == "update"
+    assert result["evidence_hints"] == ["evidence_hint: add source path before final Wiki compile"]
+    assert result["warnings"] == ["evidence_hint: add source path before final Wiki compile"]
     assert result["review"]["score"] == 83
     assert captured["topic"] == "systems"
     assert captured["title"] == "Wiki proposal 95"
     assert "Wiki proposal: wiki/systems/unified-knowledge-routing.md" in captured["body"]
+    assert "## Evidence hints" in captured["body"]
+    assert "evidence_hint: add source path before final Wiki compile" in captured["body"]
     assert captured["frontmatter_extra"]["proposal_kind"] == "wiki"
     assert captured["frontmatter_extra"]["knowledge_target"] == "wiki_proposal"
+    assert captured["frontmatter_extra"]["evidence_hints"] == [
+        "evidence_hint: add source path before final Wiki compile"
+    ]
     assert captured["frontmatter_extra"]["l2_review_score"] == 83
 
 

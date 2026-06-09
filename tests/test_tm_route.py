@@ -54,6 +54,8 @@ def test_route_memory_passes_requested_topic_and_taxonomy_context(monkeypatch):
     assert "知识策展路由员" in captured["prompt"]
     assert "knowledge_target" in captured["prompt"]
     assert "wiki_proposal" in captured["prompt"]
+    assert "evidence_hints" in captured["prompt"]
+    assert "长期有价值的信息不要仅因证据不完整就偷懒转 human_review 或 discard" in captured["prompt"]
     assert "human_review only" not in captured["prompt"]
 
 
@@ -267,6 +269,51 @@ def test_wiki_proposal_target_routes_to_inbox_with_metadata(monkeypatch):
     assert decision.wiki_slug_hint == "unified-knowledge-routing"
     assert decision.wiki_action == "create"
     assert decision.score_breakdown["canonicality"] == 92
+
+
+def test_wiki_proposal_missing_investment_evidence_returns_hints(monkeypatch):
+    def fake_call(prompt, content, **kwargs):
+        return True, {
+            "score": 84,
+            "topic_inferred": "investment",
+            "is_transient": False,
+            "is_sensitive": False,
+            "needs_human_review": False,
+            "knowledge_target": "wiki_proposal",
+            "target_confidence": 80,
+            "wiki_partition": "investment",
+            "wiki_slug_hint": "b-qmt-node-rule",
+            "wiki_action": "create",
+            "review_reason": "",
+            "evidence_hints": ["evidence_hint: add broker screenshot"],
+            "score_breakdown": {
+                "signal": 88,
+                "specificity": 62,
+                "durability": 90,
+                "canonicality": 84,
+                "evidence": 35,
+                "scope": 82,
+                "risk_review": 45,
+            },
+            "issues": ["missing source"],
+            "reasons": "durable investment system rule with weak evidence",
+        }
+
+    monkeypatch.setattr(tm_route.tm_core, "_call_deepseek_json", fake_call)
+
+    decision = tm_route.route_memory(
+        "B_qmt 自动交易节点的价格类型配置应写入投研 Wiki。",
+        "investment",
+        "codex",
+    )
+
+    assert decision.route == "inbox"
+    assert decision.knowledge_target == "wiki_proposal"
+    assert decision.evidence_hints is not None
+    assert "evidence_hint: add broker screenshot" in decision.evidence_hints
+    assert any("source path" in hint for hint in decision.evidence_hints)
+    assert any("validation result" in hint for hint in decision.evidence_hints)
+    assert any("decision date" in hint for hint in decision.evidence_hints)
 
 
 def test_daily_health_explicit_wiki_target_stays_inbox_not_mem0(monkeypatch):
