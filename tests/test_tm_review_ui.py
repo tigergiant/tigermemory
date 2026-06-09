@@ -2275,6 +2275,38 @@ def test_dashboard_memory_quality_digest_backfill_uses_frontmatter_and_live_rows
     assert output_map["issue"]["value"] == 1
 
 
+def test_quality_route_flow_prefers_route_recommendation_distribution():
+    inbox_rows = []
+    for idx in range(6):
+        inbox_rows.append({"path": f"inbox/2026-06-09-12{idx:02d}-codex-systems.md", "route_target": "mem0"})
+    inbox_rows.append({"path": "inbox/2026-06-09-1300-codex-systems.md", "route_target": "wiki"})
+    inbox_rows.extend([
+        {"path": "inbox/2026-06-09-1310-codex-systems.md", "route_target": "inbox"},
+        {"path": "inbox/2026-06-09-1320-codex-systems.md", "route_target": "inbox"},
+        {"path": "inbox/2026-06-08-1320-codex-systems.md", "route_target": "wiki"},
+    ])
+
+    flow = tm_review_ui._build_quality_route_flow(
+        counts={"mem0": 0, "wiki": 0, "inbox_today": 9, "discard": 0},
+        report_date="2026-06-09",
+        trace_summary={"status_counts": {"not_found": 12}},
+        trace_rows=[{"trace_id": str(idx)} for idx in range(10)],
+        inbox_rows=inbox_rows,
+        source_mode="digest",
+    )
+
+    output_map = {slot["key"]: slot for slot in flow["outputs"]}
+    assert flow["flow_source"] == "route_recommendation"
+    assert flow["input_total"] == 9
+    assert flow["route_recommendation_counts"] == {"mem0": 6, "wiki": 1, "inbox": 2, "discard": 0}
+    assert output_map["mem0"]["value"] == 6
+    assert output_map["wiki"]["value"] == 1
+    assert output_map["inbox"]["value"] == 2
+    assert output_map["discard"]["value"] == 0
+    assert output_map["issue"]["value"] == 12
+    assert flow["trace_count"] == 10
+
+
 def test_api_health_memory_overview_endpoint(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     (tmp_path / "wiki" / "systems").mkdir(parents=True)
@@ -2549,6 +2581,9 @@ def test_quality_page_flow_panel_keeps_all_routes_visible():
     assert "const flowSummaryCards = [" in pages_js
     assert "const outputCards = model.outputs.map((slot) =>" in pages_js
     assert "const pct = knownValue && flowTotal > 0 ? Math.round((slot.value || 0) * 100 / flowTotal) : (knownValue ? 0 : null);" in pages_js
+    assert "四条写入路线同时展示" in pages_js
+    assert "回答异常 ${c.numberText(outputValues.issue)} 条来自最近 7 天回答轨迹" in pages_js
+    assert "五条路线同时展示" not in pages_js
 
 
 def test_canvas_star_map_uses_stable_compact_layout():
