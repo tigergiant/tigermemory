@@ -4,10 +4,14 @@ import json
 import pathlib
 import sys
 
+import pytest
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
+sys.path.insert(0, str(REPO_ROOT / "packages" / "tigermemory-answer" / "src"))
 
 import tm_answer  # type: ignore[import-not-found]
+import tigermemory_answer.eval as tm_answer_eval  # type: ignore[import-not-found]
 
 
 def _search_result(hit: dict | None = None) -> dict:
@@ -48,7 +52,7 @@ def test_memory_answer_core_expands_evidence_and_generates_answer(monkeypatch, t
         }),
     )
 
-    result = tm_answer.memory_answer_core("write_memory toolkit", scope="wiki", run_id="unit-run-1")
+    result = tm_answer.memory_answer_core("verify_memory_id write_memory toolkit", scope="wiki", run_id="unit-run-1")
 
     assert result["status"] == "ok"
     assert result["run_id"] == "unit-run-1"
@@ -58,9 +62,17 @@ def test_memory_answer_core_expands_evidence_and_generates_answer(monkeypatch, t
     assert result["evidence"][0]["source_role"] == "canonical_wiki"
     assert result["trace_id"]
     assert result["trace"]["run_id"] == "unit-run-1"
+    assert result["trace"]["query_class"] == "recall"
+    assert result["trace"]["planner"]["intent"] == "recall"
+    assert result["trace"]["planner"]["freshness_mode"] == "not_applicable"
+    assert [item["role"] for item in result["trace"]["planner"]["subquery_roles"]] == ["primary", "expansion"]
+    assert len(result["trace"]["expanded_queries"]) == 2
+    assert [call["tool"] for call in result["trace"]["calls"]] == ["search_tigermemory", "search_tigermemory", "DeepSeek"]
     assert (tmp_path / "trace.jsonl").exists()
     trace_row = json.loads((tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()[-1])
     assert trace_row["run_id"] == "unit-run-1"
+    assert trace_row["trace"]["planner"]["intent"] == "recall"
+    assert trace_row["trace"]["planner"]["source_budgets"]["wiki"] == 3
 
 
 def test_memory_answer_core_not_found_skips_llm(monkeypatch, tmp_path):
@@ -81,6 +93,9 @@ def test_memory_answer_core_not_found_skips_llm(monkeypatch, tmp_path):
     assert trace_row["query_hash"]
     assert trace_row["trace"]["run_id"] == "unit-run-hidden"
     assert trace_row["trace"]["query_class"] == "recall"
+    assert trace_row["trace"]["planner"]["intent"] == "recall"
+    assert trace_row["trace"]["planner"]["freshness_mode"] == "not_applicable"
+    assert trace_row["trace"]["planner"]["source_budgets"]["wiki"] == 3
     assert "expanded_queries" not in trace_row["trace"]
     assert trace_row["trace"]["expanded_query_hashes"]
     assert "query" not in trace_row["trace"]["calls"][0]
@@ -135,10 +150,23 @@ def test_trim_evidence_for_prompt_enforces_total_excerpt_budget():
         {"id": "e2", "excerpt": "fghij"},
     ]
 
-    trimmed, warnings = tm_answer.trim_evidence_for_prompt(evidence, max_chars=7)
+    trimmed, warnings, metrics = tm_answer.trim_evidence_for_prompt(
+        evidence,
+        max_chars=7,
+        query="abc ghi",
+        return_metrics=True,
+    )
 
     assert [item["excerpt"] for item in trimmed] == ["abcde", "fg"]
     assert warnings == ["prompt_budget_truncated=true"]
+    assert metrics["chars_before"] == 10
+    assert metrics["chars_after"] == 7
+    assert metrics["truncated_evidence_ids"] == ["e2"]
+    assert metrics["retained_evidence_ids"] == ["e1", "e2"]
+    assert metrics["key_term_retention"]["terms"] == ["abc", "ghi"]
+    assert metrics["key_term_retention"]["retained_terms"] == ["abc"]
+    assert metrics["key_term_retention"]["missing_terms"] == ["ghi"]
+    assert metrics["key_term_retention"]["retention_rate"] == 0.5
 
 
 def test_memory_answer_core_can_disable_trace_write(monkeypatch, tmp_path):
@@ -155,6 +183,75 @@ def test_memory_answer_core_can_disable_trace_write(monkeypatch, tmp_path):
     assert calls == []
 
 
+def test_write_result_trace_sanitizes_full_row_and_trace_payload(monkeypatch, tmp_path):
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    canary = "canaryrawquerytoken_summary_only_20260609"
+    secret = "bearer abcdefghijklmnopqrstuvwxyz"
+    result = {
+        "status": "ok",
+        "answer": f"{secret} answer {canary}",
+        "summary": f"safe summary {canary}",
+        "warnings": [f"warning echoed {canary}"],
+        "run_id": "trace-sanitize",
+        "trace_id": "trace-1",
+        "claims": [{"id": "c1", "text": f"secret claim {canary}", "support": ["e1"], "confidence": 0.9}],
+        "evidence": [{
+            "id": "e1",
+            "source": "mem0",
+            "path": "mem0:secret",
+            "title": "systems / codex",
+            "excerpt": f"{secret} evidence {canary}",
+            "matched_terms": ["bearer", "abcdefghijklmnopqrstuvwxyz", canary],
+        }],
+    }
+    trace = {
+        "run_id": "trace-sanitize",
+        "evidence_gate": [{
+            "candidate_id": "cand1",
+            "snippet": f"{secret} snippet {canary}",
+            "excerpt": f"{secret} excerpt {canary}",
+            "trace_snippet": f"{secret} trace snippet {canary}",
+            "trace_excerpt": f"{secret} trace excerpt {canary}",
+            "trace_content": f"{secret} trace content {canary}",
+            "trace_text": f"{secret} trace text {canary}",
+            "trace_answer": f"{secret} trace answer {canary}",
+            "matched_terms": ["bearer", "abcdefghijklmnopqrstuvwxyz", canary],
+        }],
+    }
+
+    tm_answer._write_result_trace(result, trace, f"{secret} {canary}")
+
+    row = json.loads((tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    payload = json.dumps(row, ensure_ascii=False)
+    assert "bearer" not in payload
+    assert "abcdefghijklmnopqrstuvwxyz" not in payload
+    assert canary not in payload
+    assert "matched_terms" not in payload
+    assert "summary" not in row
+    assert "warnings" not in row
+    assert row["summary_chars"] > 0
+    assert row["summary_hash"]
+    assert row["warning_count"] == 1
+    assert row["warning_chars"] > 0
+    assert row["warning_hashes"]
+    assert "excerpt" not in row["evidence"][0]
+    gate = row["trace"]["evidence_gate"][0]
+    assert gate["snippet_chars"] > 0
+    assert gate["excerpt_chars"] > 0
+    assert gate["trace_snippet_chars"] > 0
+    assert gate["trace_excerpt_chars"] > 0
+    assert gate["trace_content_chars"] > 0
+    assert gate["trace_text_chars"] > 0
+    assert gate["trace_answer_chars"] > 0
+    assert "trace_snippet" not in gate
+    assert "trace_excerpt" not in gate
+    assert "trace_content" not in gate
+    assert "trace_text" not in gate
+    assert "trace_answer" not in gate
+    assert gate["matched_term_count"] == 3
+    assert gate["matched_term_hashes"]
+
+
 def test_memory_answer_core_trims_evidence_before_llm(monkeypatch, tmp_path):
     captured = {}
     monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
@@ -165,7 +262,9 @@ def test_memory_answer_core_trims_evidence_before_llm(monkeypatch, tmp_path):
             "source": "mem0",
             "path": "mem0:long",
             "title": "systems / codex",
-            "snippet": "needle " * 100,
+            "snippet": "## Heading\n\n" + ("needle " * 100),
+            "created_at": "2026-05-01T00:00:00+00:00",
+            "updated_at": "2026-05-02T00:00:00+00:00",
             "score": 1.0,
         }),
     )
@@ -188,8 +287,33 @@ def test_memory_answer_core_trims_evidence_before_llm(monkeypatch, tmp_path):
         run_id="budget-test",
     )
 
-    assert len(captured["evidence"][0]["excerpt"]) == 20
+    evidence = captured["evidence"][0]
+    assert evidence["id"] == "e1"
+    assert evidence["source"] == "mem0"
+    assert evidence["path"] == "mem0:long"
+    assert evidence["title"] == "systems / codex"
+    assert evidence["created_at"] == "2026-05-01T00:00:00+00:00"
+    assert evidence["updated_at"] == "2026-05-02T00:00:00+00:00"
+    assert evidence["matched_terms"] == ["needle"]
+    assert evidence["validity"] == "current"
+    assert len(evidence["excerpt"]) <= 20
     assert result["trace"]["prompt_budget_truncated"] is True
+    assert result["trace"]["trim_metrics"]["chars_before"] > result["trace"]["trim_metrics"]["chars_after"]
+    assert result["trace"]["trim_metrics"]["truncated_evidence_ids"] == ["e1"]
+    assert result["trace"]["trim_metrics"]["retained_evidence_ids"] == ["e1"]
+    retention = result["trace"]["trim_metrics"]["key_term_retention"]
+    assert "terms" not in retention
+    assert "retained_terms" not in retention
+    assert "missing_terms" not in retention
+    assert retention["term_count"] == 1
+    assert retention["retained_count"] == 1
+    assert retention["retention_rate"] == 1.0
+    trace_row = json.loads((tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    stored_payload = json.dumps(trace_row, ensure_ascii=False)
+    assert "needle" not in stored_payload
+    assert "matched_terms" not in stored_payload
+    assert "excerpt" not in trace_row["evidence"][0]
+    assert "matched_term_hashes" in stored_payload
     assert "prompt_budget_truncated=true" in result["warnings"]
 
 
@@ -404,6 +528,176 @@ def test_memory_answer_core_filters_weak_evidence_before_llm(monkeypatch, tmp_pa
     assert any("weak-evidence guard" in warning for warning in result["warnings"])
 
 
+def test_memory_answer_core_current_state_ignores_obsolete_mem0_evidence(monkeypatch, tmp_path):
+    captured = {}
+    old_hit = {
+        "source": "mem0",
+        "path": "mem0:old",
+        "title": "ops / agent-a",
+        "snippet": "old state",
+        "score": 1.0,
+        "created_at": "2026-05-01T00:00:00+00:00",
+    }
+    new_hit = {
+        "source": "mem0",
+        "path": "mem0:new",
+        "title": "ops / agent-a",
+        "snippet": "new state",
+        "score": 1.0,
+        "created_at": "2026-05-10T00:00:00+00:00",
+    }
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(
+        tm_answer.tm_search,
+        "search_tigermemory",
+        lambda *_args, **_kwargs: {
+            "query": "current memory state",
+            "scope": "mem0",
+            "strategy": "grouped-intent-budget-v1",
+            "primary_scope": "mem0",
+            "primary_results": [old_hit, new_hit],
+            "groups": {"mem0": [old_hit, new_hit]},
+            "warnings": [],
+        },
+    )
+
+    def fake_llm(_query, evidence):
+        captured["evidence"] = evidence
+        return True, {
+            "status": "ok",
+            "answer": "new state",
+            "summary": "current state resolved",
+            "claims": [{"id": "c1", "text": "new", "support": ["e1"], "confidence": 0.9}],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", fake_llm)
+
+    result = tm_answer.memory_answer_core("当前态 memory state", scope="mem0", run_id="freshness-current")
+
+    assert result["status"] == "ok"
+    assert result["trace"]["planner"]["freshness_mode"] == "current"
+    assert len(captured["evidence"]) == 1
+    assert captured["evidence"][0]["path"] == "mem0:new"
+    assert captured["evidence"][0]["validity"] == "current"
+    assert result["evidence"][0]["path"] == "mem0:new"
+    assert result["trace"]["validity"]["state_counts"]["current"] == 1
+    assert result["trace"]["validity"]["state_counts"]["obsolete_ignored"] == 1
+    assert result["trace"]["stale_guard"]["counterevidence_ids"]
+    assert any(item["validity"] == "obsolete_ignored" for item in result["trace"]["evidence_gate"])
+    trace_text = (tmp_path / "trace.jsonl").read_text(encoding="utf-8")
+    assert "current memory state" not in trace_text
+    trace_row = json.loads(trace_text.splitlines()[-1])
+    assert "query" not in trace_row["trace"]["validity"]
+    assert trace_row["trace"]["validity"]["query_hash"]
+
+
+def test_memory_answer_core_historical_query_keeps_older_mem0_evidence(monkeypatch, tmp_path):
+    captured = {}
+    old_hit = {
+        "source": "mem0",
+        "path": "mem0:old",
+        "title": "ops / agent-a",
+        "snippet": "old state",
+        "score": 1.0,
+        "created_at": "2026-05-01T00:00:00+00:00",
+    }
+    new_hit = {
+        "source": "mem0",
+        "path": "mem0:new",
+        "title": "ops / agent-a",
+        "snippet": "new state",
+        "score": 1.0,
+        "created_at": "2026-05-10T00:00:00+00:00",
+    }
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(
+        tm_answer.tm_search,
+        "search_tigermemory",
+        lambda *_args, **_kwargs: {
+            "query": "previous memory state",
+            "scope": "mem0",
+            "strategy": "grouped-intent-budget-v1",
+            "primary_scope": "mem0",
+            "primary_results": [old_hit, new_hit],
+            "groups": {"mem0": [old_hit, new_hit]},
+            "warnings": [],
+        },
+    )
+
+    def fake_llm(_query, evidence):
+        captured["evidence"] = evidence
+        return True, {
+            "status": "ok",
+            "answer": "historical state",
+            "summary": "historical state resolved",
+            "claims": [{"id": "c1", "text": "history", "support": ["e1", "e2"], "confidence": 0.9}],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", fake_llm)
+
+    result = tm_answer.memory_answer_core("previous memory state", scope="mem0", run_id="freshness-historical")
+
+    assert result["status"] == "ok"
+    assert result["trace"]["planner"]["freshness_mode"] == "historical"
+    assert len(captured["evidence"]) == 2
+    assert {item["path"] for item in captured["evidence"]} == {"mem0:old", "mem0:new"}
+    assert all(item["validity"] == "historical" for item in captured["evidence"])
+    assert result["trace"]["validity"]["state_counts"]["historical"] == 2
+    assert result["trace"]["stale_guard"]["counterevidence_ids"] == []
+    assert all(item["validity"] == "historical" for item in result["trace"]["evidence_gate"])
+
+
+def test_memory_answer_core_current_state_warns_on_missing_timestamp(monkeypatch, tmp_path):
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(
+        tm_answer.tm_search,
+        "search_tigermemory",
+        lambda *_args, **_kwargs: {
+            "query": "current memory state",
+            "scope": "mem0",
+            "strategy": "grouped-intent-budget-v1",
+            "primary_scope": "mem0",
+            "primary_results": [{
+                "source": "mem0",
+                "path": "mem0:unknown",
+                "title": "ops / agent-a",
+                "snippet": "state without timestamp",
+                "score": 1.0,
+            }],
+            "groups": {"mem0": [{
+                "source": "mem0",
+                "path": "mem0:unknown",
+                "title": "ops / agent-a",
+                "snippet": "state without timestamp",
+                "score": 1.0,
+            }]},
+            "warnings": [],
+        },
+    )
+    monkeypatch.setattr(
+        tm_answer,
+        "_call_memory_answer_llm",
+        lambda _q, evidence: (True, {
+            "status": "ok",
+            "answer": "unknown dated state",
+            "summary": "timestamp missing",
+            "claims": [{"id": "c1", "text": "unknown", "support": ["e1"], "confidence": 0.8}],
+            "warnings": [],
+        }),
+    )
+
+    result = tm_answer.memory_answer_core("current memory state", scope="mem0", run_id="freshness-unknown")
+
+    assert result["status"] == "ok"
+    assert result["trace"]["planner"]["freshness_mode"] == "current"
+    assert result["evidence"][0]["validity"] == "unknown_date"
+    assert result["trace"]["validity"]["state_counts"]["unknown_date"] == 1
+    assert any("unknown_date" in warning for warning in result["warnings"])
+    assert any(item["validity"] == "unknown_date" for item in result["trace"]["evidence_gate"])
+
+
 def test_memory_answer_core_conflict_scan_short_circuits_llm(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
@@ -426,3 +720,145 @@ def test_memory_answer_core_conflict_scan_short_circuits_llm(monkeypatch, tmp_pa
     assert result["claims"][0]["support"] == ["e1"]
     assert calls == []
     assert result["trace"]["conflict_scan"]["conflict"] is True
+
+
+def test_answer_eval_contract_accepts_optional_fields_and_rejects_paper_seed_tmp(tmp_path):
+    baseline = tmp_path / "baseline.jsonl"
+    baseline.write_text(
+        "\n".join([
+            json.dumps({
+                "id": "case-1",
+                "query": "baseline query",
+                "case_source": "real_failure",
+                "case_source_ref": "trace:abc",
+                "eval_dimension": "static_state_recall",
+                "freshness_mode": "current",
+                "expected_warning": "warn-1",
+                "expected_trace_flags": ["planner", "trace_id"],
+            }),
+        ]),
+        encoding="utf-8",
+    )
+
+    loaded = tm_answer_eval.load_cases(str(baseline))
+    assert loaded[0]["case_source"] == "real_failure"
+    assert loaded[0]["expected_warning"] == "warn-1"
+    assert loaded[0]["expected_trace_flags"] == ["planner", "trace_id"]
+
+    experimental = tmp_path / "paper_seed_tmp.jsonl"
+    experimental.write_text(
+        json.dumps({
+            "id": "case-2",
+            "query": "paper seed",
+            "case_source": "paper_seed_tmp",
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="paper_seed_tmp"):
+        tm_answer_eval.load_cases(str(experimental))
+
+    loaded_experimental = tm_answer_eval.load_cases(str(experimental), allow_paper_seed_tmp=True)
+    assert loaded_experimental[0]["case_source"] == "paper_seed_tmp"
+
+
+def test_answer_eval_compact_redacts_queries_and_emits_grouped_metrics(tmp_path, monkeypatch, capsys):
+    cases = tmp_path / "cases.jsonl"
+    cases.write_text(
+        "\n".join([
+            json.dumps({
+                "id": "case-1",
+                "query": "leak secret one",
+                "expected_status": "ok",
+                "expected_evidence_paths": ["wiki/systems/answer-contract.md"],
+                "must_contain": ["alpha"],
+                "case_source": "real_failure",
+                "eval_dimension": "static_state_recall",
+                "freshness_mode": "current",
+                "expected_warning": ["warn-1"],
+                "expected_trace_flags": ["planner"],
+            }),
+            json.dumps({
+                "id": "case-2",
+                "query": "stale seed two",
+                "expected_status": "ok",
+                "expected_evidence_paths": ["wiki/systems/missing.md"],
+                "must_contain": ["beta"],
+                "case_source": "patrol",
+                "eval_dimension": "stale_obsolete",
+                "freshness_mode": "stale_sensitive",
+            }),
+            json.dumps({
+                "id": "case-3",
+                "query": "trace flag missing three",
+                "expected_status": "ok",
+                "must_contain": ["gamma"],
+                "case_source": "system_contract",
+                "eval_dimension": "workflow_knowledge",
+                "freshness_mode": "not_applicable",
+                "expected_trace_flags": ["planner"],
+            }),
+        ]),
+        encoding="utf-8",
+    )
+
+    def fake_memory_answer_core(query, **kwargs):
+        if query == "leak secret one":
+            return {
+                "status": "ok",
+                "answer": "alpha answer",
+                "summary": "alpha summary",
+                "claims": [{"id": "c1", "text": "alpha", "support": ["e1"], "confidence": 0.9}],
+                "evidence": [{"id": "e1", "path": "wiki/systems/answer-contract.md", "excerpt": "alpha", "authority": 100.0, "source_role": "canonical_wiki"}],
+                "warnings": ["warn-1"],
+                "trace_id": "trace-1",
+                "trace": {"planner": {"intent": "recall"}, "trace_id": "trace-1"},
+                "run_id": kwargs.get("run_id"),
+            }
+        if query == "trace flag missing three":
+            return {
+                "status": "ok",
+                "answer": "gamma answer",
+                "summary": "gamma summary",
+                "claims": [],
+                "evidence": [],
+                "warnings": [],
+                "trace_id": "trace-3",
+                "trace": {"trace_id": "trace-3"},
+                "run_id": kwargs.get("run_id"),
+            }
+        return {
+            "status": "not_found",
+            "answer": "",
+            "summary": "",
+            "claims": [],
+            "evidence": [],
+            "warnings": [],
+            "trace_id": "trace-2",
+            "trace": None,
+            "run_id": kwargs.get("run_id"),
+        }
+
+    monkeypatch.setattr(tm_answer_eval.tm_answer, "memory_answer_core", fake_memory_answer_core)
+    args = type("Args", (), {
+        "cases": str(cases),
+        "json": True,
+        "compact": True,
+        "run_id": "unit-run",
+        "allow_paper_seed_tmp": False,
+    })()
+
+    exit_code = tm_answer_eval.cmd_eval(args)
+    captured = capsys.readouterr().out
+    assert exit_code == 0
+    assert "leak secret one" not in captured
+    report = json.loads(captured)
+    assert report["case_count_by_dimension"]["static_state_recall"] == 1
+    assert report["case_count_by_dimension"]["stale_obsolete"] == 1
+    assert report["case_count_by_source"]["real_failure"] == 1
+    assert report["warning_hit_by_dimension"]["static_state_recall"] == 1
+    assert report["stale_penalty_count"] == 1
+    assert report["action_seed_count"] == 0
+    assert {item["id"] for item in report["failures"]} == {"case-2", "case-3"}
+    assert any(item["trace_flags_hit"] is False for item in report["failures"])
+    assert all("query" not in item for item in report["failures"])

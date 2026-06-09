@@ -454,6 +454,15 @@ AUTHORITY_BASE = {
 RECENT_QUERY_MARKERS = (
     "最近", "近期", "刚才", "今天", "今日", "current", "recent", "today", "latest",
 )
+CURRENT_STATE_QUERY_MARKERS = (
+    "现在", "目前", "最新", "当前", "当前态", "当前状态", "现状",
+    "today", "current", "latest",
+)
+HISTORICAL_QUERY_MARKERS = (
+    "历史", "之前", "以前", "过去", "旧", "旧版",
+    "previous", "prior", "before", "older", "old", "earlier", "historical", "past",
+)
+STALE_CONFLICT_WINDOW_DAYS = 7
 
 WEAK_EVIDENCE_MIN_RELEVANCE = 1.0
 WEAK_EVIDENCE_MIN_MATCHES = 1
@@ -532,29 +541,89 @@ def _paragraphs(text: str) -> list[str]:
     return chunks or [_strip_frontmatter(text).strip()]
 
 
+def _signal_terms(query: str) -> list[str]:
+    terms = [term.lower() for term in tm_core.signal_tokens(query) if str(term).strip()]
+    unique: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        if term in seen:
+            continue
+        unique.append(term)
+        seen.add(term)
+    return unique
+
+
+def _excerpt_window(text: str, terms: list[str], max_chars: int) -> str:
+    clean = redact_secrets(text.replace("\r\n", "\n").strip())
+    if max_chars <= 0:
+        return ""
+    if len(clean) <= max_chars or not terms:
+        return clean[:max_chars].rstrip()
+
+    lower = clean.lower()
+    matches = [(match.start(), match.end(), term) for term in terms for match in re.finditer(re.escape(term), lower)]
+    if not matches:
+        return clean[:max_chars].rstrip()
+
+    pad = min(max(24, max_chars // 8), 120)
+    best_score = (-1, -1, 0)
+    best_excerpt = clean[:max_chars].rstrip()
+    for start_pos, _end_pos, _term in matches:
+        window_start = max(0, start_pos - pad)
+        window_end = min(len(clean), window_start + max_chars)
+        window = clean[window_start:window_end].strip()
+        lowered = window.lower()
+        covered = [term for term in terms if term in lowered]
+        score = (len(covered), sum(lowered.count(term) for term in covered), -window_start)
+        if score > best_score:
+            best_score = score
+            best_excerpt = window
+    return best_excerpt
+
+
+def _trim_excerpt_to_budget(excerpt: str, terms: list[str], max_chars: int) -> str:
+    clean = redact_secrets(excerpt.replace("\r\n", "\n").strip())
+    if max_chars <= 0:
+        return ""
+    if len(clean) <= max_chars:
+        return clean[:max_chars].rstrip()
+    if clean.startswith("#") and "\n\n" in clean:
+        heading_block, body = clean.split("\n\n", 1)
+        prefix = heading_block.strip()
+        remaining = max_chars - len(prefix) - 2
+        if remaining > 0:
+            return f"{prefix}\n\n{_excerpt_window(body, terms, remaining)}".strip()
+        return prefix[:max_chars].rstrip()
+    return _excerpt_window(clean, terms, max_chars) if terms else clean[:max_chars].rstrip()
+
+
 def _best_excerpt(text: str, query: str, fallback: str, max_chars: int = 900) -> str:
     paras = _paragraphs(text)
-    tokens = _tokens(query)
-    if not tokens:
+    terms = _signal_terms(query)
+    if not terms:
         return redact_secrets((paras[0] if paras else fallback)[:max_chars])
     scored: list[tuple[int, int, str]] = []
     for idx, para in enumerate(paras):
-        candidate = para
+        candidate = para.strip()
+        if not candidate:
+            continue
         stripped = para.lstrip()
         heading_bonus = 0
         if stripped.startswith("#") and idx + 1 < len(paras):
-            candidate = f"{para}\n\n{paras[idx + 1]}"
+            body = paras[idx + 1].strip()
+            candidate = f"{candidate}\n\n{body}" if body else candidate
             heading = para.lower()
-            if any(token in heading for token in tokens):
+            if any(term in heading for term in terms):
                 heading_bonus = 3
-        lower = candidate.lower()
-        matched = [token for token in tokens if token in lower]
+        excerpt = _trim_excerpt_to_budget(candidate, terms, max_chars)
+        lower = excerpt.lower()
+        matched = [term for term in terms if term in lower]
         unique_matched = set(matched)
         repeat_signal = min(sum(lower.count(token) for token in unique_matched), 8)
         score = len(unique_matched) * 100 + repeat_signal
         score += heading_bonus
         if score:
-            scored.append((score, -idx, candidate))
+            scored.append((score, -idx, excerpt))
     if scored:
         scored.sort(reverse=True)
         per_part = max(260, max_chars // 2)
@@ -590,6 +659,177 @@ def _read_hit_content(path: str) -> str | None:
     if not full_path.exists() or not full_path.is_file():
         return None
     return full_path.read_text(encoding="utf-8", errors="ignore")
+
+
+def _parse_frontmatter_map(text: str) -> dict[str, str]:
+    normalized = text.replace("\r\n", "\n")
+    if not normalized.startswith("---\n"):
+        return {}
+    end = normalized.find("\n---\n", 4)
+    if end < 0:
+        return {}
+    result: dict[str, str] = {}
+    for line in normalized[4:end].splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip().lower()
+        value = value.strip().strip('"').strip("'")
+        if key and value:
+            result[key] = value
+    return result
+
+
+def _normalize_freshness_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def _query_freshness_mode(query: str, query_class: str) -> str:
+    q = str(query or "").lower()
+    if any(marker in q for marker in ("历史", "之前", "以前", "过去", "旧", "旧版")):
+        return "historical"
+    if re.search(r"\b(previous|prior|before|older|old|earlier|historical|past)\b", q):
+        return "historical"
+    if any(marker in q for marker in CURRENT_STATE_QUERY_MARKERS):
+        return "current"
+    if query_class in {"recent_memory", "temporal_current"}:
+        return "current"
+    return "not_applicable"
+
+
+def _freshness_group_key(item: dict[str, Any]) -> tuple[str, ...]:
+    source = _normalize_freshness_text(item.get("source"))
+    path = _normalize_freshness_text(item.get("path"))
+    if source == "mem0":
+        return (
+            "mem0",
+            _normalize_freshness_text(item.get("topic") or item.get("title")),
+            _normalize_freshness_text(item.get("title")),
+            _normalize_freshness_text(item.get("source_agent")),
+        )
+    return (source, path)
+
+
+def _freshness_timestamp(item: dict[str, Any]) -> tuple[datetime.datetime | None, str | None]:
+    for key in ("updated_at", "updated", "created_at", "created", "date"):
+        parsed = _parse_datetime(item.get(key))
+        if parsed is not None:
+            return parsed, key
+    return None, None
+
+
+def _freshness_fingerprint(item: dict[str, Any]) -> str:
+    text = "\n".join([
+        _normalize_freshness_text(item.get("path")),
+        _normalize_freshness_text(item.get("title")),
+        redact_secrets(str(item.get("excerpt") or "")),
+    ])
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def _is_high_authority_conflict(candidate_a: dict[str, Any], candidate_b: dict[str, Any]) -> bool:
+    if str(candidate_a.get("source") or "") not in {"wiki", "sources"}:
+        return False
+    if str(candidate_b.get("source") or "") not in {"wiki", "sources"}:
+        return False
+    if float(candidate_a.get("authority") or 0.0) < 80.0:
+        return False
+    if float(candidate_b.get("authority") or 0.0) < 80.0:
+        return False
+    ts_a = candidate_a.get("_freshness_timestamp")
+    ts_b = candidate_b.get("_freshness_timestamp")
+    if not isinstance(ts_a, datetime.datetime) or not isinstance(ts_b, datetime.datetime):
+        return False
+    if abs((ts_a - ts_b).days) > STALE_CONFLICT_WINDOW_DAYS:
+        return False
+    return _freshness_fingerprint(candidate_a) != _freshness_fingerprint(candidate_b)
+
+
+def _apply_validity_guard(
+    query: str,
+    query_class: str,
+    freshness_mode: str,
+    candidates: list[dict[str, Any]],
+    gate_index: dict[str, dict[str, Any]],
+) -> list[str]:
+    warnings: list[str] = []
+    if not candidates:
+        return warnings
+
+    if freshness_mode == "historical":
+        for item in candidates:
+            item["validity"] = "historical"
+            item["validity_reason"] = "historical query keeps prior evidence"
+            gate_entry = gate_index[item["candidate_id"]]
+            gate_entry["validity"] = item["validity"]
+            gate_entry["validity_reason"] = item["validity_reason"]
+        return warnings
+
+    if freshness_mode != "current":
+        for item in candidates:
+            item["validity"] = "current"
+            item["validity_reason"] = "freshness guard not required"
+            gate_entry = gate_index[item["candidate_id"]]
+            gate_entry["validity"] = item["validity"]
+            gate_entry["validity_reason"] = item["validity_reason"]
+        return warnings
+
+    grouped: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+    for item in candidates:
+        grouped.setdefault(tuple(item["freshness_key"]), []).append(item)
+
+    for group_key, items in grouped.items():
+        dated = [item for item in items if item.get("_freshness_timestamp") is not None]
+        unknown = [item for item in items if item.get("_freshness_timestamp") is None]
+        if dated:
+            dated.sort(key=lambda item: (
+                -item["_freshness_timestamp"].timestamp(),
+                -float(item.get("authority") or 0.0),
+                -float(item.get("relevance") or 0.0),
+                -float(item.get("score") or 0.0),
+                str(item.get("path") or ""),
+            ))
+            if len(dated) >= 2 and _is_high_authority_conflict(dated[0], dated[1]):
+                for item in dated:
+                    item["validity"] = "unresolved_conflict"
+                    item["validity_reason"] = "close-date high-authority content conflict"
+                    gate_entry = gate_index[item["candidate_id"]]
+                    gate_entry["validity"] = item["validity"]
+                    gate_entry["validity_reason"] = item["validity_reason"]
+                warnings.append(
+                    f"unresolved_conflict freshness guard for {dated[0].get('source')}:{dated[0].get('path') or dated[0].get('title') or 'unknown'}"
+                )
+            else:
+                for index, item in enumerate(dated):
+                    if index == 0:
+                        item["validity"] = "current"
+                        item["validity_reason"] = "newest dated evidence for current-state query"
+                    else:
+                        item["validity"] = "obsolete_ignored"
+                        item["validity_reason"] = f"superseded by {dated[0]['candidate_id']}"
+                    gate_entry = gate_index[item["candidate_id"]]
+                    gate_entry["validity"] = item["validity"]
+                    gate_entry["validity_reason"] = item["validity_reason"]
+                if unknown:
+                    warning_key = f"{group_key[0]}:{group_key[1] or group_key[2] or 'unknown'}"
+                    warnings.append(f"unknown_date freshness guard kept for {warning_key}")
+                    for item in unknown:
+                        item["validity"] = "unknown_date"
+                        item["validity_reason"] = "current-state query lacks resolvable timestamp"
+                        gate_entry = gate_index[item["candidate_id"]]
+                        gate_entry["validity"] = item["validity"]
+                        gate_entry["validity_reason"] = item["validity_reason"]
+        else:
+            warning_key = f"{group_key[0]}:{group_key[1] or group_key[2] or 'unknown'}"
+            warnings.append(f"unknown_date freshness guard kept for {warning_key}")
+            for item in unknown:
+                item["validity"] = "unknown_date"
+                item["validity_reason"] = "current-state query lacks resolvable timestamp"
+                gate_entry = gate_index[item["candidate_id"]]
+                gate_entry["validity"] = item["validity"]
+                gate_entry["validity_reason"] = item["validity_reason"]
+
+    return warnings
 
 
 def _iter_hits(search_result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -645,7 +885,12 @@ def _authority_score(source: str, path: str, query_class: str) -> float:
     return max(0.0, min(base, 100.0))
 
 
-def _extract_hit_metadata(hit: dict[str, Any], source: str, title: str) -> dict[str, Any]:
+def _extract_hit_metadata(
+    hit: dict[str, Any],
+    source: str,
+    title: str,
+    content: str | None = None,
+) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
     if source == "mem0":
         if " / " in title:
@@ -655,6 +900,12 @@ def _extract_hit_metadata(hit: dict[str, Any], source: str, title: str) -> dict[
         for key in ("created_at", "updated_at"):
             if hit.get(key):
                 metadata[key] = str(hit.get(key))
+    if content and source in {"wiki", "sources", "inbox"}:
+        frontmatter = _parse_frontmatter_map(content)
+        for key in ("updated_at", "updated", "created_at", "created", "date"):
+            value = frontmatter.get(key)
+            if value and key not in metadata:
+                metadata[key] = value
     return metadata
 
 
@@ -763,30 +1014,111 @@ def trim_evidence_for_prompt(
     evidence: list[dict[str, Any]],
     *,
     max_chars: int = 2000,
-) -> tuple[list[dict[str, Any]], list[str]]:
+    query: str | None = None,
+    return_metrics: bool = False,
+) -> tuple[list[dict[str, Any]], list[str]] | tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
+    query_terms = _signal_terms(query or "")
     if max_chars <= 0:
-        return [{**item, "excerpt": ""} for item in evidence], ["prompt_budget_truncated=true"]
+        trimmed = [{**item, "excerpt": ""} for item in evidence]
+        metrics = {
+            "chars_before": sum(len(redact_secrets(str(item.get("excerpt") or ""))) for item in evidence),
+            "chars_after": 0,
+            "truncated_evidence_ids": [
+                str(item.get("id") or item.get("candidate_id") or item.get("path") or "")
+                for item in evidence
+                if str(item.get("id") or item.get("candidate_id") or item.get("path") or "")
+            ],
+            "retained_evidence_ids": [],
+            "key_term_retention": {
+                "terms": query_terms,
+                "retained_terms": [],
+                "missing_terms": query_terms,
+                "retention_rate": 0.0 if query_terms else 1.0,
+            },
+        }
+        if return_metrics:
+            return trimmed, ["prompt_budget_truncated=true"], metrics
+        return trimmed, ["prompt_budget_truncated=true"]
     remaining = max_chars
     trimmed: list[dict[str, Any]] = []
     warnings: list[str] = []
     truncated = False
+    chars_before = 0
+    chars_after = 0
+    retained_ids: list[str] = []
+    truncated_ids: list[str] = []
+    original_term_hits: set[str] = set()
+    retained_term_hits: set[str] = set()
     for item in evidence:
         copy_item = dict(item)
         excerpt = redact_secrets(str(copy_item.get("excerpt") or ""))
+        item_id = str(copy_item.get("id") or copy_item.get("candidate_id") or copy_item.get("path") or "")
+        chars_before += len(excerpt)
+        lower_excerpt = excerpt.lower()
+        for term in query_terms:
+            if term in lower_excerpt:
+                original_term_hits.add(term)
         if remaining <= 0:
             copy_item["excerpt"] = ""
             truncated = True
+            if item_id:
+                truncated_ids.append(item_id)
         elif len(excerpt) > remaining:
-            copy_item["excerpt"] = excerpt[:remaining]
+            trimmed_excerpt = _trim_excerpt_to_budget(excerpt, query_terms, remaining)
+            copy_item["excerpt"] = trimmed_excerpt
             remaining = 0
             truncated = True
+            if item_id:
+                truncated_ids.append(item_id)
         else:
             copy_item["excerpt"] = excerpt
             remaining -= len(excerpt)
         trimmed.append(copy_item)
+        trimmed_excerpt = str(copy_item.get("excerpt") or "")
+        chars_after += len(trimmed_excerpt)
+        if trimmed_excerpt and item_id:
+            retained_ids.append(item_id)
+            lower_trimmed = trimmed_excerpt.lower()
+            for term in query_terms:
+                if term in lower_trimmed:
+                    retained_term_hits.add(term)
     if truncated:
         warnings.append("prompt_budget_truncated=true")
+    metrics = {
+        "chars_before": chars_before,
+        "chars_after": chars_after,
+        "truncated_evidence_ids": truncated_ids,
+        "retained_evidence_ids": retained_ids,
+        "key_term_retention": {
+            "terms": query_terms,
+            "retained_terms": [term for term in query_terms if term in retained_term_hits],
+            "missing_terms": [term for term in query_terms if term in original_term_hits and term not in retained_term_hits],
+            "retention_rate": round(len(retained_term_hits & original_term_hits) / len(original_term_hits), 3) if original_term_hits else 1.0,
+        },
+    }
+    if return_metrics:
+        return trimmed, warnings, metrics
     return trimmed, warnings
+
+
+def _sanitize_trim_metrics_for_trace(metrics: dict[str, Any]) -> dict[str, Any]:
+    stored = copy.deepcopy(metrics)
+    retention = stored.get("key_term_retention")
+    if not isinstance(retention, dict):
+        return stored
+    terms = [str(item) for item in retention.get("terms") or []]
+    retained_terms = [str(item) for item in retention.get("retained_terms") or []]
+    missing_terms = [str(item) for item in retention.get("missing_terms") or []]
+    retention["term_count"] = len(terms)
+    retention["retained_count"] = len(retained_terms)
+    retention["missing_count"] = len(missing_terms)
+    retention["term_hashes"] = [query_hash(term) for term in terms]
+    retention["retained_term_hashes"] = [query_hash(term) for term in retained_terms]
+    retention["missing_term_hashes"] = [query_hash(term) for term in missing_terms]
+    retention.pop("terms", None)
+    retention.pop("retained_terms", None)
+    retention.pop("missing_terms", None)
+    return stored
 
 
 def expand_evidence(
@@ -797,6 +1129,8 @@ def expand_evidence(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     candidates: list[dict[str, Any]] = []
     gate: list[dict[str, Any]] = []
+    gate_index: dict[str, dict[str, Any]] = {}
+    freshness_mode = _query_freshness_mode(query, query_class)
     for hit in _iter_hits(search_result):
         source = str(hit.get("source") or "")
         path = str(hit.get("path") or "")
@@ -806,8 +1140,10 @@ def expand_evidence(
         excerpt = _best_excerpt(content, query, snippet) if content else redact_secrets(snippet[:900])
         if not excerpt.strip():
             continue
+        candidate_id = f"cand{len(gate) + 1}"
         item = {
             "id": "",
+            "candidate_id": candidate_id,
             "source": source,
             "path": path,
             "title": title,
@@ -821,12 +1157,19 @@ def expand_evidence(
             item["score_breakdown"] = hit["score_breakdown"]
         injection = decide_injection_eligibility(hit)
         item.update({k: v for k, v in injection.items() if v is not None})
-        item.update(_extract_hit_metadata(hit, source, title))
+        item.update(_extract_hit_metadata(hit, source, title, content))
+        freshness_timestamp, freshness_timestamp_key = _freshness_timestamp(item)
+        item["_freshness_timestamp"] = freshness_timestamp
+        item["freshness_timestamp"] = freshness_timestamp.isoformat() if freshness_timestamp else None
+        item["freshness_timestamp_key"] = freshness_timestamp_key
+        item["freshness_key"] = _freshness_group_key(item)
         relevance, match_count, matched_terms = _relevance_score(query, item)
         item["relevance"] = round(relevance, 3)
         item["match_count"] = match_count
+        item["matched_terms"] = matched_terms[:8]
         keep, reason = _passes_evidence_gate(item, query_class)
-        gate.append({
+        gate_entry = {
+            "candidate_id": candidate_id,
             "path": path,
             "source": source,
             "keep": keep,
@@ -834,20 +1177,45 @@ def expand_evidence(
             "authority": item["authority"],
             "relevance": item["relevance"],
             "matched_terms": matched_terms[:8],
-        })
+            "freshness_mode": freshness_mode,
+            "freshness_key": item["freshness_key"],
+            "freshness_timestamp": item["freshness_timestamp"],
+        }
+        if not keep:
+            gate_entry["validity"] = "weak_filtered"
+            gate_entry["validity_reason"] = reason
+        gate.append(gate_entry)
+        gate_index[candidate_id] = gate_entry
         if keep:
             item.pop("_snippet", None)
             candidates.append(item)
 
-    candidates.sort(key=lambda item: (
+    guard_warnings = _apply_validity_guard(query, query_class, freshness_mode, candidates, gate_index)
+    if guard_warnings:
+        search_result.setdefault("warnings", []).extend(guard_warnings)
+
+    selected_candidates = [item for item in candidates if item.get("validity") != "obsolete_ignored"]
+    validity_order = {
+        "current": 0,
+        "unresolved_conflict": 1,
+        "unknown_date": 2,
+        "historical": 3,
+    }
+    selected_candidates.sort(key=lambda item: (
+        validity_order.get(str(item.get("validity") or "current"), 4),
         -float(item.get("authority") or 0.0),
         -float(item.get("relevance") or 0.0),
         -float(item.get("score") or 0.0),
         str(item.get("path") or ""),
     ))
-    selected = candidates[:max_evidence]
+    selected = selected_candidates[:max_evidence]
     for index, item in enumerate(selected, 1):
         item["id"] = f"e{index}"
+        item.pop("_freshness_timestamp", None)
+        gate_index[item["candidate_id"]]["selected"] = True
+        gate_index[item["candidate_id"]]["evidence_id"] = item["id"]
+        gate_index[item["candidate_id"]]["validity"] = item.get("validity")
+        gate_index[item["candidate_id"]]["validity_reason"] = item.get("validity_reason")
     return selected, gate
 
 
@@ -855,7 +1223,7 @@ def classify_query(query: str) -> str:
     q = query.lower()
     if any(word in q for word in RECENT_QUERY_MARKERS):
         return "recent_memory"
-    if any(word in q for word in ("现在", "目前", "最新", "today", "current")):
+    if any(word in q for word in CURRENT_STATE_QUERY_MARKERS):
         return "temporal_current"
     if any(word in q for word in ("为什么", "怎么", "如何", "why", "how")):
         return "synthesis"
@@ -901,6 +1269,58 @@ def expand_queries(query: str) -> list[str]:
             unique.append(key)
             seen.add(key)
     return unique[:4]
+
+
+def plan_query(query: str) -> dict[str, Any]:
+    """Build a lightweight planner snapshot without changing retrieval behavior."""
+    query_class = classify_query(query)
+    expanded_queries = expand_queries(query)
+    freshness_mode = _query_freshness_mode(query, query_class)
+
+    if freshness_mode == "current":
+        intent = "freshness_probe"
+        freshness_mode = "current"
+        source_budgets = {"wiki": 1, "lessons": 0, "onboarding": 2, "mem0": 3}
+        needs_stale_check = True
+        needs_premise_check = False
+    elif freshness_mode == "historical":
+        intent = "recall"
+        source_budgets = {"wiki": 3, "lessons": 1, "onboarding": 1, "mem0": 1}
+        needs_stale_check = False
+        needs_premise_check = False
+    elif query_class == "synthesis":
+        intent = "synthesis"
+        freshness_mode = "not_applicable"
+        source_budgets = {"wiki": 2, "lessons": 2, "onboarding": 1, "mem0": 1}
+        needs_stale_check = False
+        needs_premise_check = True
+    elif query_class == "conflict_audit":
+        intent = "conflict_audit"
+        freshness_mode = "not_applicable"
+        source_budgets = {"wiki": 2, "lessons": 1, "onboarding": 0, "mem0": 1}
+        needs_stale_check = False
+        needs_premise_check = True
+    else:
+        intent = "recall"
+        freshness_mode = "not_applicable"
+        source_budgets = {"wiki": 3, "lessons": 1, "onboarding": 1, "mem0": 1}
+        needs_stale_check = False
+        needs_premise_check = False
+
+    subquery_roles = [
+        {"index": index, "role": "primary" if index == 0 else "expansion"}
+        for index, _ in enumerate(expanded_queries)
+    ]
+    return {
+        "intent": intent,
+        "query_class": query_class,
+        "expanded_queries": expanded_queries,
+        "freshness_mode": freshness_mode,
+        "source_budgets": source_budgets,
+        "subquery_roles": subquery_roles,
+        "needs_stale_check": needs_stale_check,
+        "needs_premise_check": needs_premise_check,
+    }
 
 
 def _merge_search_results(query: str, results: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1068,6 +1488,64 @@ def scan_conflicts(query: str, evidence: list[dict[str, Any]], query_class: str)
     }
 
 
+def _summarize_validity_trace(
+    *,
+    query: str,
+    query_class: str,
+    freshness_mode: str,
+    evidence_gate: list[dict[str, Any]],
+    selected_evidence: list[dict[str, Any]],
+) -> dict[str, Any]:
+    state_counts: dict[str, int] = {}
+    stale_candidates: list[dict[str, Any]] = []
+    counterevidence_ids: list[str] = []
+    counterevidence_paths: list[str] = []
+    guard_warnings: list[str] = []
+    for item in evidence_gate:
+        validity = str(item.get("validity") or ("current" if item.get("keep") else "weak_filtered"))
+        state_counts[validity] = state_counts.get(validity, 0) + 1
+        if validity in {"obsolete_ignored", "unknown_date", "unresolved_conflict"} or item.get("keep") is False:
+            stale_candidates.append({
+                "candidate_id": item.get("candidate_id"),
+                "path": item.get("path"),
+                "source": item.get("source"),
+                "validity": validity,
+                "reason": item.get("validity_reason") or item.get("reason"),
+            })
+        if validity == "obsolete_ignored":
+            counterevidence_ids.append(str(item.get("candidate_id") or item.get("path") or ""))
+            counterevidence_paths.append(str(item.get("path") or ""))
+        if validity == "unknown_date":
+            guard_warnings.append(f"unknown_date evidence kept for current-state query: {item.get('path') or item.get('candidate_id')}")
+        if validity == "unresolved_conflict":
+            guard_warnings.append(f"unresolved_conflict evidence kept for current-state query: {item.get('path') or item.get('candidate_id')}")
+
+    selected_ids = [str(item.get("id") or "") for item in selected_evidence if item.get("id")]
+    guard_summary = {
+        "freshness_mode": freshness_mode,
+        "query_class": query_class,
+        "current_state": freshness_mode == "current",
+        "historical_query": freshness_mode == "historical",
+        "state_counts": state_counts,
+        "selected_ids": selected_ids,
+        "counterevidence_ids": counterevidence_ids,
+        "counterevidence_paths": counterevidence_paths,
+        "stale_candidates": stale_candidates,
+        "warnings": guard_warnings,
+    }
+    return {
+        "query_hash": query_hash(query),
+        "query_class": query_class,
+        "freshness_mode": freshness_mode,
+        "state_counts": state_counts,
+        "selected_ids": selected_ids,
+        "counterevidence_ids": counterevidence_ids,
+        "stale_candidates": stale_candidates,
+        "stale_guard": guard_summary,
+        "warnings": guard_warnings,
+    }
+
+
 def _write_trace(row: dict[str, Any]) -> None:
     try:
         TRACE_LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -1075,6 +1553,73 @@ def _write_trace(row: dict[str, Any]) -> None:
             f.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
     except Exception:
         return
+
+
+TRACE_TEXT_PAYLOAD_KEYS = {
+    "answer",
+    "content",
+    "excerpt",
+    "memory",
+    "raw_text",
+    "summary",
+    "snippet",
+    "text",
+    "_snippet",
+    "warning",
+    "warnings",
+}
+
+
+def _is_trace_text_payload_key(key: str) -> bool:
+    normalized = str(key or "").strip().lower().replace("-", "_").lstrip("_")
+    aliases = {item.lstrip("_") for item in TRACE_TEXT_PAYLOAD_KEYS}
+    if normalized in aliases:
+        return True
+    return any(normalized.endswith(f"_{alias}") for alias in aliases)
+
+
+def _text_payload_storage_stats(value: Any) -> dict[str, Any]:
+    if isinstance(value, list):
+        texts = [redact_secrets(str(item or "")) for item in value]
+        hashes = [query_hash(text) for text in texts if text]
+        return {
+            "count": len(texts),
+            "chars": sum(len(text) for text in texts),
+            "hashes": hashes,
+        }
+    text = redact_secrets(str(value or ""))
+    stats: dict[str, Any] = {"chars": len(text)}
+    if text:
+        stats["hash"] = query_hash(text)
+    return stats
+
+
+def _sanitize_trace_payload_for_storage(value: Any) -> Any:
+    if isinstance(value, dict):
+        copy_value = dict(value)
+        matched_terms = copy_value.pop("matched_terms", None)
+        if isinstance(matched_terms, list):
+            terms = [str(item) for item in matched_terms]
+            copy_value["matched_term_count"] = len(terms)
+            copy_value["matched_term_hashes"] = [query_hash(term) for term in terms]
+        for key, child in list(copy_value.items()):
+            if _is_trace_text_payload_key(key):
+                stats = _text_payload_storage_stats(child)
+                if "count" in stats:
+                    copy_value[f"{key}_count"] = stats["count"]
+                    copy_value[f"{key}_chars"] = stats["chars"]
+                    copy_value[f"{key}_hashes"] = stats["hashes"]
+                else:
+                    copy_value[f"{key}_chars"] = stats["chars"]
+                    if "hash" in stats:
+                        copy_value[f"{key}_hash"] = stats["hash"]
+                copy_value.pop(key, None)
+                continue
+            copy_value[key] = _sanitize_trace_payload_for_storage(child)
+        return copy_value
+    if isinstance(value, list):
+        return [_sanitize_trace_payload_for_storage(item) for item in value]
+    return value
 
 
 def _sanitize_trace_for_storage(trace: dict[str, Any], *, include_raw_query: bool) -> dict[str, Any]:
@@ -1097,14 +1642,76 @@ def _sanitize_trace_for_storage(trace: dict[str, Any], *, include_raw_query: boo
                 call["query"] = redact_secrets(str(call.get("query") or ""))
             else:
                 call.pop("query", None)
+    return _sanitize_trace_payload_for_storage(stored)
+
+
+def _sanitize_evidence_for_storage(evidence: Any) -> list[dict[str, Any]]:
+    if not isinstance(evidence, list):
+        return []
+    stored: list[dict[str, Any]] = []
+    keep_keys = (
+        "id",
+        "source",
+        "path",
+        "title",
+        "score",
+        "authority",
+        "source_role",
+        "created_at",
+        "updated_at",
+        "freshness_timestamp",
+        "freshness_timestamp_key",
+        "validity",
+        "validity_reason",
+        "injection_eligible",
+        "injection_reason",
+        "relevance",
+        "match_count",
+    )
+    for item in evidence:
+        if not isinstance(item, dict):
+            continue
+        row = {key: item.get(key) for key in keep_keys if key in item}
+        matched_terms = item.get("matched_terms")
+        if isinstance(matched_terms, list):
+            terms = [str(term) for term in matched_terms]
+            row["matched_term_count"] = len(terms)
+            row["matched_term_hashes"] = [query_hash(term) for term in terms]
+        stored.append(row)
+    return stored
+
+
+def _sanitize_claims_for_storage(claims: Any) -> list[dict[str, Any]]:
+    if not isinstance(claims, list):
+        return []
+    stored: list[dict[str, Any]] = []
+    for item in claims:
+        if not isinstance(item, dict):
+            continue
+        stored.append({
+            "id": item.get("id"),
+            "support": item.get("support") if isinstance(item.get("support"), list) else [],
+            "confidence": item.get("confidence"),
+        })
     return stored
 
 
 def _write_result_trace(result: dict[str, Any], trace: dict[str, Any], query: str) -> None:
     include_raw_query = _trace_raw_query_enabled()
+    summary_stats = _text_payload_storage_stats(result.get("summary") or "")
+    warning_stats = _text_payload_storage_stats(result.get("warnings") or [])
     row = {
         "ts": datetime.datetime.now(tm_core.TZ_CN).isoformat(),
-        **result,
+        "status": result.get("status"),
+        "summary_chars": summary_stats["chars"],
+        "summary_hash": summary_stats.get("hash"),
+        "warning_count": warning_stats["count"],
+        "warning_chars": warning_stats["chars"],
+        "warning_hashes": warning_stats["hashes"],
+        "run_id": result.get("run_id"),
+        "trace_id": result.get("trace_id"),
+        "claims": _sanitize_claims_for_storage(result.get("claims")),
+        "evidence": _sanitize_evidence_for_storage(result.get("evidence")),
         "trace": _sanitize_trace_for_storage(trace, include_raw_query=include_raw_query),
         "query_hash": query_hash(query),
     }
@@ -1207,11 +1814,13 @@ def memory_answer_core(
     evidence_limit = min(max(int(max_evidence), 1), 12)
     trace_id = str(uuid.uuid4())
     normalized_run_id = normalize_run_id(run_id)
-    query_class = classify_query(q)
+    planner = plan_query(q)
+    query_class = planner["query_class"]
     trace: dict[str, Any] = {
         "run_id": normalized_run_id,
         "query_class": query_class,
-        "expanded_queries": expand_queries(q),
+        "expanded_queries": planner["expanded_queries"],
+        "planner": {key: value for key, value in planner.items() if key != "expanded_queries"},
         "calls": [],
         "evidence_gate": [],
         "authority_scores": [],
@@ -1237,7 +1846,17 @@ def memory_answer_core(
     warnings = list(search_result.get("warnings") or [])
     excerpt_query = " ".join(trace["expanded_queries"])
     evidence, evidence_gate = expand_evidence(excerpt_query, search_result, evidence_limit, query_class)
-    llm_evidence, budget_warnings = trim_evidence_for_prompt(evidence, max_chars=evidence_char_budget)
+    for warning in search_result.get("warnings") or []:
+        warning_text = str(warning)
+        if warning_text and warning_text not in warnings:
+            warnings.append(warning_text)
+    llm_evidence, budget_warnings, trim_metrics = trim_evidence_for_prompt(
+        evidence,
+        max_chars=evidence_char_budget,
+        query=q,
+        return_metrics=True,
+    )
+    trace["trim_metrics"] = _sanitize_trim_metrics_for_trace(trim_metrics)
     if budget_warnings:
         warnings.extend(budget_warnings)
         trace["prompt_budget_truncated"] = True
@@ -1252,14 +1871,27 @@ def memory_answer_core(
             "score_breakdown": item.get("score_breakdown"),
             "injection_eligible": item.get("injection_eligible"),
             "injection_reason": item.get("injection_reason"),
+            "validity": item.get("validity"),
+            "validity_reason": item.get("validity_reason"),
         }
         for item in evidence
     ]
     trace["selected_evidence"] = [e["id"] for e in evidence]
+    trace["validity"] = _summarize_validity_trace(
+        query=q,
+        query_class=query_class,
+        freshness_mode=str(trace["planner"].get("freshness_mode") or "not_applicable"),
+        evidence_gate=evidence_gate,
+        selected_evidence=evidence,
+    )
+    trace["stale_guard"] = trace["validity"]["stale_guard"]
 
     if not evidence:
         if evidence_gate:
-            warnings.append("all candidate evidence filtered by weak-evidence guard")
+            if all(str(item.get("validity") or "") == "weak_filtered" for item in evidence_gate):
+                warnings.append("all candidate evidence filtered by weak-evidence guard")
+            else:
+                warnings.append("all candidate evidence filtered by freshness guard")
         trace["duration_ms"] = round((time.monotonic() - started) * 1000, 2)
         result = {
             "status": "not_found",
