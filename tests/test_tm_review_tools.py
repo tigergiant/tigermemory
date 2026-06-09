@@ -59,6 +59,30 @@ def test_execute_promote_writes_valid_codex_wiki_page(tmp_path, monkeypatch):
     assert commit_cmd[-2:] == ["--", "wiki/operations/lint-linter-systems-minimax-cli-cc19aa.md"]
 
 
+def test_execute_promote_can_defer_commit_for_review_ui_batch(tmp_path, monkeypatch):
+    commands: list[list[str]] = []
+    monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_tools.tm_core, "run", _fake_run_factory(commands))
+    monkeypatch.setattr(tm_review_tools.tm_core, "git_pull_rebase", lambda: None)
+    monkeypatch.setattr(tm_review_tools.tm_core, "now", lambda _fmt: "2026-05-21")
+    monkeypatch.setitem(sys.modules, "tm_review", types.SimpleNamespace(review_draft=lambda _text: {"score": 80, "issues": []}))
+
+    result = tm_review_tools.execute_promote(
+        {"id": "inbox/2026-05-01-1200-codex-systems.md", "text": "# Fast Path", "topic": "systems"},
+        "systems",
+        "fast-path",
+        commit=False,
+    )
+
+    assert result["ok"] is True
+    assert result["committed"] is False
+    assert result["commit_sha"] is None
+    assert result["changed_paths"] == ["wiki/systems/fast-path.md"]
+    assert (tmp_path / "wiki" / "systems" / "fast-path.md").exists()
+    assert not any(cmd[:2] == ["git", "commit"] for cmd in commands)
+    assert not any(cmd[:2] == ["git", "push"] for cmd in commands)
+
+
 def test_execute_promote_l2_fallback_uses_allowed_codex_inbox(tmp_path, monkeypatch):
     commands: list[list[str]] = []
     monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)

@@ -1685,12 +1685,18 @@ def test_batch_inbox_promote_wiki_generates_slugs_and_archives(tmp_path, monkeyp
     second = _write_inbox(tmp_path, "2026-05-02-1200-codex-systems.md")
     promoted: list[tuple[str, str, str]] = []
 
-    def fake_promote(fact, partition, slug):
+    def fake_promote(fact, partition, slug, **_kwargs):
         promoted.append((fact["source_id"], partition, slug))
-        return {"ok": True, "wiki_path": f"wiki/{partition}/{slug}.md", "commit_sha": f"wiki-{len(promoted)}"}
+        return {"ok": True, "wiki_path": f"wiki/{partition}/{slug}.md", "changed_paths": [f"wiki/{partition}/{slug}.md"]}
 
     monkeypatch.setattr(tm_review_tools, "execute_promote", fake_promote)
-    monkeypatch.setattr(tm_review_ui, "commit_and_push_paths", lambda _paths, _message: "archive123")
+    commits: list[list[str]] = []
+
+    def fake_commit(paths, _message):
+        commits.append(paths)
+        return "archive123"
+
+    monkeypatch.setattr(tm_review_ui, "commit_and_push_paths", fake_commit)
     client = _client(tmp_path, monkeypatch)
     client.get("/", headers=HOST, follow_redirects=False)
 
@@ -1711,6 +1717,9 @@ def test_batch_inbox_promote_wiki_generates_slugs_and_archives(tmp_path, monkeyp
     assert promoted[0][1] == "systems"
     assert promoted[0][2].startswith("daily-review-note-1-")
     assert promoted[1][2].startswith("daily-review-note-2-")
+    assert len(commits) == 1
+    assert "wiki/systems/daily-review-note-1-codex-systems.md" in commits[0]
+    assert "wiki/systems/daily-review-note-2-codex-systems.md" in commits[0]
     assert not first.exists()
     assert not second.exists()
 
@@ -1721,9 +1730,9 @@ def test_batch_inbox_promote_wiki_uses_default_targets_without_prompt_fields(tmp
     inbox = _write_inbox(tmp_path, "2026-05-01-1200-codex-operations.md")
     promoted: list[tuple[str, str, str]] = []
 
-    def fake_promote(fact, partition, slug):
+    def fake_promote(fact, partition, slug, **_kwargs):
         promoted.append((fact["source_id"], partition, slug))
-        return {"ok": True, "wiki_path": f"wiki/{partition}/{slug}.md", "commit_sha": "wiki-1"}
+        return {"ok": True, "wiki_path": f"wiki/{partition}/{slug}.md", "changed_paths": [f"wiki/{partition}/{slug}.md"]}
 
     monkeypatch.setattr(tm_review_tools, "execute_promote", fake_promote)
     monkeypatch.setattr(tm_review_ui, "commit_and_push_paths", lambda _paths, _message: "archive123")
@@ -1741,6 +1750,48 @@ def test_batch_inbox_promote_wiki_uses_default_targets_without_prompt_fields(tmp
     assert promoted[0][1] == "operations"
     assert promoted[0][2]
     assert not inbox.exists()
+
+
+def test_batch_inbox_promote_wiki_uses_proposal_frontmatter_target(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)
+    inbox = _write_inbox(tmp_path, "2026-05-01-1200-codex-operations.md")
+    text = inbox.read_text(encoding="utf-8")
+    inbox.write_text(
+        text.replace(
+            "routed_by: tigermemory",
+            "routed_by: tigermemory\nknowledge_target: wiki_proposal\nwiki_partition: systems\nwiki_slug_hint: proposed-target",
+        ),
+        encoding="utf-8",
+    )
+    promoted: list[tuple[str, str, str, bool]] = []
+    commits: list[list[str]] = []
+
+    def fake_promote(fact, partition, slug, **kwargs):
+        promoted.append((fact["source_id"], partition, slug, kwargs.get("commit")))
+        return {"ok": True, "wiki_path": f"wiki/{partition}/{slug}.md", "changed_paths": [f"wiki/{partition}/{slug}.md"]}
+
+    def fake_commit(paths, _message):
+        commits.append(paths)
+        return "archive123"
+
+    monkeypatch.setattr(tm_review_tools, "execute_promote", fake_promote)
+    monkeypatch.setattr(tm_review_ui, "commit_and_push_paths", fake_commit)
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.post(
+        "/api/inbox/batch-action",
+        headers=HOST,
+        json={"paths": [f"inbox/{inbox.name}"], "action": "promote_wiki"},
+    )
+
+    data = response.json()
+    assert data["ok"] is True
+    assert promoted == [(f"inbox/{inbox.name}", "systems", "proposed-target", False)]
+    assert len(commits) == 1
+    assert "wiki/systems/proposed-target.md" in commits[0]
+    assert "wiki/operations/inbox-archive/2026-05-01.md" in commits[0]
 
 
 def test_batch_inbox_action_rejects_invalid_path(tmp_path, monkeypatch):
