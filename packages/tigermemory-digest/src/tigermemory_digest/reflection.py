@@ -104,6 +104,10 @@ class InboxAuditRow:
     proposal_kind: str = ""
     wiki_partition: str = ""
     wiki_slug_hint: str = ""
+    route_score: int | None = None
+    l2_review_score: int | None = None
+    target_confidence: int | None = None
+    wiki_action: str = ""
 
 
 _INBOX_REVIEW_LABEL_PREFIX = (
@@ -176,6 +180,13 @@ def _relpath(path: pathlib.Path) -> str:
         return str(path.relative_to(REPO_ROOT)).replace("\\", "/")
     except ValueError:
         return str(path)
+
+
+def _int(value: Any) -> int | None:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
 
 
 def _frontmatter(text: str) -> tuple[dict[str, str], str]:
@@ -401,11 +412,14 @@ def inbox_records(*, inbox_dir: pathlib.Path = INBOX_DIR, use_llm: bool = False)
             "summary": _preview(body),
             "review_cn_source": review_source,
             "route_score": fm.get("route_score"),
+            "l2_review_score": fm.get("l2_review_score"),
+            "target_confidence": fm.get("target_confidence"),
             "route_decision_reason": fm.get("route_decision_reason"),
             "knowledge_target": fm.get("knowledge_target"),
             "proposal_kind": fm.get("proposal_kind"),
             "wiki_partition": fm.get("wiki_partition"),
             "wiki_slug_hint": fm.get("wiki_slug_hint"),
+            "wiki_action": fm.get("wiki_action"),
         })
     if use_llm and cache_changed:
         _save_review_cache(cache)
@@ -623,6 +637,10 @@ def audit_inbox(
             proposal_kind=str(record.get("proposal_kind") or ""),
             wiki_partition=str(record.get("wiki_partition") or ""),
             wiki_slug_hint=str(record.get("wiki_slug_hint") or ""),
+            route_score=_int(record.get("route_score")),
+            l2_review_score=_int(record.get("l2_review_score")),
+            target_confidence=_int(record.get("target_confidence")),
+            wiki_action=str(record.get("wiki_action") or ""),
         ))
     return rows
 
@@ -1021,6 +1039,11 @@ def _inbox_wiki_proposal_ledger(rows: list[InboxAuditRow]) -> list[dict[str, Any
                 "topics": set(),
                 "agents": set(),
                 "paths": [],
+                "sample_items": [],
+                "route_scores": [],
+                "l2_review_scores": [],
+                "target_confidences": [],
+                "wiki_actions": set(),
                 "status": "pending",
             },
         )
@@ -1029,8 +1052,25 @@ def _inbox_wiki_proposal_ledger(rows: list[InboxAuditRow]) -> list[dict[str, Any
         item["newest_date"] = max(str(item["newest_date"]), row.created_date)
         item["topics"].add(row.topic)
         item["agents"].add(row.agent)
-        if len(item["paths"]) < 3:
-            item["paths"].append(row.path)
+        item["paths"].append(row.path)
+        if row.route_score is not None:
+            item["route_scores"].append(row.route_score)
+        if row.l2_review_score is not None:
+            item["l2_review_scores"].append(row.l2_review_score)
+        if row.target_confidence is not None:
+            item["target_confidences"].append(row.target_confidence)
+        if row.wiki_action:
+            item["wiki_actions"].add(row.wiki_action)
+        if len(item["sample_items"]) < 3:
+            item["sample_items"].append({
+                "path": row.path,
+                "title": row.title_cn,
+                "preview": row.preview_cn,
+                "route_score": row.route_score,
+                "l2_review_score": row.l2_review_score,
+                "target_confidence": row.target_confidence,
+                "wiki_action": row.wiki_action,
+            })
         if row.already_applied:
             item["status"] = "applied"
         elif row.topic == "investment" or row.wiki_partition == "investment":
@@ -1039,6 +1079,28 @@ def _inbox_wiki_proposal_ledger(rows: list[InboxAuditRow]) -> list[dict[str, Any
     for item in ledger:
         item["topics"] = ",".join(sorted(item["topics"]))
         item["agents"] = ",".join(sorted(item["agents"]))
+        item["wiki_actions"] = ",".join(sorted(item["wiki_actions"])) if item["wiki_actions"] else ""
+        route_scores = item.pop("route_scores")
+        l2_scores = item.pop("l2_review_scores")
+        target_confidences = item.pop("target_confidences")
+        item["route_score_min"] = min(route_scores) if route_scores else None
+        item["route_score_max"] = max(route_scores) if route_scores else None
+        item["l2_review_score_min"] = min(l2_scores) if l2_scores else None
+        item["l2_review_score_max"] = max(l2_scores) if l2_scores else None
+        item["target_confidence_min"] = min(target_confidences) if target_confidences else None
+        item["target_confidence_max"] = max(target_confidences) if target_confidences else None
+        if item["status"] == "investment-thread":
+            item["review_level"] = "handoff"
+            item["review_label"] = "转投资线程"
+        elif (item["route_score_min"] or 0) >= 80 and (item["l2_review_score_min"] or 0) >= 80:
+            item["review_level"] = "high"
+            item["review_label"] = "高可信"
+        elif (item["route_score_min"] or 0) >= 80 and (item["l2_review_score_min"] or 0) >= 70:
+            item["review_level"] = "medium"
+            item["review_label"] = "中等可信"
+        else:
+            item["review_level"] = "review"
+            item["review_label"] = "需复核"
     ledger.sort(key=lambda item: (-int(item["count"]), str(item["target"])))
     return ledger
 

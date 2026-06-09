@@ -376,6 +376,12 @@ def test_daily_page_static_assets_wire_cron_intake_card():
     assert 'id="wiki-proposal-ledger-section"' in review_html
     assert "renderCronIntake" in pages_js
     assert "renderWikiProposalLedger" in pages_js
+    assert "data-wiki-ledger-action=\"approve-all\"" in pages_js
+    assert "一键写入本线程" in pages_js
+    assert "wikiProposalScoreText(row)" in pages_js
+    assert "review_label" in pages_js
+    assert "sample_items" in pages_js
+    assert "runWikiProposalApproval" in pages_js
     assert "/api/cron/intake/" in pages_js
     assert "cron-intake-summary" in pages_js
     assert "font-mono" in pages_js
@@ -537,6 +543,10 @@ def test_api_digest_surfaces_wiki_proposal_ledger_and_hides_rows(tmp_path, monke
             self.proposal_kind = "wiki"
             self.wiki_partition = partition
             self.wiki_slug_hint = slug
+            self.route_score = 88
+            self.l2_review_score = 85
+            self.target_confidence = 90
+            self.wiki_action = "update"
 
     records = [
         FakeRecord("systems", "systems", "cron-result-intake-learning-plan"),
@@ -563,6 +573,11 @@ def test_api_digest_surfaces_wiki_proposal_ledger_and_hides_rows(tmp_path, monke
     statuses = {row["target"]: row["status"] for row in digest["wiki_proposal_ledger"]}
     assert statuses["wiki/systems/cron-result-intake-learning-plan.md"] == "pending"
     assert statuses["wiki/investment/decision-log/example.md"] == "investment-thread"
+    system_row = next(row for row in digest["wiki_proposal_ledger"] if row["status"] == "pending")
+    assert system_row["review_label"] == "高可信"
+    assert system_row["route_score_min"] == 88
+    assert system_row["l2_review_score_min"] == 85
+    assert system_row["sample_items"][0]["title"] == "Wiki 提案"
 
 
 def test_api_digest_returns_self_evolution_summary_not_raw_events(tmp_path, monkeypatch):
