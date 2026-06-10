@@ -21,6 +21,22 @@ Python callers can import the public helpers directly:
 from tigermemory_index import compile_partition_index, render_preview
 ```
 
+## Index Page Standard
+
+`wiki/<partition>/index.md` is a partition landing page, not a catch-all
+dump. The compiler normalizes its preamble with:
+
+- navigation aliases such as `<分区>目录`, `<分区>索引`, and `<分区>有哪些页面`;
+- a short `description` and `## 摘要` that tell retrieval this page answers
+  broad "where do I start" questions;
+- a `## 来源` block before `## 页面`, because the compiler owns everything
+  after `## 页面`.
+
+The generated `## 页面` listing includes stable pages only. Files marked
+`status: draft` or `status: archived` are omitted from both the main partition
+index and the `index-by-subtopic.md` preview, so review proposals and work in
+progress do not pollute navigation or natural-language recall.
+
 ## Repository Root
 
 The package detects the TigerMemory repository root in this order:

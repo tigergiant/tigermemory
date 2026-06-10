@@ -57,11 +57,13 @@ __all__ = [
     "cmd_write",
     "compile_partition_index",
     "extract_page_aliases",
+    "extract_page_status",
     "extract_page_subtopics",
     "extract_page_summary",
     "extract_page_title",
     "list_partition_pages",
     "main",
+    "normalize_index_preamble",
     "render_preview",
     "split_index",
 ]
@@ -83,6 +85,15 @@ WIKI_ROOT = REPO_ROOT / "wiki"
 PARTITIONS = ["brand", "investment", "operations", "person", "production", "self-evolution", "systems"]
 PREVIEW_FILENAME = "index-by-subtopic.md"
 PREVIEW_LINK_LINE = f"*主题视图*：[按 subtopic 浏览]({PREVIEW_FILENAME})"
+PARTITION_LABELS = {
+    "brand": "品牌",
+    "investment": "投资",
+    "operations": "运营",
+    "person": "人物",
+    "production": "生产",
+    "self-evolution": "自我进化",
+    "systems": "系统",
+}
 
 PAGES_HEADING = "## 页面"
 SUMMARY_HEADING_RE = re.compile(r"^##\s+摘要\s*$", re.MULTILINE)
@@ -93,6 +104,192 @@ INDEX_ITEM_RE = re.compile(r"^\s*-\s*\[([^\]]+)\]\(([^)]+)\)")
 TZ_CN = dt.timezone(dt.timedelta(hours=8))
 
 MAX_SUMMARY_LEN = 120
+
+
+# ---------------- index preamble standard ----------------
+
+
+def _yaml_quote(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _format_inline_list(values: list[str]) -> str:
+    return "[" + ", ".join(_yaml_quote(value) for value in values) + "]"
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        normalized = value.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result
+
+
+def _frontmatter_scalar(fm: str, field: str) -> str:
+    m = re.search(rf"^{re.escape(field)}:\s*(.+?)\s*$", fm, re.MULTILINE)
+    if not m:
+        return ""
+    return m.group(1).strip().strip('"').strip("'")
+
+
+def _remove_frontmatter_fields(fm: str, fields: set[str]) -> list[str]:
+    lines = fm.splitlines()
+    kept: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = re.match(r"^([A-Za-z0-9_-]+):(?:\s+.*)?$", line)
+        if m and m.group(1) in fields:
+            i += 1
+            while i < len(lines) and re.match(r"^\s*-\s+", lines[i]):
+                i += 1
+            continue
+        kept.append(line)
+        i += 1
+    return [line for line in kept if line.strip()]
+
+
+def _partition_label(partition: str) -> str:
+    return PARTITION_LABELS.get(partition, partition)
+
+
+def _index_aliases(partition: str, existing_aliases: list[str]) -> list[str]:
+    label = _partition_label(partition)
+    return _dedupe(
+        existing_aliases
+        + [
+            label,
+            f"{label}分区",
+            f"{label}目录",
+            f"{label}索引",
+            f"{label}入口",
+            f"{label}有哪些页面",
+            f"{label}有哪些内容",
+            f"{partition} index",
+            f"wiki/{partition} index",
+        ]
+    )
+
+
+def _is_generic_index_title(value: str, partition: str) -> bool:
+    label = _partition_label(partition)
+    generic = {
+        "",
+        label,
+        partition,
+        partition.capitalize(),
+        partition.title(),
+        f"{partition} Index",
+        f"{partition.capitalize()} Index",
+    }
+    return value.strip() in generic
+
+
+def _index_title(partition: str, existing_title: str) -> str:
+    if existing_title and not _is_generic_index_title(existing_title, partition):
+        return existing_title
+    return f"{_partition_label(partition)}分区入口"
+
+
+def _index_description(partition: str) -> str:
+    label = _partition_label(partition)
+    return f"{label}分区的目录和导航页，用于回答有哪些页面、从哪里开始、分区怎么组织；具体事实以具体页面为准。"
+
+
+def _index_summary(partition: str) -> str:
+    return (
+        f"本页是 `{partition}` 分区的目录和导航页，用于回答“有哪些页面 / 从哪里开始 / 分区怎么组织”这类问题。"
+        "具体事实、规则和操作细节应继续阅读下方具体页面。"
+    )
+
+
+def _render_index_frontmatter(partition: str, fm: str) -> str:
+    owner = _frontmatter_scalar(fm, "owner") or "codex"
+    status = _frontmatter_scalar(fm, "status") or "active"
+    updated = _frontmatter_scalar(fm, "updated") or _today_cn()
+    title = _index_title(partition, _frontmatter_scalar(fm, "title"))
+    aliases = _index_aliases(partition, _parse_aliases(fm))
+    subtopics = _dedupe(_parse_string_list_field(fm, "subtopic") + ["navigation", "index"])
+    description = _frontmatter_scalar(fm, "description") or _index_description(partition)
+    other_lines = _remove_frontmatter_fields(
+        fm,
+        {"owner", "status", "updated", "aliases", "subtopic", "title", "description"},
+    )
+
+    lines = [
+        f"owner: {owner}",
+        f"status: {status}",
+        f"updated: {updated}",
+        f"aliases: {_format_inline_list(aliases)}",
+        f"subtopic: {_format_inline_list(subtopics)}",
+        f"title: {_yaml_quote(title)}",
+        f"description: {_yaml_quote(description)}",
+    ]
+    lines.extend(other_lines)
+    return "---\n" + "\n".join(lines) + "\n---\n"
+
+
+def _normalize_index_body(partition: str, body: str) -> str:
+    title = _index_title(partition, "")
+    h1 = H1_RE.search(body)
+    if h1:
+        current_h1 = h1.group(1).strip()
+        if _is_generic_index_title(current_h1, partition):
+            body = body[: h1.start()] + f"# {title}" + body[h1.end():]
+    else:
+        body = f"# {title}\n\n" + body.lstrip()
+
+    if "\n## 摘要" not in "\n" + body:
+        h1 = H1_RE.search(body)
+        insert_at = h1.end() if h1 else 0
+        summary_block = "\n\n## 摘要\n\n" + _index_summary(partition) + "\n"
+        body = body[:insert_at].rstrip() + summary_block + body[insert_at:].lstrip("\n")
+
+    if "\n## 来源" not in "\n" + body:
+        source_block = (
+            "\n\n## 来源\n\n"
+            "- 本页 `## 页面` 部分由 `tools/tm_compile_index.py` 自动编译。\n"
+            "- 本页作为分区入口页参与自然语言召回；具体事实以链接到的具体页面为准。\n"
+        )
+        body = body.rstrip() + source_block
+
+    return body.strip() + "\n"
+
+
+def normalize_index_preamble(partition: str, preamble: str) -> str:
+    """Apply the standard index.md navigation preamble without churning bullets."""
+    if partition == "person":
+        return preamble
+    preamble = preamble.lstrip("\ufeff")
+    m = re.search(rf"(?m)^{re.escape(PAGES_HEADING)}\s*$", preamble)
+    body = preamble[: m.start()].rstrip() if m else preamble.rstrip()
+
+    fm_match = FRONTMATTER_BLOCK_RE.match(body + "\n")
+    if fm_match:
+        fm = fm_match.group(1)
+        rest = body[fm_match.end() - 1 :]
+    else:
+        fm = ""
+        rest = body
+
+    frontmatter = _render_index_frontmatter(partition, fm)
+    normalized_body = _normalize_index_body(partition, rest)
+    return frontmatter + "\n" + normalized_body.rstrip() + "\n\n" + PAGES_HEADING + "\n"
+
+
+def _refresh_index_updated(text: str, date: str | None = None) -> str:
+    return re.sub(
+        r"^updated:\s*\S+\s*$",
+        f"updated: {date or _today_cn()}",
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
 
 
 # ---------------- page parsing ----------------
@@ -166,6 +363,14 @@ def extract_page_aliases(text: str) -> list[str]:
     return _parse_aliases(m.group(1))
 
 
+def extract_page_status(text: str) -> str:
+    """Return frontmatter status lowercased; empty means legacy/unspecified."""
+    m = FRONTMATTER_BLOCK_RE.match(text)
+    if not m:
+        return ""
+    return _frontmatter_scalar(m.group(1), "status").lower()
+
+
 def extract_page_title(text: str) -> str:
     """Return the preferred display label for the page.
 
@@ -230,6 +435,7 @@ def split_index(text: str) -> tuple[str, list[str], dict[str, str]]:
     current index, which we preserve byte-for-byte to avoid churning
     human-curated summaries.
     """
+    text = text.lstrip("\ufeff")
     lines = text.splitlines()
     heading_idx = None
     for i, line in enumerate(lines):
@@ -262,6 +468,9 @@ def list_partition_pages(partition_dir: pathlib.Path) -> list[pathlib.Path]:
     pages = []
     for p in sorted(partition_dir.iterdir()):
         if p.is_file() and p.suffix == ".md" and p.name not in {"index.md", PREVIEW_FILENAME}:
+            status = extract_page_status(p.read_text(encoding="utf-8"))
+            if status in {"draft", "archived"}:
+                continue
             pages.append(p)
     return pages
 
@@ -289,6 +498,7 @@ def compile_partition_index(
     else:
         preamble = f"# {partition.capitalize()}\n\n{PAGES_HEADING}\n"
         existing_order, existing_lines = [], {}
+    preamble = normalize_index_preamble(partition, preamble)
 
     pages = list_partition_pages(partition_dir)
     present = {p.name: p for p in pages}
@@ -329,6 +539,8 @@ def compile_partition_index(
     new_text = preamble.rstrip("\n") + "\n\n" + "\n".join(lines) + "\n"
     if (partition_dir / PREVIEW_FILENAME).exists():
         new_text += "\n" + PREVIEW_LINK_LINE + "\n"
+    if new_text != old_text:
+        new_text = _refresh_index_updated(new_text)
     return new_text, old_text
 
 
