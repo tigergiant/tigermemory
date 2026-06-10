@@ -31,6 +31,64 @@ QUALITY_REPORT_PATH = tm_core.REPO_ROOT / ".tmp" / "llm-wiki-map-quality-report.
 FORBIDDEN_PATHS = ("tests/", ".tmp/", "runtime/")
 PERSON_PATH_PREFIXES = ("wiki/person/", "sources/person/")
 SOURCE_SURFACES = {"wiki", "sources"}
+ROOT_WIKI_PATHS = {"AGENTS.md"}
+ROOT_WIKI_KEYWORDS = {
+    "AGENTS.md": [
+        "agent",
+        "rules",
+        "开工",
+        "规则",
+        "git",
+        "commit",
+        "push",
+        "rebase",
+        "inbox",
+        "write_memory",
+        "route",
+        "topic",
+        "systems",
+        "investment",
+        "cross",
+        "live",
+        "live-state",
+        "dashboard",
+        "service",
+        "服务",
+        "端口",
+        "1998",
+        "8790",
+        "hooks",
+        "hook",
+        "MCP",
+        "WSL",
+        "D盘",
+    ]
+}
+ROOT_RULE_SIGNAL_TOKENS = {
+    "agent",
+    "rules",
+    "git",
+    "commit",
+    "push",
+    "rebase",
+    "inbox",
+    "write_memory",
+    "route",
+    "topic",
+    "systems",
+    "investment",
+    "cross",
+    "live",
+    "dashboard",
+    "service",
+    "1998",
+    "8790",
+    "hooks",
+    "hook",
+    "mcp",
+    "wsl",
+}
+ROOT_RULE_PORT_TOKENS = {"1998", "8790", "9766", "9776", "8765"}
 SENSITIVITY_VALUES = {"normal", "person_excluded", "sensitive_surface"}
 ANSWER_FACETS = ("现状", "规则", "计划", "验收", "故障", "风险", "流程", "证据")
 GENERIC_CJK_TERMS = {
@@ -293,9 +351,9 @@ def _cjk_terms(text: str, *, max_items: int = 16) -> list[str]:
     terms: list[str] = []
     seen: set[str] = set()
     for chunk in re.findall(r"[\u4e00-\u9fff]{2,12}", text):
-        candidates = [chunk]
-        if len(chunk) > 4:
-            candidates.extend(chunk[i : i + 3] for i in range(0, len(chunk) - 2))
+        candidates = [chunk] if len(chunk) <= 8 else []
+        for size in (2, 3, 4):
+            candidates.extend(chunk[i : i + size] for i in range(0, len(chunk) - size + 1))
         for item in candidates:
             clean = item.strip()
             if len(clean) < 2 or clean in GENERIC_CJK_TERMS or clean in seen:
@@ -310,12 +368,16 @@ def _cjk_terms(text: str, *, max_items: int = 16) -> list[str]:
 def _keywords(rel: str, text: str, frontmatter: dict[str, Any]) -> list[str]:
     raw: list[str] = []
     raw.extend(_path_tokens(rel))
+    raw.extend(ROOT_WIKI_KEYWORDS.get(rel, []))
     for key in ("title", "summary", "description", "subtopic"):
         raw.extend(tm_core.signal_tokens(str(frontmatter.get(key) or "")))
-    raw.extend(tm_core.signal_tokens(text[:4000]))
-    raw.extend(re.findall(r"\b[a-zA-Z][a-zA-Z0-9_]{2,}\b", text[:8000]))
+    signal_text = text if rel in ROOT_WIKI_PATHS else text[:4000]
+    regex_text = text if rel in ROOT_WIKI_PATHS else text[:8000]
+    raw.extend(tm_core.signal_tokens(signal_text))
+    raw.extend(re.findall(r"\b[a-zA-Z][a-zA-Z0-9_]{2,}\b", regex_text))
     result: list[str] = []
     seen: set[str] = set()
+    max_items = 60 if rel in ROOT_WIKI_PATHS else 24
     for token in raw:
         clean = str(token or "").strip().lower()
         if len(clean) < 2 or clean in seen:
@@ -324,7 +386,7 @@ def _keywords(rel: str, text: str, frontmatter: dict[str, Any]) -> list[str]:
             continue
         seen.add(clean)
         result.append(clean[:80])
-        if len(result) >= 24:
+        if len(result) >= max_items:
             break
     return result
 
@@ -350,7 +412,8 @@ def _extract_ports(text: str) -> list[str]:
 
 
 def _typed_entities(rel: str, text: str) -> dict[str, list[str]]:
-    sample = f"{rel}\n{text[:12000]}"
+    sample_limit = len(text) if rel in ROOT_WIKI_PATHS else 12000
+    sample = f"{rel}\n{text[:sample_limit]}"
     known_agents = sorted(tm_core.AGENTS | {"claude-code", "codex", "cascade", "openclaw", "hermes", "deerflow", "gemini", "kimi"})
     entities = {
         "paths": _clean_list(
@@ -408,6 +471,8 @@ def _answer_facets(text: str, headings: list[str]) -> list[str]:
 
 
 def _partition(rel: str, surface: str) -> str:
+    if rel in ROOT_WIKI_PATHS:
+        return "systems"
     parts = rel.split("/")
     if len(parts) >= 2 and surface == "wiki":
         return parts[1]
@@ -417,6 +482,8 @@ def _partition(rel: str, surface: str) -> str:
 
 
 def _source_surface(rel: str) -> str:
+    if rel in ROOT_WIKI_PATHS:
+        return "wiki"
     first = rel.split("/", 1)[0]
     return first if first in SOURCE_SURFACES else ""
 
@@ -500,6 +567,10 @@ def _iter_input_files(repo_root: Path = tm_core.REPO_ROOT) -> list[Path]:
         if not root.exists():
             continue
         paths.extend(sorted(root.rglob("*.md")))
+    for rel in sorted(ROOT_WIKI_PATHS):
+        path = repo_root / rel
+        if path.exists():
+            paths.append(path)
     return paths
 
 
@@ -677,6 +748,16 @@ def score_record(query: str, record: dict[str, Any]) -> tuple[float, dict[str, A
         if token_score:
             matched.append(token)
             score += token_score
+    if record.get("path") in ROOT_WIKI_PATHS and matched:
+        root_matches = {term.lower() for term in matched}
+        strong_matches = root_matches & ROOT_RULE_SIGNAL_TOKENS
+        port_matches = root_matches & ROOT_RULE_PORT_TOKENS
+        if strong_matches or port_matches:
+            score += 10.0
+            matched_fields.add("root_rules")
+        if len(root_matches) >= 2 and (strong_matches or port_matches):
+            score += 8.0
+            matched_fields.add("root_rules")
     if record.get("path", "").endswith("/index.md"):
         score -= 1.5
     return round(max(score, 0.0), 3), {"matched_terms": matched[:20], "matched_fields": sorted(matched_fields)}

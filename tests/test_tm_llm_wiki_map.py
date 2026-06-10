@@ -78,6 +78,77 @@ def test_build_records_skips_person_and_forbidden_paths(tmp_path):
     assert wiki_map.is_forbidden_input_path("runtime/llm_wiki/wiki_map.jsonl")
 
 
+def test_build_records_includes_only_root_agents_allowlist(tmp_path):
+    _write(
+        tmp_path / "AGENTS.md",
+        """---
+title: Agent Rules
+aliases: [变基出现冲突怎么办, rebase 冲突]
+---
+
+# AGENTS.md
+
+## 摘要
+
+rebase 过程中出现 conflict 时立即 abort，不要 continue。
+""",
+    )
+    _write(tmp_path / "README.md", "# README\n\n不是地图输入。")
+    _write(tmp_path / "wiki" / "systems" / "ok.md", "# OK\n\n## 摘要\n\n可索引。")
+
+    records, skipped = wiki_map.build_records(tmp_path)
+    by_path = {record.path: record for record in records}
+
+    assert "AGENTS.md" in by_path
+    assert "README.md" not in by_path
+    assert by_path["AGENTS.md"].source_surface == "wiki"
+    assert by_path["AGENTS.md"].partition == "systems"
+    assert "变基出现冲突怎么办" in by_path["AGENTS.md"].aliases
+    assert skipped == []
+
+
+def test_root_agents_scoring_prefers_rule_queries_without_date_pollution(tmp_path):
+    agents = _write(
+        tmp_path / "AGENTS.md",
+        """---
+title: Agent Rules
+aliases: [变基出现冲突怎么办, rebase 冲突]
+---
+
+# AGENTS.md
+
+## 摘要
+
+rebase 过程中出现 conflict 时立即 abort，不要 continue。
+dashboard 1998 是正式服务端口，tm-http 8790 是 HTTP router。
+updated: 2026-06-10
+""",
+    )
+    generic = _write(
+        tmp_path / "wiki" / "systems" / "annual-review.md",
+        """---
+title: 2026 年度回顾
+---
+
+# 2026 年度回顾
+
+## 摘要
+
+这个页面记录 2026 年项目回顾，与 agent 开工规则无关。
+""",
+    )
+    records = [
+        wiki_map.build_record_for_file(agents, repo_root=tmp_path).to_dict(),
+        wiki_map.build_record_for_file(generic, repo_root=tmp_path).to_dict(),
+    ]
+
+    rule_hits = wiki_map.map_recall("变基出现冲突怎么办", records=records, limit=2)
+    date_hits = wiki_map.map_recall("2026 年度回顾", records=records, limit=2)
+
+    assert rule_hits[0]["path"] == "AGENTS.md"
+    assert date_hits[0]["path"] == "wiki/systems/annual-review.md"
+
+
 def test_write_map_is_stable_and_recall_ranks_candidate(tmp_path):
     _write(
         tmp_path / "wiki" / "systems" / "memory-answer-development-plan.md",
