@@ -186,3 +186,22 @@ def test_backup_and_restore_cycle(tmp_path) -> None:
         assert row[1] == "to backup"
     finally:
         conn.close()
+
+
+def test_local_memory_main_records_runtime_event(tmp_path, monkeypatch) -> None:
+    event_root = tmp_path / "events"
+    monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(event_root))
+    source = tmp_path / "source.jsonl"
+    _write_jsonl(source, [{"id": "m1", "content": "event sample", "metadata": {"source": "codex", "topic": "systems"}}])
+    db = tmp_path / "mem.sqlite"
+
+    rc = tm_local_memory.main(["import", "--input", str(source), "--db", str(db)])
+
+    assert rc == 0
+    events = tm_local_memory.tm_runtime_events.load_events(
+        dates=[tm_local_memory.tm_runtime_events._date_key()],
+        event_root=event_root,
+    )
+    assert events[-1]["event_type"] == "local_memory_import"
+    assert events[-1]["target_ref"]["db"] == str(db)
+    assert events[-1]["target_ref"]["input"] == str(source)

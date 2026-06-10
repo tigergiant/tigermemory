@@ -14,6 +14,7 @@ if str(_PKG_SRC) not in sys.path:
     sys.path.insert(0, str(_PKG_SRC))
 
 import tigermemory_core as tm_core
+from tigermemory_core import runtime_events as tm_runtime_events
 
 
 class _JsonResponse:
@@ -332,7 +333,8 @@ def test_refine_and_save_wiki_patches(monkeypatch, tmp_path):
     assert "patch body" in written
 
 
-def test_git_commit_push_success_with_retry(monkeypatch):
+def test_git_commit_push_success_with_retry(tmp_path, monkeypatch):
+    monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(tmp_path / "events"))
     calls = []
 
     def fake_run(cmd, check=True):
@@ -358,6 +360,10 @@ def test_git_commit_push_success_with_retry(monkeypatch):
     assert tm_core.git_commit_push(["inbox/x.md"], "[codex] create: x") == "abc123"
     assert ["git", "pull", "--rebase", "--autostash", "origin", "master"] in calls
     assert calls.count(["git", "push"]) == 2
+    events = tm_runtime_events.load_events(dates=[tm_runtime_events._date_key()], event_root=tmp_path / "events")
+    assert events[-1]["event_type"] == "git_commit_push"
+    assert events[-1]["outcome"] == "success"
+    assert events[-1]["target_ref"]["commit_sha"] == "abc123"
 
 
 def test_git_commit_push_unstages_on_commit_failure(monkeypatch):

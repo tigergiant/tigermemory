@@ -126,6 +126,7 @@ def test_ensure_clean_worktree_aborts_on_dirty(monkeypatch):
 
 
 def test_reject_one_writes_rejected_json(tmp_path, monkeypatch):
+    monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(tmp_path / "events"))
     monkeypatch.setattr(tm_cron_apply, "PROPOSAL_ROOT", tmp_path)
 
     result = tm_cron_apply.reject_one("2026-05-21", "proposal-2026-05-21-001", "not useful")
@@ -134,6 +135,12 @@ def test_reject_one_writes_rejected_json(tmp_path, monkeypatch):
     assert result["reason"] == "not useful"
     assert path.exists()
     assert "not useful" in path.read_text(encoding="utf-8")
+    events = tm_cron_apply.tm_runtime_events.load_events(
+        dates=[tm_cron_apply.tm_runtime_events._date_key()],
+        event_root=tmp_path / "events",
+    )
+    assert events[-1]["event_type"] == "cron_proposal_reject"
+    assert events[-1]["target_ref"]["proposal_id"] == "proposal-2026-05-21-001"
 
 
 def test_rollback_rejects_non_cron_apply_commit(monkeypatch):

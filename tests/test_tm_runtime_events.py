@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import importlib.util
 import json
 import pathlib
 import sys
@@ -11,6 +12,14 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 import _bootstrap_paths  # noqa: F401
 from tigermemory_core import TZ_CN
 from tigermemory_core import runtime_events as tm_runtime_events
+
+
+def _load_cli_module():
+    spec = importlib.util.spec_from_file_location("tm_runtime_events_cli", REPO_ROOT / "tools" / "tm_runtime_events.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_record_event_redacts_raw_content_and_secrets(tmp_path, monkeypatch):
@@ -75,3 +84,25 @@ def test_load_and_summarize_events(tmp_path, monkeypatch):
     assert summary["service_counts"] == {"tm-dashboard": 1, "write_memory": 1}
     assert summary["type_counts"]["memory_route"] == 1
     assert summary["ok_counts"] == {"ok": 1, "failed": 1}
+
+
+def test_runtime_events_cli_record_subcommand(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(tmp_path))
+    cli = _load_cli_module()
+
+    rc = cli.main([
+        "record",
+        "--event-type", "service_auto_update",
+        "--service", "tm-mcp",
+        "--component", "auto_update",
+        "--ok",
+        "--outcome", "ff_only_checked",
+        "--target-ref", "head=abc123",
+        "--extra", "timeout_sec=5",
+    ])
+
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+    events = tm_runtime_events.load_events(dates=[tm_runtime_events._date_key()], event_root=tmp_path)
+    assert events[-1]["event_type"] == "service_auto_update"
+    assert events[-1]["target_ref"]["head"] == "abc123"

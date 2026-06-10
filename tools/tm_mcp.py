@@ -70,6 +70,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import time
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -90,6 +91,7 @@ import tm_stability_eval
 import tm_agent_doctor
 import tm_retention_audit
 import tm_dashboard_prefs
+from tigermemory_core import runtime_events as tm_runtime_events
 
 
 # ---------- MCP Server ----------
@@ -133,6 +135,43 @@ def _require_writer() -> None:
     """Raise PermissionError if current role is not 'writer'."""
     if _ROLE != "writer":
         raise PermissionError(f"write tool not allowed for role={_ROLE}")
+
+
+def _record_mcp_event(
+    event_type: str,
+    *,
+    ok: bool,
+    action: str | None = None,
+    agent: str | None = None,
+    route: str | None = None,
+    outcome: str | None = None,
+    target_ref: dict[str, Any] | None = None,
+    error: str | None = None,
+    start: float | None = None,
+    **extra: Any,
+) -> None:
+    try:
+        duration_ms = (time.monotonic() - start) * 1000 if start is not None else None
+        event_extra = {k: v for k, v in extra.items() if v is not None}
+        if action is not None:
+            event_extra["action"] = action
+        tm_runtime_events.record_event(
+            event_type=event_type,
+            service="tm-mcp",
+            component="tool",
+            ok=ok,
+            severity=None if ok else "error",
+            duration_ms=duration_ms,
+            agent=agent,
+            route=route,
+            outcome=outcome or action,
+            target_ref=target_ref,
+            source_log="mcp",
+            error=error,
+            extra=event_extra,
+        )
+    except Exception:
+        pass
 
 
 def _review_for_memory(text: str) -> dict[str, Any]:
@@ -335,6 +374,7 @@ def propose_wiki_page(
         On fallback path: {"path": "inbox/...", "committed": true, "commit_sha": "...",
                            "fallback_reason": "..."}
     """
+    start = time.monotonic()
     tm_core.validate_agent(agent)
     tm_core.validate_partition(partition)
     tm_core.validate_slug(slug)
@@ -381,11 +421,25 @@ def propose_wiki_page(
                 [inbox_rel],
                 f"[{agent}] create: L2-block propose wiki/{partition}/{slug}.md",
             )
-        except Exception:
+        except Exception as exc:
             try:
                 inbox_path.unlink()
             except OSError:
                 pass
+            _record_mcp_event(
+                "mcp_propose_wiki_page",
+                ok=False,
+                action=action,
+                agent=agent,
+                route="inbox",
+                outcome="l2_block_commit_failed",
+                target_ref={"path": inbox_rel},
+                error=str(exc),
+                start=start,
+                partition=partition,
+                slug=slug,
+                review_score=review.get("score"),
+            )
             raise
         result = {
             "path": inbox_rel,
@@ -399,6 +453,19 @@ def propose_wiki_page(
             result["digest_refresh_scheduled"] = True
         except Exception as exc:
             result["warnings"] = [f"digest refresh scheduling failed: {exc}"]
+        _record_mcp_event(
+            "mcp_propose_wiki_page",
+            ok=True,
+            action=action,
+            agent=agent,
+            route="inbox",
+            outcome="l2_block",
+            target_ref={"path": inbox_rel, "commit_sha": sha},
+            start=start,
+            partition=partition,
+            slug=slug,
+            review_score=review.get("score"),
+        )
         return result
 
     owners = tm_core.PARTITION_OWNERS[partition]
@@ -431,11 +498,25 @@ def propose_wiki_page(
                 [inbox_rel],
                 f"[{agent}] create: propose wiki/{partition}/{slug}.md" + commit_suffix,
             )
-        except Exception:
+        except Exception as exc:
             try:
                 inbox_path.unlink()
             except OSError:
                 pass
+            _record_mcp_event(
+                "mcp_propose_wiki_page",
+                ok=False,
+                action=action,
+                agent=agent,
+                route="inbox",
+                outcome="owner_fallback_commit_failed",
+                target_ref={"path": inbox_rel},
+                error=str(exc),
+                start=start,
+                partition=partition,
+                slug=slug,
+                review_score=review.get("score"),
+            )
             raise
         result = {
             "path": inbox_rel,
@@ -452,6 +533,19 @@ def propose_wiki_page(
             result["digest_refresh_scheduled"] = True
         except Exception as exc:
             result["warnings"] = [f"digest refresh scheduling failed: {exc}"]
+        _record_mcp_event(
+            "mcp_propose_wiki_page",
+            ok=True,
+            action=action,
+            agent=agent,
+            route="inbox",
+            outcome="owner_fallback",
+            target_ref={"path": inbox_rel, "commit_sha": sha},
+            start=start,
+            partition=partition,
+            slug=slug,
+            review_score=review.get("score"),
+        )
         return result
 
     # Owner path.
@@ -487,7 +581,7 @@ def propose_wiki_page(
 
     try:
         sha = tm_core.git_commit_push(files_to_add, f"[{agent}] {action}: {wiki_rel}" + commit_suffix)
-    except Exception:
+    except Exception as exc:
         # Roll back disk changes so working tree stays clean.
         if prior_wiki is None:
             try:
@@ -498,6 +592,20 @@ def propose_wiki_page(
             wiki_path.write_text(prior_wiki, encoding="utf-8")
         if prior_index is not None:
             index_path.write_text(prior_index, encoding="utf-8")
+        _record_mcp_event(
+            "mcp_propose_wiki_page",
+            ok=False,
+            action=action,
+            agent=agent,
+            route="wiki",
+            outcome="wiki_commit_failed",
+            target_ref={"path": wiki_rel},
+            error=str(exc),
+            start=start,
+            partition=partition,
+            slug=slug,
+            review_score=review.get("score"),
+        )
         raise
 
     result = {"path": wiki_rel, "committed": True, "commit_sha": sha, "review": review}
@@ -511,6 +619,19 @@ def propose_wiki_page(
         )
     except Exception as exc:
         result["warnings"] = [f"embed refresh scheduling failed: {exc}"]
+    _record_mcp_event(
+        "mcp_propose_wiki_page",
+        ok=True,
+        action=action,
+        agent=agent,
+        route="wiki",
+        outcome="wiki_write",
+        target_ref={"path": wiki_rel, "commit_sha": sha},
+        start=start,
+        partition=partition,
+        slug=slug,
+        review_score=review.get("score"),
+    )
     return result
 
 
@@ -526,11 +647,41 @@ def update_user_preference(key: str, value: Any, propose_wiki: bool = True) -> d
     _require_writer()
     if not isinstance(key, str) or not key.strip():
         raise ValueError("key is required")
-    result = tm_dashboard_prefs.update_user_preferences({key.strip(): value})
-    proposal = None
-    if propose_wiki:
-        proposal = propose_wiki_page(**tm_dashboard_prefs.preference_page_payload(result["preferences"]))
-    return {**result, "wiki_proposal": proposal}
+    clean_key = key.strip()
+    start = time.monotonic()
+    try:
+        result = tm_dashboard_prefs.update_user_preferences({clean_key: value})
+        proposal = None
+        if propose_wiki:
+            proposal = propose_wiki_page(**tm_dashboard_prefs.preference_page_payload(result["preferences"]))
+        out = {**result, "wiki_proposal": proposal}
+        _record_mcp_event(
+            "mcp_user_preference_update",
+            ok=True,
+            action="update_user_preference",
+            route="sqlite",
+            outcome="updated",
+            target_ref={"path": "data/dashboard/user_prefs.sqlite"},
+            start=start,
+            key=clean_key,
+            propose_wiki=propose_wiki,
+            wiki_path=proposal.get("path") if isinstance(proposal, dict) else None,
+        )
+        return out
+    except Exception as exc:
+        _record_mcp_event(
+            "mcp_user_preference_update",
+            ok=False,
+            action="update_user_preference",
+            route="sqlite",
+            outcome="failed",
+            target_ref={"path": "data/dashboard/user_prefs.sqlite"},
+            error=str(exc),
+            start=start,
+            key=clean_key,
+            propose_wiki=propose_wiki,
+        )
+        raise
 
 
 @mcp.tool()
@@ -570,6 +721,7 @@ def write_sources(
     Returns:
         {"path": "sources/...", "committed": true, "commit_sha": "..."}
     """
+    start = time.monotonic()
     tm_core.validate_agent(agent)
     if not re.fullmatch(r"[a-z0-9\-]+", subdir):
         raise ValueError(f"invalid subdir '{subdir}' (lowercase letters/digits/hyphens)")
@@ -613,7 +765,7 @@ def write_sources(
     full_path.write_text(content, encoding="utf-8")
     try:
         sha = tm_core.git_commit_push([rel], f"[{agent}] ingest: {rel}")
-    except Exception:
+    except Exception as exc:
         if prior is None:
             try:
                 full_path.unlink()
@@ -621,6 +773,20 @@ def write_sources(
                 pass
         else:
             full_path.write_text(prior, encoding="utf-8")
+        _record_mcp_event(
+            "mcp_write_sources",
+            ok=False,
+            action=action,
+            agent=agent,
+            route="sources",
+            outcome="commit_failed",
+            target_ref={"path": rel},
+            error=str(exc),
+            start=start,
+            subdir=subdir,
+            slug=slug,
+            status=status,
+        )
         raise
 
     result = {"path": rel, "committed": True, "commit_sha": sha}
@@ -634,6 +800,19 @@ def write_sources(
         )
     except Exception as exc:
         result["warnings"] = [f"embed refresh scheduling failed: {exc}"]
+    _record_mcp_event(
+        "mcp_write_sources",
+        ok=True,
+        action=action,
+        agent=agent,
+        route="sources",
+        outcome="committed",
+        target_ref={"path": rel, "commit_sha": sha},
+        start=start,
+        subdir=subdir,
+        slug=slug,
+        status=status,
+    )
     return result
 
 
@@ -1029,6 +1208,7 @@ def review_digest(date: str | None = None, action: str | None = None) -> dict[st
         date: "YYYY-MM-DD"，省略则列出待审日报
         action: "mark_reviewed" 触发收尾，省略则只读
     """
+    start = time.monotonic()
     try:
         if date is None or not date.strip():
             digests = tm_review_tools.list_pending_digests()
@@ -1038,10 +1218,32 @@ def review_digest(date: str | None = None, action: str | None = None) -> dict[st
             _require_writer()
             updated = tm_review_tools.save_digest_with_log(date, {"status": "reviewed"})
             if not updated:
-                return {"ok": False, "error": f"Failed to update digest: {date}"}
+                error = f"Failed to update digest: {date}"
+                _record_mcp_event(
+                    "mcp_review_digest",
+                    ok=False,
+                    action="mark_reviewed",
+                    route="daily_digest",
+                    outcome="update_failed",
+                    target_ref={"path": f"inbox/daily/{date}.md"},
+                    error=error,
+                    start=start,
+                    date=date,
+                )
+                return {"ok": False, "error": error}
             digest_path = f"inbox/daily/{date}.md"
             sha = tm_core.git_commit_push(
                 [digest_path], f"[human] update: mark {date} digest as reviewed"
+            )
+            _record_mcp_event(
+                "mcp_review_digest",
+                ok=True,
+                action="mark_reviewed",
+                route="daily_digest",
+                outcome="committed",
+                target_ref={"path": digest_path, "commit_sha": sha},
+                start=start,
+                date=date,
             )
             return {"ok": True, "committed": True, "commit_sha": sha}
 
@@ -1059,6 +1261,18 @@ def review_digest(date: str | None = None, action: str | None = None) -> dict[st
             "fact_count": len(digest["facts"]),
         }
     except Exception as e:
+        if action == "mark_reviewed":
+            _record_mcp_event(
+                "mcp_review_digest",
+                ok=False,
+                action="mark_reviewed",
+                route="daily_digest",
+                outcome="failed",
+                target_ref={"path": f"inbox/daily/{date}.md" if date else None},
+                error=str(e),
+                start=start,
+                date=date,
+            )
         return {"ok": False, "error": str(e)}
 
 
@@ -1078,11 +1292,24 @@ def approve_fact(
     - promote: 转 wiki page（走 L2 review），需给 partition + slug；Wiki 与 digest 日志统一提交
     返回: {"ok": true, "action": "...", "result": {...}}
     """
+    start = time.monotonic()
     try:
         # Load digest to find the fact
         digest = tm_review_tools.load_digest(date)
         if not digest:
-            return {"ok": False, "error": f"Digest not found: {date}"}
+            error = f"Digest not found: {date}"
+            _record_mcp_event(
+                "mcp_approve_fact",
+                ok=False,
+                action=action,
+                route="daily_digest",
+                outcome="digest_not_found",
+                error=error,
+                start=start,
+                date=date,
+                fact_id=fact_id,
+            )
+            return {"ok": False, "error": error}
         
         # Find fact by ID
         fact = None
@@ -1091,7 +1318,19 @@ def approve_fact(
                 fact = f
                 break
         if not fact:
-            return {"ok": False, "error": f"Fact not found: {fact_id}"}
+            error = f"Fact not found: {fact_id}"
+            _record_mcp_event(
+                "mcp_approve_fact",
+                ok=False,
+                action=action,
+                route="daily_digest",
+                outcome="fact_not_found",
+                error=error,
+                start=start,
+                date=date,
+                fact_id=fact_id,
+            )
+            return {"ok": False, "error": error}
         
         # Execute action
         if action == "keep":
@@ -1100,10 +1339,34 @@ def approve_fact(
             result = tm_review_tools.execute_delete(fact)
         elif action == "promote":
             if not promote_partition or not promote_slug:
-                return {"ok": False, "error": "promote requires promote_partition and promote_slug"}
+                error = "promote requires promote_partition and promote_slug"
+                _record_mcp_event(
+                    "mcp_approve_fact",
+                    ok=False,
+                    action=action,
+                    route="daily_digest",
+                    outcome="missing_promote_target",
+                    error=error,
+                    start=start,
+                    date=date,
+                    fact_id=fact_id,
+                )
+                return {"ok": False, "error": error}
             result = tm_review_tools.execute_promote(fact, promote_partition, promote_slug, commit=False)
         else:
-            return {"ok": False, "error": f"Invalid action: {action} (must be keep/delete/promote)"}
+            error = f"Invalid action: {action} (must be keep/delete/promote)"
+            _record_mcp_event(
+                "mcp_approve_fact",
+                ok=False,
+                action=action,
+                route="daily_digest",
+                outcome="invalid_action",
+                error=error,
+                start=start,
+                date=date,
+                fact_id=fact_id,
+            )
+            return {"ok": False, "error": error}
         
         # Append to review log
         log_entry = {
@@ -1128,8 +1391,34 @@ def approve_fact(
             if commit_sha is None:
                 result["commit_warning"] = "no committable paths after promote"
         
+        _record_mcp_event(
+            "mcp_approve_fact",
+            ok=bool(result.get("ok", True)),
+            action=action,
+            route="daily_digest",
+            outcome="review_logged" if log_written else "review_log_missing",
+            target_ref={"path": f"inbox/daily/{date}.md", "commit_sha": result.get("commit_sha")},
+            error=result.get("error"),
+            start=start,
+            date=date,
+            fact_id=fact_id,
+            promote_partition=promote_partition,
+            promote_slug=promote_slug,
+        )
         return {"ok": True, "action": action, "result": result, "review_log_written": log_written}
     except Exception as e:
+        _record_mcp_event(
+            "mcp_approve_fact",
+            ok=False,
+            action=action,
+            route="daily_digest",
+            outcome="failed",
+            target_ref={"path": f"inbox/daily/{date}.md"},
+            error=str(e),
+            start=start,
+            date=date,
+            fact_id=fact_id,
+        )
         return {"ok": False, "error": str(e)}
 
 
@@ -1295,14 +1584,43 @@ def expense_record(
     Returns:
         {"ok": true, "id": <int>, "kind": "...", "amount": ..., "category": "..."}
     """
+    start = time.monotonic()
     try:
-        return tm_expense.expense_record(
+        result = tm_expense.expense_record(
             kind=kind, amount=amount, category=category,
             occurred_at=occurred_at, currency=currency,
             merchant=merchant, note=note, payment_method=payment_method,
             source_agent=source_agent, source_text=source_text,
         )
+        _record_mcp_event(
+            "mcp_expense_write",
+            ok=bool(result.get("ok", True)),
+            action="record",
+            agent=source_agent,
+            route="private_sqlite",
+            outcome="recorded" if result.get("ok", True) else "failed",
+            target_ref={"id": result.get("id")},
+            error=result.get("error"),
+            start=start,
+            kind=kind,
+            category=category,
+            currency=currency,
+        )
+        return result
     except Exception as e:
+        _record_mcp_event(
+            "mcp_expense_write",
+            ok=False,
+            action="record",
+            agent=source_agent,
+            route="private_sqlite",
+            outcome="failed",
+            error=str(e),
+            start=start,
+            kind=kind,
+            category=category,
+            currency=currency,
+        )
         return {"ok": False, "error": str(e)}
 
 
@@ -1399,8 +1717,9 @@ def expense_write(
         {"ok": true, "action": "...", "id": N, "normalized": {...}}
         or {"ok": false, "needs_confirmation": true, ...} for unknown categories.
     """
+    start = time.monotonic()
     try:
-        return tm_expense.expense_write(
+        result = tm_expense.expense_write(
             action=action,
             id=id,
             kind=kind,
@@ -1436,7 +1755,38 @@ def expense_write(
             budget_note=budget_note,
             budget_id=budget_id,
         )
+        _record_mcp_event(
+            "mcp_expense_write",
+            ok=bool(result.get("ok", True)),
+            action=action,
+            agent=source_agent,
+            route="private_sqlite",
+            outcome="written" if result.get("ok", True) else "failed",
+            target_ref={"id": result.get("id", id)},
+            error=result.get("error"),
+            start=start,
+            entries_count=len(entries or []),
+            kind=kind,
+            category=category,
+            manage_category_action=manage_category_action if action == "manage_category" else None,
+            manage_merchant_action=manage_merchant_action if action == "manage_merchant" else None,
+        )
+        return result
     except Exception as e:
+        _record_mcp_event(
+            "mcp_expense_write",
+            ok=False,
+            action=action,
+            agent=source_agent,
+            route="private_sqlite",
+            outcome="failed",
+            target_ref={"id": id},
+            error=str(e),
+            start=start,
+            entries_count=len(entries or []),
+            kind=kind,
+            category=category,
+        )
         return {"ok": False, "error": str(e)}
 
 

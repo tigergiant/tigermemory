@@ -29,6 +29,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+import _bootstrap_paths  # noqa: F401  -- ensures packages/*/src imports work when run as a script
+from tigermemory_core import runtime_events as tm_runtime_events
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MEM0_ENV_PATH = REPO_ROOT / "runtime" / "openmemory" / ".env"
@@ -64,6 +67,44 @@ def _env_value(key: str, default: str | None = None) -> str:
     if default is not None:
         return default
     raise RuntimeError(f"missing env key: {key} (or set {key} in {MEM0_ENV_PATH})")
+
+
+def _record_local_memory_event(
+    command: str,
+    *,
+    ok: bool,
+    start: float,
+    args: argparse.Namespace,
+    error: str | None = None,
+) -> None:
+    try:
+        target_ref = {
+            "db": getattr(args, "db", None),
+            "input": getattr(args, "input", None),
+            "out": getattr(args, "out", None),
+            "backup": getattr(args, "backup", None),
+            "id": getattr(args, "id", None),
+        }
+        tm_runtime_events.record_event(
+            event_type=f"local_memory_{command.replace('-', '_')}",
+            service="tm-local-memory",
+            component="migration",
+            ok=ok,
+            severity=None if ok else "error",
+            duration_ms=(time.monotonic() - start) * 1000,
+            route="local_sqlite",
+            outcome=command,
+            target_ref={k: v for k, v in target_ref.items() if v is not None},
+            source_log="tm-local-memory",
+            error=error,
+            extra={
+                "dry_run": getattr(args, "dry_run", None),
+                "force": getattr(args, "force", None),
+                "terms_count": len(getattr(args, "terms", []) or []),
+            },
+        )
+    except Exception:
+        pass
 
 
 def _http_json(url: str, timeout: int = 15, bearer: str | None = None) -> dict[str, Any]:
@@ -782,7 +823,20 @@ def main(argv: list[str] | None = None) -> int:
         "restore": cmd_restore,
         "verify": cmd_verify,
     }
-    return dispatch[args.command](args)
+    start = time.monotonic()
+    try:
+        rc = dispatch[args.command](args)
+    except Exception as exc:
+        _record_local_memory_event(args.command, ok=False, start=start, args=args, error=str(exc))
+        raise
+    _record_local_memory_event(
+        args.command,
+        ok=rc == 0,
+        start=start,
+        args=args,
+        error=None if rc == 0 else f"command exited {rc}",
+    )
+    return rc
 
 
 if __name__ == "__main__":

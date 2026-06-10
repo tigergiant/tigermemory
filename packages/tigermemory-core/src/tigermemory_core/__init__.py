@@ -358,11 +358,52 @@ def git_commit_push(files: list[str], msg: str) -> str:
     manual `git pull` on the MCP host. The target files are written to disk
     but untracked at this point, so rebase cannot conflict on them.
     """
+    start = time.monotonic()
+
+    def runtime_git_event(
+        *,
+        ok: bool,
+        outcome: str,
+        severity: str | None = None,
+        error: str | None = None,
+        commit_sha: str | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            from . import runtime_events as tm_runtime_events
+
+            target_ref = {"commit_sha": commit_sha} if commit_sha else {}
+            tm_runtime_events.record_event(
+                event_type="git_commit_push",
+                service="tigermemory-core",
+                component="git",
+                ok=ok,
+                severity=severity or ("info" if ok else "error"),
+                duration_ms=round((time.monotonic() - start) * 1000, 1),
+                outcome=outcome,
+                target_ref=target_ref,
+                error=error,
+                extra={
+                    "files": list(files),
+                    "file_count": len(files),
+                    "message": msg[:160],
+                    **(extra or {}),
+                },
+            )
+        except Exception:
+            pass
+
     # Self-heal: if origin is ahead (peer worktree pushed), pull first.
     # Skip silently if offline / no upstream; the hook will handle it.
     pull_r = run(["git", "pull", "--rebase", "--autostash", "origin", "master"], check=False)
     if pull_r.returncode != 0:
         run(["git", "rebase", "--abort"], check=False)
+        runtime_git_event(
+            ok=False,
+            outcome="autopull_failed_continue",
+            severity="warn",
+            error=pull_r.stderr.strip() or pull_r.stdout.strip(),
+        )
         # Don't raise: maybe offline. Let commit+push attempt proceed;
         # the pre-commit hook will surface a clean error if truly stale.
     run(["git", "add", "--"] + files)
@@ -373,18 +414,39 @@ def git_commit_push(files: list[str], msg: str) -> str:
         # `git diff --cached`, so stale staged-add entries survive across
         # caller's on-disk cleanup).
         run(["git", "restore", "--staged", "--"] + files, check=False)
+        runtime_git_event(
+            ok=False,
+            outcome="commit_failed",
+            error=commit_r.stderr.strip() or commit_r.stdout.strip(),
+        )
         raise GitError(
             f"git commit failed: {commit_r.stderr.strip() or commit_r.stdout.strip()}"
         )
 
+    sha = run(["git", "rev-parse", "--short", "HEAD"]).stdout.strip()
     push_r = run(["git", "push"], check=False)
+    push_retried = False
     if push_r.returncode != 0:
+        push_retried = True
         git_pull_rebase()
         push2 = run(["git", "push"], check=False)
         if push2.returncode != 0:
+            runtime_git_event(
+                ok=False,
+                outcome="push_failed",
+                commit_sha=sha,
+                error=push2.stderr.strip() or push2.stdout.strip(),
+                extra={"push_retry": True},
+            )
             raise GitError(f"push failed after rebase retry: {push2.stderr.strip()}")
 
-    return run(["git", "rev-parse", "--short", "HEAD"]).stdout.strip()
+    runtime_git_event(
+        ok=True,
+        outcome="success",
+        commit_sha=sha,
+        extra={"push_retry": push_retried},
+    )
+    return sha
 
 
 def git_session_status(strict_clean: bool = False) -> dict[str, Any]:

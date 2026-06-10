@@ -4,6 +4,7 @@ import json
 import pathlib
 
 from tigermemory_config import manager
+from tigermemory_core import runtime_events as tm_runtime_events
 
 
 CANONICAL = """canonical_version: 0.1
@@ -229,6 +230,27 @@ def test_rollback_rejects_tampered_backup(tmp_path: pathlib.Path) -> None:
 
     assert result["ok"] is False
     assert "backup sha256 mismatch" in result["errors"][0]
+
+
+def test_apply_verify_rollback_record_runtime_events(tmp_path: pathlib.Path, monkeypatch) -> None:
+    event_root = tmp_path / "events"
+    monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(event_root))
+    repo = _repo(tmp_path)
+    home = _wsl_home(tmp_path)
+    backup_root = tmp_path / "backups"
+
+    applied = manager.apply_manager(["openclaw"], yes=True, repo_root=repo, wsl_home=home, backup_root=backup_root)
+    verified = manager.verify_manager(str(applied["snapshot_id"]), repo_root=repo, backup_root=backup_root)
+    rolled_back = manager.rollback_manager(str(applied["snapshot_id"]), runtimes=["openclaw"], yes=True, repo_root=repo, backup_root=backup_root)
+
+    assert applied["ok"] is True
+    assert verified["ok"] is True
+    assert rolled_back["ok"] is True
+    events = tm_runtime_events.load_events(dates=[tm_runtime_events._date_key()], event_root=event_root)
+    event_types = [event["event_type"] for event in events]
+    assert "runtime_config_apply" in event_types
+    assert "runtime_config_verify" in event_types
+    assert "runtime_config_rollback" in event_types
 
 
 def test_apply_rejects_preview_only_runtime(tmp_path: pathlib.Path) -> None:

@@ -14,6 +14,7 @@ import os
 import pathlib
 import re
 import sys
+import time
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
@@ -57,6 +58,46 @@ class RuntimeTarget:
 
 def _now() -> str:
     return dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).replace(microsecond=0).isoformat()
+
+
+def _record_manager_event(
+    event_type: str,
+    result: dict[str, object],
+    *,
+    start: float,
+    runtimes: Sequence[str] | None = None,
+    dry_run: bool | None = None,
+) -> None:
+    try:
+        from tigermemory_core import runtime_events as tm_runtime_events
+
+        ok = bool(result.get("ok"))
+        errors = result.get("errors") or []
+        targets = result.get("targets") or []
+        tm_runtime_events.record_event(
+            event_type=event_type,
+            service="tm-config-manager",
+            component="runtime_config",
+            ok=ok,
+            severity=None if ok else "error",
+            duration_ms=(time.monotonic() - start) * 1000,
+            route="managed_runtime_config",
+            outcome=str(result.get("action") or event_type),
+            target_ref={
+                "snapshot_id": result.get("snapshot_id"),
+                "manifest_path": result.get("manifest_path"),
+            },
+            source_log="config-manager",
+            error="; ".join(str(item) for item in errors[:3]) if errors else None,
+            extra={
+                "runtimes": list(runtimes or []),
+                "target_count": len(targets) if isinstance(targets, list) else 0,
+                "error_count": len(errors) if isinstance(errors, list) else 0,
+                "dry_run": dry_run,
+            },
+        )
+    except Exception:
+        pass
 
 
 def _detect_repo_root() -> pathlib.Path:
@@ -344,15 +385,25 @@ def apply_manager(
     wsl_home: pathlib.Path | None = None,
     backup_root: pathlib.Path | None = None,
 ) -> dict[str, object]:
+    start = time.monotonic()
+
+    def finish(result: dict[str, object]) -> dict[str, object]:
+        try:
+            event_runtimes: Sequence[str] | None = selected
+        except NameError:
+            event_runtimes = runtimes
+        _record_manager_event("runtime_config_apply", result, start=start, runtimes=event_runtimes)
+        return result
+
     if not yes:
-        return {"ok": False, "action": "apply", "errors": ["apply requires --yes"]}
+        return finish({"ok": False, "action": "apply", "errors": ["apply requires --yes"]})
     repo_root = repo_root or _detect_repo_root()
     wsl_home = wsl_home or _default_wsl_home()
     backup_root = backup_root or (repo_root / DEFAULT_BACKUP_DIR)
     selected = _selected_runtimes(runtimes)
     errors = _precheck_apply(selected, wsl_home)
     if errors:
-        return {"ok": False, "action": "apply", "errors": errors}
+        return finish({"ok": False, "action": "apply", "errors": errors})
 
     canonical_path = repo_root / CANONICAL_REL
     canonical = load_canonical(canonical_path)
@@ -405,13 +456,13 @@ def apply_manager(
     manifest_path = _manifest_path(backup_root, snapshot_id)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {
+    return finish({
         "ok": True,
         "action": "apply",
         "snapshot_id": snapshot_id,
         "manifest_path": str(manifest_path),
         "targets": targets_out,
-    }
+    })
 
 
 def _load_manifest(snapshot_id: str, backup_root: pathlib.Path) -> dict[str, object]:
@@ -428,6 +479,7 @@ def verify_manager(
     repo_root: pathlib.Path | None = None,
     backup_root: pathlib.Path | None = None,
 ) -> dict[str, object]:
+    start = time.monotonic()
     repo_root = repo_root or _detect_repo_root()
     backup_root = backup_root or (repo_root / DEFAULT_BACKUP_DIR)
     manifest = _load_manifest(snapshot_id, backup_root)
@@ -462,7 +514,9 @@ def verify_manager(
         elif target["write_policy"] == "managed_block" and (not has_block or missing_ids):
             errors.append(f"{runtime}:{target['target_id']}: managed block verify failed")
         rows.append(row)
-    return {"ok": not errors, "action": "verify", "snapshot_id": snapshot_id, "targets": rows, "errors": errors}
+    result = {"ok": not errors, "action": "verify", "snapshot_id": snapshot_id, "targets": rows, "errors": errors}
+    _record_manager_event("runtime_config_verify", result, start=start, runtimes=runtimes)
+    return result
 
 
 def _status_for_target(
@@ -560,8 +614,14 @@ def rollback_manager(
     repo_root: pathlib.Path | None = None,
     backup_root: pathlib.Path | None = None,
 ) -> dict[str, object]:
+    start = time.monotonic()
+
+    def finish(result: dict[str, object]) -> dict[str, object]:
+        _record_manager_event("runtime_config_rollback", result, start=start, runtimes=runtimes, dry_run=dry_run)
+        return result
+
     if not dry_run and not yes:
-        return {"ok": False, "action": "rollback", "errors": ["rollback requires --yes unless --dry-run is set"]}
+        return finish({"ok": False, "action": "rollback", "errors": ["rollback requires --yes unless --dry-run is set"]})
     repo_root = repo_root or _detect_repo_root()
     backup_root = backup_root or (repo_root / DEFAULT_BACKUP_DIR)
     manifest = _load_manifest(snapshot_id, backup_root)
@@ -592,7 +652,7 @@ def rollback_manager(
                 "restored": not dry_run,
             }
         )
-    return {"ok": not errors, "action": "rollback", "snapshot_id": snapshot_id, "targets": rows, "errors": errors}
+    return finish({"ok": not errors, "action": "rollback", "snapshot_id": snapshot_id, "targets": rows, "errors": errors})
 
 
 def _print_result(result: dict[str, object], as_json: bool) -> None:

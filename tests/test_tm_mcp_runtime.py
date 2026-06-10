@@ -260,6 +260,8 @@ def test_propose_wiki_page_owner_schedules_embed_refresh(tmp_path, monkeypatch):
 
 def test_write_sources_schedules_wiki_embed_refresh(tmp_path, monkeypatch):
     (tmp_path / "sources").mkdir()
+    event_root = tmp_path / "events"
+    monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(event_root))
     calls = []
     monkeypatch.setattr(tm_mcp.tm_core, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(tm_mcp.tm_core, "git_commit_push", lambda _files, _msg: "abc123")
@@ -292,6 +294,10 @@ def test_write_sources_schedules_wiki_embed_refresh(tmp_path, monkeypatch):
         "reason": "write_sources",
         "paths": ["sources/bc/source-test.md"],
     }]
+    events = tm_mcp.tm_runtime_events.load_events(dates=[tm_mcp.tm_core.now("%Y-%m-%d")], event_root=event_root)
+    assert events[-1]["event_type"] == "mcp_write_sources"
+    assert events[-1]["target_ref"]["path"] == "sources/bc/source-test.md"
+    assert events[-1]["target_ref"]["commit_sha"] == "abc123"
 
 
 def test_propose_wiki_page_l2_fallback_schedules_digest_refresh(tmp_path, monkeypatch):

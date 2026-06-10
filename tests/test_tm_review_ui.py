@@ -1646,7 +1646,9 @@ def test_committable_paths_skip_missing_untracked_source(tmp_path, monkeypatch):
     ]) == ["wiki/operations/inbox-archive/2026-05-01.md"]
 
 
-def test_locked_write_action_clears_api_cache(monkeypatch):
+def test_locked_write_action_clears_api_cache(tmp_path, monkeypatch):
+    event_root = tmp_path / "runtime-events"
+    monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(event_root))
     with tm_review_ui._API_CACHE_LOCK:
         tm_review_ui._API_CACHE["api:digest:test"] = {"payload": {"stale": True}}
 
@@ -1655,6 +1657,12 @@ def test_locked_write_action_clears_api_cache(monkeypatch):
     assert result == {"ok": True}
     with tm_review_ui._API_CACHE_LOCK:
         assert tm_review_ui._API_CACHE == {}
+    events = tm_review_ui.tm_runtime_events.load_events(
+        dates=[tm_review_ui.tm_runtime_events._date_key()],
+        event_root=event_root,
+    )
+    assert events[-1]["event_type"] == "dashboard_write_action"
+    assert events[-1]["service"] == "tm-dashboard"
 
 
 def test_inbox_archive_upserts_duplicate_source_entry(tmp_path, monkeypatch):
