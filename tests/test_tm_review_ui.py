@@ -856,7 +856,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v58" in response.text
+    assert "tigermemory-memory-ops-v59" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -2809,17 +2809,25 @@ def test_dashboard_action_controls_and_toast_static_guards():
 
     assert "actionInFlight" in pages_js
     assert "enqueueWriteJob" in pages_js
+    assert "enqueueInboxRowAction(row, card, action)" in pages_js
+    assert "openActionConfirmModal(row, card, action)" in pages_js
+    assert "state.kind === 'action-confirm'" in pages_js
+    assert "modalTitle.removeAttribute('data-i18n')" in pages_js
+    assert "modalConfirm.removeAttribute('data-i18n')" in pages_js
     assert "scheduleWriteQueue" in pages_js
     assert "batchableQueuedJobs" in pages_js
+    assert "queueProgressWidth(job)" in pages_js
     assert "actionTimeoutMs(action, count = 1)" in pages_js
     assert "45000 + itemCount * 30000" in pages_js
     assert "this.actionTimeoutMs(action, paths.length)" in pages_js
     assert "/api/inbox/batch-action" in pages_js
     assert "processWriteQueue" in pages_js
     assert "处理队列" in pages_js
+    assert "daily.processing.handling" not in pages_js
     assert "bottom-6 left-1/2" in pages_js
     assert "bottom-6 left-1/2" in review_html
     assert 'id="action-queue"' in review_html
+    assert 'id="wiki-modal-title"' in review_html
     assert "tm-action-queue:hover" in style_css
     assert "tmBusySheen" in style_css
     assert "tmQueueSheen" in style_css
