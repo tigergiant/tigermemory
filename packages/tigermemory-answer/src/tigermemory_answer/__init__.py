@@ -588,6 +588,45 @@ def _first_heading(text: str) -> str:
     return ""
 
 
+def _page_planner_signals(text: str, frontmatter: dict[str, str]) -> str:
+    signals: list[str] = []
+    for key in ("summary", "description", "subtopic"):
+        value = _clean_planner_text(frontmatter.get(key), max_chars=120)
+        if value:
+            signals.append(value)
+
+    body = _strip_frontmatter(text)
+    headings: list[str] = []
+    summary_lines: list[str] = []
+    lead_lines: list[str] = []
+    in_summary = False
+    in_code = False
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_code = not in_code
+            continue
+        if in_code or not stripped or stripped.startswith("|"):
+            continue
+        if stripped.startswith("#"):
+            heading = stripped.lstrip("#").strip()
+            if heading:
+                headings.append(heading)
+            in_summary = "摘要" in heading or "summary" in heading.lower()
+            if len(headings) >= 8 and len(summary_lines) >= 3 and len(lead_lines) >= 6:
+                break
+            continue
+        if in_summary and len(summary_lines) < 3:
+            summary_lines.append(stripped)
+            continue
+        if len(lead_lines) < 6:
+            lead_lines.append(stripped)
+    signals.extend(headings[:8])
+    signals.extend(summary_lines[:3])
+    signals.extend(lead_lines[:6])
+    return _clean_planner_text(" ".join(signals), max_chars=420)
+
+
 def _query_planner_manifest() -> str:
     global _QUERY_PLANNER_MANIFEST_CACHE
     if _QUERY_PLANNER_MANIFEST_CACHE is not None:
@@ -618,6 +657,9 @@ def _query_planner_manifest() -> str:
             subtopic = _clean_planner_text(frontmatter.get("subtopic"), max_chars=120)
             if subtopic:
                 item["subtopic"] = subtopic
+            signals = _page_planner_signals(text, frontmatter)
+            if signals:
+                item["signals"] = signals
             updated = _clean_planner_text(frontmatter.get("updated") or frontmatter.get("updated_at"), max_chars=30)
             if updated:
                 item["updated"] = updated
@@ -684,15 +726,18 @@ def _manifest_page_score(page: dict[str, str], tokens: list[str]) -> float:
     title = str(page.get("title") or "")
     if not path or not title:
         return 0.0
-    text = " ".join(str(value or "") for value in page.values()).lower()
+    meta_text = " ".join(str(value or "") for key, value in page.items() if key != "signals").lower()
+    signal_text = str(page.get("signals") or "").lower()
     score = 0.0
     for token in tokens:
-        if token in text:
+        if token in meta_text:
             score += 1.0 + min(len(token), 8) / 4.0
             if token in path.lower():
                 score += 1.5
             if token in title.lower():
                 score += 1.0
+        if token in signal_text:
+            score += 0.8 + min(len(token), 8) / 6.0
     if path.endswith("/index.md"):
         score -= 2.0
     return score

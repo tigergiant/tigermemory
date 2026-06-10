@@ -433,6 +433,26 @@ def test_query_planner_llm_uses_budgeted_manifest_context(monkeypatch):
     assert "answer_key" not in manifest_payload
 
 
+def test_rank_manifest_pages_uses_compact_page_signals(monkeypatch):
+    monkeypatch.setattr(tm_answer, "_query_planner_manifest_pages", lambda: [
+        {
+            "path": "wiki/systems/plain-title.md",
+            "title": "Plain Title",
+            "signals": "记忆问答 自然语言 召回 证据规划",
+        },
+        {
+            "path": "wiki/systems/noise.md",
+            "title": "Unrelated",
+            "signals": "dashboard runtime canvas",
+        },
+    ])
+
+    ranked = tm_answer._rank_manifest_pages("为什么记忆问答自然语言召回失败", limit=5)
+
+    assert ranked[0]["path"] == "wiki/systems/plain-title.md"
+    assert ranked[0]["score"] > 0
+
+
 def test_plan_query_uses_deepseek_planner_for_general_rewrite(monkeypatch):
     query = "请帮我判断记忆问答系统为什么自然语言问题找不到对应资料"
     monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "1")
