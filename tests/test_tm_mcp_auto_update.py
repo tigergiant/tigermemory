@@ -66,7 +66,67 @@ def test_auto_update_wrapper_starts_mcp_when_untracked_files_exist(tmp_path):
     assert marker.read_text(encoding="utf-8").startswith("fake-python ")
 
 
-def test_auto_update_wrapper_times_out_blocked_git_pull(tmp_path):
+def test_auto_update_wrapper_starts_mcp_when_update_lock_is_busy(tmp_path):
+    if not shutil.which("bash"):
+        pytest.skip("bash is required for wrapper lock smoke")
+
+    root = tmp_path / "repo"
+    bin_dir = tmp_path / "bin"
+    script = root / "deploy/mcp/tm_mcp_auto_update.sh"
+    fake_python = root / "runtime/mcp-venv/bin/python"
+    fake_git = bin_dir / "git"
+    marker = root / "wrapper-invoked.txt"
+    git_called = root / "git-called.txt"
+    (root / "tools").mkdir(parents=True)
+    (root / ".tmp/mcp-auto-update.lock").mkdir(parents=True)
+    script.parent.mkdir(parents=True)
+    fake_python.parent.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+    (root / "tools/tm_mcp.py").write_text("unused\n", encoding="utf-8")
+    with script.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(
+            (REPO_ROOT / "deploy/mcp/tm_mcp_auto_update.sh")
+            .read_text(encoding="utf-8")
+            .replace("\r\n", "\n")
+        )
+    with fake_python.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(
+            "#!/usr/bin/env bash\n"
+            f"printf 'fake-python %s\\n' \"$*\" >> {_sh_quote(_bash_path(marker))}\n"
+        )
+    with fake_git.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(
+            "#!/usr/bin/env bash\n"
+            f"printf 'git-called\\n' > {_sh_quote(_bash_path(git_called))}\n"
+            "exit 2\n"
+        )
+    os.chmod(fake_python, 0o755)
+    os.chmod(fake_git, 0o755)
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-lc",
+            (
+                f"cd {_sh_quote(_bash_path(root))} && "
+                f"export PATH={_sh_quote(_bash_path(bin_dir))}:$PATH && "
+                "export TM_MCP_AUTO_UPDATE_LOCK_WAIT_SEC=0 && "
+                f"exec {_sh_quote(_bash_path(script))} --stdio"
+            ),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=4,
+    )
+
+    assert result.returncode == 0
+    assert "auto-update lock busy; continuing with local checkout" in result.stderr
+    assert "tm_mcp.py --stdio" in marker.read_text(encoding="utf-8")
+    assert not git_called.exists()
+
+
+def test_auto_update_wrapper_times_out_blocked_git_fetch(tmp_path):
     if not shutil.which("bash") or not shutil.which("timeout"):
         pytest.skip("bash and timeout are required for wrapper timeout smoke")
 
@@ -241,7 +301,67 @@ def test_openai_auto_update_wrapper_starts_when_untracked_files_exist(tmp_path):
     assert marker.read_text(encoding="utf-8").startswith("fake-python ")
 
 
-def test_openai_auto_update_wrapper_times_out_blocked_git_pull(tmp_path):
+def test_openai_auto_update_wrapper_starts_when_update_lock_is_busy(tmp_path):
+    if not shutil.which("bash"):
+        pytest.skip("bash is required for wrapper lock smoke")
+
+    root = tmp_path / "repo"
+    bin_dir = tmp_path / "bin"
+    script = root / "deploy/mcp/tm_openai_mcp_auto_update.sh"
+    fake_python = root / "runtime/mcp-venv/bin/python"
+    fake_git = bin_dir / "git"
+    marker = root / "wrapper-invoked.txt"
+    git_called = root / "git-called.txt"
+    (root / "tools").mkdir(parents=True)
+    (root / ".tmp/mcp-auto-update.lock").mkdir(parents=True)
+    script.parent.mkdir(parents=True)
+    fake_python.parent.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+    (root / "tools/tm_mcp_openai.py").write_text("unused\n", encoding="utf-8")
+    with script.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(
+            (REPO_ROOT / "deploy/mcp/tm_openai_mcp_auto_update.sh")
+            .read_text(encoding="utf-8")
+            .replace("\r\n", "\n")
+        )
+    with fake_python.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(
+            "#!/usr/bin/env bash\n"
+            f"printf 'fake-python %s\\n' \"$*\" >> {_sh_quote(_bash_path(marker))}\n"
+        )
+    with fake_git.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(
+            "#!/usr/bin/env bash\n"
+            f"printf 'git-called\\n' > {_sh_quote(_bash_path(git_called))}\n"
+            "exit 2\n"
+        )
+    os.chmod(fake_python, 0o755)
+    os.chmod(fake_git, 0o755)
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-lc",
+            (
+                f"cd {_sh_quote(_bash_path(root))} && "
+                f"export PATH={_sh_quote(_bash_path(bin_dir))}:$PATH && "
+                "export TM_OPENAI_MCP_AUTO_UPDATE_LOCK_WAIT_SEC=0 && "
+                f"exec {_sh_quote(_bash_path(script))} --http --port 9776"
+            ),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=4,
+    )
+
+    assert result.returncode == 0
+    assert "OpenAI MCP auto-update lock busy; continuing with local checkout" in result.stderr
+    assert "tm_mcp_openai.py --http --port 9776" in marker.read_text(encoding="utf-8")
+    assert not git_called.exists()
+
+
+def test_openai_auto_update_wrapper_times_out_blocked_git_fetch(tmp_path):
     if not shutil.which("bash") or not shutil.which("timeout"):
         pytest.skip("bash and timeout are required for wrapper timeout smoke")
 
