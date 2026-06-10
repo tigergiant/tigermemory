@@ -2514,6 +2514,44 @@ def test_dashboard_memory_quality_range_keeps_digest_mem0_when_live_mem0_times_o
     assert "今日实时增量未计入" in data["counts"]["mem0_basis"]
 
 
+def test_dashboard_memory_quality_range_cached_note_marks_partial_route_ledger(monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "today", lambda: "2026-06-11")
+    monkeypatch.setattr(tm_review_ui, "_worktree_dirty_state", lambda: {"dirty": False, "status_count": 0, "sample": [], "error": None})
+
+    cached_payload = {
+        "ok": True,
+        "date": "2026-06-11",
+        "counts": {
+            "route_event_total": 32,
+            "route_event_counts": {"mem0": 30, "wiki": 0, "inbox": 1, "discard": 1},
+            "route_event_dates": ["2026-06-10", "2026-06-11"],
+            "route_event_missing_dates": ["2026-06-05", "2026-06-06"],
+        },
+        "route_flow": {
+            "history": {"note": "old note"},
+            "outputs": [],
+        },
+        "warnings": [],
+        "errors": [],
+    }
+    monkeypatch.setattr(
+        tm_review_ui,
+        "_attach_quality_route_history",
+        lambda counts, _dates, _warnings=None: {
+            "event_count": counts["route_event_total"],
+            "flow_counts": counts["route_event_counts"],
+            "dates_with_events": counts["route_event_dates"],
+            "missing_event_dates": counts["route_event_missing_dates"],
+        },
+    )
+    monkeypatch.setattr(tm_review_ui, "_run_cache_get", lambda *_args, **_kwargs: (cached_payload, True))
+
+    data = tm_review_ui.dashboard_memory_quality("2026-06-11", "7d")
+
+    assert data["cached"] is True
+    assert data["route_flow"]["history"]["note"] == "近 7 天主图只展示已记录路由流水 32 条；缺少 2 天流水，历史日报和待审积压只作参考。"
+
+
 def test_quality_live_mem0_count_uses_server_date_filter(monkeypatch):
     captured: dict[str, object] = {}
 
