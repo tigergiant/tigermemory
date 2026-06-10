@@ -122,6 +122,79 @@ def test_auto_update_wrapper_times_out_blocked_git_pull(tmp_path):
     assert marker.read_text(encoding="utf-8").startswith("fake-python ")
 
 
+def test_auto_update_wrapper_preserves_stdio_for_mcp_handshake(tmp_path):
+    if not shutil.which("bash"):
+        pytest.skip("bash is required for wrapper stdin smoke")
+
+    root = tmp_path / "repo"
+    bin_dir = tmp_path / "bin"
+    script = root / "deploy/mcp/tm_mcp_auto_update.sh"
+    fake_python = root / "runtime/mcp-venv/bin/python"
+    fake_git = bin_dir / "git"
+    final_stdin = root / "final-stdin.txt"
+    event_stolen = root / "event-stolen.txt"
+    git_stolen = root / "git-stolen.txt"
+    (root / "tools").mkdir(parents=True)
+    script.parent.mkdir(parents=True)
+    fake_python.parent.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+    (root / "tools/tm_mcp.py").write_text("unused\n", encoding="utf-8")
+    with script.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(
+            (REPO_ROOT / "deploy/mcp/tm_mcp_auto_update.sh")
+            .read_text(encoding="utf-8")
+            .replace("\r\n", "\n")
+        )
+    with fake_python.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(
+            "#!/usr/bin/env bash\n"
+            f"event_stolen={_sh_quote(_bash_path(event_stolen))}\n"
+            f"final_stdin={_sh_quote(_bash_path(final_stdin))}\n"
+            "if [[ \"$*\" == *tm_runtime_events.py* ]]; then\n"
+            "  if IFS= read -r -t 0.2 line; then printf '%s\\n' \"$line\" > \"$event_stolen\"; fi\n"
+            "  exit 0\n"
+            "fi\n"
+            "IFS= read -r line || line=''\n"
+            "printf '%s\\n' \"$line\" > \"$final_stdin\"\n"
+        )
+    with fake_git.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(
+            "#!/usr/bin/env bash\n"
+            f"git_stolen={_sh_quote(_bash_path(git_stolen))}\n"
+            "if [ \"$1\" = \"diff\" ]; then\n"
+            "  if IFS= read -r -t 0.2 line; then printf '%s\\n' \"$line\" > \"$git_stolen\"; fi\n"
+            "  exit 0\n"
+            "fi\n"
+            "if [ \"$1\" = \"-c\" ]; then shift 2; fi\n"
+            "if [ \"$1\" = \"pull\" ]; then\n"
+            "  if IFS= read -r -t 0.2 line; then printf '%s\\n' \"$line\" > \"$git_stolen\"; fi\n"
+            "  exit 0\n"
+            "fi\n"
+            "exit 0\n"
+        )
+    os.chmod(fake_python, 0o755)
+    os.chmod(fake_git, 0o755)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{_bash_path(bin_dir)}:{env['PATH']}"
+    initialize = '{"jsonrpc":"2.0","id":1,"method":"initialize"}\n'
+    result = subprocess.run(
+        ["bash", _bash_path(script), "--stdio"],
+        cwd=root,
+        text=True,
+        input=initialize,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+
+    assert result.returncode == 0
+    assert final_stdin.read_text(encoding="utf-8") == initialize
+    assert not git_stolen.exists()
+    assert not event_stolen.exists()
+
+
 def test_openai_auto_update_wrapper_starts_when_untracked_files_exist(tmp_path):
     if not shutil.which("bash") or not shutil.which("git"):
         pytest.skip("bash and git are required for wrapper smoke")
