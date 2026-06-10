@@ -271,12 +271,21 @@ def render_port_lookup(services: list[Unit], mem0_url: str) -> str:
         m = re.match(r"https?://([^:/]+):(\d+)", mem0_url)
         if m:
             host, port = m.group(1), m.group(2)
-            note = (
-                f"OpenMemory / Mem0 后端（外部依赖，{host}）。"
-                f"由 docker / 独立部署提供，不在 deploy/mcp/。"
-                f"服务 unit 通过 `MEM0_URL={mem0_url}` 引用。"
-            )
-            rows.append([port, "OpenMemory (Mem0)", note])
+            if port == "9765":
+                service_name = "Mem0 auth gateway"
+                note = (
+                    f"Caddy 鉴权网关（外部依赖，{host}）。"
+                    f"由 docker / 独立部署提供，反代 OpenMemory 后端 :8765。"
+                    f"服务 unit 通过 `MEM0_URL={mem0_url}` 引用。"
+                )
+            else:
+                service_name = "OpenMemory (Mem0)"
+                note = (
+                    f"OpenMemory / Mem0 后端（外部依赖，{host}）。"
+                    f"由 docker / 独立部署提供，不在 deploy/mcp/。"
+                    f"服务 unit 通过 `MEM0_URL={mem0_url}` 引用。"
+                )
+            rows.append([port, service_name, note])
     rows.sort(key=lambda r: (int(r[0].split()[0]), " (VPS)" in r[0]))
     return _md_table(["端口", "服务", "备注"], rows)
 
