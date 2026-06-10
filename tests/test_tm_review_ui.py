@@ -857,7 +857,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v60" in response.text
+    assert "tigermemory-memory-ops-v61" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -2269,6 +2269,7 @@ def test_api_agent_eval_import_error_returns_json(tmp_path, monkeypatch):
 
 
 def test_route_events_record_final_outcome_without_raw_text(tmp_path):
+    import datetime as dt
     decision = tm_route.RouteDecision(
         route="inbox",
         score=88,
