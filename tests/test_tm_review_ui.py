@@ -4,6 +4,7 @@ import json
 import pathlib
 import sys
 import builtins
+import datetime as dt
 
 from fastapi.testclient import TestClient
 
@@ -856,7 +857,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v59" in response.text
+    assert "tigermemory-memory-ops-v60" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -2295,6 +2296,7 @@ def test_route_events_record_final_outcome_without_raw_text(tmp_path):
         result={"route": "inbox", "outcome": "wiki_proposal", "path": "inbox/example.md"},
         outcome="wiki_proposal",
         event_root=root,
+        now=dt.datetime(2026, 6, 10, 12, 0, tzinfo=tm_review_ui.tm_core.TZ_CN),
     )
     rows = tm_route_events.load_route_events(dates=["2026-06-10"], event_root=root)
     summary = tm_route_events.summarize_route_events(rows, dates=["2026-06-10"], event_root=root)
@@ -2343,6 +2345,20 @@ def test_dashboard_memory_quality_falls_back_to_live_inbox(tmp_path, monkeypatch
 def test_dashboard_memory_quality_cached_live_keeps_unknown_wiki(monkeypatch):
     monkeypatch.setattr(tm_review_ui, "today", lambda: "2026-06-10")
     monkeypatch.setattr(tm_review_ui, "_worktree_dirty_state", lambda: {"dirty": False, "status_count": 0, "sample": [], "error": None})
+
+    def fake_route_history(counts, dates, warnings=None):
+        counts["route_event_counts"] = {"mem0": 0, "wiki": 0, "inbox": 0, "discard": 0}
+        counts["route_event_total"] = 0
+        counts["route_event_dates"] = []
+        counts["route_event_missing_dates"] = list(dates)
+        return {
+            "event_count": 0,
+            "flow_counts": counts["route_event_counts"],
+            "dates_with_events": [],
+            "missing_event_dates": list(dates),
+        }
+
+    monkeypatch.setattr(tm_review_ui, "_attach_quality_route_history", fake_route_history)
     monkeypatch.setattr(
         tm_review_ui,
         "_run_cache_get",
@@ -2578,6 +2594,63 @@ def test_quality_route_flow_filters_recommendations_by_date_range():
     assert output_map["wiki"]["value"] == 0
     assert output_map["inbox"]["value"] == 2
     assert output_map["discard"]["value"] == 0
+
+
+def test_quality_route_flow_prefers_logged_route_events_over_range_backfill():
+    flow = tm_review_ui._build_quality_route_flow(
+        counts={
+            "mem0": None,
+            "wiki": 2,
+            "inbox_pending": 13,
+            "review_entered": 77,
+            "discard": 0,
+            "route_event_counts": {"mem0": 30, "wiki": 0, "inbox": 1, "discard": 1},
+            "route_event_dates": ["2026-06-10", "2026-06-11"],
+            "route_event_missing_dates": ["2026-06-05", "2026-06-06", "2026-06-07"],
+        },
+        report_date="2026-06-11",
+        trace_summary={"status_counts": {"not_found": 13}},
+        trace_rows=[],
+        inbox_rows=[],
+        source_mode="range",
+        date_filter={"2026-06-05", "2026-06-06", "2026-06-07", "2026-06-10", "2026-06-11"},
+        period_label="近 7 天",
+    )
+
+    output_map = {slot["key"]: slot for slot in flow["outputs"]}
+    assert flow["flow_source"] == "route_events"
+    assert flow["input_total"] == 32
+    assert output_map["mem0"]["value"] == 30
+    assert output_map["wiki"]["value"] == 0
+    assert output_map["inbox"]["value"] == 1
+    assert output_map["discard"]["value"] == 1
+    assert "真实路由流水 route=inbox 1 条" in output_map["inbox"]["basis"]
+    assert "主图只展示已记录路由流水 32 条" in flow["history"]["note"]
+
+
+def test_quality_route_flow_prefers_logged_fallback_over_recommendation():
+    flow = tm_review_ui._build_quality_route_flow(
+        counts={
+            "mem0": None,
+            "wiki": None,
+            "inbox_pending": 13,
+            "discard": 0,
+            "route_event_counts": {"mem0": 0, "wiki": 0, "inbox": 1, "discard": 0},
+        },
+        report_date="2026-06-11",
+        trace_summary={"status_counts": {}},
+        trace_rows=[],
+        inbox_rows=[{"path": "inbox/2026-06-11-0009-codex-systems.md", "route_target": "mem0"}],
+        source_mode="live",
+        period_label="今日",
+    )
+
+    output_map = {slot["key"]: slot for slot in flow["outputs"]}
+    assert flow["flow_source"] == "route_events"
+    assert flow["input_total"] == 1
+    assert output_map["mem0"]["value"] == 0
+    assert output_map["inbox"]["value"] == 1
+    assert "真实路由流水 route=inbox 1 条" in output_map["inbox"]["basis"]
 
 
 def test_quality_route_flow_preserves_cached_recommendation_distribution():
@@ -2888,14 +2961,16 @@ def test_quality_page_flow_panel_keeps_all_routes_visible():
     assert "正在更新${c.esc(range.label)}数据" in pages_js
     assert "当前数字仍是上一范围" in pages_js
     assert "renderQualityLoading(nextRange)" not in pages_js
-    assert "进入每日审批" in pages_js
+    assert "历史补算" in pages_js
     assert "prefetchQualityRanges()" in pages_js
     assert "quality range prefetch failed" in pages_js
     assert ".tm-quality-updating" in style_css
     assert "const eventOptions = this.abortController ? { signal: this.abortController.signal } : undefined;" in pages_js
     assert "}, eventOptions);" in pages_js
     assert "['即时记忆', sourceValues.daily" in pages_js
-    assert "'未接入'" in pages_js
+    assert "'缺日志'" in pages_js
+    assert "flowPayload.flow_source === 'route_events'" in pages_js
+    assert "真实退回人工" in pages_js
     assert "已忽略数" not in pages_js
     assert "statusSection.classList.add('hidden')" not in pages_js
     assert "暂无失败样本" in pages_js
