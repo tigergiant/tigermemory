@@ -46,9 +46,10 @@ LAUNCHER_SYSTEMD_UNITS = (
     "deploy/mcp/tm-openai-mcp.service",
 )
 MEM0_ROUTED_SYSTEMD_UNITS = (
-    "deploy/mcp/tm-mcp.service",
-    "deploy/mcp/tm-http.service",
-    "deploy/mcp/tm-openai-mcp.service",
+    ("deploy/mcp/tm-mcp.service", "http://127.0.0.1:9765"),
+    ("deploy/mcp/tm-http.service", "http://127.0.0.1:9765"),
+    ("deploy/mcp/tm-openai-mcp.service", "http://127.0.0.1:9765"),
+    ("deploy/mcp/tm-openai-mcp-vps.service", "http://100.113.108.21:9765"),
 )
 PACKAGE_PATH_PATTERN = re.compile(
     r"packages/[A-Za-z0-9_\-]+/src",
@@ -157,14 +158,14 @@ def test_launcher_has_no_hardcoded_packages_src_pythonpath(launcher):
     )
 
 
-@pytest.mark.parametrize("unit", MEM0_ROUTED_SYSTEMD_UNITS)
-def test_mem0_routed_systemd_units_use_auth_gateway(unit):
-    """Long-running WSL services must use the local Mem0 auth gateway.
+@pytest.mark.parametrize(("unit", "expected_url"), MEM0_ROUTED_SYSTEMD_UNITS)
+def test_mem0_routed_systemd_units_use_auth_gateway(unit, expected_url):
+    """Long-running services must use a Mem0 auth gateway.
 
     Direct ``localhost:8765`` is the OpenMemory container backend. It can reset
     long-running service calls and bypasses the same Bearer-auth path used by
-    remote clients, so these production units must stay on ``127.0.0.1:9765``.
+    remote clients, so these production units must not target port 8765.
     """
     text = (REPO_ROOT / unit).read_text(encoding="utf-8")
-    assert "Environment=MEM0_URL=http://127.0.0.1:9765" in text
-    assert "Environment=MEM0_URL=http://localhost:8765" not in text
+    assert f"Environment=MEM0_URL={expected_url}" in text
+    assert not re.search(r"^Environment=MEM0_URL=http://\\S+:8765$", text, re.MULTILINE)
