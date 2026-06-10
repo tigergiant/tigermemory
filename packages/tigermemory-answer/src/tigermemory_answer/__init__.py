@@ -20,8 +20,10 @@ from __future__ import annotations
 
 # Grouped search helpers.
 import datetime
+import importlib
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -436,6 +438,7 @@ QUERY_EXPANSION_REGISTRY = tm_core.REPO_ROOT / "tools" / "memory_answer" / "quer
 CONFLICT_PATTERN_REGISTRY = tm_core.REPO_ROOT / "tools" / "memory_answer" / "conflict_patterns.json"
 TRACE_RAW_QUERY_ENV = "TM_ANSWER_TRACE_RAW_QUERY"
 QUERY_PLANNER_ENV = "TM_ANSWER_QUERY_PLANNER"
+WIKI_MAP_ENV = "TM_ANSWER_WIKI_MAP"
 ANSWER_STATUSES = {"ok", "not_found", "conflict", "error"}
 
 SECRET_PATTERNS = [
@@ -513,7 +516,26 @@ QUERY_PLANNER_MAX_EVIDENCE_TERMS = 12
 QUERY_PLANNER_MAX_PATH_HINTS = 3
 QUERY_PLANNER_MANIFEST_MAX_ITEMS = 1400
 QUERY_PLANNER_CONTEXT_MAX_ITEMS = 80
+MAP_RECALL_LIMIT = 12
+MAP_PLAN_LIMIT = 3
+MAP_MIN_CANDIDATES = 8
+MAP_MIN_TOP_SCORE = 8.0
+MAP_MIN_TOP_MARGIN = 1.5
+MAP_STRONG_TOP_SCORE = 24.0
+MAP_STRONG_TOP_MARGIN = 6.0
 _QUERY_PLANNER_MANIFEST_CACHE: str | None = None
+_LLM_WIKI_MAP_MODULE: Any | None = None
+
+
+def _wiki_map_enabled() -> bool:
+    return str(os.environ.get(WIKI_MAP_ENV) or "").strip().lower() in {
+        "1",
+        "true",
+        "on",
+        "enabled",
+        "yes",
+        "force",
+    }
 
 
 def redact_secrets(text: str) -> str:
@@ -783,7 +805,227 @@ def _manifest_candidate_plan(query: str, *, limit: int = 2) -> tuple[list[str], 
     )
 
 
+def _llm_wiki_map_module() -> Any | None:
+    global _LLM_WIKI_MAP_MODULE
+    if _LLM_WIKI_MAP_MODULE is not None:
+        return _LLM_WIKI_MAP_MODULE
+    tools_dir = tm_core.REPO_ROOT / "tools"
+    tools_str = str(tools_dir)
+    if tools_dir.exists() and tools_str not in sys.path:
+        sys.path.insert(0, tools_str)
+    try:
+        _LLM_WIKI_MAP_MODULE = importlib.import_module("tm_llm_wiki_map")
+    except Exception:
+        return None
+    return _LLM_WIKI_MAP_MODULE
+
+
+def _hash_paths(paths: list[str]) -> str:
+    payload = "\n".join(paths)
+    if not payload:
+        return ""
+    import hashlib
+
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _map_candidate_plan(query: str, *, limit: int = MAP_RECALL_LIMIT) -> dict[str, Any]:
+    module = _llm_wiki_map_module()
+    if module is None:
+        return {
+            "degraded": True,
+            "error": "tm_llm_wiki_map_unavailable",
+            "candidates": [],
+            "queries": [],
+            "terms": [],
+            "paths": [],
+        }
+    map_path = tm_core.REPO_ROOT / "runtime" / "llm_wiki" / "wiki_map.jsonl"
+    if not map_path.exists():
+        return {
+            "degraded": True,
+            "error": "wiki_map_missing",
+            "candidates": [],
+            "queries": [],
+            "terms": [],
+            "paths": [],
+        }
+    try:
+        candidates = module.map_recall(query, limit=limit, map_path=map_path)
+    except Exception as exc:
+        return {
+            "degraded": True,
+            "error": f"{type(exc).__name__}: {exc}",
+            "candidates": [],
+            "queries": [],
+            "terms": [],
+            "paths": [],
+        }
+    queries: list[str] = []
+    terms: list[str] = []
+    paths: list[str] = []
+    partitions: set[str] = set()
+    source_surfaces: set[str] = set()
+    for index, item in enumerate(candidates[:MAP_PLAN_LIMIT]):
+        if not isinstance(item, dict):
+            continue
+        path = _clean_planner_text(item.get("path"), max_chars=180, path_hint=True)
+        title = _clean_planner_text(item.get("title"), max_chars=120)
+        if path:
+            paths.append(path)
+            queries.append(path)
+        if title:
+            queries.append(title)
+            if index == 0:
+                terms.append(title)
+        for keyword in list(item.get("cjk_bridge_terms") or [])[:2] + list(item.get("keywords") or [])[:2]:
+            clean = _clean_planner_text(keyword, max_chars=80)
+            if clean:
+                terms.append(clean)
+        if item.get("partition"):
+            partitions.add(str(item.get("partition")))
+        if item.get("source_surface"):
+            source_surfaces.add(str(item.get("source_surface")))
+    scores = [
+        float(item.get("score") or 0.0)
+        for item in candidates
+        if isinstance(item, dict) and isinstance(item.get("score"), (int, float))
+    ]
+    top_score = scores[0] if scores else 0.0
+    second_score = scores[1] if len(scores) > 1 else 0.0
+    return {
+        "degraded": False,
+        "error": None,
+        "candidates": candidates,
+        "queries": _dedupe_planner_items(queries, max_items=MAP_PLAN_LIMIT * 2, max_chars=180),
+        "terms": _dedupe_planner_items(terms, max_items=QUERY_PLANNER_MAX_EVIDENCE_TERMS, max_chars=100),
+        "paths": _dedupe_planner_items(paths, max_items=MAP_PLAN_LIMIT, max_chars=180, path_hint=True),
+        "candidate_count": len(candidates),
+        "top_score": round(top_score, 3),
+        "top1_top2_margin": round(max(top_score - second_score, 0.0), 3),
+        "partitions": sorted(partitions),
+        "source_surfaces": sorted(source_surfaces),
+        "top_paths_hash": _hash_paths(paths),
+    }
+
+
+def _attach_map_candidates(query: str, planner: dict[str, Any]) -> dict[str, Any]:
+    plan = _map_candidate_plan(query)
+    merged = dict(planner)
+    merged["map_candidate_count"] = int(plan.get("candidate_count") or 0)
+    merged["map_top_score"] = float(plan.get("top_score") or 0.0)
+    merged["map_top1_top2_margin"] = float(plan.get("top1_top2_margin") or 0.0)
+    merged["map_top_paths_hash"] = str(plan.get("top_paths_hash") or "")
+    merged["map_partitions"] = list(plan.get("partitions") or [])
+    merged["map_source_surfaces"] = list(plan.get("source_surfaces") or [])
+    if plan.get("degraded"):
+        merged["map_degraded"] = True
+        merged["map_error"] = str(plan.get("error") or "unknown")
+        return merged
+
+    queries = list(plan.get("queries") or [])
+    terms = list(plan.get("terms") or [])
+    paths = list(plan.get("paths") or [])
+    if not queries and not terms and not paths:
+        return merged
+
+    existing = list(merged.get("expanded_queries") or [])
+    expanded: list[str] = []
+    if existing:
+        expanded.append(existing[0])
+    for item in queries + existing[1:]:
+        if item not in expanded:
+            expanded.append(item)
+        if len(expanded) >= QUERY_PLANNER_MAX_RETRIEVAL_QUERIES + 1:
+            break
+    merged["expanded_queries"] = expanded
+    merged["map_candidate_term_count"] = len(terms)
+    merged["evidence_terms"] = _dedupe_planner_items(
+        list(merged.get("evidence_terms") or []),
+        max_items=QUERY_PLANNER_MAX_EVIDENCE_TERMS,
+        max_chars=100,
+    )
+    merged["path_hints"] = _dedupe_planner_items(
+        list(merged.get("path_hints") or []) + paths,
+        max_items=QUERY_PLANNER_MAX_PATH_HINTS,
+        max_chars=180,
+        path_hint=True,
+    )
+    merged["subquery_roles"] = [
+        {"index": index, "role": "primary" if index == 0 else "map_probe"}
+        for index, _ in enumerate(expanded)
+    ]
+    return merged
+
+
+def _query_planner_flag() -> str:
+    return str(os.environ.get(QUERY_PLANNER_ENV) or "auto").strip().lower()
+
+
+def _map_planner_fallback_reasons(query: str, planner: dict[str, Any]) -> list[str]:
+    flag = _query_planner_flag()
+    if flag in {"0", "false", "off", "disabled", "no"}:
+        return []
+    if flag in {"1", "true", "on", "enabled", "force", "yes"}:
+        return ["forced"]
+
+    reasons: list[str] = []
+    if planner.get("map_degraded"):
+        if _query_planner_enabled(query, planner):
+            reasons.append("map_degraded")
+        return reasons
+
+    candidate_count = int(planner.get("map_candidate_count") or 0)
+    top_score = float(planner.get("map_top_score") or 0.0)
+    margin = float(planner.get("map_top1_top2_margin") or 0.0)
+    tokens = tm_core.signal_tokens(query)
+    complex_query = len(query) > 18 or len(tokens) > 8
+    strong_map = (
+        candidate_count >= MAP_MIN_CANDIDATES
+        and top_score >= MAP_STRONG_TOP_SCORE
+        and margin >= MAP_STRONG_TOP_MARGIN
+    )
+
+    if candidate_count < MAP_MIN_CANDIDATES:
+        reasons.append("map_candidate_count_below_min")
+    if top_score < MAP_MIN_TOP_SCORE:
+        reasons.append("map_top_score_below_min")
+    if margin < MAP_MIN_TOP_MARGIN and complex_query:
+        reasons.append("map_margin_low_for_complex_query")
+    if _query_planner_enabled(query, planner) and not strong_map:
+        reasons.append("natural_question_needs_planner")
+    if (
+        planner.get("query_class") == "synthesis"
+        and len(set(planner.get("map_partitions") or [])) >= 3
+    ):
+        reasons.append("synthesis_cross_partition")
+    return reasons
+
+
+def _attach_manifest_when_map_degraded(query: str, planner: dict[str, Any]) -> dict[str, Any]:
+    if planner.get("map_degraded"):
+        return _attach_manifest_candidates(query, planner)
+    return planner
+
+
 def _query_planner_context(query: str, *, limit: int = QUERY_PLANNER_CONTEXT_MAX_ITEMS) -> dict[str, Any]:
+    if _wiki_map_enabled():
+        map_plan = _map_candidate_plan(query, limit=limit)
+        candidates = list(map_plan.get("candidates") or [])
+        if candidates or not map_plan.get("degraded"):
+            return {
+                "indexed_surfaces": ["runtime/llm_wiki/wiki_map.jsonl"],
+                "rules": [
+                    "Use path/title/alias hints only as retrieval probes.",
+                    "Do not answer from the map.",
+                    "Prefer stable repo/project/task/path/spec terms over persona-only terms.",
+                    "Runtime/current-state questions may need current-state warnings unless evidence is fresh.",
+                ],
+                "page_count": len(candidates),
+                "map_status": "ok" if candidates else "no_candidates",
+                "candidate_selection": "top local LLM Wiki map candidates",
+                "candidate_pages": candidates[:limit],
+            }
     pages = _query_planner_manifest_pages()
     return {
         "indexed_surfaces": ["wiki/*.md", "sources/*.md", "lessons", "onboarding", "mem0"],
@@ -1756,7 +1998,37 @@ def plan_query(query: str) -> dict[str, Any]:
         "evidence_terms": [],
         "path_hints": [],
     }
-    if not _query_planner_enabled(query, planner):
+    if not _wiki_map_enabled():
+        if not _query_planner_enabled(query, planner):
+            return planner
+
+        ok, parsed = _call_memory_query_planner_llm(query, planner)
+        planner["planner_call"] = {
+            "tool": "DeepSeek",
+            "purpose": "memory_query_plan",
+            "ok": bool(ok),
+            "mode": "budgeted_metadata_manifest",
+        }
+        if not ok:
+            planner["planner_warnings"] = [f"memory query planner failed: {parsed}"]
+            return _attach_manifest_candidates(query, planner)
+        merged, warnings = _merge_llm_query_plan(planner, parsed)
+        merged = _attach_manifest_candidates(query, merged)
+        merged["planner_call"] = {
+            "tool": "DeepSeek",
+            "purpose": "memory_query_plan",
+            "ok": True,
+            "mode": "budgeted_metadata_manifest",
+        }
+        if warnings:
+            merged["planner_warnings"] = warnings
+        return merged
+
+    planner = _attach_map_candidates(query, planner)
+    fallback_reasons = _map_planner_fallback_reasons(query, planner)
+    if not fallback_reasons:
+        if planner.get("map_candidate_count"):
+            planner["planner_source"] = "deterministic+wiki_map"
         return planner
 
     ok, parsed = _call_memory_query_planner_llm(query, planner)
@@ -1764,18 +2036,20 @@ def plan_query(query: str) -> dict[str, Any]:
         "tool": "DeepSeek",
         "purpose": "memory_query_plan",
         "ok": bool(ok),
-        "mode": "budgeted_metadata_manifest",
+        "mode": "wiki_map_candidates",
+        "fallback_reasons": fallback_reasons,
     }
     if not ok:
         planner["planner_warnings"] = [f"memory query planner failed: {parsed}"]
-        return _attach_manifest_candidates(query, planner)
+        return _attach_manifest_when_map_degraded(query, planner)
     merged, warnings = _merge_llm_query_plan(planner, parsed)
-    merged = _attach_manifest_candidates(query, merged)
+    merged = _attach_manifest_when_map_degraded(query, merged)
     merged["planner_call"] = {
         "tool": "DeepSeek",
         "purpose": "memory_query_plan",
         "ok": True,
-        "mode": "budgeted_metadata_manifest",
+        "mode": "wiki_map_candidates",
+        "fallback_reasons": fallback_reasons,
     }
     if warnings:
         merged["planner_warnings"] = warnings

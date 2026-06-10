@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import statistics
 import sys
 import uuid
 from pathlib import Path
@@ -17,6 +18,11 @@ from typing import Any
 
 import tigermemory_core as tm_core
 from tigermemory_answer import memory_answer_core, normalize_run_id
+
+try:
+    import tm_llm_wiki_map
+except Exception:  # pragma: no cover - optional runtime tool path
+    tm_llm_wiki_map = None  # type: ignore[assignment]
 
 
 ALLOWED_CASE_SOURCES = {"real_failure", "patrol", "system_contract", "paper_seed_tmp"}
@@ -395,6 +401,16 @@ def _primary_scope_from_trace(trace: dict[str, Any]) -> str | None:
     return None
 
 
+def _planner_llm_used(trace: dict[str, Any]) -> bool:
+    for call in trace.get("calls") or []:
+        if not isinstance(call, dict):
+            continue
+        if call.get("tool") == "DeepSeek" and call.get("purpose") == "memory_query_plan":
+            return True
+    planner = trace.get("planner") if isinstance(trace, dict) else {}
+    return isinstance(planner, dict) and planner.get("planner_source") == "llm"
+
+
 def _evidence_gate_paths(trace: dict[str, Any]) -> list[str]:
     gate = trace.get("evidence_gate") if isinstance(trace, dict) else []
     if not isinstance(gate, list):
@@ -430,6 +446,14 @@ def _compact_diagnosis_row(row: dict[str, Any]) -> dict[str, Any]:
         "evidence_gate_rank",
         "answer_evidence_rank",
         "raw_retrieval_hit",
+        "map_candidate_hit",
+        "map_hit@10",
+        "map_hit@30",
+        "map_hit@80",
+        "map_rank",
+        "map_compensated_hit",
+        "not_in_map",
+        "planner_llm_hit",
         "planner_compensated_hit",
         "expected_rank",
         "primary_scope",
@@ -446,12 +470,14 @@ def diagnose_case(
     run_id: str | None = None,
     write_trace: bool = False,
     top_k_probe: int | None = None,
+    map_probe_k: int | None = None,
 ) -> dict[str, Any]:
     """Run one answer case and attribute failures to the first likely layer."""
     expected_paths = [_normalize_case_path(path) for path in case.get("expected_evidence_paths", [])]
     forbidden_paths = [_normalize_case_path(path) for path in case.get("forbidden_evidence_paths", [])]
     top_k = min(max(int(case.get("top_k", 5)), 1), 10)
     probe_k = min(max(int(top_k_probe or case.get("top_k_probe", 10)), 1), 20)
+    map_k = min(max(int(map_probe_k or case.get("map_probe_k", 80)), 1), 120)
     query = str(case["query"])
 
     result = tm_answer.memory_answer_core(
@@ -468,12 +494,24 @@ def diagnose_case(
     hybrid_hits = tm_core.search_wiki_hybrid(query, size=probe_k, include_sources=True, include_inbox=False, explain=True)
     lexical_paths = _paths_from_hits(lexical_hits)
     hybrid_paths = _paths_from_hits(hybrid_hits)
+    map_error: str | None = None
+    map_hits: list[dict[str, Any]] = []
+    if tm_llm_wiki_map is not None:
+        try:
+            map_path = tm_core.REPO_ROOT / "runtime" / "llm_wiki" / "wiki_map.jsonl"
+            map_hits = tm_llm_wiki_map.map_recall(query, limit=map_k, map_path=map_path)
+        except Exception as exc:
+            map_error = f"{type(exc).__name__}: {exc}"
+    else:
+        map_error = "tm_llm_wiki_map_unavailable"
+    map_paths = [_normalize_case_path(hit.get("path")) for hit in map_hits if isinstance(hit, dict)]
     gate_paths = _evidence_gate_paths(trace)
     evidence_paths = [_normalize_case_path(e.get("path")) for e in result.get("evidence", []) if isinstance(e, dict)]
 
     missing_expected_paths = [path for path in expected_paths if not _repo_path_exists(path)]
     lexical_rank = _rank_for_expected(lexical_paths, expected_paths)
     hybrid_rank = _rank_for_expected(hybrid_paths, expected_paths)
+    map_rank = _rank_for_expected(map_paths, expected_paths)
     anchor_rank = _anchor_rank_for_expected(expected_paths, probe_k) if expected_paths else None
     gate_rank = _rank_for_expected(gate_paths, expected_paths)
     evidence_rank = _rank_for_expected(evidence_paths, expected_paths)
@@ -498,7 +536,14 @@ def diagnose_case(
     anchor_hit = True if not expected_paths else anchor_rank is not None
     gate_hit = True if not expected_paths else gate_rank is not None
     raw_retrieval_hit = lexical_hit or hybrid_hit
+    map_candidate_hit = True if not expected_paths else map_rank is not None
+    map_hit_10 = True if not expected_paths else map_rank is not None and map_rank <= 10
+    map_hit_30 = True if not expected_paths else map_rank is not None and map_rank <= 30
+    map_hit_80 = True if not expected_paths else map_rank is not None and map_rank <= 80
+    not_in_map = False if not expected_paths else map_rank is None
+    planner_llm_hit = bool(_planner_llm_used(trace) and evidence_hit)
     planner_compensated_hit = evidence_hit and not raw_retrieval_hit
+    map_compensated_hit = evidence_hit and not raw_retrieval_hit and map_candidate_hit
     rank_ok = True if expected_rank is None or hybrid_rank is None else hybrid_rank <= expected_rank
     forbidden_ok = not any(path in set(evidence_paths) for path in forbidden_paths)
     must_contain_hit = all(term in answer_text for term in must_contain)
@@ -588,6 +633,15 @@ def diagnose_case(
         "evidence_gate_rank": gate_rank,
         "answer_evidence_rank": evidence_rank,
         "raw_retrieval_hit": raw_retrieval_hit,
+        "map_candidate_hit": map_candidate_hit,
+        "map_hit@10": map_hit_10,
+        "map_hit@30": map_hit_30,
+        "map_hit@80": map_hit_80,
+        "map_rank": map_rank,
+        "map_error": map_error,
+        "map_compensated_hit": map_compensated_hit,
+        "not_in_map": not_in_map,
+        "planner_llm_hit": planner_llm_hit,
         "planner_compensated_hit": planner_compensated_hit,
         "expected_rank": expected_rank,
         "primary_scope": primary_scope,
@@ -616,7 +670,19 @@ def summarize_diagnosis(results: list[dict[str, Any]]) -> dict[str, Any]:
     gate_hits = sum(1 for item in expected_path_cases if item.get("evidence_gate_rank") is not None)
     answer_evidence_hits = sum(1 for item in expected_path_cases if item.get("answer_evidence_rank") is not None)
     raw_retrieval_hits = sum(1 for item in expected_path_cases if item.get("raw_retrieval_hit"))
+    map_candidate_hits = sum(1 for item in expected_path_cases if item.get("map_candidate_hit"))
+    map_hit_10 = sum(1 for item in expected_path_cases if item.get("map_hit@10"))
+    map_hit_30 = sum(1 for item in expected_path_cases if item.get("map_hit@30"))
+    map_hit_80 = sum(1 for item in expected_path_cases if item.get("map_hit@80"))
+    map_compensated_hits = sum(1 for item in expected_path_cases if item.get("map_compensated_hit"))
+    not_in_map = sum(1 for item in expected_path_cases if item.get("not_in_map"))
+    planner_llm_hits = sum(1 for item in expected_path_cases if item.get("planner_llm_hit"))
     planner_compensated_hits = sum(1 for item in expected_path_cases if item.get("planner_compensated_hit"))
+    map_ranks = [
+        int(item["map_rank"])
+        for item in expected_path_cases
+        if isinstance(item.get("map_rank"), int) and int(item["map_rank"]) > 0
+    ]
     return {
         "case_count": case_count,
         "passed": passed,
@@ -634,6 +700,22 @@ def summarize_diagnosis(results: list[dict[str, Any]]) -> dict[str, Any]:
         "answer_evidence_hit_rate": answer_evidence_hits / len(expected_path_cases) if expected_path_cases else 1.0,
         "raw_retrieval_hit": raw_retrieval_hits,
         "raw_retrieval_hit_rate": raw_retrieval_hits / len(expected_path_cases) if expected_path_cases else 1.0,
+        "map_candidate_hit": map_candidate_hits,
+        "map_candidate_hit_rate": map_candidate_hits / len(expected_path_cases) if expected_path_cases else 1.0,
+        "map_hit@10": map_hit_10,
+        "map_hit@10_rate": map_hit_10 / len(expected_path_cases) if expected_path_cases else 1.0,
+        "map_hit@30": map_hit_30,
+        "map_hit@30_rate": map_hit_30 / len(expected_path_cases) if expected_path_cases else 1.0,
+        "map_hit@80": map_hit_80,
+        "map_hit@80_rate": map_hit_80 / len(expected_path_cases) if expected_path_cases else 1.0,
+        "map_compensated_hit": map_compensated_hits,
+        "map_compensated_hit_rate": map_compensated_hits / len(expected_path_cases) if expected_path_cases else 0.0,
+        "not_in_map": not_in_map,
+        "not_in_map_rate": not_in_map / len(expected_path_cases) if expected_path_cases else 0.0,
+        "median_rank": statistics.median(map_ranks) if map_ranks else None,
+        "mrr": sum(1 / rank for rank in map_ranks) / len(expected_path_cases) if expected_path_cases else 1.0,
+        "planner_llm_hit": planner_llm_hits,
+        "planner_llm_hit_rate": planner_llm_hits / len(expected_path_cases) if expected_path_cases else 0.0,
         "planner_compensated_hit": planner_compensated_hits,
         "planner_compensated_hit_rate": planner_compensated_hits / len(expected_path_cases) if expected_path_cases else 0.0,
         "failure_layer_counts": _count_by_field(results, "failure_layer"),
@@ -703,6 +785,7 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
             run_id=run_id,
             write_trace=bool(args.write_trace),
             top_k_probe=args.top_k_probe,
+            map_probe_k=getattr(args, "map_probe_k", 80),
         )
         for case in cases
     ]
@@ -722,6 +805,7 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
             f"cases={report['case_count']} passed={report['passed']}/{report['case_count']} "
             f"lexical={report['lexical_hit']}/{report['expected_path_case_count']} "
             f"hybrid={report['hybrid_hit']}/{report['expected_path_case_count']} "
+            f"map80={report['map_hit@80']}/{report['expected_path_case_count']} "
             f"anchor={report['anchor_hit']}/{report['expected_path_case_count']} "
             f"evidence={report['answer_evidence_hit']}/{report['expected_path_case_count']}"
         )
@@ -753,6 +837,7 @@ def main() -> None:
     diag_p.add_argument("--run-id", default=None, help="optional run id shared by all memory_answer calls")
     diag_p.add_argument("--write-trace", action="store_true", help="append diagnosis rows to .tmp/memory-answer-trace.jsonl")
     diag_p.add_argument("--top-k-probe", type=int, default=10, help="lexical/hybrid diagnostic probe depth")
+    diag_p.add_argument("--map-probe-k", type=int, default=80, help="LLM Wiki map diagnostic probe depth")
     diag_p.add_argument("--limit", type=int, default=None, help="run only the first N cases")
     diag_p.add_argument(
         "--allow-paper-seed-tmp",

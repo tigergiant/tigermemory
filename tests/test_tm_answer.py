@@ -28,7 +28,9 @@ def _search_result(hit: dict | None = None) -> dict:
 
 
 def test_memory_answer_core_expands_evidence_and_generates_answer(monkeypatch, tmp_path):
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
     monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", lambda *_args, **_kwargs: _empty_map_plan())
     monkeypatch.setattr(
         tm_answer.tm_search,
         "search_tigermemory",
@@ -254,7 +256,9 @@ def test_write_result_trace_sanitizes_full_row_and_trace_payload(monkeypatch, tm
 
 def test_memory_answer_core_trims_evidence_before_llm(monkeypatch, tmp_path):
     captured = {}
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
     monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", lambda *_args, **_kwargs: _empty_map_plan())
     monkeypatch.setattr(
         tm_answer.tm_search,
         "search_tigermemory",
@@ -393,6 +397,11 @@ def test_query_planner_llm_uses_budgeted_manifest_context(monkeypatch):
         for index in range(120)
     ]
     monkeypatch.setattr(tm_answer, "_query_planner_manifest_pages", lambda: noise + [target])
+    monkeypatch.setattr(
+        tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: {**_empty_map_plan(), "degraded": True, "error": "wiki_map_missing"},
+    )
     captured = {}
 
     def fake_deepseek(system_prompt, user_msg, **kwargs):
@@ -453,9 +462,107 @@ def test_rank_manifest_pages_uses_compact_page_signals(monkeypatch):
     assert ranked[0]["score"] > 0
 
 
+def _empty_map_plan() -> dict:
+    return {
+        "degraded": False,
+        "error": None,
+        "candidate_count": 0,
+        "top_score": 0.0,
+        "top1_top2_margin": 0.0,
+        "partitions": [],
+        "source_surfaces": [],
+        "top_paths_hash": "",
+        "queries": [],
+        "terms": [],
+        "paths": [],
+        "candidates": [],
+    }
+
+
+def test_plan_query_uses_wiki_map_without_deepseek_when_confident(monkeypatch):
+    query = "为什么自然语言召回找不到记忆问答开发计划"
+    monkeypatch.delenv(tm_answer.QUERY_PLANNER_ENV, raising=False)
+    monkeypatch.setenv(tm_answer.WIKI_MAP_ENV, "1")
+    monkeypatch.setattr(
+        tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: {
+            "degraded": False,
+            "error": None,
+            "candidate_count": 8,
+            "top_score": 30.0,
+            "top1_top2_margin": 8.0,
+            "partitions": ["systems"],
+            "source_surfaces": ["wiki"],
+            "top_paths_hash": "abc123",
+            "queries": ["wiki/systems/memory-answer-development-plan.md", "Memory Answer 开发计划"],
+            "terms": ["记忆问答开发计划", "natural recall"],
+            "paths": ["wiki/systems/memory-answer-development-plan.md"],
+            "candidates": [],
+        },
+    )
+    monkeypatch.setattr(
+        tm_answer,
+        "_call_memory_query_planner_llm",
+        lambda *_args: pytest.fail("DeepSeek planner should not run for confident map recall"),
+    )
+
+    plan = tm_answer.plan_query(query)
+
+    assert plan["planner_source"] == "deterministic+wiki_map"
+    assert plan["expanded_queries"][:3] == [
+        query,
+        "wiki/systems/memory-answer-development-plan.md",
+        "Memory Answer 开发计划",
+    ]
+    assert plan["path_hints"] == ["wiki/systems/memory-answer-development-plan.md"]
+    assert plan["map_candidate_count"] == 8
+    assert "planner_call" not in plan
+
+
+def test_query_planner_context_uses_empty_map_instead_of_large_manifest(monkeypatch):
+    monkeypatch.setenv(tm_answer.WIKI_MAP_ENV, "1")
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", lambda *_args, **_kwargs: _empty_map_plan())
+    monkeypatch.setattr(
+        tm_answer,
+        "_query_planner_manifest_pages",
+        lambda: [{"path": f"wiki/systems/noise-{index}.md", "title": "Noise"} for index in range(200)],
+    )
+
+    context = tm_answer._query_planner_context("找不到的自然语言问题")
+
+    assert context["indexed_surfaces"] == ["runtime/llm_wiki/wiki_map.jsonl"]
+    assert context["map_status"] == "no_candidates"
+    assert context["page_count"] == 0
+    assert context["candidate_pages"] == []
+
+
+def test_map_planner_fallback_reason_boundaries(monkeypatch):
+    monkeypatch.delenv(tm_answer.QUERY_PLANNER_ENV, raising=False)
+    base = {
+        "query_class": "recall",
+        "map_candidate_count": tm_answer.MAP_MIN_CANDIDATES,
+        "map_top_score": tm_answer.MAP_MIN_TOP_SCORE,
+        "map_top1_top2_margin": tm_answer.MAP_MIN_TOP_MARGIN,
+        "map_partitions": ["systems"],
+    }
+
+    assert tm_answer._map_planner_fallback_reasons("短问", dict(base)) == []
+    below_count = dict(base, map_candidate_count=tm_answer.MAP_MIN_CANDIDATES - 1)
+    assert "map_candidate_count_below_min" in tm_answer._map_planner_fallback_reasons("短问", below_count)
+    below_score = dict(base, map_top_score=tm_answer.MAP_MIN_TOP_SCORE - 0.01)
+    assert "map_top_score_below_min" in tm_answer._map_planner_fallback_reasons("短问", below_score)
+    low_margin = dict(base, map_top1_top2_margin=tm_answer.MAP_MIN_TOP_MARGIN - 0.01)
+    reasons = tm_answer._map_planner_fallback_reasons("这是一个比较复杂的自然语言召回问题需要分析", low_margin)
+    assert "map_margin_low_for_complex_query" in reasons
+    synthesis = dict(base, query_class="synthesis", map_partitions=["systems", "operations", "investment"])
+    assert "synthesis_cross_partition" in tm_answer._map_planner_fallback_reasons("综合分析这些系统问题", synthesis)
+
+
 def test_plan_query_uses_deepseek_planner_for_general_rewrite(monkeypatch):
     query = "请帮我判断记忆问答系统为什么自然语言问题找不到对应资料"
     monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "1")
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", lambda *_args, **_kwargs: _empty_map_plan())
     monkeypatch.setattr(tm_answer, "_manifest_candidate_plan", lambda *_args, **_kwargs: ([], [], []))
 
     def fake_planner(actual_query, base_plan):
@@ -486,6 +593,11 @@ def test_plan_query_falls_back_when_deepseek_planner_fails(monkeypatch):
     monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "1")
     monkeypatch.setattr(
         tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: {**_empty_map_plan(), "degraded": True, "error": "wiki_map_missing"},
+    )
+    monkeypatch.setattr(
+        tm_answer,
         "_manifest_candidate_plan",
         lambda *_args, **_kwargs: (["wiki/systems/fallback-plan.md"], ["Fallback Plan"], ["wiki/systems/fallback-plan.md"]),
     )
@@ -504,9 +616,65 @@ def test_plan_query_falls_back_when_deepseek_planner_fails(monkeypatch):
     assert any("memory query planner failed" in warning for warning in plan["planner_warnings"])
 
 
+def test_plan_query_does_not_use_manifest_when_empty_map_and_deepseek_fails(monkeypatch):
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "1")
+    monkeypatch.setenv(tm_answer.WIKI_MAP_ENV, "1")
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", lambda *_args, **_kwargs: _empty_map_plan())
+    monkeypatch.setattr(
+        tm_answer,
+        "_manifest_candidate_plan",
+        lambda *_args, **_kwargs: pytest.fail("manifest fallback must not run when map is available"),
+    )
+    monkeypatch.setattr(
+        tm_answer,
+        "_call_memory_query_planner_llm",
+        lambda *_args: (False, "offline"),
+    )
+
+    plan = tm_answer.plan_query("为什么自然语言问题找不到对应资料")
+
+    assert plan["planner_source"] == "deterministic"
+    assert plan["planner_call"]["ok"] is False
+    assert plan["expanded_queries"] == ["为什么自然语言问题找不到对应资料"]
+    assert plan["evidence_terms"] == []
+    assert plan["path_hints"] == []
+
+
+def test_plan_query_does_not_use_manifest_when_empty_map_and_deepseek_succeeds(monkeypatch):
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "1")
+    monkeypatch.setenv(tm_answer.WIKI_MAP_ENV, "1")
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", lambda *_args, **_kwargs: _empty_map_plan())
+    monkeypatch.setattr(
+        tm_answer,
+        "_manifest_candidate_plan",
+        lambda *_args, **_kwargs: pytest.fail("manifest fallback must not run when map is available"),
+    )
+    monkeypatch.setattr(
+        tm_answer,
+        "_call_memory_query_planner_llm",
+        lambda *_args: (True, {
+            "retrieval_queries": ["planner-only query"],
+            "evidence_terms": ["planner-only term"],
+            "path_hints": ["wiki/systems/planner-only.md"],
+        }),
+    )
+
+    plan = tm_answer.plan_query("为什么自然语言问题找不到对应资料")
+
+    assert plan["planner_source"] == "llm"
+    assert "planner-only query" in plan["expanded_queries"]
+    assert "wiki/systems/planner-only.md" in plan["expanded_queries"]
+    assert plan["evidence_terms"] == ["planner-only term"]
+
+
 def test_plan_query_prioritizes_manifest_candidate_before_generic_llm_probe(monkeypatch):
     query = "为什么自然语言问题应该先看记忆问答开发计划"
     monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "1")
+    monkeypatch.setattr(
+        tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: {**_empty_map_plan(), "degraded": True, "error": "wiki_map_missing"},
+    )
     monkeypatch.setattr(
         tm_answer,
         "_manifest_candidate_plan",
@@ -543,6 +711,7 @@ def test_memory_answer_core_uses_llm_planner_queries_and_terms(monkeypatch, tmp_
     search_calls = []
     monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "1")
     monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", lambda *_args, **_kwargs: _empty_map_plan())
     monkeypatch.setattr(tm_answer, "_manifest_candidate_plan", lambda *_args, **_kwargs: ([], [], []))
     monkeypatch.setattr(
         tm_answer,
