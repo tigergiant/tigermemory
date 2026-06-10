@@ -333,14 +333,15 @@ def test_write_memory_scope_guard_uses_oauth_store_fallback(tmp_path, monkeypatc
 def test_readyz_payload_reports_dependency_state(tmp_path, monkeypatch):
     calls = []
 
-    def fake_probe(name, url, **_kwargs):
-        calls.append((name, url))
+    def fake_probe(name, url, **kwargs):
+        calls.append((name, url, kwargs.get("headers")))
         return {"ok": name != "mem0", "name": name}
 
     monkeypatch.setattr(tm_mcp_openai.tm_core, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(tm_mcp_openai, "_oauth_store_path", lambda: tmp_path / "oauth.json")
     monkeypatch.setattr(tm_mcp_openai.tm_core, "mem0_base", lambda: "http://127.0.0.1:8765")
     monkeypatch.setattr(tm_mcp_openai, "_probe_url", fake_probe)
+    monkeypatch.setenv("MEM0_API_KEY", "test-key")
     monkeypatch.setenv("EMBEDDING_BASE_URL", "http://127.0.0.1:19190/v1")
 
     status, payload = tm_mcp_openai._readyz_payload()
@@ -350,8 +351,12 @@ def test_readyz_payload_reports_dependency_state(tmp_path, monkeypatch):
     assert payload["checks"]["repo"]["ok"] is True
     assert payload["checks"]["mem0"]["ok"] is False
     assert calls == [
-        ("mem0", "http://127.0.0.1:8765/api/v1/memories/?user_id=tiger&page=1&size=1"),
-        ("embedding", "http://127.0.0.1:19190/v1/models"),
+        (
+            "mem0",
+            "http://127.0.0.1:8765/api/v1/memories/?user_id=tiger&page=1&size=1",
+            {"Authorization": "Bearer test-key"},
+        ),
+        ("embedding", "http://127.0.0.1:19190/v1/models", {}),
     ]
 
 

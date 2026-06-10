@@ -392,7 +392,11 @@ def _readyz_payload() -> tuple[int, dict[str, Any]]:
     }
 
     mem0_url = f"{tm_core.mem0_base().rstrip('/')}/api/v1/memories/?user_id=tiger&page=1&size=1"
-    checks["mem0"] = _probe_url("mem0", mem0_url)
+    mem0_headers = {}
+    mem0_api_key = os.environ.get("MEM0_API_KEY", "").strip()
+    if mem0_api_key:
+        mem0_headers["Authorization"] = f"Bearer {mem0_api_key}"
+    checks["mem0"] = _probe_url("mem0", mem0_url, headers=mem0_headers)
 
     embedding_base = os.environ.get("EMBEDDING_BASE_URL", "").rstrip("/")
     if embedding_base:
