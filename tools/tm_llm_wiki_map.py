@@ -67,6 +67,13 @@ ROOT_WIKI_KEYWORDS = {
 ROOT_RULE_SIGNAL_TOKENS = {
     "agent",
     "rules",
+    "开工",
+    "规则",
+    "变基",
+    "冲突",
+    "提交",
+    "推送",
+    "收工",
     "git",
     "commit",
     "push",
@@ -75,17 +82,10 @@ ROOT_RULE_SIGNAL_TOKENS = {
     "write_memory",
     "route",
     "topic",
-    "systems",
-    "investment",
-    "cross",
-    "live",
-    "dashboard",
-    "service",
     "1998",
     "8790",
     "hooks",
     "hook",
-    "mcp",
     "wsl",
 }
 ROOT_RULE_PORT_TOKENS = {"1998", "8790", "9766", "9776", "8765"}
@@ -347,12 +347,14 @@ def _path_tokens(rel: str) -> list[str]:
     return [piece for piece in pieces if len(piece) >= 2 and piece not in {"md", "wiki", "sources"}]
 
 
-def _cjk_terms(text: str, *, max_items: int = 16) -> list[str]:
+def _cjk_terms(text: str, *, max_items: int = 16, min_size: int = 2) -> list[str]:
     terms: list[str] = []
     seen: set[str] = set()
     for chunk in re.findall(r"[\u4e00-\u9fff]{2,12}", text):
         candidates = [chunk] if len(chunk) <= 8 else []
         for size in (2, 3, 4):
+            if size < min_size:
+                continue
             candidates.extend(chunk[i : i + size] for i in range(0, len(chunk) - size + 1))
         for item in candidates:
             clean = item.strip()
@@ -543,7 +545,7 @@ def build_record_for_file(path: Path, *, repo_root: Path = tm_core.REPO_ROOT) ->
         headings=headings[:8],
         lead=lead,
         keywords=_keywords(rel, extracted_text + "\n" + text, frontmatter),
-        cjk_bridge_terms=_cjk_terms(extracted_text, max_items=12),
+        cjk_bridge_terms=_cjk_terms(extracted_text, max_items=12, min_size=3),
         typed_entities=_typed_entities(rel, text),
         answer_facets=_answer_facets(text, headings),
         status=_clean_text(frontmatter.get("status") or "active", max_chars=40),
@@ -702,6 +704,10 @@ def _score_tokens(query: str) -> list[str]:
     return result
 
 
+def _is_short_cjk_token(token: str) -> bool:
+    return len(token) == 2 and bool(re.fullmatch(r"[\u4e00-\u9fff]{2}", token))
+
+
 def _field_text(record: dict[str, Any], fields: list[str]) -> str:
     values: list[str] = []
     for field in fields:
@@ -736,15 +742,18 @@ def score_record(query: str, record: dict[str, Any]) -> tuple[float, dict[str, A
     matched_fields: set[str] = set()
     for token in tokens:
         token_score = 0.0
+        is_short_cjk = _is_short_cjk_token(token)
         if token in high:
-            token_score += 4.0 + min(len(token), 8) / 2.0
+            token_score += 1.0 if is_short_cjk else 4.0 + min(len(token), 8) / 2.0
             matched_fields.add("high")
         if token in medium:
-            token_score += 1.6 + min(len(token), 8) / 4.0
+            token_score += 0.4 if is_short_cjk else 1.6 + min(len(token), 8) / 4.0
             matched_fields.add("medium")
         if token in entity:
-            token_score += 2.4 + min(len(token), 8) / 3.0
+            token_score += 0.6 if is_short_cjk else 2.4 + min(len(token), 8) / 3.0
             matched_fields.add("typed_entities")
+        if is_short_cjk and token_score:
+            matched_fields.add("short_cjk_weak")
         if token_score:
             matched.append(token)
             score += token_score

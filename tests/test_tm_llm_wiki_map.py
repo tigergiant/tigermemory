@@ -65,6 +65,9 @@ def test_build_records_skips_person_and_forbidden_paths(tmp_path):
     _write(tmp_path / "wiki" / "systems" / "ok.md", "# OK\n\n## 摘要\n\n可索引。")
     _write(tmp_path / "wiki" / "person" / "secret.md", "# Person\n\n个人资料。")
     _write(tmp_path / "sources" / "person" / "secret.md", "# Source Person\n\n个人资料。")
+    _write(tmp_path / ".tmp" / "leak.md", "# Leak\n\n不应进入地图。")
+    _write(tmp_path / "runtime" / "llm_wiki" / "old-map.md", "# Runtime\n\n不应进入地图。")
+    _write(tmp_path / "tests" / "fixtures" / "eval.md", "# Test Fixture\n\n不应进入地图。")
 
     records, skipped = wiki_map.build_records(tmp_path)
 
@@ -104,6 +107,7 @@ rebase 过程中出现 conflict 时立即 abort，不要 continue。
     assert by_path["AGENTS.md"].source_surface == "wiki"
     assert by_path["AGENTS.md"].partition == "systems"
     assert "变基出现冲突怎么办" in by_path["AGENTS.md"].aliases
+    assert "基出" not in by_path["AGENTS.md"].cjk_bridge_terms
     assert skipped == []
 
 
@@ -147,6 +151,49 @@ title: 2026 年度回顾
 
     assert rule_hits[0]["path"] == "AGENTS.md"
     assert date_hits[0]["path"] == "wiki/systems/annual-review.md"
+
+
+def test_root_agents_does_not_outrank_specific_pages_on_broad_terms(tmp_path):
+    agents = _write(
+        tmp_path / "AGENTS.md",
+        """---
+title: Agent Rules
+---
+
+# AGENTS.md
+
+## 摘要
+
+agent 开工、提交、推送和 hook 规则。
+MCP、dashboard 1998 是正式服务端口，tm-http 8790 是 HTTP router。
+""",
+    )
+    dashboard = _write(
+        tmp_path / "wiki" / "systems" / "dashboard-service.md",
+        """---
+title: Dashboard Service
+aliases: [dashboard service, dashboard 1998]
+---
+
+# Dashboard Service
+
+## 摘要
+
+dashboard service 页面说明 MCP dashboard、1998 服务端口、页面加载和运行检查。
+""",
+    )
+    records = [
+        wiki_map.build_record_for_file(agents, repo_root=tmp_path).to_dict(),
+        wiki_map.build_record_for_file(dashboard, repo_root=tmp_path).to_dict(),
+    ]
+
+    broad_hits = wiki_map.map_recall("dashboard service", records=records, limit=2)
+    service_hits = wiki_map.map_recall("MCP dashboard service 端口", records=records, limit=2)
+    rule_hits = wiki_map.map_recall("agent 提交推送 hook 规则", records=records, limit=2)
+
+    assert broad_hits[0]["path"] == "wiki/systems/dashboard-service.md"
+    assert service_hits[0]["path"] == "wiki/systems/dashboard-service.md"
+    assert rule_hits[0]["path"] == "AGENTS.md"
 
 
 def test_write_map_is_stable_and_recall_ranks_candidate(tmp_path):
