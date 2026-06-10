@@ -22,6 +22,7 @@ from typing import Any, Callable
 import tigermemory_core as tm_core
 import tm_route
 import tm_route_audit
+import tm_route_events
 
 
 DIGEST_DEBOUNCE_SECONDS = int(os.environ.get("TM_DIGEST_DEBOUNCE_SECONDS", "180"))
@@ -776,6 +777,41 @@ def _attach_discard_audit(result: dict[str, Any], audit: dict[str, Any]) -> dict
     return result
 
 
+def _record_route_event(
+    result: dict[str, Any],
+    *,
+    agent: str,
+    requested_topic: str,
+    storage_topic: str,
+    text: str,
+    decision: tm_route.RouteDecision,
+    outcome: str,
+    warn: Callable[[str, dict[str, Any]], None] | None,
+) -> dict[str, Any]:
+    try:
+        result["route_event"] = tm_route_events.record_route_event(
+            agent=agent,
+            requested_topic=requested_topic,
+            storage_topic=storage_topic,
+            text=text,
+            decision=decision,
+            result=result,
+            outcome=outcome,
+            source="write_memory",
+        )
+    except Exception as exc:
+        result["route_event"] = {"ok": False, "error": str(exc)[:240]}
+        if warn:
+            warn("route_event_failed", {
+                "agent": agent,
+                "topic": requested_topic,
+                "route": result.get("route"),
+                "outcome": outcome,
+                "error": str(exc),
+            })
+    return result
+
+
 def _auto_wrap_handoff_card(agent: str, text: str) -> str:
     """TEMPORARY STOPGAP — will be replaced by tigermemory-ce afterTurn hook (Phase 3).
 
@@ -918,6 +954,16 @@ def write_memory_with_review(
             warn=warn,
         )
         result = _attach_discard_audit(result, audit)
+        result = _record_route_event(
+            result,
+            agent=agent,
+            requested_topic=topic,
+            storage_topic=result["topic"],
+            text=text,
+            decision=decision,
+            outcome="discard",
+            warn=warn,
+        )
         return _attach_handoff_verification(result, text, failure_reason=decision.reasons)
 
     storage_topic = _storage_topic(
@@ -951,6 +997,16 @@ def write_memory_with_review(
             skip_review_reason=skip_review_reason,
         )
         result.setdefault("warnings", []).extend(_route_warnings(topic, decision, result["topic"]))
+        result = _record_route_event(
+            result,
+            agent=agent,
+            requested_topic=topic,
+            storage_topic=result["topic"],
+            text=text,
+            decision=decision,
+            outcome="wiki_proposal",
+            warn=warn,
+        )
         return _attach_handoff_verification(result, text, failure_reason=result.get("reasons"))
 
     if decision.knowledge_target == "human_review":
@@ -964,6 +1020,16 @@ def write_memory_with_review(
             outcome="human_review",
         )
         result.setdefault("warnings", []).extend(_route_warnings(topic, decision, storage_topic))
+        result = _record_route_event(
+            result,
+            agent=agent,
+            requested_topic=topic,
+            storage_topic=storage_topic,
+            text=text,
+            decision=decision,
+            outcome="human_review",
+            warn=warn,
+        )
         return _attach_handoff_verification(result, text, failure_reason=result.get("reasons"))
 
     if decision.route == "mem0":
@@ -1026,6 +1092,16 @@ def write_memory_with_review(
                 except Exception as exc:
                     data["verified"] = {"direct_readback_ok": False, "error": str(exc)}
                     data.setdefault("warnings", []).append(f"direct readback failed: {exc}")
+                _record_route_event(
+                    data,
+                    agent=agent,
+                    requested_topic=topic,
+                    storage_topic=storage_topic,
+                    text=text,
+                    decision=decision,
+                    outcome="mem0",
+                    warn=warn,
+                )
                 _attach_handoff_verification(data, text)
                 schedule_digest_refresh()
                 return data
@@ -1064,4 +1140,14 @@ def write_memory_with_review(
         outcome=outcome,
     )
     result.setdefault("warnings", []).extend(_route_warnings(topic, decision, storage_topic))
+    result = _record_route_event(
+        result,
+        agent=agent,
+        requested_topic=topic,
+        storage_topic=storage_topic,
+        text=text,
+        decision=decision,
+        outcome=outcome or "human_review",
+        warn=warn,
+    )
     return _attach_handoff_verification(result, text, failure_reason=result.get("reasons"))

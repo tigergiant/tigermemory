@@ -11,6 +11,8 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import tm_cron_apply  # type: ignore[import-not-found]
+import tm_route  # type: ignore[import-not-found]
+import tm_route_events  # type: ignore[import-not-found]
 import tm_review_tools  # type: ignore[import-not-found]
 import tm_review_ui  # type: ignore[import-not-found]
 
@@ -832,7 +834,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v57" in response.text
+    assert "tigermemory-memory-ops-v58" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -2235,6 +2237,46 @@ def test_api_agent_eval_import_error_returns_json(tmp_path, monkeypatch):
     assert "tigermemory_eval" in data["hint"]
 
 
+def test_route_events_record_final_outcome_without_raw_text(tmp_path):
+    decision = tm_route.RouteDecision(
+        route="inbox",
+        score=88,
+        topic_inferred="investment",
+        issues=[],
+        reasons="stable knowledge should become a wiki proposal",
+        is_transient=False,
+        is_sensitive=False,
+        needs_human_review=False,
+        knowledge_target="wiki_proposal",
+        target_confidence=90,
+        wiki_partition="investment",
+        wiki_slug_hint="example",
+        wiki_action="create",
+    )
+    root = tmp_path / "events"
+    text = "2026-06-10 这是一条不应复制原文的投研记忆。"
+
+    event = tm_route_events.record_route_event(
+        agent="codex",
+        requested_topic="investment",
+        storage_topic="investment",
+        text=text,
+        decision=decision,
+        result={"route": "inbox", "outcome": "wiki_proposal", "path": "inbox/example.md"},
+        outcome="wiki_proposal",
+        event_root=root,
+    )
+    rows = tm_route_events.load_route_events(dates=["2026-06-10"], event_root=root)
+    summary = tm_route_events.summarize_route_events(rows, dates=["2026-06-10"], event_root=root)
+    raw = (root / "2026-06-10" / "events.jsonl").read_text(encoding="utf-8")
+
+    assert event["flow_target"] == "wiki"
+    assert summary["flow_counts"] == {"mem0": 0, "wiki": 1, "inbox": 0, "discard": 0}
+    assert rows[0]["text_sha256_12"]
+    assert text not in raw
+    assert "text_sha256_12" in raw
+
+
 def test_dashboard_memory_quality_falls_back_to_live_inbox(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_inbox(tmp_path, "2026-05-01-1200-codex-systems.md")
@@ -2326,7 +2368,8 @@ def test_dashboard_memory_quality_digest_backfill_uses_frontmatter_and_live_rows
     assert data["counts"]["inbox"] == 2
     assert data["counts"]["inbox_pending"] == 2
     assert data["counts"]["inbox_today"] == 1
-    assert data["counts"]["wiki"] is None
+    assert data["counts"]["wiki"] == 1
+    assert data["counts"]["wiki_count_source"] == "wiki_proposal_inbox"
     flow = data["route_flow"]
     output_map = {slot["key"]: slot for slot in flow["outputs"]}
     assert {"mem0", "wiki", "inbox", "discard", "issue"} <= set(output_map)
@@ -2374,7 +2417,8 @@ def test_dashboard_memory_quality_range_aggregates_available_digest_dates(tmp_pa
     assert "2026-06-04" in data["missing_dates"]
     assert data["counts"]["mem0"] == 4
     assert data["counts"]["discard"] == 6
-    assert data["counts"]["wiki"] is None
+    assert data["counts"]["wiki"] == 2
+    assert data["counts"]["wiki_count_source"] == "wiki_proposal_inbox"
     assert data["counts"]["inbox_pending"] == 2
     assert data["counts"]["inbox_today"] == 2
     assert data["counts"]["review_entered"] == 2
