@@ -20,6 +20,7 @@ from dataclasses import replace
 from typing import Any, Callable
 
 import tigermemory_core as tm_core
+from tigermemory_core import runtime_events as tm_runtime_events
 import tm_route
 import tm_route_audit
 import tm_route_events
@@ -799,8 +800,48 @@ def _record_route_event(
             outcome=outcome,
             source="write_memory",
         )
+        target_ref = {
+            key: result[key]
+            for key in ("id", "path", "commit_sha", "url")
+            if isinstance(result.get(key), str) and result.get(key)
+        }
+        tm_runtime_events.record_event(
+            event_type="memory_route",
+            service="write_memory",
+            component="router",
+            ok=outcome not in {"error", "retry_error"},
+            severity="info" if outcome not in {"error", "retry_error"} else "error",
+            agent=agent,
+            route=str(result.get("route") or decision.route or ""),
+            outcome=outcome,
+            target_ref=target_ref,
+            source_log=result["route_event"].get("path"),
+            extra={
+                "requested_topic": requested_topic,
+                "stored_topic": storage_topic,
+                "flow_target": result["route_event"].get("flow_target"),
+                "knowledge_target": decision.knowledge_target,
+                "score": decision.score,
+                "text_len": len(text),
+            },
+        )
     except Exception as exc:
         result["route_event"] = {"ok": False, "error": str(exc)[:240]}
+        try:
+            tm_runtime_events.record_event(
+                event_type="memory_route",
+                service="write_memory",
+                component="router",
+                ok=False,
+                severity="error",
+                agent=agent,
+                route=str(result.get("route") or decision.route or ""),
+                outcome=outcome,
+                error=str(exc)[:240],
+                extra={"requested_topic": requested_topic, "stored_topic": storage_topic},
+            )
+        except Exception:
+            pass
         if warn:
             warn("route_event_failed", {
                 "agent": agent,

@@ -44,6 +44,7 @@ from urllib.parse import urlencode, urlparse
 import _bootstrap_paths  # noqa: F401  -- must precede tigermemory_* / tigerledger imports
 
 import tigermemory_core as tm_core
+from tigermemory_core import runtime_events as tm_runtime_events
 import tm_answer
 import tigerledger as tm_expense
 import tm_memory_ops
@@ -420,6 +421,21 @@ def log_json(level: str, trace_id: str, endpoint: str, status: int, duration_ms:
         **extra,
     }
     print(json.dumps(entry), file=sys.stderr)
+    try:
+        tm_runtime_events.record_event(
+            event_type="http_request",
+            service="tm-http",
+            component=endpoint,
+            ok=status < 400 and level != "error",
+            severity=level,
+            trace_id=trace_id,
+            duration_ms=round(float(duration_ms), 1),
+            outcome=str(status),
+            extra={"status": status, **extra},
+            source_log="systemd:tm-http.service",
+        )
+    except Exception:
+        pass
 
 
 # ---------- Lifespan ----------
@@ -503,8 +519,33 @@ async def lifespan(app: FastAPI):
     # Startup: check Mem0 reachability (TCP-level, see _probe_mem0_reachable docstring)
     app.state.mem0_reachable = _probe_mem0_reachable()
     app.state.tm_core_version = _git_sha()
+    try:
+        tm_runtime_events.record_event(
+            event_type="service_start",
+            service="tm-http",
+            component="lifespan",
+            ok=True,
+            extra={
+                "git_sha": app.state.tm_core_version,
+                "mem0_reachable": app.state.mem0_reachable,
+                "profile": tm_core.tigermemory_profile(),
+            },
+            source_log="systemd:tm-http.service",
+        )
+    except Exception:
+        pass
     yield
-    # Shutdown: nothing to clean up
+    try:
+        tm_runtime_events.record_event(
+            event_type="service_stop",
+            service="tm-http",
+            component="lifespan",
+            ok=True,
+            extra={"git_sha": getattr(app.state, "tm_core_version", None)},
+            source_log="systemd:tm-http.service",
+        )
+    except Exception:
+        pass
 
 
 # ---------- Bearer Auth Middleware ----------

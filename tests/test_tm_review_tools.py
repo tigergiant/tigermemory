@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import pathlib
 import sys
 import types
@@ -101,3 +102,33 @@ def test_execute_promote_l2_fallback_uses_allowed_codex_inbox(tmp_path, monkeypa
     commit_cmd = next(cmd for cmd in commands if cmd[:2] == ["git", "commit"])
     assert commit_cmd[3].startswith("[codex] create: L2-block promote")
     assert commit_cmd[-2:] == ["--", "inbox/2026-05-21-1650-codex-selfevolution.md"]
+
+
+def test_append_review_log_writes_runtime_event(tmp_path, monkeypatch):
+    monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(tmp_path / "runtime-events"))
+    monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)
+    digest_path = tmp_path / "inbox" / "daily" / "2026-06-10.md"
+    digest_path.parent.mkdir(parents=True)
+    digest_path.write_text(
+        "\n".join([
+            "---",
+            "status: pending",
+            "facts:",
+            "  - id: fact-1",
+            "    text: \"example\"",
+            "---",
+            "",
+            "# Daily Digest",
+        ]),
+        encoding="utf-8",
+    )
+
+    saved = tm_review_tools.append_review_log("2026-06-10", {"fact_id": "fact-1", "action": "promote_mem0"})
+
+    assert saved is True
+    event_file = tmp_path / "runtime-events" / "2026-06-10" / "events.jsonl"
+    row = json.loads(event_file.read_text(encoding="utf-8"))
+    assert row["event_type"] == "daily_review_action"
+    assert row["service"] == "tm-dashboard"
+    assert row["outcome"] == "promote_mem0"
+    assert row["target_ref"] == {"date": "2026-06-10", "fact_id": "fact-1"}

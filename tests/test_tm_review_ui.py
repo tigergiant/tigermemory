@@ -25,6 +25,28 @@ def _client(tmp_path: pathlib.Path, monkeypatch) -> TestClient:
     return TestClient(tm_review_ui.app)
 
 
+def test_runtime_events_api_returns_summary(tmp_path, monkeypatch):
+    monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(tmp_path / "runtime-events"))
+    tm_review_ui.tm_runtime_events.record_event(
+        event_type="quality_cache_warm",
+        service="tm-dashboard",
+        component="quality_cache",
+        ok=True,
+        extra={"cached": True},
+    )
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/api/runtime/events?days=1&limit=5", headers=HOST)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["summary"]["event_count"] == 1
+    assert payload["summary"]["type_counts"]["quality_cache_warm"] == 1
+    assert payload["events"][0]["service"] == "tm-dashboard"
+
+
 def _write_digest(root: pathlib.Path, date: str = "2026-05-21") -> pathlib.Path:
     path = root / "wiki" / "operations" / f"daily-memory-digest-{date}.md"
     path.parent.mkdir(parents=True, exist_ok=True)

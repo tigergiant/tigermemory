@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import pathlib
 import sys
 
@@ -88,6 +89,31 @@ def test_memory_answer_endpoint_delegates_to_core(monkeypatch):
         "evidence_char_budget": 2000,
         "task_context": None,
     }
+
+
+def test_log_json_also_writes_unified_runtime_event(tmp_path, monkeypatch):
+    monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(tmp_path))
+
+    tm_http.log_json(
+        "info",
+        "trace-http-1",
+        "/search_memories",
+        200,
+        4.2,
+        query="private query body",
+        query_len=18,
+    )
+
+    path = tmp_path / tm_http.datetime.now(tm_http.tm_core.TZ_CN).strftime("%Y-%m-%d") / "events.jsonl"
+    raw = path.read_text(encoding="utf-8")
+    assert "private query body" not in raw
+    row = json.loads(raw)
+    assert row["event_type"] == "http_request"
+    assert row["service"] == "tm-http"
+    assert row["component"] == "/search_memories"
+    assert row["trace_id"] == "trace-http-1"
+    assert row["ok"] is True
+    assert row["extra"]["query"]["len"] == 18
 
 
 def test_write_memory_endpoint_forwards_force_inbox(monkeypatch):
