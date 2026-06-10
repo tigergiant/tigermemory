@@ -25,6 +25,8 @@ JOB_ID_RE = re.compile(r"^ta-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$")
 TICKER_RE = re.compile(r"^[0-9A-Z._-]{3,20}$")
 TRADE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 PROFILE_RE = re.compile(r"^(deep|fast)$")
+DECISION_LOG_PREFIX = "wiki/investment/decision-log/"
+TZ_CN = datetime.timezone(datetime.timedelta(hours=8))
 
 
 def jobs_root() -> pathlib.Path:
@@ -198,6 +200,146 @@ def _parse_last_json_line(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _env_enabled(name: str, default: bool = True) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _portable_repo_root(raw_root: str) -> pathlib.Path:
+    normalized = raw_root.replace("\\", "/")
+    m = re.match(r"^/mnt/([A-Za-z])(?:/(.*))?$", normalized)
+    if sys.platform == "win32" and m:
+        rest = m.group(2) or ""
+        return pathlib.Path(f"{m.group(1).upper()}:/{rest}")
+    m = re.match(r"^([A-Za-z]):(?:/(.*))?$", normalized)
+    if sys.platform != "win32" and m:
+        rest = m.group(2) or ""
+        return pathlib.Path(f"/mnt/{m.group(1).lower()}/{rest}")
+    return pathlib.Path(raw_root)
+
+
+def _decision_log_ref(raw_path: str) -> tuple[pathlib.Path, str] | None:
+    normalized = str(raw_path).replace("\\", "/")
+    if normalized.startswith(DECISION_LOG_PREFIX):
+        return tm_core.REPO_ROOT, normalized
+    marker = f"/{DECISION_LOG_PREFIX}"
+    idx = normalized.find(marker)
+    if idx < 0:
+        return None
+    repo_root = _portable_repo_root(normalized[:idx])
+    rel_path = normalized[idx + 1 :]
+    if not rel_path.startswith(DECISION_LOG_PREFIX):
+        return None
+    return repo_root, rel_path
+
+
+def _adapter_output_paths(payload: dict[str, Any]) -> list[str]:
+    paths: list[str] = []
+    report_paths = payload.get("report_paths")
+    if isinstance(report_paths, dict):
+        paths.extend(str(value) for value in report_paths.values() if value)
+    for key in ("summary_path", "portfolio_summary_path", "monthly_log_path"):
+        value = payload.get(key)
+        if value:
+            paths.append(str(value))
+    return paths
+
+
+def _run_git(repo_root: pathlib.Path, args: list[str], timeout: int = 60) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(repo_root), *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+    )
+
+
+def _commit_decision_log_paths(repo_root: pathlib.Path, rel_paths: list[str], trade_date: str, agent: str) -> dict[str, Any]:
+    rel_paths = sorted(set(rel_paths))
+    if not rel_paths:
+        return {"ok": True, "committed": False, "reason": "no_decision_log_paths"}
+    top = _run_git(repo_root, ["rev-parse", "--show-toplevel"])
+    if top.returncode != 0:
+        return {"ok": False, "committed": False, "reason": "repo_root_not_git", "repo_root": str(repo_root)}
+
+    staged = _run_git(repo_root, ["diff", "--cached", "--name-only"])
+    if staged.returncode != 0:
+        return {"ok": False, "committed": False, "reason": "staged_check_failed", "stderr": staged.stderr.strip()}
+    if staged.stdout.strip():
+        return {"ok": False, "committed": False, "reason": "staged_changes_present"}
+
+    status = _run_git(repo_root, ["status", "--porcelain", "--", *rel_paths])
+    if status.returncode != 0:
+        return {"ok": False, "committed": False, "reason": "status_failed", "stderr": status.stderr.strip()}
+    if not status.stdout.strip():
+        return {"ok": True, "committed": False, "reason": "no_changes", "paths": rel_paths}
+
+    add = _run_git(repo_root, ["add", "--", *rel_paths])
+    if add.returncode != 0:
+        return {"ok": False, "committed": False, "reason": "add_failed", "stderr": add.stderr.strip(), "paths": rel_paths}
+
+    message = f"[{agent}] create: archive TradingAgents decision logs {trade_date}"
+    commit = _run_git(repo_root, ["commit", "-m", message], timeout=120)
+    if commit.returncode != 0:
+        _run_git(repo_root, ["restore", "--staged", "--", *rel_paths])
+        return {"ok": False, "committed": False, "reason": "commit_failed", "stderr": commit.stderr.strip(), "paths": rel_paths}
+
+    result: dict[str, Any] = {
+        "ok": True,
+        "committed": True,
+        "commit_output": commit.stdout.strip(),
+        "paths": rel_paths,
+    }
+    if _env_enabled("TRADINGAGENTS_DECISION_LOG_AUTO_PUSH", default=True):
+        branch = _run_git(repo_root, ["rev-parse", "--abbrev-ref", "HEAD"])
+        if branch.returncode == 0 and branch.stdout.strip() and branch.stdout.strip() != "HEAD":
+            push = _run_git(repo_root, ["push", "origin", branch.stdout.strip()], timeout=180)
+            result["pushed"] = push.returncode == 0
+            if push.returncode != 0:
+                result["push_error"] = push.stderr.strip()
+        else:
+            result["pushed"] = False
+            result["push_error"] = "detached_or_unknown_branch"
+    else:
+        result["pushed"] = False
+        result["push_skipped"] = True
+    return result
+
+
+def archive_decision_log_outputs(payload: dict[str, Any]) -> dict[str, Any]:
+    if not _env_enabled("TRADINGAGENTS_DECISION_LOG_AUTO_COMMIT", default=True):
+        return {"ok": True, "enabled": False}
+    grouped: dict[pathlib.Path, list[str]] = {}
+    skipped: list[str] = []
+    for raw_path in _adapter_output_paths(payload):
+        ref = _decision_log_ref(raw_path)
+        if not ref:
+            skipped.append(raw_path)
+            continue
+        repo_root, rel_path = ref
+        if not (repo_root / rel_path).exists():
+            skipped.append(raw_path)
+            continue
+        grouped.setdefault(repo_root, []).append(rel_path)
+
+    trade_date = str(payload.get("trade_date") or datetime.datetime.now(TZ_CN).date())
+    agent = os.environ.get("TM_AGENT") or os.environ.get("TRADINGAGENTS_ARCHIVE_AGENT") or "codex"
+    commits = [
+        _commit_decision_log_paths(repo_root, rel_paths, trade_date, agent)
+        for repo_root, rel_paths in sorted(grouped.items(), key=lambda item: str(item[0]))
+    ]
+    return {
+        "ok": all(item.get("ok") for item in commits),
+        "enabled": True,
+        "commits": commits,
+        "skipped": skipped,
+    }
+
+
 def _base_status(job_id: str, ticker: str, trade_date: str, status: str, profile: str = "deep") -> dict[str, Any]:
     return {
         "ok": status not in {"failed"},
@@ -295,6 +437,8 @@ def run_worker(job_id: str, ticker: str, trade_date: str, profile: str = "deep")
         payload = _parse_last_json_line(result.stdout or "")
         elapsed = round(time.monotonic() - started, 3)
         if result.returncode == 0 and payload and payload.get("ok") is not False:
+            archive_result = archive_decision_log_outputs(payload)
+            payload["decision_log_archive"] = archive_result
             _atomic_write_json(result_path(job_id), payload)
             status.update(
                 {
@@ -309,6 +453,7 @@ def run_worker(job_id: str, ticker: str, trade_date: str, profile: str = "deep")
                     "profile": payload.get("profile") or profile,
                     "warnings": payload.get("warnings") or [],
                     "report_paths": payload.get("report_paths") or {},
+                    "decision_log_archive": archive_result,
                     "cost_estimate_usd": payload.get("cost_estimate_usd"),
                 }
             )

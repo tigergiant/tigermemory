@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import subprocess
 import sys
 
 
@@ -72,6 +73,62 @@ def test_worker_writes_completed_result(tmp_path, monkeypatch):
     assert result["job_id"] == job_id
     assert result["rating"] == "Hold"
     assert result["profile"] == "fast"
+
+
+def test_archive_decision_log_outputs_commits_only_generated_paths(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    report = repo / "wiki" / "investment" / "decision-log" / "600519.SH" / "2026-05-16" / "final_decision.md"
+    report.parent.mkdir(parents=True)
+    report.write_text("final decision\n", encoding="utf-8")
+    unrelated = repo / "unrelated.txt"
+    unrelated.write_text("leave me unstaged\n", encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "test@example.local"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test Agent"], cwd=repo, check=True)
+    monkeypatch.setenv("TRADINGAGENTS_DECISION_LOG_AUTO_PUSH", "0")
+    monkeypatch.setenv("TM_AGENT", "codex")
+
+    result = tm_deep_dive_jobs.archive_decision_log_outputs(
+        {
+            "trade_date": "2026-05-16",
+            "report_paths": {"final_decision": str(report)},
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["commits"][0]["committed"] is True
+    tracked = subprocess.run(
+        ["git", "ls-files", "--", "wiki/investment/decision-log/600519.SH/2026-05-16/final_decision.md"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "final_decision.md" in tracked.stdout
+    scoped_status = subprocess.run(
+        ["git", "status", "--porcelain", "--", "wiki/investment/decision-log"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert scoped_status.stdout == ""
+    full_status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "?? unrelated.txt" in full_status.stdout
+    subject = subprocess.run(
+        ["git", "log", "-1", "--pretty=%s"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert subject.stdout.strip() == "[codex] create: archive TradingAgents decision logs 2026-05-16"
 
 
 def test_pid_alive_for_self_does_not_kill_caller():
