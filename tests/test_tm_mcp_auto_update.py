@@ -97,7 +97,8 @@ def test_auto_update_wrapper_times_out_blocked_git_pull(tmp_path):
             "#!/usr/bin/env bash\n"
             "if [ \"$1\" = \"diff\" ]; then exit 0; fi\n"
             "if [ \"$1\" = \"-c\" ]; then shift 2; fi\n"
-            "if [ \"$1\" = \"pull\" ]; then sleep 5; exit 0; fi\n"
+            "if [ \"$1\" = \"fetch\" ]; then sleep 5; exit 0; fi\n"
+            "if [ \"$1\" = \"merge\" ]; then exit 0; fi\n"
             "exit 0\n"
         )
     os.chmod(fake_python, 0o755)
@@ -166,7 +167,11 @@ def test_auto_update_wrapper_preserves_stdio_for_mcp_handshake(tmp_path):
             "  exit 0\n"
             "fi\n"
             "if [ \"$1\" = \"-c\" ]; then shift 2; fi\n"
-            "if [ \"$1\" = \"pull\" ]; then\n"
+            "if [ \"$1\" = \"fetch\" ]; then\n"
+            "  if IFS= read -r -t 0.2 line; then printf '%s\\n' \"$line\" > \"$git_stolen\"; fi\n"
+            "  exit 0\n"
+            "fi\n"
+            "if [ \"$1\" = \"merge\" ]; then\n"
             "  if IFS= read -r -t 0.2 line; then printf '%s\\n' \"$line\" > \"$git_stolen\"; fi\n"
             "  exit 0\n"
             "fi\n"
@@ -267,7 +272,8 @@ def test_openai_auto_update_wrapper_times_out_blocked_git_pull(tmp_path):
             "#!/usr/bin/env bash\n"
             "if [ \"$1\" = \"diff\" ]; then exit 0; fi\n"
             "if [ \"$1\" = \"-c\" ]; then shift 2; fi\n"
-            "if [ \"$1\" = \"pull\" ]; then sleep 5; exit 0; fi\n"
+            "if [ \"$1\" = \"fetch\" ]; then sleep 5; exit 0; fi\n"
+            "if [ \"$1\" = \"merge\" ]; then exit 0; fi\n"
             "exit 0\n"
         )
     os.chmod(fake_python, 0o755)
