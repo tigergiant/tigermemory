@@ -39,6 +39,7 @@ LAUNCHER_SHELL_SCRIPTS = (
     "deploy/mcp/tm_openai_mcp_auto_update.sh",
     "deploy/mcp/tm_openai_mcp_vps_start.sh",
 )
+VPS_OPENAI_START_SCRIPT = "deploy/mcp/tm_openai_mcp_vps_start.sh"
 LAUNCHER_SYSTEMD_UNITS = (
     "deploy/mcp/tm-mcp.service",
     "deploy/mcp/tm-http.service",
@@ -169,3 +170,9 @@ def test_mem0_routed_systemd_units_use_auth_gateway(unit, expected_url):
     text = (REPO_ROOT / unit).read_text(encoding="utf-8")
     assert f"Environment=MEM0_URL={expected_url}" in text
     assert not re.search(r"^Environment=MEM0_URL=http://\\S+:8765$", text, re.MULTILINE)
+
+
+def test_vps_openai_start_script_overrides_legacy_mem0_url():
+    text = (REPO_ROOT / VPS_OPENAI_START_SCRIPT).read_text(encoding="utf-8")
+    assert 'export MEM0_URL="${TM_OPENAI_MCP_MEM0_URL:-http://100.113.108.21:9765}"' in text
+    assert "100.113.108.21:8765" not in text
