@@ -6,10 +6,12 @@ and references only; callers must not use it as a raw content archive.
 from __future__ import annotations
 
 import datetime as dt
+import contextlib
 import hashlib
 import json
 import os
 import pathlib
+import time
 from typing import Any
 
 from . import REPO_ROOT, TZ_CN
@@ -38,6 +40,9 @@ _SECRET_KEYS = {
     "token",
 }
 _MAX_STRING = 500
+_DEFAULT_LOCK_TIMEOUT_SEC = 5.0
+_DEFAULT_LOCK_STALE_SEC = 120.0
+_LOCK_POLL_SEC = 0.05
 
 
 def _now_local() -> dt.datetime:
@@ -101,10 +106,75 @@ def _sanitize(value: Any, key: str | None = None) -> Any:
     return str(value)[:_MAX_STRING]
 
 
-def _write_jsonl(path: pathlib.Path, row: dict[str, Any]) -> None:
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+@contextlib.contextmanager
+def _jsonl_file_lock(
+    path: pathlib.Path,
+    *,
+    timeout_env: str = "TM_RUNTIME_EVENTS_LOCK_TIMEOUT_SEC",
+    stale_env: str = "TM_RUNTIME_EVENTS_LOCK_STALE_SEC",
+):
+    lock_path = path.with_name(path.name + ".lock")
+    timeout_sec = max(0.0, _env_float(timeout_env, _DEFAULT_LOCK_TIMEOUT_SEC))
+    stale_sec = max(0.0, _env_float(stale_env, _DEFAULT_LOCK_STALE_SEC))
+    deadline = time.monotonic() + timeout_sec
+    acquired = False
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(fd, f"pid={os.getpid()} ts={time.time()}\n".encode("utf-8"))
+            finally:
+                os.close(fd)
+            acquired = True
+            break
+        except FileExistsError:
+            try:
+                if time.time() - lock_path.stat().st_mtime >= stale_sec:
+                    lock_path.unlink()
+                    continue
+            except FileNotFoundError:
+                continue
+            except OSError:
+                pass
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"runtime event ledger lock busy: {lock_path}")
+            time.sleep(min(_LOCK_POLL_SEC, max(0.01, deadline - time.monotonic())))
+    try:
+        yield
+    finally:
+        if acquired:
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def append_jsonl_row(
+    path: pathlib.Path,
+    row: dict[str, Any],
+    *,
+    timeout_env: str = "TM_RUNTIME_EVENTS_LOCK_TIMEOUT_SEC",
+    stale_env: str = "TM_RUNTIME_EVENTS_LOCK_STALE_SEC",
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8", newline="\n") as fh:
-        fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    payload = json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
+    with _jsonl_file_lock(path, timeout_env=timeout_env, stale_env=stale_env):
+        with path.open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write(payload)
+
+
+def _write_jsonl(path: pathlib.Path, row: dict[str, Any]) -> None:
+    append_jsonl_row(path, row)
 
 
 def record_event(

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import concurrent.futures
 import datetime as dt
 import importlib.util
 import json
 import pathlib
 import sys
+
+import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
@@ -84,6 +87,50 @@ def test_load_and_summarize_events(tmp_path, monkeypatch):
     assert summary["service_counts"] == {"tm-dashboard": 1, "write_memory": 1}
     assert summary["type_counts"]["memory_route"] == 1
     assert summary["ok_counts"] == {"ok": 1, "failed": 1}
+
+
+def test_record_event_concurrent_writes_remain_valid_jsonl(tmp_path, monkeypatch):
+    monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(tmp_path))
+    now = dt.datetime(2026, 6, 10, 12, 0, tzinfo=TZ_CN)
+
+    def write_one(index: int) -> None:
+        tm_runtime_events.record_event(
+            event_type="concurrent_probe",
+            service="tm-test",
+            component="jsonl_lock",
+            ok=True,
+            trace_id=f"trace-{index}",
+            now=now + dt.timedelta(microseconds=index),
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(write_one, range(40)))
+
+    path = tmp_path / "2026-06-10" / "events.jsonl"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    rows = [json.loads(line) for line in lines]
+
+    assert len(rows) == 40
+    assert {row["trace_id"] for row in rows} == {f"trace-{index}" for index in range(40)}
+    assert not path.with_name(path.name + ".lock").exists()
+
+
+def test_record_event_fails_explicitly_when_jsonl_lock_is_busy(tmp_path, monkeypatch):
+    monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(tmp_path))
+    monkeypatch.setenv("TM_RUNTIME_EVENTS_LOCK_TIMEOUT_SEC", "0")
+    monkeypatch.setenv("TM_RUNTIME_EVENTS_LOCK_STALE_SEC", "3600")
+    path = tmp_path / "2026-06-10" / "events.jsonl"
+    path.parent.mkdir(parents=True)
+    path.with_name(path.name + ".lock").write_text("busy\n", encoding="utf-8")
+
+    with pytest.raises(TimeoutError, match="runtime event ledger lock busy"):
+        tm_runtime_events.record_event(
+            event_type="blocked_probe",
+            service="tm-test",
+            component="jsonl_lock",
+            ok=True,
+            now=dt.datetime(2026, 6, 10, 12, 0, tzinfo=TZ_CN),
+        )
 
 
 def test_runtime_events_cli_record_subcommand(tmp_path, monkeypatch, capsys):

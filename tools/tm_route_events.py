@@ -14,6 +14,7 @@ import pathlib
 from typing import Any
 
 import tigermemory_core as tm_core
+from tigermemory_core import runtime_events as tm_runtime_events
 import tm_route
 
 REPO_ROOT = tm_core.REPO_ROOT
@@ -50,9 +51,12 @@ def _relpath(path: pathlib.Path) -> str:
 
 
 def _write_jsonl(path: pathlib.Path, row: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8", newline="\n") as fh:
-        fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    tm_runtime_events.append_jsonl_row(
+        path,
+        row,
+        timeout_env="TM_ROUTE_EVENTS_LOCK_TIMEOUT_SEC",
+        stale_env="TM_ROUTE_EVENTS_LOCK_STALE_SEC",
+    )
 
 
 def _target_ref(result: dict[str, Any]) -> dict[str, Any]:
