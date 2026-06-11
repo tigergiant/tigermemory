@@ -411,15 +411,72 @@ def _planner_llm_used(trace: dict[str, Any]) -> bool:
     return isinstance(planner, dict) and planner.get("planner_source") == "llm"
 
 
-def _evidence_gate_paths(trace: dict[str, Any]) -> list[str]:
+def _evidence_gate_paths(
+    trace: dict[str, Any],
+    *,
+    keep: bool | None = None,
+    selected: bool | None = None,
+) -> list[str]:
     gate = trace.get("evidence_gate") if isinstance(trace, dict) else []
     if not isinstance(gate, list):
         return []
-    return [
-        _normalize_case_path(item.get("path"))
-        for item in gate
-        if isinstance(item, dict) and item.get("path")
-    ]
+    paths: list[str] = []
+    for item in gate:
+        if not isinstance(item, dict) or not item.get("path"):
+            continue
+        if keep is not None and bool(item.get("keep")) is not keep:
+            continue
+        if selected is not None and bool(item.get("selected")) is not selected:
+            continue
+        paths.append(_normalize_case_path(item.get("path")))
+    return paths
+
+
+def _map_rank_band(rank: int | None) -> str:
+    if rank is None:
+        return "map_miss"
+    if rank <= 10:
+        return "top10"
+    if rank <= 30:
+        return "top11_30"
+    if rank <= 80:
+        return "top31_80"
+    return "after80"
+
+
+def _map_bridge_bucket(
+    *,
+    expected_paths: list[str],
+    missing_expected_paths: list[str],
+    map_rank: int | None,
+    gate_rank: int | None,
+    gate_selected_rank: int | None,
+    gate_rejected_rank: int | None,
+    evidence_rank: int | None,
+    passed: bool,
+    prompt_budget_truncated: bool,
+) -> str:
+    if not expected_paths:
+        return "no_expected_path"
+    if missing_expected_paths:
+        return "missing_knowledge"
+    if map_rank is None:
+        return "map_miss"
+    if evidence_rank is not None:
+        if not passed and prompt_budget_truncated:
+            return "map_to_evidence_ok_answer_budget_risk"
+        return "map_to_evidence_ok"
+    if gate_rank is None:
+        if map_rank <= 10:
+            return "map_top10_not_in_gate"
+        if map_rank <= 30:
+            return "map_top30_not_in_gate"
+        return "map_deep_rank_not_in_gate"
+    if gate_rejected_rank is not None:
+        return "evidence_gate_rejected"
+    if gate_selected_rank is None:
+        return "evidence_selection_topk_miss"
+    return "map_hit_evidence_miss_unknown"
 
 
 def _append_unique_path(paths: list[str], seen: set[str], value: Any) -> None:
@@ -500,6 +557,8 @@ def _compact_diagnosis_row(row: dict[str, Any]) -> dict[str, Any]:
         "hybrid_rank",
         "anchor_rank",
         "evidence_gate_rank",
+        "evidence_gate_selected_rank",
+        "evidence_gate_rejected_rank",
         "answer_evidence_rank",
         "raw_retrieval_hit",
         "map_candidate_hit",
@@ -507,10 +566,14 @@ def _compact_diagnosis_row(row: dict[str, Any]) -> dict[str, Any]:
         "map_hit@30",
         "map_hit@80",
         "map_rank",
+        "map_rank_band",
+        "map_bridge_bucket",
+        "map_hit_but_evidence_miss",
         "map_compensated_hit",
         "recommendation_candidate_rank",
         "recommendation_candidate_hit@5",
         "recommendation_evidence_hit",
+        "prompt_budget_truncated",
         "not_in_map",
         "planner_llm_hit",
         "planner_compensated_hit",
@@ -565,6 +628,8 @@ def diagnose_case(
         map_error = "tm_llm_wiki_map_unavailable"
     map_paths = [_normalize_case_path(hit.get("path")) for hit in map_hits if isinstance(hit, dict)]
     gate_paths = _evidence_gate_paths(trace)
+    gate_selected_paths = _evidence_gate_paths(trace, selected=True)
+    gate_rejected_paths = _evidence_gate_paths(trace, keep=False)
     evidence_paths = [_normalize_case_path(e.get("path")) for e in result.get("evidence", []) if isinstance(e, dict)]
     recommendation_paths = _recommendation_candidate_paths(result, trace)
     recommendation_evidence_paths = _recommendation_evidence_paths(trace, evidence_paths)
@@ -575,6 +640,8 @@ def diagnose_case(
     map_rank = _rank_for_expected(map_paths, expected_paths)
     anchor_rank = _anchor_rank_for_expected(expected_paths, probe_k) if expected_paths else None
     gate_rank = _rank_for_expected(gate_paths, expected_paths)
+    gate_selected_rank = _rank_for_expected(gate_selected_paths, expected_paths)
+    gate_rejected_rank = _rank_for_expected(gate_rejected_paths, expected_paths)
     evidence_rank = _rank_for_expected(evidence_paths, expected_paths)
     recommendation_candidate_rank = _rank_for_expected(recommendation_paths, expected_paths)
     recommendation_evidence_rank = _rank_for_expected(recommendation_evidence_paths, expected_paths)
@@ -674,6 +741,20 @@ def diagnose_case(
         failure_layer = "actionability_gap"
     else:
         failure_layer = "answer_synthesis_miss"
+    prompt_budget_truncated = bool(trace.get("prompt_budget_truncated"))
+    map_rank_band = _map_rank_band(map_rank)
+    map_hit_but_evidence_miss = bool(expected_paths and map_rank is not None and evidence_rank is None)
+    map_bridge_bucket = _map_bridge_bucket(
+        expected_paths=expected_paths,
+        missing_expected_paths=missing_expected_paths,
+        map_rank=map_rank,
+        gate_rank=gate_rank,
+        gate_selected_rank=gate_selected_rank,
+        gate_rejected_rank=gate_rejected_rank,
+        evidence_rank=evidence_rank,
+        passed=failure_layer == "ok",
+        prompt_budget_truncated=prompt_budget_truncated,
+    )
 
     return {
         "id": case["id"],
@@ -698,6 +779,8 @@ def diagnose_case(
         "hybrid_rank": hybrid_rank,
         "anchor_rank": anchor_rank,
         "evidence_gate_rank": gate_rank,
+        "evidence_gate_selected_rank": gate_selected_rank,
+        "evidence_gate_rejected_rank": gate_rejected_rank,
         "answer_evidence_rank": evidence_rank,
         "raw_retrieval_hit": raw_retrieval_hit,
         "map_candidate_hit": map_candidate_hit,
@@ -705,11 +788,15 @@ def diagnose_case(
         "map_hit@30": map_hit_30,
         "map_hit@80": map_hit_80,
         "map_rank": map_rank,
+        "map_rank_band": map_rank_band,
+        "map_bridge_bucket": map_bridge_bucket,
+        "map_hit_but_evidence_miss": map_hit_but_evidence_miss,
         "map_error": map_error,
         "map_compensated_hit": map_compensated_hit,
         "recommendation_candidate_rank": recommendation_candidate_rank,
         "recommendation_candidate_hit@5": recommendation_candidate_hit_5,
         "recommendation_evidence_hit": recommendation_evidence_hit,
+        "prompt_budget_truncated": prompt_budget_truncated,
         "not_in_map": not_in_map,
         "planner_llm_hit": planner_llm_hit,
         "planner_compensated_hit": planner_compensated_hit,
@@ -745,6 +832,7 @@ def summarize_diagnosis(results: list[dict[str, Any]]) -> dict[str, Any]:
     map_hit_30 = sum(1 for item in expected_path_cases if item.get("map_hit@30"))
     map_hit_80 = sum(1 for item in expected_path_cases if item.get("map_hit@80"))
     map_compensated_hits = sum(1 for item in expected_path_cases if item.get("map_compensated_hit"))
+    map_hit_but_evidence_miss = sum(1 for item in expected_path_cases if item.get("map_hit_but_evidence_miss"))
     recommendation_candidate_hits_5 = sum(1 for item in expected_path_cases if item.get("recommendation_candidate_hit@5"))
     recommendation_evidence_hits = sum(1 for item in expected_path_cases if item.get("recommendation_evidence_hit"))
     not_in_map = sum(1 for item in expected_path_cases if item.get("not_in_map"))
@@ -782,6 +870,12 @@ def summarize_diagnosis(results: list[dict[str, Any]]) -> dict[str, Any]:
         "map_hit@80_rate": map_hit_80 / len(expected_path_cases) if expected_path_cases else 1.0,
         "map_compensated_hit": map_compensated_hits,
         "map_compensated_hit_rate": map_compensated_hits / len(expected_path_cases) if expected_path_cases else 0.0,
+        "map_hit_but_evidence_miss": map_hit_but_evidence_miss,
+        "map_hit_but_evidence_miss_rate": (
+            map_hit_but_evidence_miss / len(expected_path_cases) if expected_path_cases else 0.0
+        ),
+        "map_bridge_bucket_counts": _count_by_field(results, "map_bridge_bucket"),
+        "map_rank_band_counts": _count_by_field(results, "map_rank_band"),
         "recommendation_candidate_hit@5": recommendation_candidate_hits_5,
         "recommendation_candidate_hit@5_rate": (
             recommendation_candidate_hits_5 / len(expected_path_cases) if expected_path_cases else 1.0
@@ -886,6 +980,7 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
             f"lexical={report['lexical_hit']}/{report['expected_path_case_count']} "
             f"hybrid={report['hybrid_hit']}/{report['expected_path_case_count']} "
             f"map80={report['map_hit@80']}/{report['expected_path_case_count']} "
+            f"map_leak={report['map_hit_but_evidence_miss']}/{report['expected_path_case_count']} "
             f"rec5={report['recommendation_candidate_hit@5']}/{report['expected_path_case_count']} "
             f"rec_evidence={report['recommendation_evidence_hit']}/{report['expected_path_case_count']} "
             f"anchor={report['anchor_hit']}/{report['expected_path_case_count']} "

@@ -440,6 +440,7 @@ CONFLICT_PATTERN_REGISTRY = tm_core.REPO_ROOT / "tools" / "memory_answer" / "con
 TRACE_RAW_QUERY_ENV = "TM_ANSWER_TRACE_RAW_QUERY"
 QUERY_PLANNER_ENV = "TM_ANSWER_QUERY_PLANNER"
 WIKI_MAP_ENV = "TM_ANSWER_WIKI_MAP"
+WIKI_MAP_BRIDGE_ENV = "TM_ANSWER_WIKI_MAP_BRIDGE"
 ANSWER_STATUSES = {"ok", "not_found", "conflict", "error"}
 
 SECRET_PATTERNS = [
@@ -560,12 +561,24 @@ RECOMMENDATION_BOOST_PRIVATE_MARKERS = (
     "私密",
 )
 RECOMMENDATION_BOOST_MAX_SECONDARY = 5
+WIKI_MAP_BRIDGE_MAX_CANDIDATES = 10
 _QUERY_PLANNER_MANIFEST_CACHE: str | None = None
 _LLM_WIKI_MAP_MODULE: Any | None = None
 
 
 def _wiki_map_enabled() -> bool:
     return str(os.environ.get(WIKI_MAP_ENV) or "").strip().lower() in {
+        "1",
+        "true",
+        "on",
+        "enabled",
+        "yes",
+        "force",
+    }
+
+
+def _wiki_map_bridge_enabled() -> bool:
+    return str(os.environ.get(WIKI_MAP_BRIDGE_ENV) or "").strip().lower() in {
         "1",
         "true",
         "on",
@@ -2125,6 +2138,8 @@ def expand_evidence(
             "freshness_key": item["freshness_key"],
             "freshness_timestamp": item["freshness_timestamp"],
         }
+        if hit.get("bridge_source"):
+            gate_entry["bridge_source"] = str(hit.get("bridge_source"))
         if not keep:
             gate_entry["validity"] = "weak_filtered"
             gate_entry["validity_reason"] = reason
@@ -2708,6 +2723,80 @@ def _merge_search_results(query: str, results: list[dict[str, Any]]) -> dict[str
     }
 
 
+def _path_source_for_bridge(path: str, surface: Any = None) -> str:
+    surface_text = str(surface or "").strip().lower()
+    if surface_text == "sources" or path.startswith("sources/"):
+        return "sources"
+    return "wiki"
+
+
+def _bridge_hit_from_map_candidate(item: dict[str, Any]) -> dict[str, Any] | None:
+    path = _clean_planner_text(item.get("path"), max_chars=180, path_hint=True)
+    if not path or _is_forbidden_related_path(path):
+        return None
+    source = _path_source_for_bridge(path, item.get("source_surface"))
+    title = _clean_planner_text(item.get("title"), max_chars=120) or path
+    score = float(item.get("score") or 0.0)
+    return {
+        "source": source,
+        "path": path,
+        "title": title,
+        "snippet": "",
+        "score": min(max(score, 0.0), 20.0),
+        "bridge_source": "wiki_map",
+    }
+
+
+def _apply_wiki_map_bridge(query: str, search_result: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    trace: dict[str, Any] = {
+        "enabled": False,
+        "status": "disabled",
+        "candidate_count": 0,
+        "added_count": 0,
+    }
+    if not _wiki_map_bridge_enabled():
+        return search_result, trace
+    trace["enabled"] = True
+    trace["status"] = "ok"
+    plan = _map_candidate_plan(query, limit=WIKI_MAP_BRIDGE_MAX_CANDIDATES)
+    if plan.get("degraded"):
+        trace["status"] = "degraded"
+        trace["error"] = str(plan.get("error") or "unknown")
+        return search_result, trace
+
+    candidates = [item for item in plan.get("candidates") or [] if isinstance(item, dict)]
+    trace["candidate_count"] = len(candidates)
+    existing = {
+        (str(hit.get("source") or ""), str(hit.get("path") or ""))
+        for hit in _iter_hits(search_result)
+    }
+    bridge_hits: list[dict[str, Any]] = []
+    for item in candidates[:WIKI_MAP_BRIDGE_MAX_CANDIDATES]:
+        hit = _bridge_hit_from_map_candidate(item)
+        if not hit:
+            continue
+        key = (str(hit.get("source") or ""), str(hit.get("path") or ""))
+        if key in existing:
+            continue
+        existing.add(key)
+        bridge_hits.append(hit)
+    if not bridge_hits:
+        trace["status"] = "no_new_candidates"
+        return search_result, trace
+
+    merged = dict(search_result)
+    groups = {key: list(value) for key, value in (search_result.get("groups") or {}).items()}
+    for hit in bridge_hits:
+        groups.setdefault(str(hit.get("source") or "wiki"), []).append(hit)
+    merged["groups"] = groups
+    warnings = list(search_result.get("warnings") or [])
+    warnings.append(f"wiki_map_bridge_candidates={len(bridge_hits)}")
+    merged["warnings"] = warnings
+    trace["added_count"] = len(bridge_hits)
+    trace["top_paths_hash"] = _hash_paths([str(hit.get("path") or "") for hit in bridge_hits])
+    return merged, trace
+
+
 def _call_memory_answer_llm(query: str, evidence: list[dict[str, Any]]) -> tuple[bool, Any]:
     user_msg = json.dumps(
         {"query": query, "evidence": evidence},
@@ -3214,11 +3303,31 @@ def memory_answer_core(
             "primary_scope": result.get("primary_scope"),
             "group_counts": {k: len(v) for k, v in (result.get("groups") or {}).items()},
         })
-    search_result = _merge_search_results(q, search_results)
-    warnings = list(planner_warnings) + list(search_result.get("warnings") or [])
     evidence_query = _planner_evidence_query(q, planner)
+    search_result = _merge_search_results(q, search_results)
     trace["planner"]["evidence_query_hash"] = query_hash(evidence_query)
     evidence, evidence_gate = expand_evidence(evidence_query, search_result, evidence_limit, query_class)
+    map_bridge_trace: dict[str, Any] = {
+        "enabled": _wiki_map_bridge_enabled(),
+        "status": "disabled" if not _wiki_map_bridge_enabled() else "skipped_sufficient_evidence",
+        "candidate_count": 0,
+        "added_count": 0,
+    }
+    bridge_allowed = (
+        _wiki_map_bridge_enabled()
+        and query_class in {"recall", "synthesis"}
+        and planner.get("freshness_mode") != "current"
+        and evidence_limit >= 2
+        and len(evidence) < 2
+        and not _is_private_for_recommendation_boost(q)
+    )
+    if bridge_allowed:
+        bridged_result, map_bridge_trace = _apply_wiki_map_bridge(evidence_query, search_result)
+        if int(map_bridge_trace.get("added_count") or 0) > 0:
+            search_result = bridged_result
+            evidence, evidence_gate = expand_evidence(evidence_query, search_result, evidence_limit, query_class)
+    trace["map_to_evidence_bridge"] = map_bridge_trace
+    warnings = list(planner_warnings) + list(search_result.get("warnings") or [])
     recommendation_boosted_candidates: list[dict[str, Any]] = []
     if (
         query_class in {"recall", "synthesis"}

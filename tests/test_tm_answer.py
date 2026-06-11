@@ -535,6 +535,103 @@ def _empty_map_plan() -> dict:
     }
 
 
+def _map_plan_with_candidate(path: str, *, title: str = "Bridge Target") -> dict:
+    return {
+        "degraded": False,
+        "error": None,
+        "candidate_count": 1,
+        "top_score": 99.0,
+        "top1_top2_margin": 99.0,
+        "partitions": ["systems"],
+        "source_surfaces": ["wiki"],
+        "top_paths_hash": "bridgehash",
+        "queries": [path, title],
+        "terms": [title],
+        "paths": [path],
+        "candidates": [{
+            "path": path,
+            "title": title,
+            "partition": "systems",
+            "source_surface": "wiki",
+            "score": 99.0,
+        }],
+    }
+
+
+def test_memory_answer_core_does_not_use_wiki_map_bridge_by_default(monkeypatch, tmp_path):
+    target = tmp_path / "wiki" / "systems" / "bridge-target.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("# Bridge Target\nalpha bridge answer", encoding="utf-8")
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
+    monkeypatch.delenv(tm_answer.WIKI_MAP_BRIDGE_ENV, raising=False)
+    monkeypatch.setattr(tm_answer.tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(
+        tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("bridge should be disabled")),
+    )
+    monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", lambda *_args, **_kwargs: _search_result())
+    monkeypatch.setattr(
+        tm_answer,
+        "_call_memory_answer_llm",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("no evidence should skip LLM")),
+    )
+
+    result = tm_answer.memory_answer_core("alpha bridge", scope="wiki", run_id="bridge-default-off")
+
+    assert result["status"] == "not_found"
+    assert result["trace"]["map_to_evidence_bridge"] == {
+        "enabled": False,
+        "status": "disabled",
+        "candidate_count": 0,
+        "added_count": 0,
+    }
+
+
+def test_memory_answer_core_wiki_map_bridge_adds_candidates_to_evidence_gate(monkeypatch, tmp_path):
+    target = tmp_path / "wiki" / "systems" / "bridge-target.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("# Bridge Target\nalpha bridge answer", encoding="utf-8")
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
+    monkeypatch.setenv(tm_answer.WIKI_MAP_BRIDGE_ENV, "1")
+    monkeypatch.setattr(tm_answer.tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(
+        tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: _map_plan_with_candidate("wiki/systems/bridge-target.md"),
+    )
+    monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", lambda *_args, **_kwargs: _search_result())
+
+    captured: dict[str, object] = {}
+
+    def fake_llm(query: str, evidence: list[dict]):
+        captured["query"] = query
+        captured["evidence_paths"] = [item["path"] for item in evidence]
+        return True, {
+            "status": "ok",
+            "answer": "alpha bridge answer",
+            "summary": "bridge target used",
+            "claims": [{"id": "c1", "text": "bridge target", "support": ["e1"], "confidence": 0.9}],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", fake_llm)
+
+    result = tm_answer.memory_answer_core("alpha bridge", scope="wiki", run_id="bridge-on")
+
+    assert result["status"] == "ok"
+    assert captured["evidence_paths"] == ["wiki/systems/bridge-target.md"]
+    assert result["trace"]["map_to_evidence_bridge"]["enabled"] is True
+    assert result["trace"]["map_to_evidence_bridge"]["added_count"] == 1
+    gate = result["trace"]["evidence_gate"]
+    assert gate[0]["path"] == "wiki/systems/bridge-target.md"
+    assert gate[0]["keep"] is True
+    assert gate[0]["selected"] is True
+    assert gate[0]["bridge_source"] == "wiki_map"
+
+
 def test_plan_query_uses_wiki_map_without_deepseek_when_confident(monkeypatch):
     query = "为什么自然语言召回找不到记忆问答开发计划"
     monkeypatch.delenv(tm_answer.QUERY_PLANNER_ENV, raising=False)

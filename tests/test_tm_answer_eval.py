@@ -11,6 +11,14 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 import tm_answer_eval  # type: ignore[import-not-found]
 
 
+class _DummyWikiMap:
+    def __init__(self, hits: list[dict[str, object]]):
+        self._hits = hits
+
+    def map_recall(self, *args, **kwargs):
+        return list(self._hits)
+
+
 def test_eval_case_passes_run_id_to_memory_answer(monkeypatch):
     calls: dict[str, object] = {}
 
@@ -281,6 +289,104 @@ def test_diagnose_case_counts_recommendation_candidate_and_evidence_hit(tmp_path
     assert summary["recommendation_candidate_hit@5_rate"] == 1.0
     assert summary["recommendation_evidence_hit"] == 1
     assert summary["recommendation_evidence_hit_rate"] == 1.0
+
+
+def test_diagnose_case_buckets_map_top10_not_in_gate(tmp_path, monkeypatch):
+    expected = tmp_path / "wiki" / "systems" / "bridge-target.md"
+    expected.parent.mkdir(parents=True)
+    expected.write_text("# Bridge Target\nalpha", encoding="utf-8")
+    monkeypatch.setattr(tm_answer_eval.tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_answer_eval.tm_core, "search_wiki", lambda *a, **k: [])
+    monkeypatch.setattr(tm_answer_eval.tm_core, "search_wiki_hybrid", lambda *a, **k: [])
+    monkeypatch.setattr(
+        tm_answer_eval,
+        "tm_llm_wiki_map",
+        _DummyWikiMap([{"path": "wiki/systems/bridge-target.md", "score": 99.0}]),
+    )
+
+    def fake_memory_answer_core(query: str, **kwargs):
+        return {
+            "status": "not_found",
+            "answer": "",
+            "summary": "",
+            "claims": [],
+            "evidence": [],
+            "warnings": [],
+            "run_id": kwargs.get("run_id"),
+            "trace_id": "trace-map-not-gated",
+            "trace": {"calls": [{"primary_scope": "wiki"}], "evidence_gate": []},
+        }
+
+    monkeypatch.setattr(tm_answer_eval.tm_answer, "memory_answer_core", fake_memory_answer_core)
+
+    result = tm_answer_eval.diagnose_case(
+        {
+            "id": "map-not-gated",
+            "query": "bridge alpha",
+            "expected_status": "ok",
+            "expected_evidence_paths": ["wiki/systems/bridge-target.md"],
+        },
+        run_id="diag-test",
+    )
+
+    assert result["map_rank"] == 1
+    assert result["map_rank_band"] == "top10"
+    assert result["map_hit_but_evidence_miss"] is True
+    assert result["map_bridge_bucket"] == "map_top10_not_in_gate"
+
+    summary = tm_answer_eval.summarize_diagnosis([result])
+    assert summary["map_hit_but_evidence_miss"] == 1
+    assert summary["map_bridge_bucket_counts"] == {"map_top10_not_in_gate": 1}
+
+
+def test_diagnose_case_buckets_map_gate_rejected(tmp_path, monkeypatch):
+    expected = tmp_path / "wiki" / "systems" / "gate-target.md"
+    expected.parent.mkdir(parents=True)
+    expected.write_text("# Gate Target\nalpha", encoding="utf-8")
+    monkeypatch.setattr(tm_answer_eval.tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_answer_eval.tm_core, "search_wiki", lambda *a, **k: [])
+    monkeypatch.setattr(tm_answer_eval.tm_core, "search_wiki_hybrid", lambda *a, **k: [])
+    monkeypatch.setattr(
+        tm_answer_eval,
+        "tm_llm_wiki_map",
+        _DummyWikiMap([{"path": "wiki/systems/gate-target.md", "score": 99.0}]),
+    )
+
+    def fake_memory_answer_core(query: str, **kwargs):
+        return {
+            "status": "not_found",
+            "answer": "",
+            "summary": "",
+            "claims": [],
+            "evidence": [],
+            "warnings": [],
+            "run_id": kwargs.get("run_id"),
+            "trace_id": "trace-gate-rejected",
+            "trace": {
+                "calls": [{"primary_scope": "wiki"}],
+                "evidence_gate": [{
+                    "path": "wiki/systems/gate-target.md",
+                    "keep": False,
+                    "reason": "low relevance",
+                }],
+            },
+        }
+
+    monkeypatch.setattr(tm_answer_eval.tm_answer, "memory_answer_core", fake_memory_answer_core)
+
+    result = tm_answer_eval.diagnose_case(
+        {
+            "id": "map-gate-rejected",
+            "query": "gate alpha",
+            "expected_status": "ok",
+            "expected_evidence_paths": ["wiki/systems/gate-target.md"],
+        },
+        run_id="diag-test",
+    )
+
+    assert result["evidence_gate_rank"] == 1
+    assert result["evidence_gate_rejected_rank"] == 1
+    assert result["map_bridge_bucket"] == "evidence_gate_rejected"
 
 
 def test_diagnose_case_flags_mixed_partition_evidence(tmp_path, monkeypatch):
