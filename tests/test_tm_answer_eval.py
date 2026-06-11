@@ -209,6 +209,80 @@ def test_diagnose_case_counts_planner_compensated_hit_as_pass(tmp_path, monkeypa
     assert summary["planner_compensated_hit"] == 1
 
 
+def test_diagnose_case_counts_recommendation_candidate_and_evidence_hit(tmp_path, monkeypatch):
+    expected = tmp_path / "wiki" / "systems" / "recommended-protocol.md"
+    expected.parent.mkdir(parents=True)
+    expected.write_text("# Recommended Protocol\nalpha", encoding="utf-8")
+    monkeypatch.setattr(tm_answer_eval.tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_answer_eval.tm_core, "search_wiki", lambda *a, **k: [])
+    monkeypatch.setattr(tm_answer_eval.tm_core, "search_wiki_hybrid", lambda *a, **k: [])
+
+    def fake_memory_answer_core(query: str, **kwargs):
+        return {
+            "status": "ok",
+            "answer": "alpha",
+            "summary": "alpha",
+            "claims": [{"id": "c1", "text": "alpha", "support": ["e1"]}],
+            "evidence": [{"id": "e1", "path": "wiki/systems/recommended-protocol.md", "excerpt": "alpha"}],
+            "warnings": [],
+            "run_id": kwargs.get("run_id"),
+            "trace_id": "trace-recommendation",
+            "trace": {
+                "calls": [{"primary_scope": "wiki"}],
+                "evidence_gate": [{
+                    "path": "wiki/systems/recommended-protocol.md",
+                    "selected": True,
+                    "keep": True,
+                    "reason": "kept recommendation",
+                }],
+                "related_evidence_candidates": {
+                    "status": "ok",
+                    "candidate_count": 2,
+                    "candidates": [
+                        {"path": "wiki/systems/other.md"},
+                        {"path": "wiki/systems/recommended-protocol.md"},
+                    ],
+                },
+                "recommendation_boosted_candidates": {
+                    "status": "ok",
+                    "candidate_count": 1,
+                    "accepted_count": 1,
+                    "rejected_count": 0,
+                    "candidates": [{
+                        "path": "wiki/systems/recommended-protocol.md",
+                        "action": "accepted_to_evidence",
+                        "gate_outcome": "evidence_gate_passed",
+                    }],
+                },
+            },
+            "related_evidence_candidates": [{"path": "wiki/systems/recommended-protocol.md"}],
+        }
+
+    monkeypatch.setattr(tm_answer_eval.tm_answer, "memory_answer_core", fake_memory_answer_core)
+
+    result = tm_answer_eval.diagnose_case(
+        {
+            "id": "recommendation-hit",
+            "query": "natural recommendation alpha",
+            "expected_status": "ok",
+            "expected_evidence_paths": ["wiki/systems/recommended-protocol.md"],
+            "must_contain": ["alpha"],
+        },
+        run_id="diag-test",
+    )
+
+    assert result["passed"] is True
+    assert result["recommendation_candidate_rank"] == 2
+    assert result["recommendation_candidate_hit@5"] is True
+    assert result["recommendation_evidence_hit"] is True
+
+    summary = tm_answer_eval.summarize_diagnosis([result])
+    assert summary["recommendation_candidate_hit@5"] == 1
+    assert summary["recommendation_candidate_hit@5_rate"] == 1.0
+    assert summary["recommendation_evidence_hit"] == 1
+    assert summary["recommendation_evidence_hit_rate"] == 1.0
+
+
 def test_diagnose_case_flags_mixed_partition_evidence(tmp_path, monkeypatch):
     for rel in [
         "wiki/systems/answer-contract.md",

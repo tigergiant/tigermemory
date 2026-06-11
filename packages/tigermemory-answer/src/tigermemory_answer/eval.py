@@ -422,6 +422,62 @@ def _evidence_gate_paths(trace: dict[str, Any]) -> list[str]:
     ]
 
 
+def _append_unique_path(paths: list[str], seen: set[str], value: Any) -> None:
+    path = _normalize_case_path(value)
+    if path and path not in seen:
+        paths.append(path)
+        seen.add(path)
+
+
+def _candidate_paths_from_payload(payload: Any) -> list[str]:
+    if isinstance(payload, dict):
+        candidates = payload.get("candidates")
+    else:
+        candidates = payload
+    if not isinstance(candidates, list):
+        return []
+    paths: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        if isinstance(item, dict):
+            _append_unique_path(paths, seen, item.get("path"))
+    return paths
+
+
+def _recommendation_candidate_paths(result: dict[str, Any], trace: dict[str, Any]) -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+    for payload in (
+        trace.get("related_evidence_candidates"),
+        result.get("related_evidence_candidates"),
+        trace.get("recommendation_boosted_candidates"),
+    ):
+        for path in _candidate_paths_from_payload(payload):
+            _append_unique_path(paths, seen, path)
+    return paths
+
+
+def _recommendation_evidence_paths(trace: dict[str, Any], evidence_paths: list[str]) -> list[str]:
+    evidence_set = {_normalize_case_path(path) for path in evidence_paths if _normalize_case_path(path)}
+    boosted = trace.get("recommendation_boosted_candidates") if isinstance(trace, dict) else {}
+    candidates = boosted.get("candidates") if isinstance(boosted, dict) else []
+    if not isinstance(candidates, list):
+        return []
+    paths: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        path = _normalize_case_path(item.get("path"))
+        accepted = (
+            item.get("action") == "accepted_to_evidence"
+            or item.get("gate_outcome") == "evidence_gate_passed"
+        )
+        if accepted and path in evidence_set:
+            _append_unique_path(paths, seen, path)
+    return paths
+
+
 def _compact_diagnosis_row(row: dict[str, Any]) -> dict[str, Any]:
     keep = [
         "id",
@@ -452,6 +508,9 @@ def _compact_diagnosis_row(row: dict[str, Any]) -> dict[str, Any]:
         "map_hit@80",
         "map_rank",
         "map_compensated_hit",
+        "recommendation_candidate_rank",
+        "recommendation_candidate_hit@5",
+        "recommendation_evidence_hit",
         "not_in_map",
         "planner_llm_hit",
         "planner_compensated_hit",
@@ -507,6 +566,8 @@ def diagnose_case(
     map_paths = [_normalize_case_path(hit.get("path")) for hit in map_hits if isinstance(hit, dict)]
     gate_paths = _evidence_gate_paths(trace)
     evidence_paths = [_normalize_case_path(e.get("path")) for e in result.get("evidence", []) if isinstance(e, dict)]
+    recommendation_paths = _recommendation_candidate_paths(result, trace)
+    recommendation_evidence_paths = _recommendation_evidence_paths(trace, evidence_paths)
 
     missing_expected_paths = [path for path in expected_paths if not _repo_path_exists(path)]
     lexical_rank = _rank_for_expected(lexical_paths, expected_paths)
@@ -515,6 +576,8 @@ def diagnose_case(
     anchor_rank = _anchor_rank_for_expected(expected_paths, probe_k) if expected_paths else None
     gate_rank = _rank_for_expected(gate_paths, expected_paths)
     evidence_rank = _rank_for_expected(evidence_paths, expected_paths)
+    recommendation_candidate_rank = _rank_for_expected(recommendation_paths, expected_paths)
+    recommendation_evidence_rank = _rank_for_expected(recommendation_evidence_paths, expected_paths)
     expected_rank_raw = case.get("expected_rank")
     expected_rank = int(expected_rank_raw) if expected_rank_raw is not None else None
 
@@ -541,6 +604,10 @@ def diagnose_case(
     map_hit_30 = True if not expected_paths else map_rank is not None and map_rank <= 30
     map_hit_80 = True if not expected_paths else map_rank is not None and map_rank <= 80
     not_in_map = False if not expected_paths else map_rank is None
+    recommendation_candidate_hit_5 = (
+        True if not expected_paths else recommendation_candidate_rank is not None and recommendation_candidate_rank <= 5
+    )
+    recommendation_evidence_hit = True if not expected_paths else recommendation_evidence_rank is not None
     planner_llm_hit = bool(_planner_llm_used(trace) and evidence_hit)
     planner_compensated_hit = evidence_hit and not raw_retrieval_hit
     map_compensated_hit = evidence_hit and not raw_retrieval_hit and map_candidate_hit
@@ -640,6 +707,9 @@ def diagnose_case(
         "map_rank": map_rank,
         "map_error": map_error,
         "map_compensated_hit": map_compensated_hit,
+        "recommendation_candidate_rank": recommendation_candidate_rank,
+        "recommendation_candidate_hit@5": recommendation_candidate_hit_5,
+        "recommendation_evidence_hit": recommendation_evidence_hit,
         "not_in_map": not_in_map,
         "planner_llm_hit": planner_llm_hit,
         "planner_compensated_hit": planner_compensated_hit,
@@ -675,6 +745,8 @@ def summarize_diagnosis(results: list[dict[str, Any]]) -> dict[str, Any]:
     map_hit_30 = sum(1 for item in expected_path_cases if item.get("map_hit@30"))
     map_hit_80 = sum(1 for item in expected_path_cases if item.get("map_hit@80"))
     map_compensated_hits = sum(1 for item in expected_path_cases if item.get("map_compensated_hit"))
+    recommendation_candidate_hits_5 = sum(1 for item in expected_path_cases if item.get("recommendation_candidate_hit@5"))
+    recommendation_evidence_hits = sum(1 for item in expected_path_cases if item.get("recommendation_evidence_hit"))
     not_in_map = sum(1 for item in expected_path_cases if item.get("not_in_map"))
     planner_llm_hits = sum(1 for item in expected_path_cases if item.get("planner_llm_hit"))
     planner_compensated_hits = sum(1 for item in expected_path_cases if item.get("planner_compensated_hit"))
@@ -710,6 +782,14 @@ def summarize_diagnosis(results: list[dict[str, Any]]) -> dict[str, Any]:
         "map_hit@80_rate": map_hit_80 / len(expected_path_cases) if expected_path_cases else 1.0,
         "map_compensated_hit": map_compensated_hits,
         "map_compensated_hit_rate": map_compensated_hits / len(expected_path_cases) if expected_path_cases else 0.0,
+        "recommendation_candidate_hit@5": recommendation_candidate_hits_5,
+        "recommendation_candidate_hit@5_rate": (
+            recommendation_candidate_hits_5 / len(expected_path_cases) if expected_path_cases else 1.0
+        ),
+        "recommendation_evidence_hit": recommendation_evidence_hits,
+        "recommendation_evidence_hit_rate": (
+            recommendation_evidence_hits / len(expected_path_cases) if expected_path_cases else 1.0
+        ),
         "not_in_map": not_in_map,
         "not_in_map_rate": not_in_map / len(expected_path_cases) if expected_path_cases else 0.0,
         "median_rank": statistics.median(map_ranks) if map_ranks else None,
@@ -806,6 +886,8 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
             f"lexical={report['lexical_hit']}/{report['expected_path_case_count']} "
             f"hybrid={report['hybrid_hit']}/{report['expected_path_case_count']} "
             f"map80={report['map_hit@80']}/{report['expected_path_case_count']} "
+            f"rec5={report['recommendation_candidate_hit@5']}/{report['expected_path_case_count']} "
+            f"rec_evidence={report['recommendation_evidence_hit']}/{report['expected_path_case_count']} "
             f"anchor={report['anchor_hit']}/{report['expected_path_case_count']} "
             f"evidence={report['answer_evidence_hit']}/{report['expected_path_case_count']}"
         )
