@@ -2234,6 +2234,8 @@ def build_cron_intake(
     if counts.get("stale_archive_count"):
         action_items.append(f"处理 {counts['stale_archive_count']} 个 14 天 inbox archive 候选")
     for row in reports:
+        if row.get("kind") == "daily_health" and not row.get("exists"):
+            action_items.append(f"补跑或检查 tigermemory-daily-health-scan：缺少 {row.get('path')}")
         if row.get("kind") == "daily_health" and row.get("health_color") in {"red", "yellow"}:
             action_items.append(f"处理 daily-health {row['health_color']}：查看 {row.get('path')} 的阻塞项和 known debt")
     if reports and reports[-1].get("kind") == "ai_agent_radar" and not reports[-1].get("exists"):

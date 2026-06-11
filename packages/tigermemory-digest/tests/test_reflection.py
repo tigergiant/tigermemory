@@ -430,6 +430,21 @@ def test_build_cron_intake_surfaces_red_daily_health_action(tmp_path):
     assert not any(item == "无立即动作，继续观察" for item in result["action_items"])
 
 
+def test_build_cron_intake_surfaces_missing_daily_health_action(tmp_path):
+    operations = tmp_path / "wiki" / "operations"
+    operations.mkdir(parents=True)
+
+    result = reflection.build_cron_intake(
+        date="2026-06-11",
+        window="system-health",
+        operations_dir=operations,
+    )
+
+    assert result["status"] == "partial"
+    assert any("tigermemory-daily-health-scan" in item for item in result["action_items"])
+    assert not any(item == "无立即动作，继续观察" for item in result["action_items"])
+
+
 def test_default_intake_date_uses_yesterday_for_memory_digest(monkeypatch):
     monkeypatch.setattr(reflection, "_yesterday_local", lambda: "2026-06-08")
     monkeypatch.setattr(reflection, "today_local", lambda: "2026-06-09")
