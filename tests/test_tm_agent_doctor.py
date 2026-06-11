@@ -11,6 +11,7 @@ import tm_agent_doctor  # type: ignore[import-not-found]
 
 def test_agent_doctor_aggregates_ok_warn_and_fail(monkeypatch):
     monkeypatch.setattr(tm_agent_doctor, "check_worktree", lambda: {"name": "worktree", "status": "ok", "ok": True})
+    monkeypatch.setattr(tm_agent_doctor, "check_remote_master", lambda: {"name": "remote_master", "status": "ok", "ok": True})
     monkeypatch.setattr(tm_agent_doctor, "check_tm_http", lambda _url=None: {"name": "tm_http", "status": "warn", "ok": False})
     monkeypatch.setattr(tm_agent_doctor, "check_mem0", lambda: {"name": "mem0_api", "status": "ok", "ok": True})
     monkeypatch.setattr(tm_agent_doctor, "search_lessons", lambda _query: {"name": "lessons", "status": "fail", "ok": False, "hit_count": 0})
@@ -22,13 +23,15 @@ def test_agent_doctor_aggregates_ok_warn_and_fail(monkeypatch):
 
     assert report["status"] == "fail"
     assert report["ok"] is False
-    assert report["summary"] == {"fail_count": 1, "warn_count": 1, "ok_count": 5}
+    assert report["summary"] == {"fail_count": 1, "warn_count": 1, "ok_count": 6}
+    assert "write_memory" in report["mcp_tool_contract"]["required_tools"]
     assert "Resolve failing checks" in report["recommended_action"]
 
 
 def test_agent_doctor_can_skip_l2(monkeypatch):
     called = []
     monkeypatch.setattr(tm_agent_doctor, "check_worktree", lambda: {"name": "worktree", "status": "ok", "ok": True})
+    monkeypatch.setattr(tm_agent_doctor, "check_remote_master", lambda: {"name": "remote_master", "status": "ok", "ok": True})
     monkeypatch.setattr(tm_agent_doctor, "check_tm_http", lambda _url=None: {"name": "tm_http", "status": "ok", "ok": True})
     monkeypatch.setattr(tm_agent_doctor, "check_mem0", lambda: {"name": "mem0_api", "status": "ok", "ok": True})
     monkeypatch.setattr(tm_agent_doctor, "search_lessons", lambda _query: {"name": "lessons", "status": "ok", "ok": True, "hit_count": 2})
@@ -42,6 +45,7 @@ def test_agent_doctor_can_skip_l2(monkeypatch):
     assert called == []
     assert [check["name"] for check in report["checks"]] == [
         "worktree",
+        "remote_master",
         "tm_http",
         "mem0_api",
         "lessons",
@@ -57,15 +61,23 @@ def test_agent_doctor_markdown_includes_evidence():
         "recommended_action": "inspect warn checks",
         "checks": [
             {"name": "worktree", "status": "ok", "head": "abc", "dirty_count": 0},
+            {"name": "remote_master", "status": "warn", "local_head": "abc", "remote_head": "def", "reason": "runtime checkout is not at latest origin/master"},
             {"name": "tm_http", "status": "warn", "error": "offline | refused"},
             {"name": "retention_audit", "status": "ok", "item_count": 3, "offline_only": True},
         ],
+        "mcp_tool_contract": {
+            "required_tools": ["agent_doctor", "write_memory"],
+            "client_recovery": "Run tool discovery.",
+        },
     }
 
     markdown = tm_agent_doctor.render_markdown(report)
 
     assert "# Tigermemory Agent Doctor" in markdown
     assert "offline \\| refused" in markdown
+    assert "runtime checkout is not at latest origin/master" in markdown
+    assert "write_memory" in markdown
+    assert "Run tool discovery." in markdown
     assert "offline_only=True" in markdown
 
 
@@ -98,3 +110,36 @@ def test_check_mem0_uses_lightweight_memories_probe(monkeypatch):
     assert res["status"] == "ok"
     assert calls["url"] == "http://localhost:8765/api/v1/memories/?user_id=tiger&page=1&size=1&match_mode=id_first"
     assert calls["kwargs"]["timeout"] == 4
+
+
+def test_check_remote_master_warns_when_runtime_head_lags(monkeypatch):
+    class FakeResult:
+        returncode = 0
+        stdout = "def456789abc\trefs/heads/master\n"
+        stderr = ""
+
+    monkeypatch.setattr(tm_agent_doctor.tm_core, "git_session_status", lambda: {"head": "abc123456789"})
+    monkeypatch.setattr(tm_agent_doctor.subprocess, "run", lambda *_args, **_kwargs: FakeResult())
+
+    res = tm_agent_doctor.check_remote_master()
+
+    assert res["name"] == "remote_master"
+    assert res["status"] == "warn"
+    assert res["local_head"] == "abc123456789"
+    assert res["remote_head"] == "def456789abc"
+    assert "not at latest origin/master" in res["reason"]
+
+
+def test_check_remote_master_ok_when_runtime_matches(monkeypatch):
+    class FakeResult:
+        returncode = 0
+        stdout = "abc123456789\trefs/heads/master\n"
+        stderr = ""
+
+    monkeypatch.setattr(tm_agent_doctor.tm_core, "git_session_status", lambda: {"head": "abc123456789"})
+    monkeypatch.setattr(tm_agent_doctor.subprocess, "run", lambda *_args, **_kwargs: FakeResult())
+
+    res = tm_agent_doctor.check_remote_master()
+
+    assert res["status"] == "ok"
+    assert res["ok"] is True

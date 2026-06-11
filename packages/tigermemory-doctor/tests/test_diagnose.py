@@ -52,7 +52,7 @@ def test_check_mem0_reports_api_health_payload(monkeypatch):
     result = diagnose.check_mem0(timeout=4)
 
     assert result["status"] == "ok"
-    assert calls == [("http://mem0/api/v1/memories/categories?user_id=tiger", 4)]
+    assert calls == [("http://mem0/api/v1/memories/?user_id=tiger&page=1&size=1&match_mode=id_first", 4)]
 
 
 def test_check_l2_review_scores_probe_text(monkeypatch):
@@ -77,6 +77,7 @@ def test_check_retention_uses_retention_module_functions():
 
 def test_run_agent_doctor_combines_checks_and_warnings(monkeypatch):
     monkeypatch.setattr(diagnose, "check_worktree", lambda: {"name": "worktree", "status": "ok"})
+    monkeypatch.setattr(diagnose, "check_remote_master", lambda: {"name": "remote_master", "status": "ok"})
     monkeypatch.setattr(diagnose, "check_tm_http", lambda _url: {"name": "tm_http", "status": "warn"})
     monkeypatch.setattr(diagnose, "check_mem0", lambda: {"name": "mem0", "status": "ok"})
     monkeypatch.setattr(diagnose, "search_lessons", lambda query: {"name": "lessons", "status": "ok", "query": query})
@@ -87,5 +88,6 @@ def test_run_agent_doctor_combines_checks_and_warnings(monkeypatch):
     report = diagnose.run_agent_doctor(query="doctor query", http_url="http://tm")
 
     assert report["status"] == "warn"
-    assert report["summary"] == {"fail_count": 0, "warn_count": 1, "ok_count": 6}
-    assert [check["name"] for check in report["checks"]] == ["worktree", "tm_http", "mem0", "lessons", "lessons_log", "retention", "l2"]
+    assert report["summary"] == {"fail_count": 0, "warn_count": 1, "ok_count": 7}
+    assert [check["name"] for check in report["checks"]] == ["worktree", "remote_master", "tm_http", "mem0", "lessons", "lessons_log", "retention", "l2"]
+    assert "write_memory" in report["mcp_tool_contract"]["required_tools"]

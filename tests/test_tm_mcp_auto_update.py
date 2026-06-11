@@ -260,6 +260,54 @@ def test_auto_update_wrapper_preserves_stdio_for_mcp_handshake(tmp_path):
     assert not event_stolen.exists()
 
 
+def test_auto_update_wrapper_lock_busy_preserves_stdio_for_mcp_handshake(tmp_path):
+    if not shutil.which("bash"):
+        pytest.skip("bash is required for wrapper lock stdin smoke")
+
+    root = tmp_path / "repo"
+    script = root / "deploy/mcp/tm_mcp_auto_update.sh"
+    fake_python = root / "runtime/mcp-venv/bin/python"
+    final_stdin = root / "final-stdin.txt"
+    (root / "tools").mkdir(parents=True)
+    (root / ".tmp/mcp-auto-update.lock").mkdir(parents=True)
+    script.parent.mkdir(parents=True)
+    fake_python.parent.mkdir(parents=True)
+    (root / "tools/tm_mcp.py").write_text("unused\n", encoding="utf-8")
+    with script.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(
+            (REPO_ROOT / "deploy/mcp/tm_mcp_auto_update.sh")
+            .read_text(encoding="utf-8")
+            .replace("\r\n", "\n")
+        )
+    with fake_python.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(
+            "#!/usr/bin/env bash\n"
+            f"final_stdin={_sh_quote(_bash_path(final_stdin))}\n"
+            "if [[ \"$*\" == *tm_runtime_events.py* ]]; then exit 0; fi\n"
+            "IFS= read -r line || line=''\n"
+            "printf '%s\\n' \"$line\" >> \"$final_stdin\"\n"
+        )
+    os.chmod(fake_python, 0o755)
+
+    env = os.environ.copy()
+    env["TM_MCP_AUTO_UPDATE_LOCK_WAIT_SEC"] = "0"
+    result = subprocess.run(
+        ["bash", _bash_path(script), "--stdio"],
+        cwd=root,
+        text=True,
+        input='{"jsonrpc":"2.0","id":1,"method":"initialize"}\n',
+        capture_output=True,
+        check=False,
+        env=env,
+        timeout=5,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    captured = final_stdin.read_text(encoding="utf-8")
+    assert "initialize" in captured
+    assert "auto-update lock busy; continuing with local checkout" in result.stderr
+
+
 def test_openai_auto_update_wrapper_starts_when_untracked_files_exist(tmp_path):
     if not shutil.which("bash") or not shutil.which("git"):
         pytest.skip("bash and git are required for wrapper smoke")

@@ -10,7 +10,9 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import pathlib
+import subprocess
 import sys
 import time
 import urllib.parse
@@ -29,6 +31,18 @@ from tigermemory_doctor.retention import load_mem0_json, run_retention_audit, sc
 
 REPO_ROOT = tm_core.REPO_ROOT
 DEFAULT_QUERY = "retention dry-run agent doctor connect mem0 audit"
+MCP_REQUIRED_TOOLS = [
+    "agent_doctor",
+    "get_agent_onboarding",
+    "write_memory",
+    "verify_memory_id",
+    "search_tigermemory",
+    "memory_answer",
+]
+MCP_CLIENT_RECOVERY = (
+    "If a Codex/ChatGPT session only exposes agent_doctor, run tool discovery "
+    "for 'tigermemory MCP write_memory' before concluding that handoff write is unavailable."
+)
 
 
 def _status(ok: bool) -> str:
@@ -74,6 +88,51 @@ def check_worktree() -> dict[str, Any]:
         "dirty_count": status.get("dirty_count"),
         "blockers": status.get("blockers", []),
         "paths": status.get("paths", []),
+    }
+
+
+def check_remote_master(timeout: int = 3) -> dict[str, Any]:
+    start = time.time()
+    try:
+        status = tm_core.git_session_status()
+        local_head = str(status.get("head") or "")
+        env = os.environ.copy()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        res = subprocess.run(
+            ["git", "ls-remote", "origin", "refs/heads/master"],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+            env=env,
+        )
+    except Exception as exc:
+        return {
+            "name": "remote_master",
+            "status": "warn",
+            "ok": False,
+            "latency_ms": round((time.time() - start) * 1000, 1),
+            "error": str(exc)[:200],
+        }
+    if res.returncode != 0:
+        return {
+            "name": "remote_master",
+            "status": "warn",
+            "ok": False,
+            "latency_ms": round((time.time() - start) * 1000, 1),
+            "error": (res.stderr or res.stdout).strip()[:200],
+        }
+    remote_head = (res.stdout.strip().split() or [""])[0]
+    ok = bool(local_head and remote_head and local_head == remote_head)
+    return {
+        "name": "remote_master",
+        "status": "ok" if ok else "warn",
+        "ok": ok,
+        "latency_ms": round((time.time() - start) * 1000, 1),
+        "local_head": local_head[:12] if local_head else None,
+        "remote_head": remote_head[:12] if remote_head else None,
+        "reason": None if ok else "runtime checkout is not at latest origin/master; fast-forward and restart services",
     }
 
 
@@ -266,6 +325,7 @@ def run_agent_doctor(
 ) -> dict[str, Any]:
     checks = [
         check_worktree(),
+        check_remote_master(),
         check_tm_http(http_url),
         check_mem0(),
         search_lessons(query),
@@ -282,6 +342,10 @@ def run_agent_doctor(
         "ok": not hard_fail,
         "status": "fail" if hard_fail else ("warn" if warnings else "ok"),
         "checks": checks,
+        "mcp_tool_contract": {
+            "required_tools": MCP_REQUIRED_TOOLS,
+            "client_recovery": MCP_CLIENT_RECOVERY,
+        },
         "summary": {
             "fail_count": len(hard_fail),
             "warn_count": len(warnings),
@@ -310,11 +374,21 @@ def render_markdown(report: dict[str, Any]) -> str:
     ]
     for check in report["checks"]:
         evidence_bits = []
-        for key in ("head", "branch", "dirty_count", "ahead", "behind", "latency_ms", "hit_count", "score", "error", "reason", "item_count", "action_counts", "offline_only"):
+        for key in ("head", "branch", "dirty_count", "ahead", "behind", "local_head", "remote_head", "latency_ms", "hit_count", "score", "error", "reason", "item_count", "action_counts", "offline_only"):
             if check.get(key) not in (None, "", []):
                 evidence_bits.append(f"{key}={check[key]}")
         evidence = "; ".join(str(bit) for bit in evidence_bits).replace("|", "\\|")
         lines.append(f"| {check['name']} | {check['status']} | {evidence} |")
+    contract = report.get("mcp_tool_contract") or {}
+    if contract:
+        tools = ", ".join(contract.get("required_tools") or [])
+        lines.extend([
+            "",
+            "## MCP Tool Visibility",
+            "",
+            f"- required_tools: `{tools}`",
+            f"- recovery: {contract.get('client_recovery', '')}",
+        ])
     return "\n".join(lines) + "\n"
 
 
