@@ -562,6 +562,7 @@ RECOMMENDATION_BOOST_PRIVATE_MARKERS = (
 )
 RECOMMENDATION_BOOST_MAX_SECONDARY = 5
 WIKI_MAP_BRIDGE_MAX_CANDIDATES = 10
+WIKI_MAP_BRIDGE_MIN_SCORE = MAP_STRONG_TOP_SCORE
 _QUERY_PLANNER_MANIFEST_CACHE: str | None = None
 _LLM_WIKI_MAP_MODULE: Any | None = None
 
@@ -2753,6 +2754,8 @@ def _apply_wiki_map_bridge(query: str, search_result: dict[str, Any]) -> tuple[d
         "status": "disabled",
         "candidate_count": 0,
         "added_count": 0,
+        "min_score": WIKI_MAP_BRIDGE_MIN_SCORE,
+        "below_min_score_count": 0,
     }
     if not _wiki_map_bridge_enabled():
         return search_result, trace
@@ -2772,6 +2775,10 @@ def _apply_wiki_map_bridge(query: str, search_result: dict[str, Any]) -> tuple[d
     }
     bridge_hits: list[dict[str, Any]] = []
     for item in candidates[:WIKI_MAP_BRIDGE_MAX_CANDIDATES]:
+        score = float(item.get("score") or 0.0)
+        if score < WIKI_MAP_BRIDGE_MIN_SCORE:
+            trace["below_min_score_count"] = int(trace["below_min_score_count"]) + 1
+            continue
         hit = _bridge_hit_from_map_candidate(item)
         if not hit:
             continue
@@ -3309,7 +3316,7 @@ def memory_answer_core(
     evidence, evidence_gate = expand_evidence(evidence_query, search_result, evidence_limit, query_class)
     map_bridge_trace: dict[str, Any] = {
         "enabled": _wiki_map_bridge_enabled(),
-        "status": "disabled" if not _wiki_map_bridge_enabled() else "skipped_sufficient_evidence",
+        "status": "disabled" if not _wiki_map_bridge_enabled() else "skipped_by_policy",
         "candidate_count": 0,
         "added_count": 0,
     }
@@ -3318,7 +3325,6 @@ def memory_answer_core(
         and query_class in {"recall", "synthesis"}
         and planner.get("freshness_mode") != "current"
         and evidence_limit >= 2
-        and len(evidence) < 2
         and not _is_private_for_recommendation_boost(q)
     )
     if bridge_allowed:

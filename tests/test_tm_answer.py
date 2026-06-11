@@ -535,13 +535,13 @@ def _empty_map_plan() -> dict:
     }
 
 
-def _map_plan_with_candidate(path: str, *, title: str = "Bridge Target") -> dict:
+def _map_plan_with_candidate(path: str, *, title: str = "Bridge Target", score: float = 99.0) -> dict:
     return {
         "degraded": False,
         "error": None,
         "candidate_count": 1,
-        "top_score": 99.0,
-        "top1_top2_margin": 99.0,
+        "top_score": score,
+        "top1_top2_margin": score,
         "partitions": ["systems"],
         "source_surfaces": ["wiki"],
         "top_paths_hash": "bridgehash",
@@ -553,7 +553,7 @@ def _map_plan_with_candidate(path: str, *, title: str = "Bridge Target") -> dict
             "title": title,
             "partition": "systems",
             "source_surface": "wiki",
-            "score": 99.0,
+            "score": score,
         }],
     }
 
@@ -630,6 +630,124 @@ def test_memory_answer_core_wiki_map_bridge_adds_candidates_to_evidence_gate(mon
     assert gate[0]["keep"] is True
     assert gate[0]["selected"] is True
     assert gate[0]["bridge_source"] == "wiki_map"
+
+
+def test_memory_answer_core_wiki_map_bridge_competes_with_existing_wrong_evidence(monkeypatch, tmp_path):
+    for rel, body in {
+        "wiki/systems/wrong-one.md": "# Wrong One\nalpha unrelated",
+        "wiki/systems/wrong-two.md": "# Wrong Two\nalpha different",
+        "wiki/systems/bridge-target.md": "# Bridge Target\nalpha bridge answer",
+    }.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
+    monkeypatch.setenv(tm_answer.WIKI_MAP_BRIDGE_ENV, "1")
+    monkeypatch.setattr(tm_answer.tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(
+        tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: _map_plan_with_candidate("wiki/systems/bridge-target.md", score=32.0),
+    )
+    monkeypatch.setattr(
+        tm_answer.tm_search,
+        "search_tigermemory",
+        lambda *_args, **_kwargs: _search_result({
+            "source": "wiki",
+            "path": "wiki/systems/wrong-one.md",
+            "title": "Wrong One",
+            "snippet": "alpha unrelated",
+            "score": 1.0,
+        }) | {
+            "primary_results": [
+                {
+                    "source": "wiki",
+                    "path": "wiki/systems/wrong-one.md",
+                    "title": "Wrong One",
+                    "snippet": "alpha unrelated",
+                    "score": 1.0,
+                },
+                {
+                    "source": "wiki",
+                    "path": "wiki/systems/wrong-two.md",
+                    "title": "Wrong Two",
+                    "snippet": "alpha different",
+                    "score": 1.0,
+                },
+            ],
+            "groups": {
+                "wiki": [
+                    {
+                        "source": "wiki",
+                        "path": "wiki/systems/wrong-one.md",
+                        "title": "Wrong One",
+                        "snippet": "alpha unrelated",
+                        "score": 1.0,
+                    },
+                    {
+                        "source": "wiki",
+                        "path": "wiki/systems/wrong-two.md",
+                        "title": "Wrong Two",
+                        "snippet": "alpha different",
+                        "score": 1.0,
+                    },
+                ],
+            },
+        },
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_llm(query: str, evidence: list[dict]):
+        captured["evidence_paths"] = [item["path"] for item in evidence]
+        return True, {
+            "status": "ok",
+            "answer": "alpha bridge answer",
+            "summary": "bridge target used",
+            "claims": [{"id": "c1", "text": "bridge target", "support": ["e1"], "confidence": 0.9}],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", fake_llm)
+
+    result = tm_answer.memory_answer_core("alpha bridge", scope="wiki", run_id="bridge-wrong-evidence")
+
+    assert result["status"] == "ok"
+    assert "wiki/systems/bridge-target.md" in captured["evidence_paths"]
+    assert result["trace"]["map_to_evidence_bridge"]["added_count"] == 1
+    gate_paths = [item["path"] for item in result["trace"]["evidence_gate"]]
+    assert "wiki/systems/bridge-target.md" in gate_paths
+
+
+def test_memory_answer_core_wiki_map_bridge_filters_low_score_candidates(monkeypatch, tmp_path):
+    target = tmp_path / "wiki" / "systems" / "bridge-target.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("# Bridge Target\nalpha bridge answer", encoding="utf-8")
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
+    monkeypatch.setenv(tm_answer.WIKI_MAP_BRIDGE_ENV, "1")
+    monkeypatch.setattr(tm_answer.tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(
+        tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: _map_plan_with_candidate(
+            "wiki/systems/bridge-target.md",
+            score=tm_answer.WIKI_MAP_BRIDGE_MIN_SCORE - 0.5,
+        ),
+    )
+    monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", lambda *_args, **_kwargs: _search_result())
+    monkeypatch.setattr(
+        tm_answer,
+        "_call_memory_answer_llm",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("low-score bridge should not call LLM")),
+    )
+
+    result = tm_answer.memory_answer_core("alpha bridge", scope="wiki", run_id="bridge-low-score")
+
+    assert result["status"] == "not_found"
+    assert result["trace"]["map_to_evidence_bridge"]["added_count"] == 0
+    assert result["trace"]["map_to_evidence_bridge"]["below_min_score_count"] == 1
 
 
 def test_plan_query_uses_wiki_map_without_deepseek_when_confident(monkeypatch):
