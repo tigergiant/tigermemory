@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 import importlib
+import io
 
 import tigermemory_persona
 
@@ -142,6 +143,17 @@ def test_load_lessons_returns_list_of_lessons():
 def test_load_lessons_respects_limit():
     lessons = tigermemory_persona.load_lessons(limit=2)
     assert len(lessons) <= 2
+
+
+def test_safe_stdout_write_preserves_utf8_when_redirected(monkeypatch):
+    raw = io.BytesIO()
+    stream = io.TextIOWrapper(raw, encoding="gbk", errors="strict")
+    monkeypatch.setattr(sys, "stdout", stream)
+
+    tigermemory_persona._safe_stdout_write("A ↔ B")
+    stream.flush()
+
+    assert raw.getvalue().decode("utf-8") == "A ↔ B"
 
 
 # ------------------------------------------------------------------

@@ -302,9 +302,30 @@ def compile_snapshot(depth: str = "5min") -> str:
     return render_full(lessons).rstrip() + "\n"
 
 
+def _safe_stdout_write(text: str) -> None:
+    """Write human-facing CLI output without crashing on legacy consoles."""
+    try:
+        sys.stdout.write(text)
+    except BrokenPipeError:
+        return
+    except UnicodeEncodeError:
+        if not sys.stdout.isatty() and hasattr(sys.stdout, "buffer"):
+            try:
+                sys.stdout.buffer.write(text.encode("utf-8"))
+            except BrokenPipeError:
+                return
+            return
+        encoding = sys.stdout.encoding or "utf-8"
+        fallback = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+        try:
+            sys.stdout.write(fallback)
+        except BrokenPipeError:
+            return
+
+
 def cmd_compile(args: argparse.Namespace) -> int:
     try:
-        sys.stdout.write(compile_snapshot(args.depth))
+        _safe_stdout_write(compile_snapshot(args.depth))
     except (FileNotFoundError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
