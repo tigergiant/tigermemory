@@ -485,6 +485,85 @@ def compact_answer_eval(report: dict[str, Any] | None) -> dict[str, Any] | None:
     return out
 
 
+RECOMMENDATION_STATUS_TOKENS = {
+    "error",
+    "fallback",
+    "invalid",
+    "missing",
+    "no_eligible_candidates",
+    "no_selected_evidence",
+    "no_trace_data",
+    "not_attempted",
+    "ok",
+    "unknown",
+}
+RECOMMENDATION_REASON_TOKENS = {
+    "current",
+    "freshness",
+    "policy",
+    "recency",
+    "relevance",
+    "stale",
+    "unknown",
+    "weak_filtered",
+}
+
+
+def _safe_metric_token(value: Any, *, allowed: set[str], default: str = "unknown") -> str:
+    token = str(value or "").strip().lower()
+    if not token:
+        return default
+    return token if token in allowed else default
+
+
+def _to_non_negative_int(value: Any) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return number if number > 0 else 0
+
+
+def _compact_status_counts(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, int] = {}
+    for key, count in value.items():
+        token = _safe_metric_token(key, allowed=RECOMMENDATION_STATUS_TOKENS)
+        out[token] = out.get(token, 0) + _to_non_negative_int(count)
+    return dict(sorted(out.items()))
+
+
+def compact_recommendation_quality(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    status_counts = value.get("status_counts") if isinstance(value.get("status_counts"), dict) else {}
+    noisy_counts: dict[str, int] = {}
+    for item in value.get("top_noisy_reasons") or []:
+        if not isinstance(item, dict):
+            continue
+        reason_category = _safe_metric_token(
+            item.get("reason_category"),
+            allowed=RECOMMENDATION_REASON_TOKENS,
+        )
+        noisy_counts[reason_category] = noisy_counts.get(reason_category, 0) + _to_non_negative_int(item.get("count"))
+    return {
+        "recommendation_shown_count": _to_non_negative_int(value.get("recommendation_shown_count")),
+        "recommendation_candidate_count": _to_non_negative_int(value.get("recommendation_candidate_count")),
+        "recommendation_boost_attempted_count": _to_non_negative_int(value.get("recommendation_boost_attempted_count")),
+        "recommendation_used_as_evidence_count": _to_non_negative_int(value.get("recommendation_used_as_evidence_count")),
+        "recommendation_blocked_by_gate_count": _to_non_negative_int(value.get("recommendation_blocked_by_gate_count")),
+        "status_counts": {
+            "sidecar": _compact_status_counts(status_counts.get("sidecar")),
+            "boost": _compact_status_counts(status_counts.get("boost")),
+        },
+        "top_noisy_reasons": [
+            {"reason_category": reason_category, "count": count}
+            for reason_category, count in sorted(noisy_counts.items(), key=lambda item: (-item[1], item[0]))[:3]
+        ],
+    }
+
+
 def compact_trace_summary(summary: dict[str, Any] | None, failures: dict[str, Any] | None) -> dict[str, Any] | None:
     if not summary and not failures:
         return None
@@ -500,6 +579,7 @@ def compact_trace_summary(summary: dict[str, Any] | None, failures: dict[str, An
         "status_counts": summary.get("status_counts") or {},
         "llm_counts": summary.get("llm_counts") or {},
         "duration_ms": summary.get("duration_ms") or {},
+        "recommendation_quality": compact_recommendation_quality(summary.get("recommendation_quality")),
         "failure_count": failures.get("failure_count", 0),
     }
 

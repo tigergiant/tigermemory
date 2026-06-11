@@ -22,6 +22,28 @@ from tigermemory_answer import TRACE_LOG, redact_secrets
 
 
 DEFAULT_FAILURE_STATUSES = ("error", "conflict", "not_found")
+RECOMMENDATION_STATUS_TOKENS = {
+    "error",
+    "fallback",
+    "invalid",
+    "missing",
+    "no_eligible_candidates",
+    "no_selected_evidence",
+    "no_trace_data",
+    "not_attempted",
+    "ok",
+    "unknown",
+}
+RECOMMENDATION_REASON_TOKENS = {
+    "current",
+    "freshness",
+    "policy",
+    "recency",
+    "relevance",
+    "stale",
+    "unknown",
+    "weak_filtered",
+}
 
 
 def _parse_ts(value: Any) -> dt.datetime | None:
@@ -123,6 +145,27 @@ def _duration_ms(row: dict[str, Any]) -> float | None:
     return None
 
 
+def _to_non_negative_int(value: Any) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return number if number > 0 else 0
+
+
+def _safe_metric_token(value: Any, *, allowed: set[str], default: str = "unknown") -> str:
+    token = str(value or "").strip().lower()
+    if not token:
+        return default
+    return token if token in allowed else default
+
+
+def _safe_status_token(value: Any) -> str:
+    if value is None or str(value).strip() == "":
+        return "missing"
+    return _safe_metric_token(value, allowed=RECOMMENDATION_STATUS_TOKENS, default="unknown")
+
+
 def _percentile(values: list[float], percentile: float) -> float | None:
     if not values:
         return None
@@ -215,6 +258,95 @@ def summarize_rows(
                 gate_kept += 1
             else:
                 gate_dropped += 1
+    recommendation_shown_count = 0
+    recommendation_candidate_count = 0
+    recommendation_boost_attempted_count = 0
+    recommendation_used_as_evidence_count = 0
+    recommendation_blocked_by_gate_count = 0
+    related_status_counts = Counter()
+    boost_status_counts = Counter()
+    noisy_reasons = Counter()
+    compact_rows: list[dict[str, Any]] = []
+
+    for row in rows:
+        related_candidates = 0
+        boost_candidates = 0
+        accepted_count = 0
+        rejected_count = 0
+        candidate_list: list[dict[str, Any]] = []
+        related_status = "missing"
+        boost_status = "missing"
+        trace = row.get("trace")
+        if isinstance(trace, dict):
+            related = trace.get("related_evidence_candidates")
+            related_trace = related if isinstance(related, dict) else {}
+            boost = trace.get("recommendation_boosted_candidates")
+            boost_trace = boost if isinstance(boost, dict) else {}
+            related_candidates = _to_non_negative_int(related_trace.get("candidate_count"))
+            boost_candidates = _to_non_negative_int(boost_trace.get("candidate_count"))
+            related_status = _safe_status_token(related_trace.get("status"))
+            boost_status = _safe_status_token(boost_trace.get("status"))
+
+            if related_candidates > 0:
+                recommendation_shown_count += 1
+            recommendation_candidate_count += related_candidates
+
+            if boost_candidates > 0:
+                recommendation_boost_attempted_count += 1
+
+            accepted_count = _to_non_negative_int(boost_trace.get("accepted_count"))
+            rejected_count = _to_non_negative_int(boost_trace.get("rejected_count"))
+            candidate_list = boost_trace.get("candidates")
+            if isinstance(candidate_list, list):
+                if accepted_count == 0:
+                    accepted_count = sum(
+                        1 for item in candidate_list
+                        if isinstance(item, dict) and str(item.get("action") or "") == "accepted_to_evidence"
+                    )
+                if rejected_count == 0:
+                    rejected_count = sum(
+                        1 for item in candidate_list
+                        if isinstance(item, dict) and str(item.get("action") or "") == "rejected_by_gate"
+                    )
+                for item in candidate_list:
+                    if not isinstance(item, dict):
+                        continue
+                    if str(item.get("action") or "") != "rejected_by_gate":
+                        continue
+                    reason = _safe_metric_token(
+                        item.get("reason_category"),
+                        allowed=RECOMMENDATION_REASON_TOKENS,
+                        default="unknown",
+                    )
+                    if reason:
+                        noisy_reasons[reason] += 1
+            recommendation_used_as_evidence_count += accepted_count
+            recommendation_blocked_by_gate_count += rejected_count
+
+        related_status_counts[related_status] += 1
+        boost_status_counts[boost_status] += 1
+        compact_rows.append({
+            "trace_id": str(row.get("trace_id") or ""),
+            "related_candidate_count": related_candidates,
+            "boost_candidate_count": boost_candidates,
+        })
+
+    recommendation_quality = {
+        "recommendation_shown_count": recommendation_shown_count,
+        "recommendation_candidate_count": recommendation_candidate_count,
+        "recommendation_boost_attempted_count": recommendation_boost_attempted_count,
+        "recommendation_used_as_evidence_count": recommendation_used_as_evidence_count,
+        "recommendation_blocked_by_gate_count": recommendation_blocked_by_gate_count,
+        "status_counts": {
+            "sidecar": dict(sorted(related_status_counts.items())),
+            "boost": dict(sorted(boost_status_counts.items())),
+        },
+        "top_noisy_reasons": [
+            {"reason_category": reason, "count": count}
+            for reason, count in sorted(noisy_reasons.items(), key=lambda item: (-item[1], item[0]))[:3]
+        ],
+        "rows": compact_rows[-5:],
+    }
     return {
         "row_count": len(rows),
         "invalid_row_count": len(invalid or []),
@@ -238,6 +370,7 @@ def summarize_rows(
             "kept": gate_kept,
             "dropped": gate_dropped,
         },
+        "recommendation_quality": recommendation_quality,
         "latest": [
             compact_row(row, include_query=include_query)
             for row in (rows[-latest:] if latest > 0 else [])

@@ -405,6 +405,78 @@ def test_compact_answer_eval_omits_success_rows():
     }
 
 
+def test_compact_trace_summary_preserves_answer_trace_recommendation_quality():
+    compact = tm_daily_health_summary.compact_trace_summary({
+        "row_count": 12,
+        "trace_present_count": 12,
+        "status_counts": {"ok": 10, "not_found": 2},
+        "recommendation_quality": {
+            "recommendation_shown_count": 4,
+            "recommendation_candidate_count": 9,
+            "recommendation_boost_attempted_count": 2,
+            "recommendation_used_as_evidence_count": 3,
+            "recommendation_blocked_by_gate_count": 1,
+            "status_counts": {
+                "sidecar": {"ok": 2, "no_selected_evidence": 2},
+                "boost": {"ok": 1, "missing": 1},
+            },
+            "top_noisy_reasons": [{"reason_category": "recency", "count": 1}],
+        },
+    }, {"failure_count": 1})
+
+    assert compact["recommendation_quality"]["recommendation_shown_count"] == 4
+    assert compact["recommendation_quality"]["recommendation_candidate_count"] == 9
+    assert compact["recommendation_quality"]["recommendation_boost_attempted_count"] == 2
+    assert compact["recommendation_quality"]["recommendation_used_as_evidence_count"] == 3
+    assert compact["recommendation_quality"]["recommendation_blocked_by_gate_count"] == 1
+    assert compact["recommendation_quality"]["status_counts"]["sidecar"]["no_selected_evidence"] == 2
+    assert compact["recommendation_quality"]["top_noisy_reasons"][0]["reason_category"] == "recency"
+
+
+def test_compact_trace_summary_allowlists_recommendation_quality_fields():
+    raw_payload = "raw_query_or_reason_should_not_leak"
+    short_private_token = "tiger_name"
+    compact = tm_daily_health_summary.compact_trace_summary({
+        "row_count": 1,
+        "recommendation_quality": {
+            "recommendation_shown_count": 1,
+            "recommendation_candidate_count": 2,
+            "recommendation_boost_attempted_count": 1,
+            "recommendation_used_as_evidence_count": 1,
+            "recommendation_blocked_by_gate_count": 1,
+            "rows": [{"query": raw_payload, "title": raw_payload, "excerpt": raw_payload}],
+            "query": raw_payload,
+            "title": raw_payload,
+            "excerpt": raw_payload,
+            "raw_reason": raw_payload,
+            "status_counts": {
+                "sidecar": {raw_payload: 1, short_private_token: 1, "ok": 1},
+                "boost": {"ok": 1},
+            },
+            "top_noisy_reasons": [
+                {"reason_category": raw_payload, "count": 1, "reason": raw_payload},
+                {"reason_category": short_private_token, "count": 1},
+                {"reason_category": "recency", "count": 2},
+            ],
+        },
+    }, None)
+
+    encoded = json.dumps(compact, ensure_ascii=False)
+
+    assert raw_payload not in encoded
+    assert short_private_token not in encoded
+    quality = compact["recommendation_quality"]
+    assert "rows" not in quality
+    assert "query" not in quality
+    assert "title" not in quality
+    assert "excerpt" not in quality
+    assert quality["status_counts"]["sidecar"] == {"ok": 1, "unknown": 2}
+    assert quality["top_noisy_reasons"] == [
+        {"reason_category": "recency", "count": 2},
+        {"reason_category": "unknown", "count": 2},
+    ]
+
+
 def _write_daily_report(path: pathlib.Path, summary: dict) -> None:
     path.write_text(
         "\n".join([

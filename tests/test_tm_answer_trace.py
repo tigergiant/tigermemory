@@ -81,6 +81,160 @@ def test_summary_counts_status_llm_and_gate(tmp_path):
     assert report["duration_ms"]["avg"] == 123.4
     assert report["duration_ms"]["p50"] == 123.4
     assert report["duration_ms"]["p95"] == 123.4
+    assert report["duration_ms"]["max"] == 123.4
+
+
+def test_summary_recommendation_quality_counts_for_sidecar_and_boost_rows(tmp_path):
+    log = tmp_path / "trace.jsonl"
+    rows = []
+
+    shown_row = _row("t-show", "ok")
+    shown_row["trace"]["related_evidence_candidates"] = {
+        "status": "ok",
+        "candidate_count": 3,
+    }
+    shown_row["trace"]["recommendation_boosted_candidates"] = {
+        "status": "ok",
+        "candidate_count": 2,
+        "accepted_count": 1,
+        "rejected_count": 0,
+        "candidates": [
+            {
+                "action": "accepted_to_evidence",
+                "target_title": "target title should stay internal",
+                "reason_category": "policy",
+                "reason_text": "raw rejected reason text should be hidden",
+            },
+            {
+                "action": "rejected_by_gate",
+                "target_title": "target title should stay internal",
+                "reason_category": "recency",
+                "reason_text": "raw rejected reason text should be hidden",
+            },
+        ],
+    }
+    rows.append(shown_row)
+
+    blocked_row = _row("t-blocked", "not_found")
+    blocked_row["trace"]["related_evidence_candidates"] = {
+        "status": "no_selected_evidence",
+        "candidate_count": 0,
+    }
+    blocked_row["trace"]["recommendation_boosted_candidates"] = {
+        "status": "error",
+        "candidate_count": 1,
+        "candidates": [
+            {
+                "action": "rejected_by_gate",
+                "target_title": "target title should stay internal",
+                "reason_category": "policy",
+                "reason_text": "raw rejected reason text should be hidden",
+            },
+            {
+                "action": "rejected_by_gate",
+                "target_title": "target title should stay internal",
+                "reason_category": "policy",
+            },
+        ],
+    }
+    rows.append(blocked_row)
+
+    fallback_row = _row("t-fallback", "ok")
+    fallback_row["trace"]["related_evidence_candidates"] = {
+        "status": "fallback",
+        "candidate_count": 2,
+    }
+    fallback_row["trace"]["recommendation_boosted_candidates"] = {
+        "status": "missing",
+        "candidate_count": 0,
+        "accepted_count": 0,
+        "rejected_count": 0,
+        "candidates": [
+            {"action": "ignored", "target_title": "target title should stay internal"},
+        ],
+    }
+    rows.append(fallback_row)
+
+    _write_jsonl(log, rows)
+    rows, invalid = tm_answer_trace.load_trace_rows(log)
+    report = tm_answer_trace.summarize_rows(rows, invalid)
+    quality = report["recommendation_quality"]
+
+    assert quality["recommendation_shown_count"] == 2
+    assert quality["recommendation_candidate_count"] == 5
+    assert quality["recommendation_boost_attempted_count"] == 2
+    assert quality["recommendation_used_as_evidence_count"] == 1
+    assert quality["recommendation_blocked_by_gate_count"] == 3
+    assert quality["status_counts"]["sidecar"] == {"fallback": 1, "no_selected_evidence": 1, "ok": 1}
+    assert quality["status_counts"]["boost"] == {"error": 1, "missing": 1, "ok": 1}
+    assert quality["top_noisy_reasons"][0] == {"reason_category": "policy", "count": 2}
+
+
+def test_summary_json_has_no_raw_recommendation_payload_leaks(tmp_path):
+    log = tmp_path / "trace.jsonl"
+    row = _row("t-privacy", "ok", query="raw query text should not leak")
+    row["query_expanded"] = "expanded query should not leak"
+    row["evidence"][0]["excerpt"] = "evidence excerpt should not leak"
+    row["trace"]["related_evidence_candidates"] = {"status": "ok", "candidate_count": 1}
+    row["trace"]["recommendation_boosted_candidates"] = {
+        "status": "ok",
+        "candidate_count": 1,
+        "accepted_count": 0,
+        "rejected_count": 0,
+        "candidates": [
+            {
+                "action": "rejected_by_gate",
+                "target_title": "target title should not leak",
+                "reason_category": "policy",
+                "reason": "raw rejected reason text should not leak",
+                "reason_text": "raw rejected reason text should not leak",
+            }
+        ],
+    }
+
+    _write_jsonl(log, [row])
+    rows, invalid = tm_answer_trace.load_trace_rows(log)
+    report = tm_answer_trace.summarize_rows(rows, invalid)
+    encoded = json.dumps(report, ensure_ascii=False)
+
+    assert "raw query text should not leak" not in encoded
+    assert "expanded query should not leak" not in encoded
+    assert "raw rejected reason text should not leak" not in encoded
+    assert "target title should not leak" not in encoded
+    assert "evidence excerpt should not leak" not in encoded
+    assert "raw_query_text_should_not_leak" not in encoded
+
+
+def test_summary_recommendation_quality_sanitizes_metric_tokens(tmp_path):
+    log = tmp_path / "trace.jsonl"
+    raw_status = "tiger_name"
+    raw_reason = "phone"
+    row = _row("t-token-safety", "ok")
+    row["trace"]["related_evidence_candidates"] = {
+        "status": raw_status,
+        "candidate_count": 1,
+    }
+    row["trace"]["recommendation_boosted_candidates"] = {
+        "status": raw_status,
+        "candidate_count": 1,
+        "candidates": [
+            {
+                "action": "rejected_by_gate",
+                "reason_category": raw_reason,
+            }
+        ],
+    }
+
+    _write_jsonl(log, [row])
+    rows, invalid = tm_answer_trace.load_trace_rows(log)
+    report = tm_answer_trace.summarize_rows(rows, invalid)
+    encoded = json.dumps(report, ensure_ascii=False)
+
+    assert raw_status not in encoded
+    assert raw_reason not in encoded
+    assert report["recommendation_quality"]["status_counts"]["sidecar"] == {"unknown": 1}
+    assert report["recommendation_quality"]["status_counts"]["boost"] == {"unknown": 1}
+    assert report["recommendation_quality"]["top_noisy_reasons"] == [{"reason_category": "unknown", "count": 1}]
 
 
 def test_summary_duration_percentiles_ignore_missing_values(tmp_path):
