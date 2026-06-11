@@ -523,6 +523,9 @@ MAP_MIN_TOP_SCORE = 8.0
 MAP_MIN_TOP_MARGIN = 1.5
 MAP_STRONG_TOP_SCORE = 24.0
 MAP_STRONG_TOP_MARGIN = 6.0
+PERSON_IDENTITY_SAFE_PROFILES = {
+    "tiger": "wiki/person/tiger.md",
+}
 _QUERY_PLANNER_MANIFEST_CACHE: str | None = None
 _LLM_WIKI_MAP_MODULE: Any | None = None
 
@@ -1351,6 +1354,238 @@ def _parse_frontmatter_map(text: str) -> dict[str, str]:
         value = value.strip().strip('"').strip("'")
         if key and value:
             result[key] = value
+    return result
+
+
+def _normalize_identity_query_text(query: str) -> str:
+    text = str(query or "").strip().lower()
+    punctuation = set("?？!！。.,，;；:：、\"'`“”‘’（）()[]{}-")
+    return "".join(ch for ch in text if not ch.isspace() and ch not in punctuation)
+
+
+def _person_identity_profile_path(query: str, scope: str) -> str | None:
+    if scope not in {"auto", "all", "wiki"}:
+        return None
+    normalized = _normalize_identity_query_text(query)
+    if not normalized:
+        return None
+
+    tiger_exact = {
+        "虎哥是谁",
+        "虎哥是誰",
+        "虎哥是什么人",
+        "虎哥是什麼人",
+        "请介绍虎哥",
+        "请介绍一下虎哥",
+        "介绍虎哥",
+        "介绍一下虎哥",
+        "简单介绍虎哥",
+        "简单介绍一下虎哥",
+        "tiger是谁",
+        "tiger是誰",
+        "giantrao是谁",
+        "giantrao是誰",
+        "whoistiger",
+        "whoisgiantrao",
+    }
+    if normalized in tiger_exact:
+        return PERSON_IDENTITY_SAFE_PROFILES["tiger"]
+    tiger_identity_suffixes = (
+        "虎哥是谁",
+        "虎哥是誰",
+        "虎哥是什么人",
+        "虎哥是什麼人",
+    )
+    allowed_instruction_prefixes = {
+        "请",
+        "帮我",
+        "麻烦",
+        "查一下",
+        "帮我查一下",
+        "帮我看看",
+        "用tigermemory查一下",
+        "使用tigermemory查一下",
+        "通过tigermemory查一下",
+        "在tigermemory里查一下",
+        "用tiger记忆查一下",
+    }
+    for suffix in tiger_identity_suffixes:
+        if normalized.endswith(suffix) and normalized[: -len(suffix)] in allowed_instruction_prefixes:
+            return PERSON_IDENTITY_SAFE_PROFILES["tiger"]
+    return None
+
+
+def _extract_markdown_section(text: str, heading: str) -> str:
+    normalized = text.replace("\r\n", "\n")
+    lines = normalized.splitlines()
+    start_index: int | None = None
+    for index, line in enumerate(lines):
+        if line.strip() == f"## {heading}":
+            start_index = index + 1
+            break
+    if start_index is None:
+        return ""
+    collected: list[str] = []
+    for line in lines[start_index:]:
+        if line.startswith("## "):
+            break
+        collected.append(line)
+    return "\n".join(collected).strip()
+
+
+def _first_markdown_heading(text: str) -> str:
+    for line in _strip_frontmatter(text).splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+    metadata = _parse_frontmatter_map(text)
+    return metadata.get("title") or "人物档案"
+
+
+def _safe_person_identity_summary(path: str) -> dict[str, str] | None:
+    full_path = tm_core.REPO_ROOT / path
+    if not full_path.exists() or not full_path.is_file():
+        return None
+    text = full_path.read_text(encoding="utf-8", errors="ignore")
+    summary = _extract_markdown_section(text, "摘要")
+    verified = _extract_markdown_section(text, "已验证现状")
+    safe_prefixes = ("- 称呼：", "- 英文名：", "- 关注领域：", "- 沟通风格：")
+    safe_facts = [
+        line.strip()
+        for line in verified.splitlines()
+        if line.strip().startswith(safe_prefixes)
+    ]
+    title = _first_markdown_heading(text)
+    if not summary and not safe_facts:
+        return None
+    excerpt_parts = [f"# {title}"]
+    if summary:
+        excerpt_parts.append(summary)
+    if safe_facts:
+        excerpt_parts.append("\n".join(safe_facts))
+    return {
+        "title": title,
+        "summary": redact_secrets(summary),
+        "safe_facts": redact_secrets("；".join(line.lstrip("- ").strip() for line in safe_facts)),
+        "excerpt": redact_secrets("\n\n".join(excerpt_parts))[:900],
+    }
+
+
+def _person_identity_fast_path_answer(
+    query: str,
+    *,
+    scope: str,
+    normalized_run_id: str,
+    trace_id: str,
+    started: float,
+    include_trace: bool,
+    write_trace: bool,
+    task_context: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    path = _person_identity_profile_path(query, scope)
+    if not path:
+        return None
+    profile = _safe_person_identity_summary(path)
+    if not profile:
+        return None
+
+    answer_parts = [profile["summary"]]
+    if profile["safe_facts"]:
+        answer_parts.append(f"已验证信息：{profile['safe_facts']}。")
+    answer = "\n\n".join(part for part in answer_parts if part).strip()
+    evidence = [{
+        "id": "e1",
+        "source": "wiki",
+        "path": path,
+        "title": profile["title"],
+        "excerpt": profile["excerpt"],
+        "score": 100.0,
+        "authority": 98.0,
+        "relevance": 3.0,
+        "match_count": 2,
+        "matched_terms": ["虎哥", "身份"],
+        "source_role": "protected_person_profile",
+        "injection_eligible": False,
+        "injection_reason": "protected_person_summary_only",
+        "validity": "current",
+        "validity_reason": "stable identity profile",
+    }]
+    trace: dict[str, Any] = {
+        "run_id": normalized_run_id,
+        "query_class": "identity",
+        "expanded_queries": [],
+        "planner": {
+            "intent": "identity",
+            "source": "person_identity_fast_path",
+            "freshness_mode": "not_applicable",
+            "safe_profile_path": path,
+        },
+        "calls": [{
+            "tool": "read_protected_person_summary",
+            "path": path,
+            "ok": True,
+        }],
+        "evidence_gate": [{
+            "candidate_id": "e1",
+            "path": path,
+            "source": "wiki",
+            "keep": True,
+            "reason": "safe person identity profile",
+            "validity": "current",
+            "validity_reason": "stable identity profile",
+        }],
+        "authority_scores": [{
+            "id": "e1",
+            "path": path,
+            "authority": 98.0,
+            "relevance": 3.0,
+            "source_role": "protected_person_profile",
+            "injection_eligible": False,
+            "injection_reason": "protected_person_summary_only",
+            "validity": "current",
+            "validity_reason": "stable identity profile",
+        }],
+        "conflict_scan": {"enabled": False, "conflict": False, "checks": [], "conflicts": []},
+        "selected_evidence": ["e1"],
+        "prompt_budget_truncated": False,
+        "evidence_char_budget": len(profile["excerpt"]),
+        "privacy_guard": "person_safe_summary_only",
+        "duration_ms": round((time.monotonic() - started) * 1000, 2),
+    }
+    trace["validity"] = _summarize_validity_trace(
+        query=query,
+        query_class="identity",
+        freshness_mode="not_applicable",
+        evidence_gate=trace["evidence_gate"],
+        selected_evidence=evidence,
+    )
+    trace["stale_guard"] = trace["validity"]["stale_guard"]
+
+    result = {
+        "status": "ok",
+        "answer": answer[:4000],
+        "summary": f"已从受控人物页读取 {profile['title']} 的安全身份摘要。",
+        "claims": [{
+            "id": "c1",
+            "text": answer[:1000],
+            "support": ["e1"],
+            "confidence": 0.98,
+        }],
+        "evidence": evidence,
+        "warnings": [],
+        "run_id": normalized_run_id,
+        "trace_id": trace_id,
+        "trace": trace if include_trace else None,
+    }
+    _attach_context_pack_fields(
+        result,
+        task_context=task_context,
+        evidence=evidence,
+        conflicts=[],
+        warnings=[],
+        evidence_gate=trace["evidence_gate"],
+    )
+    if write_trace:
+        _write_result_trace(result, trace, query)
     return result
 
 
@@ -2550,6 +2785,19 @@ def memory_answer_core(
     evidence_limit = min(max(int(max_evidence), 1), 12)
     trace_id = str(uuid.uuid4())
     normalized_run_id = normalize_run_id(run_id)
+    fast_path_result = _person_identity_fast_path_answer(
+        q,
+        scope=scope,
+        normalized_run_id=normalized_run_id,
+        trace_id=trace_id,
+        started=started,
+        include_trace=include_trace,
+        write_trace=write_trace,
+        task_context=task_context,
+    )
+    if fast_path_result is not None:
+        return fast_path_result
+
     planner = plan_query(q)
     query_class = planner["query_class"]
     planner_warnings = [str(item) for item in (planner.get("planner_warnings") or []) if str(item).strip()]

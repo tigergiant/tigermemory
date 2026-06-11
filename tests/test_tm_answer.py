@@ -27,6 +27,60 @@ def _search_result(hit: dict | None = None) -> dict:
     }
 
 
+def test_memory_answer_core_uses_person_identity_fast_path(monkeypatch, tmp_path):
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    assert tm_answer._normalize_identity_query_text("虎哥是谁？") == "虎哥是谁"
+    assert tm_answer._person_identity_profile_path("使用tigermemory查一下虎哥是谁", "auto") == "wiki/person/tiger.md"
+
+    def fail_search(*_args, **_kwargs):
+        raise AssertionError("identity fast path should not call search")
+
+    def fail_llm(*_args, **_kwargs):
+        raise AssertionError("identity fast path should not call DeepSeek")
+
+    monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", fail_search)
+    monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", fail_llm)
+
+    result = tm_answer.memory_answer_core("虎哥是谁", scope="auto", include_trace=True, run_id="person-fast")
+
+    assert result["status"] == "ok"
+    assert "tigermemory 系统的主人" in result["answer"]
+    assert "Giant Rao" in result["answer"]
+    assert result["evidence"][0]["path"] == "wiki/person/tiger.md"
+    assert result["evidence"][0]["source_role"] == "protected_person_profile"
+    assert result["trace"]["query_class"] == "identity"
+    assert result["trace"]["planner"]["source"] == "person_identity_fast_path"
+    assert [call["tool"] for call in result["trace"]["calls"]] == ["read_protected_person_summary"]
+
+    trace_row = json.loads((tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert trace_row["run_id"] == "person-fast"
+    assert trace_row["trace"]["planner"]["source"] == "person_identity_fast_path"
+    assert "query" not in trace_row
+
+
+def test_memory_answer_core_person_fast_path_does_not_match_general_tiger_task(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", lambda *_args, **_kwargs: _empty_map_plan())
+    monkeypatch.setattr(
+        tm_answer.tm_search,
+        "search_tigermemory",
+        lambda *_args, **_kwargs: calls.append("search") or _search_result(),
+    )
+    monkeypatch.setattr(
+        tm_answer,
+        "_call_memory_answer_llm",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("no evidence should skip LLM")),
+    )
+
+    result = tm_answer.memory_answer_core("虎哥今天让我优化什么", scope="wiki", run_id="person-normal")
+
+    assert result["status"] == "not_found"
+    assert calls
+    assert result["trace"]["query_class"] != "identity"
+
+
 def test_memory_answer_core_expands_evidence_and_generates_answer(monkeypatch, tmp_path):
     monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
     monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
