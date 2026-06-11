@@ -1181,12 +1181,12 @@ def test_memory_answer_core_returns_related_evidence_sidecar_without_changing_ll
     related_map = tmp_path / "related_map.jsonl"
     _write_related_map(related_map, [{
         "source_path": "wiki/systems/agent-write-toolkit.md",
-        "target_path": "wiki/systems/session-handoff-protocol.md",
-        "score": 22.5,
-        "reasons": ["markdown_link:wiki/systems/session-handoff-protocol.md", "shared_keyword:handoff"],
+        "target_path": "wiki/systems/related-sidecar-no-boost.md",
+        "score": 0.0,
+        "reasons": ["markdown_link:wiki/systems/related-sidecar-no-boost.md", "shared_keyword:session-handoff"],
         "source_surface": "wiki",
         "target_surface": "wiki",
-        "target_title": "Session Handoff Protocol",
+        "target_title": "Related sidecar no boost",
         "target_status": "active",
         "sensitivity": "normal",
         "built_from": ["markdown_links", "keywords"],
@@ -1216,11 +1216,14 @@ def test_memory_answer_core_returns_related_evidence_sidecar_without_changing_ll
     assert result["status"] == "ok"
     assert [item["path"] for item in result["evidence"]] == ["wiki/systems/agent-write-toolkit.md"]
     assert [item["path"] for item in captured["evidence"]] == ["wiki/systems/agent-write-toolkit.md"]
+    assert result["trace"]["recommendation_boosted_candidates"]["candidate_count"] == 1
+    assert result["trace"]["recommendation_boosted_candidates"]["rejected_count"] == 1
+    assert result["trace"]["recommendation_boosted_candidates"]["accepted_count"] == 0
     assert "related_evidence_candidates" in result
     assert result["related_evidence_candidates"] == [{
-        "path": "wiki/systems/session-handoff-protocol.md",
-        "title": "Session Handoff Protocol",
-        "score": 22.5,
+        "path": "wiki/systems/related-sidecar-no-boost.md",
+        "title": "Related sidecar no boost",
+        "score": 0.0,
         "reasons": ["markdown_link", "shared_keyword"],
         "use_hint": "read_next",
         "source_evidence_id": "e1",
@@ -1228,8 +1231,8 @@ def test_memory_answer_core_returns_related_evidence_sidecar_without_changing_ll
     }]
     assert result["trace"]["related_evidence_candidates"]["candidate_count"] == 1
     assert result["trace"]["related_evidence_candidates"]["candidates"][0] == {
-        "path": "wiki/systems/session-handoff-protocol.md",
-        "score_bucket": "high",
+        "path": "wiki/systems/related-sidecar-no-boost.md",
+        "score_bucket": "none",
         "reason_categories": ["markdown_link", "shared_keyword"],
         "use_hint": "read_next",
         "source_evidence_id": "e1",
@@ -1437,6 +1440,476 @@ def test_memory_answer_filters_forbidden_related_targets(monkeypatch, tmp_path):
     assert not any(path.startswith(("wiki/person/", "runtime/")) for path in paths)
     assert all(".." not in path and not path.lower().startswith("d:/") for path in paths)
     assert result["related_evidence_candidates"][0]["use_hint"] == "background_only"
+
+
+def test_memory_answer_core_boosts_related_evidence_into_llm_input(monkeypatch, tmp_path):
+    related_map = tmp_path / "related_map.jsonl"
+    _write_related_map(related_map, [{
+        "source_path": "wiki/systems/agent-write-toolkit.md",
+        "target_path": "wiki/systems/toolkit-session-handoff-protocol.md",
+        "score": 19.5,
+        "reasons": ["shared_keyword:toolkit", "markdown_link:wiki/systems/toolkit-session-handoff-protocol.md"],
+        "source_surface": "wiki",
+        "target_surface": "wiki",
+        "target_title": "Toolkit handoff protocol",
+        "target_status": "active",
+        "sensitivity": "normal",
+        "built_from": ["summary", "markdown_links"],
+        "text_hash": "boost-ok",
+    }])
+    captured = {}
+    monkeypatch.setattr(tm_answer, "RELATED_MAP_PATH", related_map)
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", lambda *_args, **_kwargs: _empty_map_plan())
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
+    monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", lambda *_args, **_kwargs: _search_result(_recommendation_search_hit()))
+
+    def fake_llm(_query, evidence):
+        captured["evidence_paths"] = [item["path"] for item in evidence]
+        return True, {
+            "status": "ok",
+            "answer": "Answer with boost.",
+            "summary": "Boosted summary.",
+            "claims": [
+                {
+                    "id": "c1",
+                    "text": "boosted",
+                    "support": ["e1", "e2"],
+                    "confidence": 0.9,
+                },
+            ],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", fake_llm)
+
+    result = tm_answer.memory_answer_core("toolkit write_memory", scope="wiki", run_id="related-boost-on")
+
+    assert result["status"] == "ok"
+    assert captured["evidence_paths"] == [
+        "wiki/systems/agent-write-toolkit.md",
+        "wiki/systems/toolkit-session-handoff-protocol.md",
+    ]
+    assert [item["id"] for item in result["evidence"]] == ["e1", "e2"]
+    boost_trace = result["trace"]["recommendation_boosted_candidates"]
+    assert boost_trace["status"] == "ok"
+    assert boost_trace["accepted_count"] == 1
+    assert boost_trace["rejected_count"] == 0
+    assert boost_trace["candidate_count"] == 1
+    assert boost_trace["candidates"][0]["action"] == "accepted_to_evidence"
+    assert boost_trace["candidates"][0]["path"] == "wiki/systems/toolkit-session-handoff-protocol.md"
+    assert boost_trace["candidates"][0]["gate_outcome"] == "evidence_gate_passed"
+    candidate_ids = [item["candidate_id"] for item in result["trace"]["evidence_gate"]]
+    assert len(candidate_ids) == len(set(candidate_ids))
+
+
+def test_memory_answer_core_no_boost_when_selected_evidence_is_not_thin(monkeypatch, tmp_path):
+    related_map = tmp_path / "related_map.jsonl"
+    _write_related_map(related_map, [{
+        "source_path": "wiki/systems/agent-write-toolkit.md",
+        "target_path": "wiki/systems/toolkit-session-handoff-protocol.md",
+        "score": 19.5,
+        "reasons": ["shared_keyword:toolkit"],
+        "source_surface": "wiki",
+        "target_surface": "wiki",
+        "target_title": "Toolkit handoff protocol",
+        "target_status": "active",
+        "sensitivity": "normal",
+        "built_from": ["summary"],
+        "text_hash": "boost-ok",
+    }])
+    captured = {}
+    monkeypatch.setattr(tm_answer, "RELATED_MAP_PATH", related_map)
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", lambda *_args, **_kwargs: _empty_map_plan())
+
+    def two_hit_result():
+        return {
+            "query": "q",
+            "scope": "wiki",
+            "strategy": "grouped-intent-budget-v1",
+            "primary_scope": "wiki",
+            "primary_results": [
+                {
+                    "source": "wiki",
+                    "path": "wiki/systems/agent-write-toolkit.md",
+                    "title": "Agent write toolkit",
+                    "snippet": "toolkit evidence for write_memory",
+                    "score": 10.0,
+                },
+                {
+                    "source": "wiki",
+                    "path": "wiki/systems/toolkit-session-write_memory-reference.md",
+                    "title": "Tooling reference",
+                    "snippet": "toolkit write_memory reference",
+                    "score": 9.0,
+                },
+            ],
+            "groups": {
+                "wiki": [
+                    {
+                        "source": "wiki",
+                        "path": "wiki/systems/agent-write-toolkit.md",
+                        "title": "Agent write toolkit",
+                        "snippet": "toolkit evidence for write_memory",
+                        "score": 10.0,
+                    },
+                    {
+                        "source": "wiki",
+                        "path": "wiki/systems/toolkit-session-write_memory-reference.md",
+                        "title": "Tooling reference",
+                        "snippet": "toolkit write_memory reference",
+                        "score": 9.0,
+                    },
+                ],
+            },
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", lambda *_args, **_kwargs: two_hit_result())
+    def fake_llm(_query, evidence):
+        captured["evidence_paths"] = [item["path"] for item in evidence]
+        return True, {
+            "status": "ok",
+            "answer": "Answer without boost.",
+            "summary": "No boost summary.",
+            "claims": [{"id": "c1", "text": "base", "support": ["e1", "e2"], "confidence": 0.9}],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", fake_llm)
+
+    result = tm_answer.memory_answer_core("toolkit write_memory", scope="wiki", run_id="related-boost-off-many")
+
+    assert result["status"] == "ok"
+    assert captured["evidence_paths"] == [
+        "wiki/systems/agent-write-toolkit.md",
+        "wiki/systems/toolkit-session-write_memory-reference.md",
+    ]
+    assert [item["id"] for item in result["evidence"]] == ["e1", "e2"]
+    boost_trace = result["trace"]["recommendation_boosted_candidates"]
+    assert boost_trace["candidate_count"] == 0
+    assert boost_trace["accepted_count"] == 0
+
+
+def test_memory_answer_core_no_boost_for_current_freshness(monkeypatch, tmp_path):
+    related_map = tmp_path / "related_map.jsonl"
+    _write_related_map(related_map, [{
+        "source_path": "wiki/systems/agent-write-toolkit.md",
+        "target_path": "wiki/systems/toolkit-session-handoff-protocol.md",
+        "score": 19.5,
+        "reasons": ["shared_keyword:toolkit"],
+        "source_surface": "wiki",
+        "target_surface": "wiki",
+        "target_title": "Toolkit handoff protocol",
+        "target_status": "active",
+        "sensitivity": "normal",
+        "built_from": ["summary"],
+        "text_hash": "boost-ok",
+    }])
+    captured = {}
+    monkeypatch.setattr(tm_answer, "RELATED_MAP_PATH", related_map)
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", lambda *_args, **_kwargs: _empty_map_plan())
+    monkeypatch.setattr(tm_answer, "classify_query", lambda *_args, **_kwargs: "recall")
+    monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", lambda *_args, **_kwargs: _search_result(_recommendation_search_hit()))
+
+    def fake_llm(_query, evidence):
+        captured["evidence_paths"] = [item["path"] for item in evidence]
+        return True, {
+            "status": "ok",
+            "answer": "Current freshness answer.",
+            "summary": "Current summary.",
+            "claims": [{"id": "c1", "text": "current", "support": ["e1"], "confidence": 0.9}],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", fake_llm)
+
+    result = tm_answer.memory_answer_core("today toolkit", scope="wiki", run_id="related-no-current")
+
+    assert result["status"] == "ok"
+    assert captured["evidence_paths"] == ["wiki/systems/agent-write-toolkit.md"]
+    assert result["trace"]["planner"]["freshness_mode"] == "current"
+    boost_trace = result["trace"]["recommendation_boosted_candidates"]
+    assert boost_trace["candidate_count"] == 0
+
+
+def test_memory_answer_core_no_boost_for_private_or_forbidden_related_targets(monkeypatch, tmp_path):
+    related_map = tmp_path / "related_map.jsonl"
+    _write_related_map(related_map, [
+        {
+            "source_path": "wiki/systems/agent-write-toolkit.md",
+            "target_path": "wiki/person/tiger.md",
+            "score": 19.5,
+            "reasons": ["markdown_link:wiki/person/tiger.md"],
+            "source_surface": "wiki",
+            "target_surface": "wiki",
+            "target_title": "Tiger",
+            "target_status": "active",
+            "sensitivity": "person",
+            "built_from": ["markdown_links"],
+            "text_hash": "forbidden-boost",
+        },
+        {
+            "source_path": "wiki/systems/agent-write-toolkit.md",
+            "target_path": "wiki/systems/toolkit-session-handoff-protocol.md",
+            "score": 19.5,
+            "reasons": ["shared_keyword:toolkit", "markdown_link:wiki/systems/toolkit-session-handoff-protocol.md"],
+            "source_surface": "wiki",
+            "target_surface": "wiki",
+            "target_title": "Toolkit handoff protocol",
+            "target_status": "active",
+            "sensitivity": "normal",
+            "built_from": ["summary"],
+            "text_hash": "boost-ok",
+        },
+    ])
+    captured = {}
+    monkeypatch.setattr(tm_answer, "RELATED_MAP_PATH", related_map)
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", lambda *_args, **_kwargs: _empty_map_plan())
+    monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", lambda *_args, **_kwargs: _search_result(_recommendation_search_hit()))
+
+    def fake_llm(_query, evidence):
+        captured["evidence_paths"] = [item["path"] for item in evidence]
+        return True, {
+            "status": "ok",
+            "answer": "Private sensitive answer.",
+            "summary": "Private summary.",
+            "claims": [{"id": "c1", "text": "private", "support": ["e1"], "confidence": 0.9}],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", fake_llm)
+
+    result = tm_answer.memory_answer_core("private toolkit", scope="wiki", run_id="related-no-private")
+
+    assert result["status"] == "ok"
+    assert captured["evidence_paths"] == ["wiki/systems/agent-write-toolkit.md"]
+    assert result["trace"]["recommendation_boosted_candidates"]["candidate_count"] == 0
+    assert all(
+        item["path"] != "wiki/person/tiger.md"
+        for item in result["trace"]["recommendation_boosted_candidates"].get("candidates", [])
+    )
+
+
+def test_memory_answer_core_related_boost_rejects_by_gate_and_records_block(monkeypatch, tmp_path):
+    related_map = tmp_path / "related_map.jsonl"
+    reason_canary = "boost-gate-reason-canary-20260611"
+    _write_related_map(related_map, [{
+        "source_path": "wiki/systems/agent-write-toolkit.md",
+        "target_path": "wiki/systems/unrelated-reference-note.md",
+        "score": 1.0,
+        "reasons": ["shared_keyword:unrelated"],
+        "source_surface": "wiki",
+        "target_surface": "wiki",
+        "target_title": "Unrelated",
+        "target_status": "active",
+        "sensitivity": "normal",
+        "built_from": ["summary"],
+        "text_hash": "boost-reject",
+    }])
+    captured = {}
+    monkeypatch.setattr(tm_answer, "RELATED_MAP_PATH", related_map)
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", lambda *_args, **_kwargs: _empty_map_plan())
+    monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", lambda *_args, **_kwargs: _search_result(_recommendation_search_hit()))
+    original_gate = tm_answer._passes_evidence_gate
+
+    def _passes_evidence_gate_with_canary(item: dict, query_class: str) -> tuple[bool, str]:
+        if str(item.get("path", "")) == "wiki/systems/unrelated-reference-note.md":
+            return False, f"weak evidence: {reason_canary}"
+        return original_gate(item, query_class)
+
+    monkeypatch.setattr(tm_answer, "_passes_evidence_gate", _passes_evidence_gate_with_canary)
+
+    def fake_llm(_query, evidence):
+        captured["evidence_paths"] = [item["path"] for item in evidence]
+        return True, {
+            "status": "ok",
+            "answer": "Rejected by gate.",
+            "summary": "Rejected summary.",
+            "claims": [{"id": "c1", "text": "rejected", "support": ["e1"], "confidence": 0.9}],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", fake_llm)
+
+    result = tm_answer.memory_answer_core("toolkit write_memory", scope="wiki", run_id="related-gate-reject")
+
+    assert result["status"] == "ok"
+    assert captured["evidence_paths"] == ["wiki/systems/agent-write-toolkit.md"]
+    boost_trace = result["trace"]["recommendation_boosted_candidates"]
+    assert boost_trace["candidate_count"] == 1
+    assert boost_trace["accepted_count"] == 0
+    assert boost_trace["rejected_count"] == 1
+    assert boost_trace["candidates"][0]["action"] == "rejected_by_gate"
+    assert boost_trace["candidates"][0]["path"] == "wiki/systems/unrelated-reference-note.md"
+    assert boost_trace["candidates"][0]["gate_outcome"].startswith("evidence_gate_rejected")
+    assert "reason" not in boost_trace["candidates"][0]
+    assert boost_trace["candidates"][0]["reason_category"] == "unknown" or boost_trace["candidates"][0]["reason_category"]
+    assert "reason_hash" in boost_trace["candidates"][0]
+    assert "wiki/systems/unrelated-reference-note.md" not in [item["path"] for item in result["evidence"]]
+    trace_row = json.loads((tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    stored_payload = json.dumps(trace_row, ensure_ascii=False)
+    assert reason_canary not in stored_payload
+
+
+def test_memory_answer_core_boost_filters_forbidden_targets_from_boosting(monkeypatch, tmp_path):
+    related_map = tmp_path / "related_map.jsonl"
+    forbidden_targets = [
+        "wiki/tmp/toolkit-tmp-note.md",
+        "sources/tmp/toolkit-temp-note.md",
+        "wiki/tests/toolkit-test-note.md",
+        "sources/tests/toolkit-test-note.md",
+        "wiki/review-artifacts/toolkit-review.md",
+        "sources/review-artifacts/toolkit-review.md",
+        "runtime/memory_recommendation/forbidden.jsonl",
+    ]
+    _write_related_map(related_map, [
+        {
+            "source_path": "wiki/systems/agent-write-toolkit.md",
+            "target_path": path,
+            "score": 20.0,
+            "reasons": ["shared_keyword:toolkit"],
+            "source_surface": "wiki",
+            "target_surface": "wiki",
+            "target_title": "Forbidden boost target",
+            "target_status": "active",
+            "sensitivity": "normal",
+            "built_from": ["summary"],
+            "text_hash": "boost-forbidden",
+        }
+        for path in forbidden_targets
+    ] + [{
+        "source_path": "wiki/systems/agent-write-toolkit.md",
+        "target_path": "wiki/systems/toolkit-session-handoff-protocol.md",
+        "score": 20.0,
+        "reasons": ["shared_keyword:toolkit", "markdown_link:wiki/systems/toolkit-session-handoff-protocol.md"],
+        "source_surface": "wiki",
+        "target_surface": "wiki",
+        "target_title": "Allowed boost target",
+        "target_status": "active",
+        "sensitivity": "normal",
+        "built_from": ["summary", "markdown_links"],
+        "text_hash": "boost-ok",
+    }])
+    call_count = {"n": 0}
+
+    def fake_search(*_args, **_kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return _search_result(_recommendation_search_hit())
+        return {
+            "query": "toolkit write_memory",
+            "scope": "wiki",
+            "strategy": "grouped-intent-budget-v1",
+            "primary_scope": "wiki",
+            "primary_results": [
+                {
+                    "source": "wiki",
+                    "path": path,
+                    "title": path,
+                    "snippet": "toolkit write_memory",
+                    "score": 10.0,
+                }
+                for path in forbidden_targets
+            ] + [{
+                "source": "wiki",
+                "path": "wiki/systems/toolkit-session-handoff-protocol.md",
+                "title": "Toolkit handoff protocol",
+                "snippet": "toolkit write_memory",
+                "score": 10.0,
+            }],
+            "groups": {},
+            "warnings": [],
+        }
+
+    captured: dict[str, list[str]] = {}
+    monkeypatch.setattr(tm_answer, "RELATED_MAP_PATH", related_map)
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", lambda *_args, **_kwargs: _empty_map_plan())
+    monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", fake_search)
+    monkeypatch.setattr(
+        tm_answer,
+        "_call_memory_answer_llm",
+        lambda _q, _e: (True, {
+            "status": "ok",
+            "answer": "Forbidden target filtered.",
+            "summary": "Filtered summary.",
+            "claims": [{"id": "c1", "text": "filtered", "support": ["e1", "e2"], "confidence": 0.9}],
+            "warnings": [],
+        }),
+    )
+
+    result = tm_answer.memory_answer_core("toolkit write_memory", scope="wiki", run_id="related-boost-forbidden")
+    captured["evidence_paths"] = [item["path"] for item in result["evidence"]]
+    assert captured["evidence_paths"] == [
+        "wiki/systems/agent-write-toolkit.md",
+        "wiki/systems/toolkit-session-handoff-protocol.md",
+    ]
+    assert result["trace"]["recommendation_boosted_candidates"]["candidate_count"] == 1
+    assert [
+        item["path"]
+        for item in result["trace"]["recommendation_boosted_candidates"]["candidates"]
+    ] == ["wiki/systems/toolkit-session-handoff-protocol.md"]
+    trace_gate_paths = [entry["path"] for entry in result["trace"]["evidence_gate"]]
+    for forbidden_path in forbidden_targets:
+        assert forbidden_path not in trace_gate_paths
+
+
+def test_memory_answer_core_boost_trace_excludes_raw_query_and_candidate_excerpt_fields(monkeypatch, tmp_path):
+    related_map = tmp_path / "related_map.jsonl"
+    raw_query_canary = "raw-query-canary-boost-20260611"
+    reason_canary = "reason-canary-boost-20260611"
+    _write_related_map(related_map, [{
+        "source_path": "wiki/systems/agent-write-toolkit.md",
+        "target_path": "wiki/systems/toolkit-session-handoff-protocol.md",
+        "score": 19.5,
+        "reasons": [f"shared_summary_token:{reason_canary}"],
+        "source_surface": "wiki",
+        "target_surface": "wiki",
+        "target_title": f"Title with {raw_query_canary}",
+        "target_status": "active",
+        "sensitivity": "normal",
+        "built_from": ["summary"],
+        "text_hash": "boost-ok",
+    }])
+    monkeypatch.setattr(tm_answer, "RELATED_MAP_PATH", related_map)
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", lambda *_args, **_kwargs: _empty_map_plan())
+    monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", lambda *_args, **_kwargs: _search_result(_recommendation_search_hit()))
+    monkeypatch.setattr(
+        tm_answer,
+        "_call_memory_answer_llm",
+        lambda _q, _e: (True, {
+            "status": "ok",
+            "answer": "Trace safe answer.",
+            "summary": "Trace safe summary.",
+            "claims": [{"id": "c1", "text": "claim", "support": ["e1", "e2"], "confidence": 0.9}],
+            "warnings": [],
+        }),
+    )
+
+    result = tm_answer.memory_answer_core(f"toolkit {raw_query_canary}", scope="wiki", run_id="related-boost-trace")
+
+    assert result["trace"]["recommendation_boosted_candidates"]["candidate_count"] == 1
+    boost_trace = result["trace"]["recommendation_boosted_candidates"]["candidates"][0]
+    assert "title" not in boost_trace
+    assert "excerpt" not in boost_trace
+    trace_row = json.loads((tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    stored_payload = json.dumps(trace_row, ensure_ascii=False)
+    assert raw_query_canary not in stored_payload
+    assert reason_canary not in stored_payload
+    assert "Title with" not in stored_payload
+    assert boost_trace["reason_categories"] == ["shared_summary_token"]
 
 
 def test_answer_eval_contract_accepts_optional_fields_and_rejects_paper_seed_tmp(tmp_path):

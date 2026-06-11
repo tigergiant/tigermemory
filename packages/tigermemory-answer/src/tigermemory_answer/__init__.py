@@ -530,6 +530,12 @@ PERSON_IDENTITY_SAFE_PROFILES = {
 RELATED_FORBIDDEN_PREFIXES = (
     "wiki/person/",
     "sources/person/",
+    "wiki/tmp/",
+    "sources/tmp/",
+    "wiki/tests/",
+    "sources/tests/",
+    "wiki/review-artifacts/",
+    "sources/review-artifacts/",
     ".tmp/",
     "runtime/",
     "tests/",
@@ -545,6 +551,15 @@ RELATED_CONTENT_REASONS = {
     "shared_cjk_bridge",
     "answer_facets",
 }
+RECOMMENDATION_BOOST_PRIVATE_MARKERS = (
+    "private",
+    "secret",
+    "token",
+    "password",
+    "隐私",
+    "私密",
+)
+RECOMMENDATION_BOOST_MAX_SECONDARY = 5
 _QUERY_PLANNER_MANIFEST_CACHE: str | None = None
 _LLM_WIKI_MAP_MODULE: Any | None = None
 
@@ -2155,6 +2170,26 @@ def _normalize_related_path(value: Any) -> str:
     return path
 
 
+def _boost_reason_category(reason: Any) -> str:
+    value = str(reason or "").strip().lower()
+    if not value:
+        return "unknown"
+    if ":" in value:
+        value = value.split(":", 1)[0]
+    value = re.sub(r"[^a-z0-9]+", "_", value).strip("_")
+    return value[:48] or "unknown"
+
+
+def _is_private_for_recommendation_boost(query: str) -> bool:
+    lowered = str(query or "").lower()
+    return any(marker in lowered for marker in RECOMMENDATION_BOOST_PRIVATE_MARKERS)
+
+
+def _is_wiki_or_sources_path(path: Any) -> bool:
+    rel = _normalize_related_path(path).lower()
+    return rel.startswith("wiki/") or rel.startswith("sources/")
+
+
 def _is_forbidden_related_path(path: Any) -> bool:
     rel = _normalize_related_path(path).lower()
     if not rel:
@@ -2201,6 +2236,183 @@ def _related_use_hint(score: float, reason_categories: list[str]) -> str:
     if categories & RELATED_CONTENT_REASONS:
         return "candidate_for_evidence"
     return "background_only"
+
+
+def _is_location_only_reason_set(reason_categories: list[str] | tuple[str, ...]) -> bool:
+    categories = set(reason_categories)
+    return bool(categories) and categories <= RELATED_LOCATION_ONLY_REASONS
+
+
+def _collect_boost_exclusion_paths(
+    search_result: dict[str, Any],
+    evidence: list[dict[str, Any]],
+    evidence_gate: list[dict[str, Any]],
+) -> set[str]:
+    excluded: set[str] = set()
+    for hit in (search_result.get("primary_results") or []):
+        path = _normalize_related_path(hit.get("path"))
+        if path:
+            excluded.add(path)
+    for hits in (search_result.get("groups") or {}).values():
+        for hit in hits:
+            path = _normalize_related_path(hit.get("path"))
+            if path:
+                excluded.add(path)
+    for item in evidence:
+        path = _normalize_related_path(item.get("path"))
+        if path:
+            excluded.add(path)
+    for entry in evidence_gate:
+        path = _normalize_related_path(entry.get("path"))
+        if path:
+            excluded.add(path)
+    return excluded
+
+
+def _derive_related_boost_candidates(
+    evidence: list[dict[str, Any]],
+    search_result: dict[str, Any],
+    evidence_gate: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    related_candidates, related_trace = _derive_related_evidence_candidates(evidence)
+    if related_trace.get("status") != "ok":
+        related_trace.setdefault("candidates", [])
+        return [], related_trace
+    excluded_paths = _collect_boost_exclusion_paths(search_result, evidence, evidence_gate)
+    filtered: list[dict[str, Any]] = []
+    for item in related_candidates:
+        path = _normalize_related_path(item.get("path"))
+        reason_categories = [str(reason) for reason in (item.get("reasons") or [])]
+        use_hint = str(item.get("use_hint") or "background_only")
+        if not path or path in excluded_paths:
+            continue
+        if _is_forbidden_related_path(path):
+            continue
+        if not _is_wiki_or_sources_path(path):
+            continue
+        if use_hint == "background_only":
+            continue
+        if _is_location_only_reason_set(reason_categories):
+            continue
+        filtered.append({
+            "path": path,
+            "score": float(item.get("score") or 0.0),
+            "reason_categories": reason_categories,
+            "use_hint": use_hint,
+            "source_evidence_id": str(item.get("source_evidence_id") or ""),
+            "source_evidence_path": _normalize_related_path(item.get("source_evidence_path")),
+        })
+    related_trace["candidate_count"] = len(filtered)
+    related_trace["candidates"] = [
+        {
+            "path": item["path"],
+            "score_bucket": _related_score_bucket(float(item.get("score") or 0.0)),
+            "reason_categories": item.get("reason_categories") or [],
+            "use_hint": item.get("use_hint"),
+            "source_evidence_id": item.get("source_evidence_id"),
+            "source_evidence_path": item.get("source_evidence_path"),
+        }
+        for item in filtered[:RECOMMENDATION_BOOST_MAX_SECONDARY]
+    ]
+    return filtered[:RECOMMENDATION_BOOST_MAX_SECONDARY], related_trace
+
+
+def _build_boost_search_result(evidence_query: str, candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    primary_results: list[dict[str, Any]] = []
+    for candidate in candidates:
+        path = _normalize_related_path(candidate.get("path"))
+        if not path:
+            continue
+        source = "wiki" if path.startswith("wiki/") else "sources"
+        primary_results.append({
+            "source": source,
+            "path": path,
+            "title": path,
+            "snippet": "related evidence candidate: " + ",".join(candidate.get("reason_categories") or []),
+            "score": float(candidate.get("score") or 0.0),
+        })
+    return {
+        "query": evidence_query,
+        "scope": "wiki",
+        "strategy": "memory-answer-related-booster-v1",
+        "primary_scope": "wiki" if primary_results and primary_results[0]["path"].startswith("wiki/") else "sources",
+        "primary_results": primary_results,
+        "groups": {},
+        "warnings": [],
+    }
+
+
+def _attach_recommendation_boosted_candidates(
+    trace: dict[str, Any],
+    *,
+    evidence: list[dict[str, Any]],
+    evidence_gate: list[dict[str, Any]],
+    boosted_candidates: list[dict[str, Any]],
+) -> None:
+    boosted_trace: dict[str, Any] = {
+        "status": "not_attempted",
+        "candidate_count": 0,
+        "accepted_count": 0,
+        "rejected_count": 0,
+        "candidates": [],
+    }
+    if not boosted_candidates and not evidence:
+        boosted_trace["status"] = "no_eligible_candidates"
+        trace["recommendation_boosted_candidates"] = boosted_trace
+        return
+
+    accepted = {_normalize_related_path(item.get("path")) for item in evidence}
+    gate_by_path = {
+        _normalize_related_path(item.get("path")): item
+        for item in evidence_gate
+        if _normalize_related_path(item.get("path"))
+    }
+    accepted_count = 0
+    rejected_count = 0
+    candidates_trace: list[dict[str, Any]] = []
+    for candidate in boosted_candidates:
+        path = _normalize_related_path(candidate.get("path"))
+        if not path:
+            continue
+        gate = gate_by_path.get(path, {})
+        reason_category = ""
+        reason_hash = ""
+        if path in accepted and gate.get("selected"):
+            action = "accepted_to_evidence"
+            gate_outcome = "evidence_gate_passed"
+            accepted_count += 1
+        else:
+            action = "rejected_by_gate"
+            rejected_count += 1
+            reason = str(gate.get("reason") or "")
+            if reason == "":  # pragma: no branch
+                reason = str(gate.get("validity_reason") or "")
+            gate_outcome = "evidence_gate_rejected"
+            reason_category = _boost_reason_category(reason)
+            reason_hash = query_hash(reason) if reason else ""
+        candidates_trace.append({
+            "path": path,
+            "source_evidence_id": candidate.get("source_evidence_id"),
+            "source_evidence_path": candidate.get("source_evidence_path"),
+            "score_bucket": _related_score_bucket(float(candidate.get("score") or 0.0)),
+            "reason_categories": candidate.get("reason_categories") or [],
+            "use_hint": candidate.get("use_hint"),
+            "action": action,
+            "gate_outcome": gate_outcome,
+            "reason_category": reason_category,
+            "reason_hash": reason_hash,
+        })
+    if candidates_trace:
+        boosted_trace.update({
+            "status": "ok",
+            "candidate_count": len(candidates_trace),
+            "accepted_count": accepted_count,
+            "rejected_count": rejected_count,
+            "candidates": candidates_trace,
+        })
+    elif boosted_candidates:
+        boosted_trace["status"] = "no_trace_data"
+    trace["recommendation_boosted_candidates"] = boosted_trace
 
 
 def _load_related_map_by_source(path: Path | None = None) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any]]:
@@ -3007,6 +3219,88 @@ def memory_answer_core(
     evidence_query = _planner_evidence_query(q, planner)
     trace["planner"]["evidence_query_hash"] = query_hash(evidence_query)
     evidence, evidence_gate = expand_evidence(evidence_query, search_result, evidence_limit, query_class)
+    recommendation_boosted_candidates: list[dict[str, Any]] = []
+    if (
+        query_class in {"recall", "synthesis"}
+        and planner.get("freshness_mode") != "current"
+        and evidence_limit >= 2
+        and len(evidence) == 1
+        and not _is_private_for_recommendation_boost(q)
+        and query_class != "identity"
+    ):
+        recommendation_boosted_candidates, _ = _derive_related_boost_candidates(
+            evidence,
+            search_result,
+            evidence_gate,
+        )
+        if recommendation_boosted_candidates:
+            boost_limit = min(
+                RECOMMENDATION_BOOST_MAX_SECONDARY,
+                max(0, evidence_limit - len(evidence)),
+            )
+            if boost_limit > 0:
+                boost_search = _build_boost_search_result(
+                    evidence_query,
+                    recommendation_boosted_candidates[:boost_limit],
+                )
+                boosted_evidence, boosted_gate = expand_evidence(
+                    evidence_query,
+                    boost_search,
+                    boost_limit,
+                    query_class,
+                )
+                if boosted_evidence:
+                    next_id = len(evidence)
+                    boosted_used_candidate_ids = {
+                        str(item.get("candidate_id") or "")
+                        for item in evidence_gate
+                        if str(item.get("candidate_id") or "")
+                    }
+                    boosted_candidate_counter = [1]
+
+                    def _next_boost_candidate_id() -> str:
+                        while True:
+                            candidate_id = f"boost-c{boosted_candidate_counter[0]}"
+                            boosted_candidate_counter[0] += 1
+                            if candidate_id not in boosted_used_candidate_ids:
+                                boosted_used_candidate_ids.add(candidate_id)
+                                return candidate_id
+
+                    remap: dict[str, str] = {}
+                    for item in boosted_gate + boosted_evidence:
+                        old_id = str(item.get("candidate_id") or "").strip()
+                        if old_id and old_id not in remap:
+                            remap[old_id] = _next_boost_candidate_id()
+                    boosted_by_candidate: dict[str, str] = {}
+                    for item in boosted_evidence:
+                        if not isinstance(item, dict):
+                            continue
+                        old_id = str(item.get("candidate_id") or "").strip()
+                        item["candidate_id"] = remap.get(old_id, _next_boost_candidate_id())
+                        next_id += 1
+                        item["id"] = f"e{next_id}"
+                        candidate_id = str(item.get("candidate_id") or "")
+                        if candidate_id:
+                            boosted_by_candidate[candidate_id] = item["id"]
+                    for gate_entry in boosted_gate:
+                        if not isinstance(gate_entry, dict):
+                            continue
+                        old_id = str(gate_entry.get("candidate_id") or "").strip()
+                        candidate_id = remap.get(old_id, "")
+                        if not candidate_id:
+                            candidate_id = _next_boost_candidate_id()
+                        gate_entry["candidate_id"] = candidate_id
+                        evidence_id = boosted_by_candidate.get(candidate_id, "")
+                        if evidence_id:
+                            gate_entry["selected"] = True
+                            gate_entry["evidence_id"] = evidence_id
+                            for boosted_entry in boosted_evidence:
+                                if str(boosted_entry.get("candidate_id") or "") == candidate_id:
+                                    gate_entry["validity"] = boosted_entry.get("validity")
+                                    gate_entry["validity_reason"] = boosted_entry.get("validity_reason")
+                                    break
+                    evidence.extend(boosted_evidence)
+                    evidence_gate.extend(boosted_gate)
     for warning in search_result.get("warnings") or []:
         warning_text = str(warning)
         if warning_text and warning_text not in warnings:
@@ -3073,6 +3367,12 @@ def memory_answer_core(
             warnings=warnings,
             evidence_gate=evidence_gate,
         )
+        _attach_recommendation_boosted_candidates(
+            trace,
+            evidence=[],
+            evidence_gate=evidence_gate,
+            boosted_candidates=recommendation_boosted_candidates,
+        )
         _attach_related_evidence_candidates(result, trace, [])
         if write_trace:
             _write_result_trace(result, trace, q)
@@ -3113,6 +3413,12 @@ def memory_answer_core(
             warnings=warnings,
             evidence_gate=evidence_gate,
         )
+        _attach_recommendation_boosted_candidates(
+            trace,
+            evidence=evidence,
+            evidence_gate=evidence_gate,
+            boosted_candidates=recommendation_boosted_candidates,
+        )
         _attach_related_evidence_candidates(result, trace, evidence)
         if write_trace:
             _write_result_trace(result, trace, q)
@@ -3141,6 +3447,12 @@ def memory_answer_core(
             conflicts=conflict_scan.get("conflicts") if "conflict_scan" in trace else [],
             warnings=warnings,
             evidence_gate=evidence_gate,
+        )
+        _attach_recommendation_boosted_candidates(
+            trace,
+            evidence=evidence,
+            evidence_gate=evidence_gate,
+            boosted_candidates=recommendation_boosted_candidates,
         )
         _attach_related_evidence_candidates(result, trace, evidence)
         if write_trace:
@@ -3180,6 +3492,12 @@ def memory_answer_core(
         conflicts=conflict_scan.get("conflicts") or [],
         warnings=warnings,
         evidence_gate=evidence_gate,
+    )
+    _attach_recommendation_boosted_candidates(
+        trace,
+        evidence=evidence,
+        evidence_gate=evidence_gate,
+        boosted_candidates=recommendation_boosted_candidates,
     )
     _attach_related_evidence_candidates(result, trace, evidence)
     if not result["summary"]:
