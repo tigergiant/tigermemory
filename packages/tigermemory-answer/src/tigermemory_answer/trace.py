@@ -12,7 +12,9 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import re
 import sys
+import uuid
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -22,6 +24,13 @@ from tigermemory_answer import TRACE_LOG, redact_secrets
 
 
 DEFAULT_FAILURE_STATUSES = ("error", "conflict", "not_found")
+FEEDBACK_SCHEMA_VERSION = "memory-answer-feedback-v1"
+FEEDBACK_SUMMARY_SCHEMA_VERSION = "memory-answer-feedback-summary-v1"
+FEEDBACK_LOG = tm_core.REPO_ROOT / "runtime" / "memory_answer_feedback" / "events.jsonl"
+FEEDBACK_ACTION_TOKENS = {"clicked", "ignored", "selected"}
+FEEDBACK_SURFACE_TOKENS = {"cli", "dashboard", "review_ui", "unknown"}
+FEEDBACK_SCORE_BUCKET_TOKENS = {"high", "mid", "low", "unknown"}
+FEEDBACK_USE_HINT_TOKENS = {"background_only", "candidate_for_evidence", "read_next", "unknown"}
 RECOMMENDATION_STATUS_TOKENS = {
     "error",
     "fallback",
@@ -44,6 +53,8 @@ RECOMMENDATION_REASON_TOKENS = {
     "unknown",
     "weak_filtered",
 }
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_SAFE_FEEDBACK_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _parse_ts(value: Any) -> dt.datetime | None:
@@ -74,6 +85,279 @@ def _row_run_id(row: dict[str, Any]) -> str | None:
         value = trace.get("run_id")
     run_id = str(value or "").strip()
     return run_id or None
+
+
+def _now_iso() -> str:
+    return dt.datetime.now(tm_core.TZ_CN).replace(microsecond=0).isoformat()
+
+
+def _safe_event_ts(value: Any) -> str:
+    if value in (None, ""):
+        return _now_iso()
+    parsed = _parse_ts(value)
+    if not parsed:
+        raise ValueError(f"invalid feedback ts: {value!r}")
+    return parsed.replace(microsecond=0).isoformat()
+
+
+def _safe_identifier_token(value: Any) -> str | None:
+    token = str(value or "").strip()
+    if not token or not _SAFE_IDENTIFIER_RE.fullmatch(token):
+        return None
+    return token
+
+
+def _safe_repo_rel_path(value: Any) -> str | None:
+    raw = str(value or "").strip().replace("\\", "/")
+    if not raw:
+        return None
+    if raw.startswith(("~", "/", "//")) or re.match(r"^[A-Za-z]:", raw):
+        return None
+    if "://" in raw:
+        return None
+    parts: list[str] = []
+    for part in Path(raw).parts:
+        if part in ("", "."):
+            continue
+        if part == "..":
+            return None
+        parts.append(part)
+    normalized = "/".join(parts)
+    if not normalized.startswith(("wiki/", "sources/")):
+        return None
+    if normalized.startswith(("wiki/person/", "sources/person/")):
+        return None
+    forbidden = {"runtime", ".tmp", "tests", "review-artifacts"}
+    if any(part in forbidden for part in Path(normalized).parts):
+        return None
+    return normalized
+
+
+def _feedback_reason_categories(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_items = [item.strip() for item in value.split(",")]
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = [str(item).strip() for item in value]
+    else:
+        raw_items = [str(value).strip()]
+    categories: list[str] = []
+    for item in raw_items:
+        if not item:
+            continue
+        token = _safe_metric_token(item, allowed=RECOMMENDATION_REASON_TOKENS)
+        if token not in categories:
+            categories.append(token)
+    return categories
+
+
+def build_feedback_event(
+    *,
+    surface: Any,
+    action: Any,
+    trace_id: Any,
+    query: Any = None,
+    query_hash: Any = None,
+    run_id: Any = None,
+    target_path: Any = None,
+    source_evidence_id: Any = None,
+    source_evidence_path: Any = None,
+    candidate_rank: Any = None,
+    score_bucket: Any = None,
+    reason_categories: Any = None,
+    use_hint: Any = None,
+    event_id: Any = None,
+    ts: Any = None,
+) -> dict[str, Any]:
+    action_token = str(action or "").strip().lower()
+    if action_token not in FEEDBACK_ACTION_TOKENS:
+        raise ValueError(f"invalid feedback action: {action!r}")
+    trace_id_token = _safe_identifier_token(trace_id)
+    if not trace_id_token:
+        raise ValueError(f"invalid trace_id: {trace_id!r}")
+    surface_token = _safe_metric_token(surface, allowed=FEEDBACK_SURFACE_TOKENS)
+    event: dict[str, Any] = {
+        "schema_version": FEEDBACK_SCHEMA_VERSION,
+        "ts": _safe_event_ts(ts),
+        "event_id": _safe_identifier_token(event_id) or uuid.uuid4().hex,
+        "surface": surface_token,
+        "action": action_token,
+        "trace_id": trace_id_token,
+        "telemetry_only": True,
+    }
+    if query_hash is None and query not in (None, ""):
+        query_hash = _query_hash(query)
+    if query_hash not in (None, ""):
+        query_hash_token = str(query_hash).strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{12}", query_hash_token):
+            raise ValueError(f"invalid query_hash: {query_hash!r}")
+        event["query_hash"] = query_hash_token
+    run_id_token = _safe_identifier_token(run_id)
+    if run_id_token:
+        event["run_id"] = run_id_token
+    if target_path not in (None, ""):
+        safe_target_path = _safe_repo_rel_path(target_path)
+        if not safe_target_path:
+            raise ValueError(f"invalid target_path: {target_path!r}")
+        event["target_path"] = safe_target_path
+    source_evidence_path_token = None
+    if source_evidence_path not in (None, ""):
+        source_evidence_path_token = _safe_repo_rel_path(source_evidence_path)
+        if not source_evidence_path_token:
+            raise ValueError(f"invalid source_evidence_path: {source_evidence_path!r}")
+        event["source_evidence_path"] = source_evidence_path_token
+    source_evidence_id_token = _safe_identifier_token(source_evidence_id)
+    if source_evidence_id_token:
+        event["source_evidence_id"] = source_evidence_id_token
+    if candidate_rank not in (None, ""):
+        try:
+            rank = int(candidate_rank)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid candidate_rank: {candidate_rank!r}") from exc
+        if rank > 0:
+            event["candidate_rank"] = rank
+    if score_bucket not in (None, ""):
+        event["score_bucket"] = _safe_metric_token(score_bucket, allowed=FEEDBACK_SCORE_BUCKET_TOKENS)
+    categories = _feedback_reason_categories(reason_categories)
+    if categories:
+        event["reason_categories"] = categories
+    if use_hint not in (None, ""):
+        event["use_hint"] = _safe_metric_token(use_hint, allowed=FEEDBACK_USE_HINT_TOKENS)
+    return event
+
+
+def append_feedback_event(event: dict[str, Any], path: Path | str = FEEDBACK_LOG) -> dict[str, Any]:
+    if not isinstance(event, dict):
+        raise TypeError("feedback event must be a dict")
+    sanitized = build_feedback_event(
+        surface=event.get("surface"),
+        action=event.get("action"),
+        trace_id=event.get("trace_id"),
+        query=event.get("query"),
+        query_hash=event.get("query_hash"),
+        run_id=event.get("run_id"),
+        target_path=event.get("target_path"),
+        source_evidence_id=event.get("source_evidence_id"),
+        source_evidence_path=event.get("source_evidence_path"),
+        candidate_rank=event.get("candidate_rank"),
+        score_bucket=event.get("score_bucket"),
+        reason_categories=event.get("reason_categories"),
+        use_hint=event.get("use_hint"),
+        event_id=event.get("event_id"),
+        ts=event.get("ts"),
+    )
+    feedback_path = Path(path)
+    feedback_path.parent.mkdir(parents=True, exist_ok=True)
+    with feedback_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(sanitized, ensure_ascii=False, sort_keys=True) + "\n")
+    return sanitized
+
+
+def load_feedback_events(
+    path: Path | str = FEEDBACK_LOG,
+    *,
+    since_hours: float | None = None,
+    run_id: str | None = None,
+    trace_id: str | None = None,
+    dates: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    feedback_path = Path(path)
+    if not feedback_path.exists():
+        return [], []
+    cutoff: dt.datetime | None = None
+    if since_hours and since_hours > 0:
+        cutoff = dt.datetime.now(tm_core.TZ_CN) - dt.timedelta(hours=since_hours)
+    wanted_run_id = str(run_id or "").strip()
+    wanted_trace_id = str(trace_id or "").strip()
+    wanted_dates = {str(date).strip() for date in (dates or []) if _SAFE_FEEDBACK_DATE_RE.fullmatch(str(date).strip())}
+
+    events: list[dict[str, Any]] = []
+    invalid: list[dict[str, Any]] = []
+    with feedback_path.open("r", encoding="utf-8", errors="replace") as f:
+        for line_no, raw in enumerate(f, 1):
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                invalid.append({"line_no": line_no, "error": str(exc)})
+                continue
+            if not isinstance(row, dict):
+                invalid.append({"line_no": line_no, "error": "row is not a JSON object"})
+                continue
+            try:
+                event = build_feedback_event(
+                    surface=row.get("surface"),
+                    action=row.get("action"),
+                    trace_id=row.get("trace_id"),
+                    query_hash=row.get("query_hash"),
+                    run_id=row.get("run_id"),
+                    target_path=row.get("target_path"),
+                    source_evidence_id=row.get("source_evidence_id"),
+                    source_evidence_path=row.get("source_evidence_path"),
+                    candidate_rank=row.get("candidate_rank"),
+                    score_bucket=row.get("score_bucket"),
+                    reason_categories=row.get("reason_categories"),
+                    use_hint=row.get("use_hint"),
+                    event_id=row.get("event_id"),
+                    ts=row.get("ts"),
+                )
+            except ValueError as exc:
+                invalid.append({"line_no": line_no, "error": str(exc)})
+                continue
+            ts = _parse_ts(event.get("ts"))
+            if cutoff and ts and ts < cutoff:
+                continue
+            if wanted_dates:
+                if not ts:
+                    continue
+                event_date = ts.astimezone(tm_core.TZ_CN).date().isoformat()
+                if event_date not in wanted_dates:
+                    continue
+            if wanted_run_id and event.get("run_id") != wanted_run_id:
+                continue
+            if wanted_trace_id and event.get("trace_id") != wanted_trace_id:
+                continue
+            events.append(event)
+    return events, invalid
+
+
+def summarize_feedback_events(
+    events: list[dict[str, Any]],
+    invalid: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    action_counts = Counter()
+    surface_counts = Counter()
+    score_bucket_counts = Counter()
+    use_hint_counts = Counter()
+    reason_category_counts = Counter()
+    trace_ids: set[str] = set()
+
+    for event in events:
+        action_counts[_safe_metric_token(event.get("action"), allowed=FEEDBACK_ACTION_TOKENS)] += 1
+        surface_counts[_safe_metric_token(event.get("surface"), allowed=FEEDBACK_SURFACE_TOKENS)] += 1
+        score_bucket_counts[_safe_metric_token(event.get("score_bucket"), allowed=FEEDBACK_SCORE_BUCKET_TOKENS)] += 1
+        use_hint_counts[_safe_metric_token(event.get("use_hint"), allowed=FEEDBACK_USE_HINT_TOKENS)] += 1
+        trace_id = _safe_identifier_token(event.get("trace_id"))
+        if trace_id:
+            trace_ids.add(trace_id)
+        for reason in event.get("reason_categories") or []:
+            reason_category_counts[_safe_metric_token(reason, allowed=RECOMMENDATION_REASON_TOKENS)] += 1
+
+    summary = {
+        "schema_version": FEEDBACK_SUMMARY_SCHEMA_VERSION,
+        "event_count": len(events),
+        "trace_count": len(trace_ids),
+        "invalid_row_count": len(invalid or []),
+        "action_counts": dict(sorted(action_counts.items())),
+        "surface_counts": dict(sorted(surface_counts.items())),
+        "score_bucket_counts": dict(sorted(score_bucket_counts.items())),
+        "use_hint_counts": dict(sorted(use_hint_counts.items())),
+        "reason_category_counts": dict(sorted(reason_category_counts.items())),
+    }
+    return summary
 
 
 def load_trace_rows(
@@ -236,6 +520,7 @@ def summarize_rows(
     latest: int = 5,
     include_query: bool = False,
     selected_run_id: str | None = None,
+    feedback_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     durations = [value for row in rows if (value := _duration_ms(row)) is not None]
     trace_present_count = sum(1 for row in rows if isinstance(row.get("trace"), dict))
@@ -347,6 +632,8 @@ def summarize_rows(
         ],
         "rows": compact_rows[-5:],
     }
+    if isinstance(feedback_summary, dict) and feedback_summary:
+        recommendation_quality["feedback_summary"] = feedback_summary
     return {
         "row_count": len(rows),
         "invalid_row_count": len(invalid or []),
@@ -513,13 +800,60 @@ def cmd_failures(args: argparse.Namespace) -> int:
                 f"- {item['trace_id']} {item['status']} {item['query_class']} "
                 f"evidence={item['evidence_count']} warnings={item['warning_count']} "
                 f"query_hash={item['query_hash']}"
-            )
+        )
+    return 0
+
+
+def cmd_feedback_record(args: argparse.Namespace) -> int:
+    event = build_feedback_event(
+        surface=args.surface,
+        action=args.action,
+        trace_id=args.trace_id,
+        query=args.query,
+        query_hash=args.query_hash,
+        run_id=args.run_id,
+        target_path=args.target_path,
+        source_evidence_id=args.source_evidence_id,
+        source_evidence_path=args.source_evidence_path,
+        candidate_rank=args.candidate_rank,
+        score_bucket=args.score_bucket,
+        reason_categories=args.reason_categories,
+        use_hint=args.use_hint,
+        event_id=args.event_id,
+        ts=args.ts,
+    )
+    stored = append_feedback_event(event, path=args.feedback_log)
+    if args.json:
+        _print_json({"ok": True, "path": str(Path(args.feedback_log)), "event": stored})
+    else:
+        print(f"ok: appended feedback event {stored['event_id']} to {args.feedback_log}")
+    return 0
+
+
+def cmd_feedback_summary(args: argparse.Namespace) -> int:
+    events, invalid = load_feedback_events(
+        args.feedback_log,
+        since_hours=args.since_hours,
+        run_id=args.run_id,
+        trace_id=args.trace_id,
+        dates=args.dates,
+    )
+    report = summarize_feedback_events(events, invalid)
+    if args.json:
+        _print_json(report)
+    else:
+        print(
+            f"events={report['event_count']} traces={report['trace_count']} "
+            f"actions={report['action_counts']} surfaces={report['surface_counts']} "
+            f"score_buckets={report['score_bucket_counts']} hints={report['use_hint_counts']}"
+        )
     return 0
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="tm_answer_trace.py", description=__doc__)
     parser.add_argument("--log", default=str(TRACE_LOG), help="trace JSONL path")
+    parser.add_argument("--feedback-log", default=str(FEEDBACK_LOG), help="feedback JSONL path")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     summary = sub.add_parser("summary", help="summarize trace status and latency")
@@ -547,7 +881,39 @@ def main() -> None:
     failures.add_argument("--json", action="store_true")
     failures.set_defaults(func=cmd_failures)
 
+    feedback = sub.add_parser("feedback", help="record or summarize explicit feedback events")
+    feedback_sub = feedback.add_subparsers(dest="feedback_cmd", required=True)
+
+    feedback_record = feedback_sub.add_parser("record", help="append one feedback event")
+    feedback_record.add_argument("--surface", required=True)
+    feedback_record.add_argument("--action", required=True)
+    feedback_record.add_argument("--trace-id", required=True)
+    feedback_record.add_argument("--query", default=None, help="raw query for query_hash only; not persisted")
+    feedback_record.add_argument("--query-hash", default=None)
+    feedback_record.add_argument("--run-id", default=None)
+    feedback_record.add_argument("--target-path", default=None)
+    feedback_record.add_argument("--source-evidence-id", default=None)
+    feedback_record.add_argument("--source-evidence-path", default=None)
+    feedback_record.add_argument("--candidate-rank", default=None)
+    feedback_record.add_argument("--score-bucket", default=None)
+    feedback_record.add_argument("--reason-category", dest="reason_categories", action="append", default=None)
+    feedback_record.add_argument("--use-hint", default=None)
+    feedback_record.add_argument("--event-id", default=None)
+    feedback_record.add_argument("--ts", default=None)
+    feedback_record.add_argument("--json", action="store_true")
+    feedback_record.set_defaults(func=cmd_feedback_record)
+
+    feedback_summary = feedback_sub.add_parser("summary", help="summarize feedback events")
+    feedback_summary.add_argument("--since-hours", type=float, default=None)
+    feedback_summary.add_argument("--run-id", default=None)
+    feedback_summary.add_argument("--trace-id", default=None)
+    feedback_summary.add_argument("--dates", default=None, help="comma-separated YYYY-MM-DD dates")
+    feedback_summary.add_argument("--json", action="store_true")
+    feedback_summary.set_defaults(func=cmd_feedback_summary)
+
     args = parser.parse_args()
+    if getattr(args, "cmd", None) == "feedback" and getattr(args, "dates", None):
+        args.dates = [item.strip() for item in str(args.dates).split(",") if item.strip()]
     raise SystemExit(args.func(args))
 
 

@@ -35,6 +35,10 @@ DAILY_TREND_SCHEMA = "daily-health-trend-v1"
 DAILY_REPORT_VALIDATION_SCHEMA = "daily-health-report-validation-v1"
 PROMPT_AUDIT_SCHEMA = "daily-health-prompt-audit-v1"
 SESSION_HANDOFF_AUDIT_SCHEMA = "session-handoff-audit-v1"
+FEEDBACK_ACTION_TOKENS = {"clicked", "ignored", "selected", "unknown"}
+FEEDBACK_SURFACE_TOKENS = {"cli", "dashboard", "review_ui", "unknown"}
+FEEDBACK_SCORE_BUCKET_TOKENS = {"high", "mid", "low", "unknown"}
+FEEDBACK_USE_HINT_TOKENS = {"background_only", "candidate_for_evidence", "read_next", "unknown"}
 REQUIRED_DAILY_SUMMARY_FIELDS = (
     "schema_version",
     "health_color",
@@ -534,6 +538,35 @@ def _compact_status_counts(value: Any) -> dict[str, int]:
     return dict(sorted(out.items()))
 
 
+def _compact_feedback_counts(value: Any, *, allowed: set[str]) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, int] = {}
+    for key, count in value.items():
+        token = _safe_metric_token(key, allowed=allowed)
+        out[token] = out.get(token, 0) + _to_non_negative_int(count)
+    return dict(sorted(out.items()))
+
+
+def compact_feedback_summary(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    reason_counts: dict[str, int] = {}
+    for key, count in (value.get("reason_category_counts") or {}).items():
+        token = _safe_metric_token(key, allowed=RECOMMENDATION_REASON_TOKENS)
+        reason_counts[token] = reason_counts.get(token, 0) + _to_non_negative_int(count)
+    return {
+        "event_count": _to_non_negative_int(value.get("event_count")),
+        "trace_count": _to_non_negative_int(value.get("trace_count")),
+        "invalid_row_count": _to_non_negative_int(value.get("invalid_row_count")),
+        "action_counts": _compact_feedback_counts(value.get("action_counts"), allowed=FEEDBACK_ACTION_TOKENS),
+        "surface_counts": _compact_feedback_counts(value.get("surface_counts"), allowed=FEEDBACK_SURFACE_TOKENS),
+        "score_bucket_counts": _compact_feedback_counts(value.get("score_bucket_counts"), allowed=FEEDBACK_SCORE_BUCKET_TOKENS),
+        "use_hint_counts": _compact_feedback_counts(value.get("use_hint_counts"), allowed=FEEDBACK_USE_HINT_TOKENS),
+        "reason_category_counts": dict(sorted(reason_counts.items())),
+    }
+
+
 def compact_recommendation_quality(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
@@ -547,7 +580,7 @@ def compact_recommendation_quality(value: Any) -> dict[str, Any]:
             allowed=RECOMMENDATION_REASON_TOKENS,
         )
         noisy_counts[reason_category] = noisy_counts.get(reason_category, 0) + _to_non_negative_int(item.get("count"))
-    return {
+    compact = {
         "recommendation_shown_count": _to_non_negative_int(value.get("recommendation_shown_count")),
         "recommendation_candidate_count": _to_non_negative_int(value.get("recommendation_candidate_count")),
         "recommendation_boost_attempted_count": _to_non_negative_int(value.get("recommendation_boost_attempted_count")),
@@ -562,6 +595,10 @@ def compact_recommendation_quality(value: Any) -> dict[str, Any]:
             for reason_category, count in sorted(noisy_counts.items(), key=lambda item: (-item[1], item[0]))[:3]
         ],
     }
+    feedback_summary = compact_feedback_summary(value.get("feedback_summary"))
+    if feedback_summary:
+        compact["feedback_summary"] = feedback_summary
+    return compact
 
 
 def compact_trace_summary(summary: dict[str, Any] | None, failures: dict[str, Any] | None) -> dict[str, Any] | None:

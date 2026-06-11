@@ -5,6 +5,8 @@ import pathlib
 import subprocess
 import sys
 
+import pytest
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
@@ -379,3 +381,159 @@ def test_tool_cli_shim_invokes_trace_main(tmp_path):
     assert report["selected_run_id"] == "shim-smoke"
     assert report["row_count"] == 1
     assert result.stdout.strip()
+
+
+def test_feedback_helpers_write_safely_and_summarize(tmp_path):
+    log = tmp_path / "feedback.jsonl"
+    event = tm_answer_trace.build_feedback_event(
+        surface="review_ui",
+        action="clicked",
+        trace_id="trace-1",
+        query="raw query text should not persist",
+        run_id="run-1",
+        target_path="wiki/operations/memory-answer.md",
+        source_evidence_id="e-1",
+        source_evidence_path="sources/ops/guide.md",
+        candidate_rank=2,
+        score_bucket="high",
+        reason_categories=["policy", "recency"],
+        use_hint="read_next",
+    )
+    stored = tm_answer_trace.append_feedback_event(event, path=log)
+    tm_answer_trace.append_feedback_event(
+        {
+            "surface": "cli",
+            "action": "selected",
+            "trace_id": "trace-2",
+            "target_path": "wiki/systems/memory-answer-p38-recommendation-plan.md",
+            "candidate_rank": 1,
+            "score_bucket": "low",
+            "reason_categories": "relevance",
+            "use_hint": "candidate_for_evidence",
+        },
+        path=log,
+    )
+
+    events, invalid = tm_answer_trace.load_feedback_events(log)
+    report = tm_answer_trace.summarize_feedback_events(events, invalid)
+    raw = log.read_text(encoding="utf-8")
+
+    assert stored["query_hash"] == tm_answer_trace._query_hash("raw query text should not persist")
+    assert "raw query text should not persist" not in raw
+    assert "schema_version" in raw
+    assert report["schema_version"] == "memory-answer-feedback-summary-v1"
+    assert report["event_count"] == 2
+    assert report["trace_count"] == 2
+    assert report["invalid_row_count"] == 0
+    assert report["action_counts"] == {"clicked": 1, "selected": 1}
+    assert report["surface_counts"] == {"cli": 1, "review_ui": 1}
+    assert report["score_bucket_counts"] == {"high": 1, "low": 1}
+    assert report["use_hint_counts"] == {"candidate_for_evidence": 1, "read_next": 1}
+    assert report["reason_category_counts"] == {"policy": 1, "recency": 1, "relevance": 1}
+    assert report["reason_category_counts"].get("unknown") is None
+    assert "target_path" in raw
+    assert "wiki/person" not in raw
+
+
+@pytest.mark.parametrize(
+    "unsafe_path",
+    [
+        "/abs/path.md",
+        "C:/Users/Giant/secret.md",
+        "../wiki/systems/x.md",
+        "https://example.com/x.md",
+        "wiki/person/tiger.md",
+        "sources/person/tiger.md",
+        "wiki/systems/../person/tiger.md",
+        "runtime/memory_answer_feedback/events.jsonl",
+        ".tmp/memory-answer-feedback.jsonl",
+        "tests/fixtures/example.md",
+        "review-artifacts/p37-map-20260610/summary.json",
+    ],
+)
+def test_feedback_event_rejects_unsafe_target_paths(unsafe_path):
+    with pytest.raises(ValueError):
+        tm_answer_trace.build_feedback_event(
+            surface="cli",
+            action="ignored",
+            trace_id="trace-3",
+            target_path=unsafe_path,
+        )
+
+
+def test_feedback_event_rejects_unsafe_source_evidence_paths():
+    with pytest.raises(ValueError):
+        tm_answer_trace.build_feedback_event(
+            surface="cli",
+            action="selected",
+            trace_id="trace-source-path",
+            source_evidence_path="wiki/person/tiger.md",
+        )
+
+
+def test_feedback_event_rejects_freeform_timestamp():
+    with pytest.raises(ValueError):
+        tm_answer_trace.build_feedback_event(
+            surface="cli",
+            action="clicked",
+            trace_id="trace-4",
+            ts="raw query text should not persist here",
+        )
+
+
+def test_tool_cli_shim_supports_feedback_record_and_summary(tmp_path):
+    log = tmp_path / "feedback.jsonl"
+
+    record = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "tools" / "tm_answer_trace.py"),
+            "--feedback-log",
+            str(log),
+            "feedback",
+            "record",
+            "--surface",
+            "dashboard",
+            "--action",
+            "ignored",
+            "--trace-id",
+            "trace-cli",
+            "--target-path",
+            "wiki/operations/memory-answer-p38-recommendation-plan.md",
+            "--reason-category",
+            "policy",
+            "--use-hint",
+            "background_only",
+            "--json",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    summary = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "tools" / "tm_answer_trace.py"),
+            "--feedback-log",
+            str(log),
+            "feedback",
+            "summary",
+            "--json",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    record_payload = json.loads(record.stdout)
+    summary_payload = json.loads(summary.stdout)
+
+    assert record_payload["ok"] is True
+    assert record_payload["event"]["trace_id"] == "trace-cli"
+    assert summary_payload["event_count"] == 1
+    assert summary_payload["action_counts"] == {"ignored": 1}
+    assert summary_payload["surface_counts"] == {"dashboard": 1}
+    assert summary_payload["reason_category_counts"] == {"policy": 1}
+    assert summary_payload["use_hint_counts"] == {"background_only": 1}

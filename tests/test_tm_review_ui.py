@@ -2424,6 +2424,49 @@ def test_dashboard_memory_quality_digest_backfill_uses_frontmatter_and_live_rows
     assert output_map["issue"]["value"] == 2
 
 
+def test_quality_trace_summary_loads_and_passes_feedback_aggregate(monkeypatch):
+    feedback_summary = {
+        "schema_version": "memory-answer-feedback-summary-v1",
+        "event_count": 1,
+        "trace_count": 1,
+        "invalid_row_count": 0,
+        "action_counts": {"clicked": 1},
+        "surface_counts": {"review_ui": 1},
+        "score_bucket_counts": {"high": 1},
+        "use_hint_counts": {"read_next": 1},
+        "reason_category_counts": {"policy": 1},
+    }
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        tm_review_ui.tm_answer_trace,
+        "load_trace_rows",
+        lambda **_kwargs: ([{"trace_id": "trace-1", "status": "ok", "trace": {}}], []),
+    )
+    monkeypatch.setattr(
+        tm_review_ui.tm_answer_trace,
+        "load_feedback_events",
+        lambda **_kwargs: ([{"trace_id": "trace-1", "surface": "review_ui", "action": "clicked"}], []),
+    )
+    monkeypatch.setattr(tm_review_ui.tm_answer_trace, "summarize_feedback_events", lambda events, invalid: feedback_summary)
+
+    def fake_summarize_rows(rows, invalid, **kwargs):
+        captured["feedback_summary"] = kwargs.get("feedback_summary")
+        return {
+            "duration_ms": {},
+            "status_counts": {},
+            "latest": [],
+            "recommendation_quality": {"feedback_summary": kwargs.get("feedback_summary") or {}},
+        }
+
+    monkeypatch.setattr(tm_review_ui.tm_answer_trace, "summarize_rows", fake_summarize_rows)
+
+    report = tm_review_ui._load_quality_trace_summary(since_hours=24 * 7, dates=["2026-06-10"])
+
+    assert captured["feedback_summary"] == feedback_summary
+    assert report["recommendation_quality"]["feedback_summary"]["action_counts"] == {"clicked": 1}
+
+
 def test_dashboard_memory_quality_range_aggregates_available_digest_dates(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(tm_review_ui, "today", lambda: "2026-06-10")
@@ -2996,6 +3039,9 @@ def test_quality_page_flow_panel_keeps_all_routes_visible():
     assert "new URLSearchParams({ range: this.rangeKey || 'today' })" in pages_js
     assert "统计 ${rangeSpan}" in pages_js
     assert "renderRangeControls(memory)" in pages_js
+    assert "feedbackSummary.action_counts" in pages_js
+    assert "!feedbackHasCounts && !Object.keys(sidecarStatus || {}).length" in pages_js
+    assert "显式反馈" in pages_js
     assert "setQualityUpdating(nextRange, true)" in pages_js
     assert "正在更新${c.esc(range.label)}数据" in pages_js
     assert "当前数字仍是上一范围" in pages_js

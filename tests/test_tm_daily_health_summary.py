@@ -477,6 +477,42 @@ def test_compact_trace_summary_allowlists_recommendation_quality_fields():
     ]
 
 
+def test_compact_trace_summary_allowlists_feedback_summary_fields():
+    raw_payload = "raw_feedback_payload_should_not_leak"
+    compact = tm_daily_health_summary.compact_trace_summary({
+        "row_count": 1,
+        "recommendation_quality": {
+            "feedback_summary": {
+                "schema_version": "memory-answer-feedback-summary-v1",
+                "event_count": 3,
+                "trace_count": 2,
+                "invalid_row_count": 1,
+                "action_counts": {"clicked": 1, "ignored": 1, "selected": 1, raw_payload: 9},
+                "surface_counts": {"cli": 2, raw_payload: 1},
+                "score_bucket_counts": {"high": 1, "mid": 1, "low": 1, raw_payload: 4},
+                "use_hint_counts": {"read_next": 1, "candidate_for_evidence": 1, "background_only": 1, raw_payload: 2},
+                "reason_category_counts": {"policy": 1, raw_payload: 2},
+                "rows": [{"target_path": raw_payload, "query_hash": raw_payload}],
+                "target_path": raw_payload,
+                "query_hash": raw_payload,
+            },
+        },
+    }, None)
+
+    encoded = json.dumps(compact, ensure_ascii=False)
+
+    assert raw_payload not in encoded
+    feedback = compact["recommendation_quality"]["feedback_summary"]
+    assert feedback["event_count"] == 3
+    assert feedback["trace_count"] == 2
+    assert feedback["invalid_row_count"] == 1
+    assert feedback["action_counts"] == {"clicked": 1, "ignored": 1, "selected": 1, "unknown": 9}
+    assert feedback["surface_counts"] == {"cli": 2, "unknown": 1}
+    assert feedback["score_bucket_counts"] == {"high": 1, "low": 1, "mid": 1, "unknown": 4}
+    assert feedback["use_hint_counts"] == {"background_only": 1, "candidate_for_evidence": 1, "read_next": 1, "unknown": 2}
+    assert feedback["reason_category_counts"] == {"policy": 1, "unknown": 2}
+
+
 def _write_daily_report(path: pathlib.Path, summary: dict) -> None:
     path.write_text(
         "\n".join([
