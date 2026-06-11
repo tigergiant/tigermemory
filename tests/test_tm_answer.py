@@ -750,6 +750,48 @@ def test_memory_answer_core_wiki_map_bridge_filters_low_score_candidates(monkeyp
     assert result["trace"]["map_to_evidence_bridge"]["below_min_score_count"] == 1
 
 
+def test_memory_answer_core_wiki_map_bridge_allows_current_queries_to_reach_gate(monkeypatch, tmp_path):
+    target = tmp_path / "wiki" / "systems" / "bridge-target.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("---\nupdated: 2026-06-12\n---\n# Bridge Target\n当前 alpha bridge answer", encoding="utf-8")
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
+    monkeypatch.setenv(tm_answer.WIKI_MAP_BRIDGE_ENV, "1")
+    monkeypatch.setattr(tm_answer.tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(
+        tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: _map_plan_with_candidate("wiki/systems/bridge-target.md", score=36.0),
+    )
+    monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", lambda *_args, **_kwargs: _search_result())
+
+    captured: dict[str, object] = {}
+
+    def fake_llm(query: str, evidence: list[dict]):
+        captured["query"] = query
+        captured["evidence_paths"] = [item["path"] for item in evidence]
+        return True, {
+            "status": "ok",
+            "answer": "current bridge answer",
+            "summary": "current bridge target used",
+            "claims": [{"id": "c1", "text": "bridge target", "support": ["e1"], "confidence": 0.9}],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", fake_llm)
+
+    result = tm_answer.memory_answer_core("当前 alpha bridge", scope="wiki", run_id="bridge-current")
+
+    assert result["status"] == "ok"
+    assert result["trace"]["query_class"] == "temporal_current"
+    assert result["trace"]["planner"]["freshness_mode"] == "current"
+    assert "wiki/systems/bridge-target.md" in captured["evidence_paths"]
+    gate = result["trace"]["evidence_gate"]
+    assert gate[0]["path"] == "wiki/systems/bridge-target.md"
+    assert gate[0]["freshness_mode"] == "current"
+    assert gate[0]["bridge_source"] == "wiki_map"
+
+
 def test_plan_query_uses_wiki_map_without_deepseek_when_confident(monkeypatch):
     query = "为什么自然语言召回找不到记忆问答开发计划"
     monkeypatch.delenv(tm_answer.QUERY_PLANNER_ENV, raising=False)

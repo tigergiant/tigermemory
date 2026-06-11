@@ -3322,8 +3322,7 @@ def memory_answer_core(
     }
     bridge_allowed = (
         _wiki_map_bridge_enabled()
-        and query_class in {"recall", "synthesis"}
-        and planner.get("freshness_mode") != "current"
+        and query_class in {"recall", "synthesis", "temporal_current"}
         and evidence_limit >= 2
         and not _is_private_for_recommendation_boost(q)
     )
