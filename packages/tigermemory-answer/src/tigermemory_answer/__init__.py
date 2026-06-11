@@ -434,6 +434,7 @@ tm_search = sys.modules[__name__]
 import tigermemory_core as tm_core
 
 TRACE_LOG = tm_core.REPO_ROOT / ".tmp" / "memory-answer-trace.jsonl"
+RELATED_MAP_PATH = tm_core.REPO_ROOT / "runtime" / "memory_recommendation" / "related_map.jsonl"
 QUERY_EXPANSION_REGISTRY = tm_core.REPO_ROOT / "tools" / "memory_answer" / "query_expansions.json"
 CONFLICT_PATTERN_REGISTRY = tm_core.REPO_ROOT / "tools" / "memory_answer" / "conflict_patterns.json"
 TRACE_RAW_QUERY_ENV = "TM_ANSWER_TRACE_RAW_QUERY"
@@ -525,6 +526,24 @@ MAP_STRONG_TOP_SCORE = 24.0
 MAP_STRONG_TOP_MARGIN = 6.0
 PERSON_IDENTITY_SAFE_PROFILES = {
     "tiger": "wiki/person/tiger.md",
+}
+RELATED_FORBIDDEN_PREFIXES = (
+    "wiki/person/",
+    "sources/person/",
+    ".tmp/",
+    "runtime/",
+    "tests/",
+    "review-artifacts/",
+)
+RELATED_LOCATION_ONLY_REASONS = {"same_partition", "same_directory"}
+RELATED_READ_NEXT_REASONS = {"markdown_link", "markdown_link_reverse", "shared_alias", "typed_entity"}
+RELATED_CONTENT_REASONS = {
+    "same_subtopic",
+    "shared_title_term",
+    "shared_summary_token",
+    "shared_keyword",
+    "shared_cjk_bridge",
+    "answer_facets",
 }
 _QUERY_PLANNER_MANIFEST_CACHE: str | None = None
 _LLM_WIKI_MAP_MODULE: Any | None = None
@@ -1584,6 +1603,7 @@ def _person_identity_fast_path_answer(
         warnings=[],
         evidence_gate=trace["evidence_gate"],
     )
+    _attach_related_evidence_candidates(result, trace, evidence)
     if write_trace:
         _write_result_trace(result, trace, query)
     return result
@@ -2126,6 +2146,154 @@ def expand_evidence(
         gate_index[item["candidate_id"]]["validity"] = item.get("validity")
         gate_index[item["candidate_id"]]["validity_reason"] = item.get("validity_reason")
     return selected, gate
+
+
+def _normalize_related_path(value: Any) -> str:
+    path = str(value or "").replace("\\", "/").strip()
+    while path.startswith("./"):
+        path = path[2:]
+    return path
+
+
+def _is_forbidden_related_path(path: Any) -> bool:
+    rel = _normalize_related_path(path).lower()
+    if not rel:
+        return True
+    if re.match(r"^[a-z]:/", rel) or rel.startswith(("/", "~")) or ".." in rel.split("/"):
+        return True
+    return any(rel == prefix.rstrip("/") or rel.startswith(prefix) for prefix in RELATED_FORBIDDEN_PREFIXES)
+
+
+def _related_reason_category(reason: Any) -> str:
+    return str(reason or "").split(":", 1)[0].strip()
+
+
+def _safe_related_reason_categories(reasons: Any) -> list[str]:
+    if not isinstance(reasons, list):
+        return []
+    seen: set[str] = set()
+    categories: list[str] = []
+    for reason in reasons:
+        category = _related_reason_category(reason)
+        if not category or category in seen:
+            continue
+        seen.add(category)
+        categories.append(category)
+    return categories
+
+
+def _related_score_bucket(score: float) -> str:
+    if score >= 20.0:
+        return "high"
+    if score >= 8.0:
+        return "medium"
+    if score > 0.0:
+        return "low"
+    return "none"
+
+
+def _related_use_hint(score: float, reason_categories: list[str]) -> str:
+    categories = set(reason_categories)
+    if categories and categories <= RELATED_LOCATION_ONLY_REASONS:
+        return "background_only"
+    if score >= 8.0 or categories & RELATED_READ_NEXT_REASONS:
+        return "read_next"
+    if categories & RELATED_CONTENT_REASONS:
+        return "candidate_for_evidence"
+    return "background_only"
+
+
+def _load_related_map_by_source(path: Path | None = None) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any]]:
+    map_path = path or RELATED_MAP_PATH
+    if not map_path.exists():
+        return {}, {"status": "missing", "candidate_count": 0}
+    by_source: dict[str, list[dict[str, Any]]] = {}
+    try:
+        lines = map_path.read_text(encoding="utf-8").splitlines()
+        for line in lines:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                return {}, {"status": "invalid", "candidate_count": 0, "warning": "related_map_invalid"}
+            source_path = _normalize_related_path(row.get("source_path"))
+            target_path = _normalize_related_path(row.get("target_path"))
+            if not source_path or not target_path:
+                return {}, {"status": "invalid", "candidate_count": 0, "warning": "related_map_invalid"}
+            try:
+                float(row.get("score") or 0.0)
+            except (TypeError, ValueError):
+                return {}, {"status": "invalid", "candidate_count": 0, "warning": "related_map_invalid"}
+            if _is_forbidden_related_path(source_path) or _is_forbidden_related_path(target_path):
+                continue
+            by_source.setdefault(source_path, []).append(row)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        return {}, {"status": "invalid", "candidate_count": 0, "warning": "related_map_invalid"}
+    for edges in by_source.values():
+        edges.sort(key=lambda item: (-float(item.get("score") or 0.0), _normalize_related_path(item.get("target_path"))))
+    return by_source, {"status": "ok", "candidate_count": 0}
+
+
+def _derive_related_evidence_candidates(evidence: list[dict[str, Any]], *, max_candidates: int = 5) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    selected = [
+        item for item in evidence
+        if isinstance(item, dict) and _normalize_related_path(item.get("path")) and not _is_forbidden_related_path(item.get("path"))
+    ]
+    if not selected:
+        return [], {"status": "no_selected_evidence", "candidate_count": 0, "candidates": []}
+
+    related_map, trace = _load_related_map_by_source()
+    if trace.get("status") != "ok":
+        trace["candidates"] = []
+        return [], trace
+
+    selected_paths = {_normalize_related_path(item.get("path")) for item in selected}
+    by_target: dict[str, dict[str, Any]] = {}
+    for source in selected:
+        source_path = _normalize_related_path(source.get("path"))
+        source_id = str(source.get("id") or "")
+        for edge in related_map.get(source_path, []):
+            target_path = _normalize_related_path(edge.get("target_path"))
+            if not target_path or target_path in selected_paths or _is_forbidden_related_path(target_path):
+                continue
+            score = float(edge.get("score") or 0.0)
+            reason_categories = _safe_related_reason_categories(edge.get("reasons"))
+            use_hint = _related_use_hint(score, reason_categories)
+            candidate = {
+                "path": target_path,
+                "title": redact_secrets(str(edge.get("target_title") or target_path))[:200],
+                "score": round(score, 4),
+                "reasons": reason_categories,
+                "use_hint": use_hint,
+                "source_evidence_id": source_id,
+                "source_evidence_path": source_path,
+            }
+            current = by_target.get(target_path)
+            if current is None or score > float(current.get("score") or 0.0):
+                by_target[target_path] = candidate
+
+    candidates = sorted(by_target.values(), key=lambda item: (-float(item["score"]), item["path"]))[:max_candidates]
+    trace_candidates = [
+        {
+            "path": item["path"],
+            "score_bucket": _related_score_bucket(float(item.get("score") or 0.0)),
+            "reason_categories": item.get("reasons") or [],
+            "use_hint": item.get("use_hint"),
+            "source_evidence_id": item.get("source_evidence_id"),
+            "source_evidence_path": item.get("source_evidence_path"),
+        }
+        for item in candidates
+    ]
+    return candidates, {"status": "ok", "candidate_count": len(candidates), "candidates": trace_candidates}
+
+
+def _attach_related_evidence_candidates(result: dict[str, Any], trace: dict[str, Any], evidence: list[dict[str, Any]]) -> dict[str, Any]:
+    candidates, related_trace = _derive_related_evidence_candidates(evidence)
+    result["related_evidence_candidates"] = candidates
+    trace["related_evidence_candidates"] = related_trace
+    if result.get("trace") is trace:
+        result["trace"] = trace
+    return result
 
 
 def classify_query(query: str) -> str:
@@ -2905,6 +3073,7 @@ def memory_answer_core(
             warnings=warnings,
             evidence_gate=evidence_gate,
         )
+        _attach_related_evidence_candidates(result, trace, [])
         if write_trace:
             _write_result_trace(result, trace, q)
         return result
@@ -2944,6 +3113,7 @@ def memory_answer_core(
             warnings=warnings,
             evidence_gate=evidence_gate,
         )
+        _attach_related_evidence_candidates(result, trace, evidence)
         if write_trace:
             _write_result_trace(result, trace, q)
         return result
@@ -2972,6 +3142,7 @@ def memory_answer_core(
             warnings=warnings,
             evidence_gate=evidence_gate,
         )
+        _attach_related_evidence_candidates(result, trace, evidence)
         if write_trace:
             _write_result_trace(result, trace, q)
         return result
@@ -3010,6 +3181,7 @@ def memory_answer_core(
         warnings=warnings,
         evidence_gate=evidence_gate,
     )
+    _attach_related_evidence_candidates(result, trace, evidence)
     if not result["summary"]:
         result["summary"] = "已基于证据生成回答。" if status == "ok" else "未能生成可用答案。"
     if write_trace:

@@ -51,6 +51,8 @@ def test_memory_answer_core_uses_person_identity_fast_path(monkeypatch, tmp_path
     assert result["trace"]["query_class"] == "identity"
     assert result["trace"]["planner"]["source"] == "person_identity_fast_path"
     assert [call["tool"] for call in result["trace"]["calls"]] == ["read_protected_person_summary"]
+    assert result["related_evidence_candidates"] == []
+    assert result["trace"]["related_evidence_candidates"]["status"] == "no_selected_evidence"
 
     trace_row = json.loads((tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()[-1])
     assert trace_row["run_id"] == "person-fast"
@@ -1156,6 +1158,285 @@ def test_memory_answer_core_conflict_scan_short_circuits_llm(monkeypatch, tmp_pa
     assert result["claims"][0]["support"] == ["e1"]
     assert calls == []
     assert result["trace"]["conflict_scan"]["conflict"] is True
+
+
+def _write_related_map(path: pathlib.Path, edges: list[dict]) -> None:
+    path.write_text(
+        "\n".join(json.dumps(edge, ensure_ascii=False) for edge in edges) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _recommendation_search_hit() -> dict:
+    return {
+        "source": "wiki",
+        "path": "wiki/systems/agent-write-toolkit.md",
+        "title": "Agent write toolkit",
+        "snippet": "toolkit evidence for write_memory",
+        "score": 10.0,
+    }
+
+
+def test_memory_answer_core_returns_related_evidence_sidecar_without_changing_llm_input(monkeypatch, tmp_path):
+    related_map = tmp_path / "related_map.jsonl"
+    _write_related_map(related_map, [{
+        "source_path": "wiki/systems/agent-write-toolkit.md",
+        "target_path": "wiki/systems/session-handoff-protocol.md",
+        "score": 22.5,
+        "reasons": ["markdown_link:wiki/systems/session-handoff-protocol.md", "shared_keyword:handoff"],
+        "source_surface": "wiki",
+        "target_surface": "wiki",
+        "target_title": "Session Handoff Protocol",
+        "target_status": "active",
+        "sensitivity": "normal",
+        "built_from": ["markdown_links", "keywords"],
+        "text_hash": "hash1",
+    }])
+    captured = {}
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
+    monkeypatch.setattr(tm_answer, "RELATED_MAP_PATH", related_map)
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", lambda *_args, **_kwargs: _empty_map_plan())
+    monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", lambda *_args, **_kwargs: _search_result(_recommendation_search_hit()))
+
+    def fake_llm(_query, evidence):
+        captured["evidence"] = evidence
+        return True, {
+            "status": "ok",
+            "answer": "Use toolkit evidence.",
+            "summary": "Answered from original evidence.",
+            "claims": [{"id": "c1", "text": "toolkit", "support": ["e1"], "confidence": 0.9}],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", fake_llm)
+
+    result = tm_answer.memory_answer_core("toolkit write_memory", scope="wiki", run_id="related-sidecar")
+
+    assert result["status"] == "ok"
+    assert [item["path"] for item in result["evidence"]] == ["wiki/systems/agent-write-toolkit.md"]
+    assert [item["path"] for item in captured["evidence"]] == ["wiki/systems/agent-write-toolkit.md"]
+    assert "related_evidence_candidates" in result
+    assert result["related_evidence_candidates"] == [{
+        "path": "wiki/systems/session-handoff-protocol.md",
+        "title": "Session Handoff Protocol",
+        "score": 22.5,
+        "reasons": ["markdown_link", "shared_keyword"],
+        "use_hint": "read_next",
+        "source_evidence_id": "e1",
+        "source_evidence_path": "wiki/systems/agent-write-toolkit.md",
+    }]
+    assert result["trace"]["related_evidence_candidates"]["candidate_count"] == 1
+    assert result["trace"]["related_evidence_candidates"]["candidates"][0] == {
+        "path": "wiki/systems/session-handoff-protocol.md",
+        "score_bucket": "high",
+        "reason_categories": ["markdown_link", "shared_keyword"],
+        "use_hint": "read_next",
+        "source_evidence_id": "e1",
+        "source_evidence_path": "wiki/systems/agent-write-toolkit.md",
+    }
+
+
+def test_memory_answer_related_trace_uses_safe_metadata_only(monkeypatch, tmp_path):
+    related_map = tmp_path / "related_map.jsonl"
+    raw_query_canary = "raw-query-canary-20260611"
+    reason_canary = "candidateexcerptcanary20260611"
+    _write_related_map(related_map, [{
+        "source_path": "wiki/systems/agent-write-toolkit.md",
+        "target_path": "wiki/systems/memory-answer-p38-recommendation-plan.md",
+        "score": 6.5,
+        "reasons": [f"shared_summary_token:{reason_canary}"],
+        "source_surface": "wiki",
+        "target_surface": "wiki",
+        "target_title": "Candidate title should stay out of trace",
+        "target_status": "active",
+        "sensitivity": "normal",
+        "built_from": ["summary"],
+        "text_hash": "hash2",
+    }])
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
+    monkeypatch.setattr(tm_answer, "RELATED_MAP_PATH", related_map)
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", lambda *_args, **_kwargs: _empty_map_plan())
+    monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", lambda *_args, **_kwargs: _search_result(_recommendation_search_hit()))
+    monkeypatch.setattr(
+        tm_answer,
+        "_call_memory_answer_llm",
+        lambda _q, _e: (True, {
+            "status": "ok",
+            "answer": "Answer.",
+            "summary": "Summary.",
+            "claims": [{"id": "c1", "text": "claim", "support": ["e1"], "confidence": 0.9}],
+            "warnings": [],
+        }),
+    )
+
+    result = tm_answer.memory_answer_core(f"toolkit {raw_query_canary}", scope="wiki", run_id="related-trace")
+
+    assert result["related_evidence_candidates"][0]["reasons"] == ["shared_summary_token"]
+    trace_row = json.loads((tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    stored_payload = json.dumps(trace_row, ensure_ascii=False)
+    assert raw_query_canary not in stored_payload
+    assert reason_canary not in stored_payload
+    assert "Candidate title should stay out of trace" not in stored_payload
+    related_trace = trace_row["trace"]["related_evidence_candidates"]
+    assert related_trace["status"] == "ok"
+    assert related_trace["candidates"][0]["reason_categories"] == ["shared_summary_token"]
+    assert related_trace["candidates"][0]["use_hint"] == "candidate_for_evidence"
+    assert "query" not in related_trace
+    assert "excerpt" not in stored_payload
+
+
+def test_memory_answer_missing_related_map_returns_empty_sidecar(monkeypatch, tmp_path):
+    captured = {}
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
+    monkeypatch.setattr(tm_answer, "RELATED_MAP_PATH", tmp_path / "missing.jsonl")
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", lambda *_args, **_kwargs: _empty_map_plan())
+    monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", lambda *_args, **_kwargs: _search_result(_recommendation_search_hit()))
+
+    def fake_llm(_query, evidence):
+        captured["evidence"] = evidence
+        return True, {
+            "status": "ok",
+            "answer": "Answer.",
+            "summary": "Summary.",
+            "claims": [{"id": "c1", "text": "claim", "support": ["e1"], "confidence": 0.9}],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", fake_llm)
+
+    result = tm_answer.memory_answer_core("toolkit", scope="wiki", run_id="related-missing")
+
+    assert result["status"] == "ok"
+    assert captured["evidence"]
+    assert result["related_evidence_candidates"] == []
+    assert result["trace"]["related_evidence_candidates"]["status"] == "missing"
+    assert result["trace"]["related_evidence_candidates"]["candidate_count"] == 0
+
+
+def test_memory_answer_invalid_related_map_returns_empty_sidecar(monkeypatch, tmp_path):
+    related_map = tmp_path / "related_map.jsonl"
+    related_map.write_text("{not-json}\n", encoding="utf-8")
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
+    monkeypatch.setattr(tm_answer, "RELATED_MAP_PATH", related_map)
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", lambda *_args, **_kwargs: _empty_map_plan())
+    monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", lambda *_args, **_kwargs: _search_result(_recommendation_search_hit()))
+    monkeypatch.setattr(
+        tm_answer,
+        "_call_memory_answer_llm",
+        lambda _q, _e: (True, {
+            "status": "ok",
+            "answer": "Answer.",
+            "summary": "Summary.",
+            "claims": [{"id": "c1", "text": "claim", "support": ["e1"], "confidence": 0.9}],
+            "warnings": [],
+        }),
+    )
+
+    result = tm_answer.memory_answer_core("toolkit", scope="wiki", run_id="related-invalid")
+
+    assert result["status"] == "ok"
+    assert result["related_evidence_candidates"] == []
+    assert result["trace"]["related_evidence_candidates"]["status"] == "invalid"
+    assert result["trace"]["related_evidence_candidates"]["warning"] == "related_map_invalid"
+
+
+def test_memory_answer_filters_forbidden_related_targets(monkeypatch, tmp_path):
+    related_map = tmp_path / "related_map.jsonl"
+    _write_related_map(related_map, [
+        {
+            "source_path": "wiki/systems/agent-write-toolkit.md",
+            "target_path": "wiki/person/tiger.md",
+            "score": 99.0,
+            "reasons": ["markdown_link:wiki/person/tiger.md"],
+            "source_surface": "wiki",
+            "target_surface": "wiki",
+            "target_title": "Tiger",
+            "target_status": "active",
+            "sensitivity": "person",
+            "built_from": ["markdown_links"],
+            "text_hash": "hash-forbidden",
+        },
+        {
+            "source_path": "wiki/systems/agent-write-toolkit.md",
+            "target_path": "runtime/memory_recommendation/related_map.jsonl",
+            "score": 98.0,
+            "reasons": ["same_directory:runtime/memory_recommendation"],
+            "source_surface": "runtime",
+            "target_surface": "runtime",
+            "target_title": "Runtime map",
+            "target_status": "active",
+            "sensitivity": "normal",
+            "built_from": ["directory"],
+            "text_hash": "hash-runtime",
+        },
+        {
+            "source_path": "wiki/systems/agent-write-toolkit.md",
+            "target_path": "D:/tigermemory/wiki/person/tiger.md",
+            "score": 97.0,
+            "reasons": ["markdown_link:D:/tigermemory/wiki/person/tiger.md"],
+            "source_surface": "wiki",
+            "target_surface": "wiki",
+            "target_title": "Absolute Person",
+            "target_status": "active",
+            "sensitivity": "person",
+            "built_from": ["markdown_links"],
+            "text_hash": "hash-absolute",
+        },
+        {
+            "source_path": "wiki/systems/agent-write-toolkit.md",
+            "target_path": "wiki/systems/../person/tiger.md",
+            "score": 96.0,
+            "reasons": ["markdown_link:wiki/systems/../person/tiger.md"],
+            "source_surface": "wiki",
+            "target_surface": "wiki",
+            "target_title": "Traversal Person",
+            "target_status": "active",
+            "sensitivity": "person",
+            "built_from": ["markdown_links"],
+            "text_hash": "hash-traversal",
+        },
+        {
+            "source_path": "wiki/systems/agent-write-toolkit.md",
+            "target_path": "wiki/systems/memory-answer-p38-recommendation-plan.md",
+            "score": 5.0,
+            "reasons": ["same_directory:wiki/systems"],
+            "source_surface": "wiki",
+            "target_surface": "wiki",
+            "target_title": "P3.8 recommendation plan",
+            "target_status": "active",
+            "sensitivity": "normal",
+            "built_from": ["directory"],
+            "text_hash": "hash-allowed",
+        },
+    ])
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
+    monkeypatch.setattr(tm_answer, "RELATED_MAP_PATH", related_map)
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", lambda *_args, **_kwargs: _empty_map_plan())
+    monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", lambda *_args, **_kwargs: _search_result(_recommendation_search_hit()))
+    monkeypatch.setattr(
+        tm_answer,
+        "_call_memory_answer_llm",
+        lambda _q, _e: (True, {
+            "status": "ok",
+            "answer": "Answer.",
+            "summary": "Summary.",
+            "claims": [{"id": "c1", "text": "claim", "support": ["e1"], "confidence": 0.9}],
+            "warnings": [],
+        }),
+    )
+
+    result = tm_answer.memory_answer_core("toolkit", scope="wiki", run_id="related-filter")
+
+    paths = [item["path"] for item in result["related_evidence_candidates"]]
+    assert paths == ["wiki/systems/memory-answer-p38-recommendation-plan.md"]
+    assert not any(path.startswith(("wiki/person/", "runtime/")) for path in paths)
+    assert all(".." not in path and not path.lower().startswith("d:/") for path in paths)
+    assert result["related_evidence_candidates"][0]["use_hint"] == "background_only"
 
 
 def test_answer_eval_contract_accepts_optional_fields_and_rejects_paper_seed_tmp(tmp_path):
