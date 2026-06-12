@@ -2313,6 +2313,8 @@ def search_wiki(
 # Standard RRF constant (Cormack et al., 2009). k=10..100 all behave similarly;
 # 60 is the canonical default and what most production hybrid retrievers use.
 _RRF_K = 60
+_HYBRID_MAP_ARM_ENV = "TM_HYBRID_MAP_ARM"
+_HYBRID_MAP_MIN_SCORE = 24.0
 _HYBRID_LEXICAL_ANCHOR_COUNT = 2
 _HYBRID_LEXICAL_ANCHOR_MIN_SCORE = 100.0
 _HYBRID_LEXICAL_FIRST_MIN_SCORE = 150.0
@@ -2326,6 +2328,51 @@ def _skip_hybrid_lexical_first(path: str) -> bool:
     return path.endswith("/index.md") or path in _HYBRID_LEXICAL_FIRST_SKIP_SUFFIXES
 
 
+_HYBRID_MAP_RECORDS_CACHE: list[dict[str, Any]] | None = None
+
+
+def _hybrid_map_arm_enabled() -> bool:
+    return str(os.environ.get(_HYBRID_MAP_ARM_ENV) or "").strip().lower() in {
+        "1",
+        "true",
+        "on",
+        "enabled",
+        "yes",
+        "force",
+    }
+
+
+def _hybrid_map_stub(path: str, title: str) -> dict[str, Any]:
+    snippet = ""
+    try:
+        body = (REPO_ROOT / path).read_text(encoding="utf-8", errors="replace")
+        snippet = " ".join(body[:600].split())[:300]
+    except OSError:
+        pass
+    return {
+        "path": path,
+        "title": title,
+        "score": 0.0,
+        "snippet": snippet,
+    }
+
+
+def _hybrid_map_recall(query: str, *, limit: int) -> list[dict[str, Any]]:
+    global _HYBRID_MAP_RECORDS_CACHE
+    tools_dir = str(REPO_ROOT / "tools")
+    if tools_dir not in sys.path:
+        sys.path.insert(0, tools_dir)
+    import tm_llm_wiki_map  # type: ignore[import-not-found]
+
+    if _HYBRID_MAP_RECORDS_CACHE is None:
+        _HYBRID_MAP_RECORDS_CACHE = tm_llm_wiki_map.load_map()
+    return [
+        hit
+        for hit in tm_llm_wiki_map.map_recall(query, limit=limit, records=_HYBRID_MAP_RECORDS_CACHE)
+        if float(hit.get("score") or 0.0) >= _HYBRID_MAP_MIN_SCORE
+    ]
+
+
 def search_wiki_hybrid(
     query: str,
     size: int = 5,
@@ -2334,7 +2381,7 @@ def search_wiki_hybrid(
     *,
     explain: bool = False,
 ) -> list[dict[str, Any]]:
-    """Reciprocal-rank-fusion of `search_wiki` (lexical) and the embedding index.
+    """Reciprocal-rank-fusion of lexical, embedding, and optional wiki-map recall.
 
     Why this exists: Phase 2e (2026-05-06) showed lexical AND search returns
     0 candidates for many CN / synonym / cross-lingual queries; Phase 2f
@@ -2377,6 +2424,7 @@ def search_wiki_hybrid(
         return hits
 
     emb_hits: list[dict[str, Any]] = []
+    emb_degraded = False
     try:
         # Lazy import: tm_core is imported by lots of modules; tm_embed_index
         # depends on tm_core, so importing at module top would create a cycle.
@@ -2385,12 +2433,24 @@ def search_wiki_hybrid(
     except RuntimeError:
         # Index empty / not built / embedding service unreachable.
         # Degrade silently to lexical-only — caller already gets useful results.
-        return degraded_lexical_hits()
+        emb_degraded = True
     except Exception:
+        emb_degraded = True
+
+    map_hits: list[dict[str, Any]] = []
+    map_degraded = False
+    if _hybrid_map_arm_enabled():
+        try:
+            map_hits = _hybrid_map_recall(query, limit=pool_k)
+        except Exception:
+            map_degraded = True
+
+    if emb_degraded and not map_hits:
         return degraded_lexical_hits()
 
     if not include_sources:
         emb_hits = [h for h in emb_hits if not h["path"].startswith("sources/")]
+        map_hits = [h for h in map_hits if not h["path"].startswith("sources/")]
 
     fused: dict[str, dict[str, Any]] = {}
     for rank, hit in enumerate(lex_hits, 1):
@@ -2416,6 +2476,13 @@ def search_wiki_hybrid(
                 "snippet": snippet,
             }
             fused[path] = {"hit": stub, "score": 0.0}
+        fused[path]["score"] += 1.0 / (_RRF_K + rank)
+    for rank, hit in enumerate(map_hits, 1):
+        path = str(hit.get("path") or "")
+        if not path:
+            continue
+        if path not in fused:
+            fused[path] = {"hit": _hybrid_map_stub(path, str(hit.get("title") or "")), "score": 0.0}
         fused[path]["score"] += 1.0 / (_RRF_K + rank)
 
     ordered = sorted(fused.values(), key=lambda v: -v["score"])
@@ -2464,6 +2531,17 @@ def search_wiki_hybrid(
             emb_score_by_path[path] = float(hit.get("score") or 0.0)
         except (TypeError, ValueError):
             emb_score_by_path[path] = 0.0
+    map_score_by_path: dict[str, float] = {}
+    map_rank_by_path: dict[str, int] = {}
+    for rank, hit in enumerate(map_hits, 1):
+        path = str(hit.get("path") or "")
+        if not path:
+            continue
+        map_rank_by_path[path] = rank
+        try:
+            map_score_by_path[path] = float(hit.get("score") or 0.0)
+        except (TypeError, ValueError):
+            map_score_by_path[path] = 0.0
 
     def add_entry(entry: dict[str, Any]) -> None:
         if len(out) >= limit:
@@ -2479,13 +2557,15 @@ def search_wiki_hybrid(
                 "lexical_rank": lex_rank_by_path.get(path),
                 "vector_score": emb_score_by_path.get(path),
                 "vector_rank": emb_rank_by_path.get(path),
+                "map_score": map_score_by_path.get(path),
+                "map_rank": map_rank_by_path.get(path),
                 "alias_match": lex_alias_match_by_path.get(path, False),
                 "rrf_score": merged["score"],
                 "lexical_anchor": path in anchor_paths or (
                     lexical_first_candidate is not None
                     and path == lexical_first_candidate[0]
                 ),
-                "degraded": False,
+                "degraded": bool(emb_degraded or map_degraded),
                 "final_score": merged["score"],
             }
         seen.add(path)

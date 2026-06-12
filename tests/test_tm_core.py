@@ -465,6 +465,60 @@ def test_search_wiki_hybrid_explain_includes_branch_scores(monkeypatch):
     assert by_path["wiki/systems/exact-a.md"]["degraded"] is False
 
 
+def test_search_wiki_hybrid_map_arm_is_off_by_default(monkeypatch):
+    import types
+
+    monkeypatch.delenv("TM_HYBRID_MAP_ARM", raising=False)
+    monkeypatch.setattr(tm_core, "search_wiki", lambda *_args, **_kwargs: [])
+    monkeypatch.setitem(sys.modules, "tm_embed_index", types.SimpleNamespace(search=lambda *_args, **_kwargs: []))
+    monkeypatch.setitem(
+        sys.modules,
+        "tm_llm_wiki_map",
+        types.SimpleNamespace(
+            load_map=lambda: (_ for _ in ()).throw(AssertionError("map arm should be disabled")),
+            map_recall=lambda *_args, **_kwargs: [],
+        ),
+    )
+
+    assert tm_core.search_wiki_hybrid("natural language query", size=3, include_sources=False) == []
+
+
+def test_search_wiki_hybrid_map_arm_fuses_map_only_hits(monkeypatch, tmp_path):
+    import types
+
+    target = tmp_path / "wiki" / "systems" / "map-target.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("# Map Target\nnatural language answer", encoding="utf-8")
+    monkeypatch.setenv("TM_HYBRID_MAP_ARM", "1")
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_core, "_HYBRID_MAP_RECORDS_CACHE", None)
+    monkeypatch.setattr(tm_core, "search_wiki", lambda *_args, **_kwargs: [])
+    monkeypatch.setitem(sys.modules, "tm_embed_index", types.SimpleNamespace(search=lambda *_args, **_kwargs: []))
+    monkeypatch.setitem(
+        sys.modules,
+        "tm_llm_wiki_map",
+        types.SimpleNamespace(
+            load_map=lambda: [{"path": "wiki/systems/map-target.md"}],
+            map_recall=lambda *_args, **_kwargs: [{
+                "path": "wiki/systems/map-target.md",
+                "title": "Map Target",
+                "source_surface": "wiki",
+                "score": 42.0,
+            }],
+        ),
+    )
+
+    results = tm_core.search_wiki_hybrid("natural language query", size=3, include_sources=False, explain=True)
+
+    assert results[0]["path"] == "wiki/systems/map-target.md"
+    assert "natural language answer" in results[0]["snippet"]
+    breakdown = results[0]["score_breakdown"]
+    assert breakdown["map_score"] == 42.0
+    assert breakdown["map_rank"] == 1
+    assert breakdown["vector_rank"] is None
+    assert breakdown["degraded"] is False
+
+
 def test_search_wiki_hybrid_does_not_promote_retrieval_eval_report(monkeypatch):
     import types
 
