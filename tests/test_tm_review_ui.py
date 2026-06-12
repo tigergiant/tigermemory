@@ -2315,7 +2315,7 @@ def test_dashboard_memory_quality_falls_back_to_live_inbox(tmp_path, monkeypatch
     _write_inbox(tmp_path, "2026-05-01-1200-codex-systems.md")
     _write_inbox(tmp_path, "2026-05-02-1200-codex-systems.md")
     monkeypatch.setattr(tm_review_ui, "_mem0_payload", lambda *_args, **_kwargs: {"count": 8, "items": [], "results": [], "latency_ms": 12})
-    monkeypatch.setattr(tm_review_ui.tm_memory_ops, "fetch_mem0_items_by_date_range", lambda *_args, **_kwargs: [{"id": "m1"}, {"id": "m2"}])
+    monkeypatch.setattr(tm_review_ui, "_quality_live_mem0_count", lambda *_args, **_kwargs: (2, "Mem0 cached"))
     monkeypatch.setattr(tm_review_ui.tm_memory_reflection, "discard_events_for_dates", lambda *_args, **_kwargs: [{"event_id": "d1"}])
     monkeypatch.setattr(tm_review_ui.tm_answer_trace, "load_trace_rows", lambda **_kwargs: ([], []))
     monkeypatch.setattr(tm_review_ui.tm_answer_trace, "summarize_rows", lambda *_args, **_kwargs: {"duration_ms": {}, "status_counts": {}, "latest": []})
@@ -2597,6 +2597,7 @@ def test_dashboard_memory_quality_range_cached_note_marks_partial_route_ledger(m
 
 
 def test_quality_live_mem0_count_uses_server_date_filter(monkeypatch):
+    tm_review_ui._mem0_dashboard_reset_for_tests()
     captured: dict[str, object] = {}
 
     def fake_mem0_request(url: str, *, timeout: float):
@@ -2616,6 +2617,55 @@ def test_quality_live_mem0_count_uses_server_date_filter(monkeypatch):
     assert "to_date=" in str(captured["url"])
     assert "sort_column=created_at" in str(captured["url"])
     assert captured["timeout"] == 2.0
+
+
+def test_mem0_payload_serves_stale_cache_after_timeout(monkeypatch):
+    tm_review_ui._mem0_dashboard_reset_for_tests()
+    calls = {"count": 0}
+
+    def fake_mem0_request(_url: str, *, timeout: float):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return json.dumps({"total": 9, "results": [{"id": "m1"}]})
+        raise RuntimeError("Mem0 timeout: synthetic")
+
+    monkeypatch.setattr(tm_review_ui, "MEM0_DASHBOARD_CACHE_TTL", 0.0)
+    monkeypatch.setattr(tm_review_ui, "MEM0_DASHBOARD_FAILURE_THRESHOLD", 1)
+    monkeypatch.setattr(tm_review_ui.tm_core, "mem0_base", lambda: "http://mem0.local")
+    monkeypatch.setattr(tm_review_ui.tm_core, "mem0_user_id", lambda: "tiger")
+    monkeypatch.setattr(tm_review_ui.tm_core, "mem0_request", fake_mem0_request)
+
+    first = tm_review_ui._mem0_payload("session-handoff", size=1, timeout=0.1)
+    second = tm_review_ui._mem0_payload("session-handoff", size=1, timeout=0.1)
+
+    assert first["count"] == 9
+    assert second["count"] == 9
+    assert second["stale"] is True
+    assert second["mem0_guard"]["status"] == "error-stale-cache"
+    assert calls["count"] == 2
+
+
+def test_mem0_payload_circuit_breaker_skips_repeated_live_calls(monkeypatch):
+    tm_review_ui._mem0_dashboard_reset_for_tests()
+    calls = {"count": 0}
+
+    def fake_mem0_request(_url: str, *, timeout: float):
+        calls["count"] += 1
+        raise RuntimeError("Mem0 timeout: synthetic")
+
+    monkeypatch.setattr(tm_review_ui, "MEM0_DASHBOARD_FAILURE_THRESHOLD", 1)
+    monkeypatch.setattr(tm_review_ui, "MEM0_DASHBOARD_COOLDOWN", 60.0)
+    monkeypatch.setattr(tm_review_ui.tm_core, "mem0_base", lambda: "http://mem0.local")
+    monkeypatch.setattr(tm_review_ui.tm_core, "mem0_user_id", lambda: "tiger")
+    monkeypatch.setattr(tm_review_ui.tm_core, "mem0_request", fake_mem0_request)
+
+    first = tm_review_ui._mem0_payload("no-cache", size=1, timeout=0.1)
+    second = tm_review_ui._mem0_payload("no-cache", size=1, timeout=0.1)
+
+    assert first["count"] is None
+    assert second["count"] is None
+    assert second["mem0_guard"]["status"] == "circuit-open"
+    assert calls["count"] == 1
 
 
 def test_quality_route_flow_prefers_route_recommendation_distribution():
@@ -3245,6 +3295,7 @@ def test_canvas_payload_returns_candidate_warning_when_mem0_unavailable(tmp_path
 
 
 def test_canvas_candidate_mem0_payload_can_use_env_fallback(monkeypatch):
+    tm_review_ui._mem0_dashboard_reset_for_tests()
     seen = {}
 
     class FakeResponse:

@@ -176,3 +176,16 @@ def test_vps_openai_start_script_overrides_legacy_mem0_url():
     text = (REPO_ROOT / VPS_OPENAI_START_SCRIPT).read_text(encoding="utf-8")
     assert 'export MEM0_URL="${TM_OPENAI_MCP_MEM0_URL:-http://100.113.108.21:9765}"' in text
     assert "100.113.108.21:8765" not in text
+
+
+def test_openmemory_compose_mounts_database_patch_and_healthcheck():
+    text = (REPO_ROOT / "deploy/openmemory/docker-compose.example.yml").read_text(encoding="utf-8")
+    assert "../../deploy/openmemory/patches/app/database.py:/usr/src/openmemory/app/database.py:ro" in text
+    assert "healthcheck:" in text
+    assert "/api/v1/memories/?user_id=tiger&page=1&size=1" in text
+
+
+def test_openmemory_runtime_patch_script_copies_database_patch():
+    text = (REPO_ROOT / "deploy/openmemory/scripts/apply-runtime-patches.ps1").read_text(encoding="utf-8")
+    assert 'app\\database.py' in text
+    assert ':/usr/src/openmemory/app/database.py' in text
