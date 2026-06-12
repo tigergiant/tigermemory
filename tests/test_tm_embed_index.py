@@ -153,3 +153,81 @@ def test_stats_includes_meta(isolated_index_dir):
     s = tm_embed_index.stats("wiki")
     assert s["meta"] is not None
     assert s["meta"]["embedding_model"] == "test-model"
+
+
+def test_embed_texts_with_split_retry_splits_transient_batch(monkeypatch):
+    calls: list[tuple[str, ...]] = []
+
+    def fake_embed_texts(texts: list[str]) -> list[list[float]]:
+        calls.append(tuple(texts))
+        if len(texts) > 1:
+            raise tm_embed_index.tm_core.EmbeddingError("timeout", kind="transient")
+        return [[float(len(calls))]]
+
+    monkeypatch.setattr(tm_embed_index.tm_core, "embed_texts", fake_embed_texts)
+
+    vectors, skipped = tm_embed_index._embed_texts_with_split_retry(
+        ["a", "b", "c"],
+        labels=["a.md", "b.md", "c.md"],
+    )
+
+    assert len(vectors) == 3
+    assert skipped == []
+    assert calls[0] == ("a", "b", "c")
+    assert ("a",) in calls
+    assert ("b",) in calls
+    assert ("c",) in calls
+
+
+def test_embed_texts_with_split_retry_preserves_permanent_failure(monkeypatch):
+    def fake_embed_texts(texts: list[str]) -> list[list[float]]:
+        raise tm_embed_index.tm_core.EmbeddingError("bad shape", kind="permanent")
+
+    monkeypatch.setattr(tm_embed_index.tm_core, "embed_texts", fake_embed_texts)
+
+    with pytest.raises(tm_embed_index.tm_core.EmbeddingError) as exc:
+        tm_embed_index._embed_texts_with_split_retry(["a", "b"], labels=["a.md", "b.md"])
+
+    assert exc.value.kind == "permanent"
+
+
+def test_embed_texts_with_split_retry_waits_for_open_breaker(monkeypatch):
+    calls = 0
+    sleeps: list[float] = []
+
+    def fake_embed_texts(texts: list[str]) -> list[list[float]]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise tm_embed_index.tm_core.EmbeddingError(
+                "Embedding circuit breaker OPEN (5 consecutive transient failures); retry in 60s",
+                kind="transient",
+            )
+        return [[0.1]]
+
+    monkeypatch.setattr(tm_embed_index.tm_core, "embed_texts", fake_embed_texts)
+    monkeypatch.setattr(
+        tm_embed_index.tm_core,
+        "_embed_retry_config",
+        lambda: {"breaker_reset": 0.0},
+    )
+    monkeypatch.setattr(tm_embed_index.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    vectors, skipped = tm_embed_index._embed_texts_with_split_retry(["a"], labels=["a.md"])
+
+    assert vectors == [[0.1]]
+    assert skipped == []
+    assert calls == 2
+    assert sleeps == [1.0]
+
+
+def test_embed_texts_with_split_retry_skips_single_transient(monkeypatch):
+    def fake_embed_texts(texts: list[str]) -> list[list[float]]:
+        raise tm_embed_index.tm_core.EmbeddingError("timeout", kind="transient")
+
+    monkeypatch.setattr(tm_embed_index.tm_core, "embed_texts", fake_embed_texts)
+
+    vectors, skipped = tm_embed_index._embed_texts_with_split_retry(["a"], labels=["a.md"])
+
+    assert vectors == []
+    assert skipped == ["a.md"]

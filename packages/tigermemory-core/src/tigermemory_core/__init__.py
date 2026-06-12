@@ -1571,12 +1571,23 @@ def verify_memory_record(
 #   EMBEDDING_DIMENSIONS optional; pass-through if server supports (ARK: 2048)
 #   EMBEDDING_TIMEOUT    optional int seconds, default 30
 
-EMBEDDING_TIMEOUT = 30
+def _env_positive_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+EMBEDDING_TIMEOUT = _env_positive_int("EMBEDDING_TIMEOUT", 30)
 # ARK (Volcengine) /embeddings limits `input` to 10 entries per request. We
 # keep the cap configurable for self-hosted backends (e.g. local vLLM accepts
 # larger batches) but default to the tightest known limit so primary-path
 # callers succeed without feature-detection.
-EMBEDDING_BATCH_SIZE = 10
+EMBEDDING_BATCH_SIZE = _env_positive_int("EMBEDDING_BATCH_SIZE", 10)
 
 # ---- Stability layer (OpenViking-inspired retry + circuit breaker) ----
 #
@@ -1840,6 +1851,11 @@ def _embed_batch_once(
         if kind == "unknown":
             kind = "transient"
         raise EmbeddingError(f"Embedding unreachable: {reason}", kind=kind)
+    except (TimeoutError, socket.timeout) as e:
+        raise EmbeddingError(
+            f"Embedding timeout: {e} (limit={effective_timeout}s)",
+            kind="transient",
+        ) from e
     try:
         d = json.loads(raw)
     except ValueError as e:

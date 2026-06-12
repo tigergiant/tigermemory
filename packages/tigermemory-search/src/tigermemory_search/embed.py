@@ -59,10 +59,22 @@ EXTRA_ROOT_FILES: dict[str, tuple[str, ...]] = {
     "wiki": ("AGENTS.md",),
 }
 
-# Embedding text budget. Qwen3-Embedding-0.6B accepts up to ~8K tokens; we
-# keep characters well under that to stay safe across CJK content. Title +
-# path slug are prepended so very short pages still get a usable signal.
-EMBED_TEXT_CHARS = 6000
+def _env_positive_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+# Embedding text budget. Qwen3-Embedding-0.6B advertises a long context, but
+# local OpenAI-compatible embedding servers can stall on many long inputs in a
+# bulk refresh. Keep the single-vector page input compact; title, aliases and
+# path slug are prepended so short and medium pages still get strong signals.
+EMBED_TEXT_CHARS = _env_positive_int("TM_EMBED_TEXT_CHARS", 3000)
 
 
 # ---------- text extraction ----------
@@ -271,7 +283,7 @@ def _embed_text(rel_path: str, title: str, aliases: list[str], body: str) -> str
 
 # Bump `_HASH_SCHEMA` whenever `_embed_text` composition changes; cached
 # vectors are then automatically invalidated on next refresh (no --force).
-_HASH_SCHEMA = b"v5-aliases-first-class"
+_HASH_SCHEMA = b"v6-compact-page-input"
 
 
 def _content_hash(rel_path: str, title: str, aliases: list[str], body: str) -> str:
@@ -586,6 +598,40 @@ def _propagation_alpha(explicit: float | None) -> float:
 
 # ---------- build / refresh ----------
 
+def _embed_texts_with_split_retry(
+    texts: list[str],
+    *,
+    labels: list[str] | None = None,
+    breaker_waits: int = 1,
+) -> tuple[list[list[float]], list[str]]:
+    """Embed a build batch; split transiently failing batches to avoid losing a full refresh."""
+    labels = labels or ["<unknown>"] * len(texts)
+    try:
+        return tm_core.embed_texts(texts), []
+    except tm_core.EmbeddingError as err:
+        if err.kind == "transient" and "circuit breaker OPEN" in str(err) and breaker_waits > 0:
+            reset = tm_core._embed_retry_config().get("breaker_reset", 60.0)
+            print(
+                f"[embed-build] breaker open; sleeping {reset:.0f}s before retry",
+                file=sys.stderr,
+            )
+            time.sleep(float(reset) + 1.0)
+            return _embed_texts_with_split_retry(
+                texts,
+                labels=labels,
+                breaker_waits=breaker_waits - 1,
+            )
+        if err.kind != "transient":
+            raise
+        if len(texts) <= 1:
+            print(f"[embed-build] skipping transiently failing input: {labels[0]}", file=sys.stderr)
+            return [], [labels[0]]
+        mid = len(texts) // 2
+        left_vecs, left_skipped = _embed_texts_with_split_retry(texts[:mid], labels=labels[:mid])
+        right_vecs, right_skipped = _embed_texts_with_split_retry(texts[mid:], labels=labels[mid:])
+        return left_vecs + right_vecs, left_skipped + right_skipped
+
+
 def build(scope: str = "wiki", *, force: bool = False, batch_log: int = 50) -> dict[str, Any]:
     """Build or refresh the embedding index for `scope`.
 
@@ -617,20 +663,29 @@ def build(scope: str = "wiki", *, force: bool = False, batch_log: int = 50) -> d
     dropped = sorted(set(existing) - seen_paths)
 
     embedded = 0
+    skipped: list[str] = []
     if pending:
         # tm_core.embed_texts handles batching internally (default 10/req).
         for start in range(0, len(pending), batch_log):
             batch = pending[start:start + batch_log]
             texts = [t[2] for t in batch]
             t0 = time.perf_counter()
-            vectors = tm_core.embed_texts(texts)
+            vectors, batch_skipped = _embed_texts_with_split_retry(
+                texts,
+                labels=[t[0] for t in batch],
+            )
+            skipped.extend(batch_skipped)
             dt = (time.perf_counter() - t0) * 1000
             print(
                 f"  embedded {start + len(batch):>4}/{len(pending)} "
-                f"(+{len(batch)} in {dt:.0f}ms)",
+                f"(+{len(vectors)}, skipped {len(batch_skipped)} in {dt:.0f}ms)",
                 file=sys.stderr,
             )
-            for (rel, title, _), vec in zip(batch, vectors):
+            vec_iter = iter(vectors)
+            for rel, title, _ in batch:
+                if rel in batch_skipped:
+                    continue
+                vec = next(vec_iter)
                 # mtime fetched lazily — file might have been touched between
                 # iter_pages and now; we re-stat from REPO_ROOT/rel.
                 try:
@@ -649,6 +704,11 @@ def build(scope: str = "wiki", *, force: bool = False, batch_log: int = 50) -> d
                     "vec": vec,
                 }
                 embedded += 1
+            # Long local embedding builds can take tens of minutes and may hit
+            # transient backend stalls. Persist each successful outer batch so
+            # `refresh` can resume instead of discarding all previous work.
+            _save_index(scope, keep)
+            _save_meta(scope, _build_meta(scope, keep))
 
     _save_index(scope, keep)
     # Persist meta manifest so `search()` can guard against
@@ -660,6 +720,7 @@ def build(scope: str = "wiki", *, force: bool = False, batch_log: int = 50) -> d
         "total_pages": len(keep),
         "reused": len(keep) - embedded,
         "embedded": embedded,
+        "skipped": skipped,
         "dropped": dropped,
         "meta": meta,
     }

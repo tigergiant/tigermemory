@@ -34,8 +34,41 @@ class _FakeOpener:
         return _FakeResponse()
 
 
+class _TimeoutOpener:
+    def open(self, request, *, timeout):
+        raise TimeoutError("timed out")
+
+
 def _use_hybrid_profile(monkeypatch):
     monkeypatch.setenv("TIGERMEMORY_PROFILE", tm_core.TIGERMEMORY_PROFILE_HYBRID)
+
+
+def test_env_positive_int_uses_valid_override(monkeypatch):
+    monkeypatch.setenv("TM_TEST_POSITIVE_INT", "17")
+    assert tm_core._env_positive_int("TM_TEST_POSITIVE_INT", 5) == 17
+
+
+def test_env_positive_int_falls_back_for_invalid_values(monkeypatch):
+    monkeypatch.setenv("TM_TEST_POSITIVE_INT", "0")
+    assert tm_core._env_positive_int("TM_TEST_POSITIVE_INT", 5) == 5
+    monkeypatch.setenv("TM_TEST_POSITIVE_INT", "not-an-int")
+    assert tm_core._env_positive_int("TM_TEST_POSITIVE_INT", 5) == 5
+
+
+def test_embed_batch_once_wraps_raw_timeout_as_transient(monkeypatch):
+    monkeypatch.setattr(tm_core.urllib.request, "build_opener", lambda *_args, **_kwargs: _TimeoutOpener())
+    cfg = {
+        "base": "http://127.0.0.1:19190/v1",
+        "model": "test-embedding",
+        "api_key": "test-key",
+        "dim": None,
+    }
+
+    with pytest.raises(tm_core.EmbeddingError) as exc:
+        tm_core._embed_batch_once(["hello"], cfg, 1)
+
+    assert exc.value.kind == "transient"
+    assert "timeout" in str(exc.value).lower()
 
 
 def test_render_inbox_body_adds_summary_cn_from_agent_chinese_line():
