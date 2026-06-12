@@ -281,9 +281,49 @@ def _embed_text(rel_path: str, title: str, aliases: list[str], body: str) -> str
     return composed[:EMBED_TEXT_CHARS]
 
 
+def _summary_embed_text(rel_path: str, title: str, aliases: list[str], summary: str) -> str:
+    """Compose the separate summary-vector input.
+
+    This intentionally does not prepend the summary to the page vector. A prior
+    Phase 2j experiment showed summary-prefixing degrades single-vector ranking;
+    P3.11 keeps summary as a second vector so it can help only when it is more
+    relevant than the page head.
+    """
+    alias_line = "; ".join(a.strip() for a in aliases if a.strip())
+    parts = [title.strip(), alias_line, _slug_words(rel_path), summary.strip()]
+    return "\n\n".join(p for p in parts if p)[: SUMMARY_MAX_CHARS + 512]
+
+
+SUMMARY_HASH_SCHEMA = b"v1-summary-vector"
+
+
+def _summary_hash(rel_path: str, title: str, aliases: list[str], summary: str) -> str:
+    h = hashlib.md5()
+    h.update(SUMMARY_HASH_SCHEMA)
+    h.update(b"\nsummary\n")
+    h.update(rel_path.encode("utf-8"))
+    h.update(b"\n")
+    h.update(title.encode("utf-8"))
+    h.update(b"\n")
+    h.update(("\n".join(aliases)).encode("utf-8"))
+    h.update(b"\n")
+    h.update(summary.encode("utf-8"))
+    return h.hexdigest()
+
+
 # Bump `_HASH_SCHEMA` whenever `_embed_text` composition changes; cached
-# vectors are then automatically invalidated on next refresh (no --force).
+# page vectors are then automatically invalidated on next refresh (no --force).
 _HASH_SCHEMA = b"v8-compact-page-input-6144"
+
+# Summary vectors are a secondary signal. Keep them just under page vectors so
+# an equally relevant full-page vector still wins, but a strong summary-only
+# match can rescue long pages whose important content is beyond the page head.
+SUMMARY_VECTOR_WEIGHT = 0.98
+
+
+def _allows_summary_vector(rel_path: str) -> bool:
+    """Return whether runtime index may store summary text/vector for a page."""
+    return not rel_path.replace("\\", "/").startswith("wiki/person/")
 
 
 def _content_hash(rel_path: str, title: str, aliases: list[str], body: str) -> str:
@@ -300,6 +340,17 @@ def _content_hash(rel_path: str, title: str, aliases: list[str], body: str) -> s
     # only first EMBED_TEXT_CHARS matter — that's what gets embedded
     h.update(body[:EMBED_TEXT_CHARS].encode("utf-8"))
     return h.hexdigest()
+
+
+def _is_forbidden_input_path(rel_path: str) -> bool:
+    """Reject non-knowledge work areas even if a scope is widened in tests/tools."""
+    rel = rel_path.replace("\\", "/").lstrip("/")
+    first = rel.split("/", 1)[0]
+    if first in {".tmp", "runtime", "tests", "review-artifacts"}:
+        return True
+    if rel.startswith("sources/review-artifacts/"):
+        return True
+    return False
 
 
 def _iter_pages(scope: str) -> Iterable[tuple[pathlib.Path, str, str, list[str], str]]:
@@ -319,6 +370,8 @@ def _iter_pages(scope: str) -> Iterable[tuple[pathlib.Path, str, str, list[str],
             except (UnicodeDecodeError, OSError):
                 continue
             rel = p.relative_to(REPO_ROOT).as_posix()
+            if _is_forbidden_input_path(rel):
+                continue
             title = _extract_title(body, p)
             aliases = _extract_aliases(body)
             yield p, rel, title, aliases, body
@@ -332,6 +385,8 @@ def _iter_pages(scope: str) -> Iterable[tuple[pathlib.Path, str, str, list[str],
         except (UnicodeDecodeError, OSError):
             continue
         rel = p.relative_to(REPO_ROOT).as_posix()
+        if _is_forbidden_input_path(rel):
+            continue
         title = _extract_title(body, p)
         aliases = _extract_aliases(body)
         yield p, rel, title, aliases, body
@@ -524,7 +579,10 @@ def _build_meta(scope: str, entries: dict[str, dict[str, Any]]) -> dict[str, Any
         "embedding_dimensions": actual_dim,
         "embedding_dimensions_env_hint": env_dim,
         "hash_schema": _HASH_SCHEMA.decode("utf-8", errors="replace"),
+        "summary_hash_schema": SUMMARY_HASH_SCHEMA.decode("utf-8", errors="replace"),
+        "summary_vector_weight": SUMMARY_VECTOR_WEIGHT,
         "entry_count": len(entries),
+        "summary_vector_count": sum(1 for entry in entries.values() if isinstance(entry.get("summary_vec"), list)),
         "built_at": built_at,
     }
 
@@ -551,6 +609,15 @@ def _load_meta(scope: str) -> dict[str, Any] | None:
 
 class IndexConfigMismatch(RuntimeError):
     """Raised when the live embedding env doesn't match what the index was built with."""
+
+
+def _current_embedding_identity() -> tuple[str, str]:
+    """Return the live embedding backend identity without forcing a request."""
+    try:
+        cfg = tm_core.embedding_config()
+        return str(cfg["base"]).rstrip("/"), str(cfg["model"])
+    except RuntimeError:
+        return os.environ.get("EMBEDDING_BASE_URL", "").rstrip("/"), os.environ.get("EMBEDDING_MODEL", "")
 
 
 def _check_query_compat(scope: str, query_dim: int) -> None:
@@ -581,6 +648,47 @@ def _check_query_compat(scope: str, query_dim: int) -> None:
             f"Either re-export env to match the index, or rebuild the index "
             f"with the desired model."
         )
+
+
+def _check_build_reuse_compat(scope: str, reused_entries: dict[str, dict[str, Any]]) -> int:
+    """Guard incremental builds from mixing cached and newly embedded vectors.
+
+    Returns the cached vector dimension when reusable entries are present.
+    """
+    reused_dim = 0
+    for entry in reused_entries.values():
+        vec = entry.get("vec")
+        if isinstance(vec, list) and vec:
+            reused_dim = len(vec)
+            break
+    if not reused_dim:
+        return 0
+
+    meta = _load_meta(scope)
+    if meta is None:
+        raise IndexConfigMismatch(
+            f"cannot incrementally add embeddings to scope={scope!r}: "
+            "existing index has no meta manifest. Rebuild with --force once."
+        )
+
+    live_base, live_model = _current_embedding_identity()
+    index_base = str(meta.get("embedding_base_url") or "").rstrip("/")
+    index_model = str(meta.get("embedding_model") or "")
+    if live_base != index_base or live_model != index_model:
+        raise IndexConfigMismatch(
+            f"cannot incrementally add embeddings to scope={scope!r}: "
+            f"existing index uses {index_model!r} at {index_base!r}, "
+            f"live env is {live_model!r} at {live_base!r}. "
+            "Rebuild with --force or restore the original embedding env."
+        )
+
+    index_dim = int(meta.get("embedding_dimensions") or 0)
+    if index_dim and index_dim != reused_dim:
+        raise IndexConfigMismatch(
+            f"index meta dim={index_dim} disagrees with cached vectors dim={reused_dim} "
+            f"for scope={scope!r}; rebuild with --force."
+        )
+    return reused_dim
 
 
 def _propagation_alpha(explicit: float | None) -> float:
@@ -640,35 +748,53 @@ def build(scope: str = "wiki", *, force: bool = False, batch_log: int = 50) -> d
     """
     existing = {} if force else _load_index(scope)
     keep: dict[str, dict[str, Any]] = {}
-    pending: list[tuple[str, str, str]] = []  # (rel, title, embed_text)
+    pending: list[tuple[str, str, str, str]] = []  # (label, rel, kind, embed_text)
     seen_paths: set[str] = set()
+    reused_entries: dict[str, dict[str, Any]] = {}
 
     for abs_path, rel, title, aliases, body in _iter_pages(scope):
         seen_paths.add(rel)
         text_for_embed = _embed_text(rel, title, aliases, body)
         h = _content_hash(rel, title, aliases, body)
+        summary = _extract_summary(body) if _allows_summary_vector(rel) else ""
+        summary_hash = _summary_hash(rel, title, aliases, summary) if summary else ""
         prior = existing.get(rel)
+        entry: dict[str, Any] = {
+            "path": rel,
+            "title": title,
+            "hash": h,
+            "mtime": int(abs_path.stat().st_mtime),
+        }
         if prior and prior.get("hash") == h and isinstance(prior.get("vec"), list):
-            keep[rel] = {
-                "path": rel,
-                "title": title,
-                "hash": h,
-                "mtime": int(abs_path.stat().st_mtime),
-                "vec": prior["vec"],
-            }
+            entry["vec"] = prior["vec"]
+            reused_entries[rel] = entry
         else:
-            pending.append((rel, title, text_for_embed))
+            pending.append((f"{rel}#page", rel, "page", text_for_embed))
+        if summary:
+            entry["summary"] = summary
+            entry["summary_hash"] = summary_hash
+            if (
+                prior
+                and prior.get("summary_hash") == summary_hash
+                and isinstance(prior.get("summary_vec"), list)
+            ):
+                entry["summary_vec"] = prior["summary_vec"]
+            else:
+                pending.append((f"{rel}#summary", rel, "summary", _summary_embed_text(rel, title, aliases, summary)))
+        keep[rel] = entry
 
     # Drop entries whose source file disappeared (rename / archive).
     dropped = sorted(set(existing) - seen_paths)
 
     embedded = 0
+    summary_embedded = 0
     skipped: list[str] = []
+    reused_dim = _check_build_reuse_compat(scope, reused_entries) if pending else 0
     if pending:
         # tm_core.embed_texts handles batching internally (default 10/req).
         for start in range(0, len(pending), batch_log):
             batch = pending[start:start + batch_log]
-            texts = [t[2] for t in batch]
+            texts = [t[3] for t in batch]
             t0 = time.perf_counter()
             vectors, batch_skipped = _embed_texts_with_split_retry(
                 texts,
@@ -682,44 +808,41 @@ def build(scope: str = "wiki", *, force: bool = False, batch_log: int = 50) -> d
                 file=sys.stderr,
             )
             vec_iter = iter(vectors)
-            for rel, title, _ in batch:
-                if rel in batch_skipped:
+            for label, rel, kind, _ in batch:
+                if label in batch_skipped:
                     continue
                 vec = next(vec_iter)
-                # mtime fetched lazily — file might have been touched between
-                # iter_pages and now; we re-stat from REPO_ROOT/rel.
-                try:
-                    mtime = int((REPO_ROOT / rel).stat().st_mtime)
-                except OSError:
-                    mtime = 0
-                # we know the hash from the first pass; recompute the same way
-                body_now = (REPO_ROOT / rel).read_text(encoding="utf-8", errors="replace")
-                aliases_now = _extract_aliases(body_now)
-                h_now = _content_hash(rel, title, aliases_now, body_now)
-                keep[rel] = {
-                    "path": rel,
-                    "title": title,
-                    "hash": h_now,
-                    "mtime": mtime,
-                    "vec": vec,
-                }
-                embedded += 1
+                if reused_dim and len(vec) != reused_dim:
+                    raise IndexConfigMismatch(
+                        f"new embedding dim={len(vec)} does not match cached dim={reused_dim} "
+                        f"for {label}; rebuild scope={scope!r} with --force."
+                    )
+                if kind == "page":
+                    keep[rel]["vec"] = vec
+                    embedded += 1
+                elif kind == "summary":
+                    keep[rel]["summary_vec"] = vec
+                    summary_embedded += 1
             # Long local embedding builds can take tens of minutes and may hit
             # transient backend stalls. Persist each successful outer batch so
             # `refresh` can resume instead of discarding all previous work.
-            _save_index(scope, keep)
-            _save_meta(scope, _build_meta(scope, keep))
+            materialized = {rel: entry for rel, entry in keep.items() if isinstance(entry.get("vec"), list)}
+            _save_index(scope, materialized)
+            _save_meta(scope, _build_meta(scope, materialized))
 
-    _save_index(scope, keep)
+    materialized = {rel: entry for rel, entry in keep.items() if isinstance(entry.get("vec"), list)}
+    _save_index(scope, materialized)
     # Persist meta manifest so `search()` can guard against
     # model/dimension drift (P0-1).
-    meta = _build_meta(scope, keep)
+    meta = _build_meta(scope, materialized)
     _save_meta(scope, meta)
     return {
         "scope": scope,
-        "total_pages": len(keep),
-        "reused": len(keep) - embedded,
+        "total_pages": len(materialized),
+        "reused": len(materialized) - embedded,
         "embedded": embedded,
+        "summary_embedded": summary_embedded,
+        "summary_vectors": sum(1 for entry in materialized.values() if isinstance(entry.get("summary_vec"), list)),
         "skipped": skipped,
         "dropped": dropped,
         "meta": meta,
@@ -778,27 +901,46 @@ def search(
     part_score: dict[str, float] = {
         part: _cosine(q_vec, c) for part, c in centroids.items()
     } if alpha > 0 else {}
-    scored: list[tuple[float, dict[str, Any]]] = []
+    scored: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
     for entry in entries.values():
         vec = entry.get("vec")
         if not isinstance(vec, list):
             continue
         page_score = _cosine(q_vec, vec)
+        summary_vec = entry.get("summary_vec")
+        summary_score = _cosine(q_vec, summary_vec) if isinstance(summary_vec, list) else 0.0
+        weighted_summary_score = summary_score * SUMMARY_VECTOR_WEIGHT
+        summary_boosted = weighted_summary_score > page_score
+        vector_score = weighted_summary_score if summary_boosted else page_score
         if alpha > 0:
             part = _partition_of(entry["path"])
             p_s = part_score.get(part, 0.0)
-            score = (1.0 - alpha) * page_score + alpha * p_s
+            score = (1.0 - alpha) * vector_score + alpha * p_s
         else:
-            score = page_score
-        scored.append((score, entry))
+            p_s = 0.0
+            score = vector_score
+        breakdown = {
+            "page_score": round(page_score, 4),
+            "summary_score": round(summary_score, 4),
+            "weighted_summary_score": round(weighted_summary_score, 4),
+            "vector_score": round(vector_score, 4),
+            "selected_vector": "summary" if summary_boosted else "page",
+            "summary_weight": SUMMARY_VECTOR_WEIGHT,
+            "summary_boosted": summary_boosted,
+            "partition_score": round(p_s, 4),
+            "propagation_alpha": alpha,
+            "final_score": round(score, 4),
+        }
+        scored.append((score, entry, breakdown))
     scored.sort(key=lambda kv: -kv[0])
     out: list[dict[str, Any]] = []
-    for score, entry in scored[:k]:
+    for score, entry, breakdown in scored[:k]:
         out.append({
             "path": entry["path"],
             "title": entry["title"],
             "score": round(score, 4),
             "source": "embedding",
+            "score_breakdown": breakdown,
         })
     return out
 
