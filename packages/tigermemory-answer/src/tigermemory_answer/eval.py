@@ -444,10 +444,54 @@ def _map_rank_band(rank: int | None) -> str:
     return "after80"
 
 
+def _gate_entry_for_expected(trace: dict[str, Any], expected_paths: list[str]) -> dict[str, Any] | None:
+    normalized_expected = {_normalize_case_path(path) for path in expected_paths if _normalize_case_path(path)}
+    if not normalized_expected:
+        return None
+    gate = trace.get("evidence_gate") if isinstance(trace, dict) else []
+    if not isinstance(gate, list):
+        return None
+    for item in gate:
+        if isinstance(item, dict) and _normalize_case_path(item.get("path")) in normalized_expected:
+            return item
+    return None
+
+
+def _gate_reason_category(
+    entry: dict[str, Any] | None,
+    *,
+    map_rank: int | None,
+    missing_expected_paths: list[str],
+) -> str:
+    if missing_expected_paths:
+        return "missing_knowledge"
+    if entry is None:
+        return "not_in_gate" if map_rank is not None else "map_miss"
+    if entry.get("selected"):
+        return "selected"
+    validity = str(entry.get("validity") or "").lower()
+    reason = str(entry.get("reason") or entry.get("validity_reason") or "").lower()
+    haystack = f"{validity}\n{reason}"
+    if "conflict" in haystack:
+        return "conflict"
+    if any(token in haystack for token in ("stale", "obsolete", "old", "unknown_date", "historical")):
+        return "stale_or_date"
+    if "authority" in haystack:
+        return "authority"
+    if any(token in haystack for token in ("relevance", "match", "weak", "low_quality", "low quality")):
+        return "relevance"
+    if entry.get("keep") is False:
+        return "gate_rejected_unknown"
+    if entry.get("keep") is True:
+        return "kept_not_selected"
+    return "unknown"
+
+
 def _map_bridge_bucket(
     *,
     expected_paths: list[str],
     missing_expected_paths: list[str],
+    trace_present: bool,
     map_rank: int | None,
     gate_rank: int | None,
     gate_selected_rank: int | None,
@@ -462,6 +506,8 @@ def _map_bridge_bucket(
         return "missing_knowledge"
     if map_rank is None:
         return "map_miss"
+    if not trace_present:
+        return "trace_missing"
     if evidence_rank is not None:
         if not passed and prompt_budget_truncated:
             return "map_to_evidence_ok_answer_budget_risk"
@@ -559,6 +605,13 @@ def _compact_diagnosis_row(row: dict[str, Any]) -> dict[str, Any]:
         "evidence_gate_rank",
         "evidence_gate_selected_rank",
         "evidence_gate_rejected_rank",
+        "evidence_gate_keep",
+        "evidence_gate_selected",
+        "evidence_gate_reason_category",
+        "evidence_gate_validity",
+        "evidence_gate_bridge_source",
+        "evidence_gate_authority",
+        "evidence_gate_relevance",
         "answer_evidence_rank",
         "raw_retrieval_hit",
         "map_candidate_hit",
@@ -580,6 +633,7 @@ def _compact_diagnosis_row(row: dict[str, Any]) -> dict[str, Any]:
         "expected_rank",
         "primary_scope",
         "expected_primary_scope",
+        "trace_present",
         "trace_id",
         "run_id",
     ]
@@ -612,6 +666,7 @@ def diagnose_case(
         write_trace=write_trace,
     )
     trace = result.get("trace") if isinstance(result.get("trace"), dict) else {}
+    trace_present = isinstance(result.get("trace"), dict)
     lexical_hits = tm_core.search_wiki(query, size=probe_k, include_sources=True, include_inbox=False, explain=True)
     hybrid_hits = tm_core.search_wiki_hybrid(query, size=probe_k, include_sources=True, include_inbox=False, explain=True)
     lexical_paths = _paths_from_hits(lexical_hits)
@@ -642,6 +697,12 @@ def diagnose_case(
     gate_rank = _rank_for_expected(gate_paths, expected_paths)
     gate_selected_rank = _rank_for_expected(gate_selected_paths, expected_paths)
     gate_rejected_rank = _rank_for_expected(gate_rejected_paths, expected_paths)
+    expected_gate_entry = _gate_entry_for_expected(trace, expected_paths)
+    gate_reason_category = _gate_reason_category(
+        expected_gate_entry,
+        map_rank=map_rank,
+        missing_expected_paths=missing_expected_paths,
+    )
     evidence_rank = _rank_for_expected(evidence_paths, expected_paths)
     recommendation_candidate_rank = _rank_for_expected(recommendation_paths, expected_paths)
     recommendation_evidence_rank = _rank_for_expected(recommendation_evidence_paths, expected_paths)
@@ -747,6 +808,7 @@ def diagnose_case(
     map_bridge_bucket = _map_bridge_bucket(
         expected_paths=expected_paths,
         missing_expected_paths=missing_expected_paths,
+        trace_present=trace_present,
         map_rank=map_rank,
         gate_rank=gate_rank,
         gate_selected_rank=gate_selected_rank,
@@ -781,6 +843,13 @@ def diagnose_case(
         "evidence_gate_rank": gate_rank,
         "evidence_gate_selected_rank": gate_selected_rank,
         "evidence_gate_rejected_rank": gate_rejected_rank,
+        "evidence_gate_keep": expected_gate_entry.get("keep") if expected_gate_entry else None,
+        "evidence_gate_selected": expected_gate_entry.get("selected") if expected_gate_entry else None,
+        "evidence_gate_reason_category": gate_reason_category,
+        "evidence_gate_validity": expected_gate_entry.get("validity") if expected_gate_entry else None,
+        "evidence_gate_bridge_source": expected_gate_entry.get("bridge_source") if expected_gate_entry else None,
+        "evidence_gate_authority": expected_gate_entry.get("authority") if expected_gate_entry else None,
+        "evidence_gate_relevance": expected_gate_entry.get("relevance") if expected_gate_entry else None,
         "answer_evidence_rank": evidence_rank,
         "raw_retrieval_hit": raw_retrieval_hit,
         "map_candidate_hit": map_candidate_hit,
@@ -803,6 +872,7 @@ def diagnose_case(
         "expected_rank": expected_rank,
         "primary_scope": primary_scope,
         "expected_primary_scope": expected_primary_scope,
+        "trace_present": trace_present,
         "checks": checks,
         "trace_id": result.get("trace_id"),
         "run_id": result.get("run_id"),
@@ -833,6 +903,7 @@ def summarize_diagnosis(results: list[dict[str, Any]]) -> dict[str, Any]:
     map_hit_80 = sum(1 for item in expected_path_cases if item.get("map_hit@80"))
     map_compensated_hits = sum(1 for item in expected_path_cases if item.get("map_compensated_hit"))
     map_hit_but_evidence_miss = sum(1 for item in expected_path_cases if item.get("map_hit_but_evidence_miss"))
+    map_leak_cases = [item for item in expected_path_cases if item.get("map_hit_but_evidence_miss")]
     recommendation_candidate_hits_5 = sum(1 for item in expected_path_cases if item.get("recommendation_candidate_hit@5"))
     recommendation_evidence_hits = sum(1 for item in expected_path_cases if item.get("recommendation_evidence_hit"))
     not_in_map = sum(1 for item in expected_path_cases if item.get("not_in_map"))
@@ -875,7 +946,14 @@ def summarize_diagnosis(results: list[dict[str, Any]]) -> dict[str, Any]:
             map_hit_but_evidence_miss / len(expected_path_cases) if expected_path_cases else 0.0
         ),
         "map_bridge_bucket_counts": _count_by_field(results, "map_bridge_bucket"),
+        "map_leak_bucket_counts": _count_by_field(map_leak_cases, "map_bridge_bucket"),
+        "map_leak_reason_category_counts": _count_by_field(map_leak_cases, "evidence_gate_reason_category"),
+        "evidence_gate_reason_category_counts": _count_by_field(
+            [item for item in expected_path_cases if item.get("evidence_gate_rank") is not None],
+            "evidence_gate_reason_category",
+        ),
         "map_rank_band_counts": _count_by_field(results, "map_rank_band"),
+        "prompt_budget_truncated_count": sum(1 for item in results if item.get("prompt_budget_truncated")),
         "recommendation_candidate_hit@5": recommendation_candidate_hits_5,
         "recommendation_candidate_hit@5_rate": (
             recommendation_candidate_hits_5 / len(expected_path_cases) if expected_path_cases else 1.0

@@ -9,6 +9,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import tm_answer_eval  # type: ignore[import-not-found]
+import tm_answer_funnel_compare  # type: ignore[import-not-found]
 
 
 class _DummyWikiMap:
@@ -333,10 +334,13 @@ def test_diagnose_case_buckets_map_top10_not_in_gate(tmp_path, monkeypatch):
     assert result["map_rank_band"] == "top10"
     assert result["map_hit_but_evidence_miss"] is True
     assert result["map_bridge_bucket"] == "map_top10_not_in_gate"
+    assert result["evidence_gate_reason_category"] == "not_in_gate"
 
     summary = tm_answer_eval.summarize_diagnosis([result])
     assert summary["map_hit_but_evidence_miss"] == 1
     assert summary["map_bridge_bucket_counts"] == {"map_top10_not_in_gate": 1}
+    assert summary["map_leak_bucket_counts"] == {"map_top10_not_in_gate": 1}
+    assert summary["map_leak_reason_category_counts"] == {"not_in_gate": 1}
 
 
 def test_diagnose_case_buckets_map_gate_rejected(tmp_path, monkeypatch):
@@ -387,6 +391,56 @@ def test_diagnose_case_buckets_map_gate_rejected(tmp_path, monkeypatch):
     assert result["evidence_gate_rank"] == 1
     assert result["evidence_gate_rejected_rank"] == 1
     assert result["map_bridge_bucket"] == "evidence_gate_rejected"
+    assert result["evidence_gate_keep"] is False
+    assert result["evidence_gate_reason_category"] == "relevance"
+
+    summary = tm_answer_eval.summarize_diagnosis([result])
+    assert summary["map_leak_bucket_counts"] == {"evidence_gate_rejected": 1}
+    assert summary["map_leak_reason_category_counts"] == {"relevance": 1}
+    assert summary["evidence_gate_reason_category_counts"] == {"relevance": 1}
+
+
+def test_diagnose_case_buckets_trace_missing(tmp_path, monkeypatch):
+    expected = tmp_path / "wiki" / "systems" / "trace-target.md"
+    expected.parent.mkdir(parents=True)
+    expected.write_text("# Trace Target\nalpha", encoding="utf-8")
+    monkeypatch.setattr(tm_answer_eval.tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_answer_eval.tm_core, "search_wiki", lambda *a, **k: [])
+    monkeypatch.setattr(tm_answer_eval.tm_core, "search_wiki_hybrid", lambda *a, **k: [])
+    monkeypatch.setattr(
+        tm_answer_eval,
+        "tm_llm_wiki_map",
+        _DummyWikiMap([{"path": "wiki/systems/trace-target.md", "score": 99.0}]),
+    )
+
+    def fake_memory_answer_core(query: str, **kwargs):
+        return {
+            "status": "not_found",
+            "answer": "",
+            "summary": "",
+            "claims": [],
+            "evidence": [],
+            "warnings": [],
+            "run_id": kwargs.get("run_id"),
+            "trace_id": "trace-missing",
+            "trace": None,
+        }
+
+    monkeypatch.setattr(tm_answer_eval.tm_answer, "memory_answer_core", fake_memory_answer_core)
+
+    result = tm_answer_eval.diagnose_case(
+        {
+            "id": "trace-missing",
+            "query": "trace alpha",
+            "expected_status": "ok",
+            "expected_evidence_paths": ["wiki/systems/trace-target.md"],
+        },
+        run_id="diag-test",
+    )
+
+    assert result["trace_present"] is False
+    assert result["map_bridge_bucket"] == "trace_missing"
+    assert result["evidence_gate_reason_category"] == "not_in_gate"
 
 
 def test_diagnose_case_flags_mixed_partition_evidence(tmp_path, monkeypatch):
@@ -510,3 +564,37 @@ def test_memory_answer_diagnosis_fixture_has_100_unique_cases():
         "runtime_service_grounding",
         "actionability_gap",
     }
+
+
+def test_memory_answer_p310_holdout_fixture_is_independent():
+    baseline = tm_answer_eval.load_cases(
+        str(REPO_ROOT / "tests" / "fixtures" / "memory_answer_diagnosis_100.jsonl")
+    )
+    holdout = tm_answer_eval.load_cases(
+        str(REPO_ROOT / "tests" / "fixtures" / "memory_answer_holdout_p310.jsonl")
+    )
+
+    assert len(holdout) == 30
+    assert len({case["id"] for case in holdout}) == 30
+    assert not ({case["id"] for case in baseline} & {case["id"] for case in holdout})
+    assert {case["holdout_domain"] for case in holdout} == {
+        "new_agent_tigermemory",
+        "new_agent_tigerinvest",
+        "chatgpt_ipfb",
+        "random_negative",
+    }
+    assert all(not str(case["id"]).startswith("p35-") for case in holdout)
+
+
+def test_funnel_compare_matrix_env_is_explicit():
+    assert tm_answer_funnel_compare.MATRICES["production"] == {
+        "TM_HYBRID_MAP_ARM": "0",
+        "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
+        "TM_ANSWER_WIKI_MAP": "0",
+    }
+    assert tm_answer_funnel_compare.MATRICES["map_arm"] == {
+        "TM_HYBRID_MAP_ARM": "1",
+        "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
+        "TM_ANSWER_WIKI_MAP": "0",
+    }
+    assert tm_answer_funnel_compare.MATRICES["bridge"]["TM_ANSWER_WIKI_MAP_BRIDGE"] == "1"
