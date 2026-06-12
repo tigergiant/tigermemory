@@ -74,7 +74,7 @@ def _env_positive_int(name: str, default: int) -> int:
 # local OpenAI-compatible embedding servers can stall on many long inputs in a
 # bulk refresh. Keep the single-vector page input compact; title, aliases and
 # path slug are prepended so short and medium pages still get strong signals.
-EMBED_TEXT_CHARS = _env_positive_int("TM_EMBED_TEXT_CHARS", 3000)
+EMBED_TEXT_CHARS = _env_positive_int("TM_EMBED_TEXT_CHARS", 4096)
 
 
 # ---------- text extraction ----------
@@ -283,7 +283,7 @@ def _embed_text(rel_path: str, title: str, aliases: list[str], body: str) -> str
 
 # Bump `_HASH_SCHEMA` whenever `_embed_text` composition changes; cached
 # vectors are then automatically invalidated on next refresh (no --force).
-_HASH_SCHEMA = b"v6-compact-page-input"
+_HASH_SCHEMA = b"v7-compact-page-input-4096"
 
 
 def _content_hash(rel_path: str, title: str, aliases: list[str], body: str) -> str:
