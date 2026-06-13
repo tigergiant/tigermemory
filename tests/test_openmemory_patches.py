@@ -9,6 +9,12 @@ PATCH_FILES = [
     REPO_ROOT / "deploy/openmemory/patches/app/routers/memories.py",
     REPO_ROOT / "runtime/openmemory/patches/app/routers/memories.py",
 ]
+DEPLOY_CATEGORIZATION_PATCH = REPO_ROOT / "deploy/openmemory/patches/app/utils/categorization.py"
+RUNTIME_CATEGORIZATION_PATCH = REPO_ROOT / "runtime/openmemory/patches/app/utils/categorization.py"
+CATEGORY_PATCH_FILES = [
+    DEPLOY_CATEGORIZATION_PATCH,
+    *([RUNTIME_CATEGORIZATION_PATCH] if RUNTIME_CATEGORIZATION_PATCH.exists() else []),
+]
 
 
 def test_openmemory_memories_patch_preserves_tigermemory_write_contract():
@@ -34,6 +40,28 @@ def test_categories_patch_does_not_load_all_memories():
     assert ".distinct()" in text
     assert "db.query(Memory).filter(Memory.user_id == user.id" not in text
     assert "for memory in memories for category in memory.categories" not in text
+
+
+def test_categorization_patch_defaults_to_nonblocking_empty_categories():
+    for path in CATEGORY_PATCH_FILES:
+        text = path.read_text(encoding="utf-8")
+        assert "OPENMEMORY_ENABLE_AUTO_CATEGORIZATION" in text
+        assert 'os.getenv("OPENMEMORY_ENABLE_AUTO_CATEGORIZATION", "false")' in text
+        assert "return []" in text
+
+        body = re.search(r"def get_categories_for_memory\(memory: str\) -> List\[str\]:[\s\S]+$", text)
+        assert body is not None
+        assert body.group(0).index("_auto_categorization_enabled()") < body.group(0).index("openai_client.chat.completions.create")
+
+
+def test_runtime_categorization_patch_matches_deploy_copy():
+    if not RUNTIME_CATEGORIZATION_PATCH.exists():
+        return
+
+    deploy_text = DEPLOY_CATEGORIZATION_PATCH.read_text(encoding="utf-8")
+    runtime_text = RUNTIME_CATEGORIZATION_PATCH.read_text(encoding="utf-8")
+
+    assert runtime_text == deploy_text
 
 
 def test_memory_client_config_session_closes_on_exception_path():
