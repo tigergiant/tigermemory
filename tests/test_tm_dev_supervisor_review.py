@@ -110,6 +110,9 @@ def test_archive_redacts_secret_like_text(monkeypatch, tmp_path):
         prompt_hash="abc123",
         requested_model="sonnet",
         requested_effort="medium",
+        session_mode="fresh",
+        review_status="success",
+        failure_kind=None,
         prompt="please review api_key=secret-token and Bearer verysecretbearertoken",
         output="ok sk-abcdefghijklmnop",
     )
@@ -119,6 +122,8 @@ def test_archive_redacts_secret_like_text(monkeypatch, tmp_path):
     assert f"session_ref: {supervisor.session_ref(raw_session_id)}" in text
     assert "requested_model: sonnet" in text
     assert "requested_effort: medium" in text
+    assert "session_mode: fresh" in text
+    assert "review_status: success" in text
     assert "secret-token" not in text
     assert "verysecretbearertoken" not in text
     assert "sk-abcdefghijklmnop" not in text
@@ -159,6 +164,8 @@ def test_run_review_passes_model_and_effort_without_changing_session_key(monkeyp
             "sonnet",
             "--effort",
             "medium",
+            "--session-mode",
+            "stage",
             "review this",
         ]
     )
@@ -175,3 +182,83 @@ def test_run_review_passes_model_and_effort_without_changing_session_key(monkeyp
     assert "requested_effort: medium" in text
     data = json.loads((tmp_path / "sessions.json").read_text(encoding="utf-8"))
     assert "claude-official-review|TigerMemory|tiger-development-reviewer|pmodel" in data["sessions"]
+
+
+def test_run_review_defaults_to_fresh_session_without_persistent_registry(monkeypatch, tmp_path):
+    claude_exe = tmp_path / "claude.exe"
+    claude_exe.write_text("", encoding="utf-8")
+    monkeypatch.setattr(supervisor, "OFFICIAL_LAUNCHER", tmp_path / "start-official-claude.ps1")
+    supervisor.OFFICIAL_LAUNCHER.write_text("# noop\n", encoding="utf-8")
+    monkeypatch.setattr(supervisor, "ARCHIVE_ROOT", tmp_path / "reviews")
+    monkeypatch.setattr(supervisor, "LEDGER_PATH", tmp_path / "ledger.md")
+    monkeypatch.setattr(supervisor, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(supervisor, "SESSION_FILE", tmp_path / "sessions.json")
+    supervisor.LEDGER_PATH.write_text("# Ledger\n\n## 审核调用记录\n", encoding="utf-8")
+
+    payload = {
+        "ClaudeExe": str(claude_exe),
+        "Workdir": str(tmp_path),
+        "ProxyExitLocation": "US",
+        "AnthropicAuthToken": "unset",
+        "AnthropicBaseUrl": None,
+    }
+    calls = []
+
+    def fake_runner(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[0] == "powershell":
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="review ok", stderr="")
+
+    args = supervisor.build_parser().parse_args(["--stage", "pfresh", "--model", "sonnet", "review this"])
+    out_path = supervisor.run_review(args, runner=fake_runner)
+
+    claude_cmd = calls[-1]
+    assert "--session-id" in claude_cmd
+    assert not (tmp_path / "sessions.json").exists()
+    assert "session_mode: fresh" in out_path.read_text(encoding="utf-8")
+
+
+def test_run_review_archives_session_busy_failure(monkeypatch, tmp_path):
+    claude_exe = tmp_path / "claude.exe"
+    claude_exe.write_text("", encoding="utf-8")
+    monkeypatch.setattr(supervisor, "OFFICIAL_LAUNCHER", tmp_path / "start-official-claude.ps1")
+    supervisor.OFFICIAL_LAUNCHER.write_text("# noop\n", encoding="utf-8")
+    monkeypatch.setattr(supervisor, "ARCHIVE_ROOT", tmp_path / "reviews")
+    monkeypatch.setattr(supervisor, "LEDGER_PATH", tmp_path / "ledger.md")
+    monkeypatch.setattr(supervisor, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(supervisor, "SESSION_FILE", tmp_path / "sessions.json")
+    supervisor.LEDGER_PATH.write_text("# Ledger\n\n## 审核调用记录\n", encoding="utf-8")
+
+    payload = {
+        "ClaudeExe": str(claude_exe),
+        "Workdir": str(tmp_path),
+        "ProxyExitLocation": "US",
+        "AnthropicAuthToken": "unset",
+        "AnthropicBaseUrl": None,
+    }
+
+    def fake_runner(cmd, **kwargs):
+        if cmd[0] == "powershell":
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+        return subprocess.CompletedProcess(
+            cmd,
+            1,
+            stdout="",
+            stderr="Error: Session ID 00000000-0000-0000-0000-000000000000 is already in use.",
+        )
+
+    args = supervisor.build_parser().parse_args(["--stage", "pfail", "review this"])
+    try:
+        supervisor.run_review(args, runner=fake_runner)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("expected failed Claude call")
+
+    archives = list((tmp_path / "reviews").rglob("*.md"))
+    assert len(archives) == 1
+    text = archives[0].read_text(encoding="utf-8")
+    assert "review_status: failed" in text
+    assert "failure_kind: session_busy" in text
+    assert "status=failed" in supervisor.LEDGER_PATH.read_text(encoding="utf-8")

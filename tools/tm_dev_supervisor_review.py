@@ -35,7 +35,9 @@ WORKSPACES = {
     "ClaudeHub": pathlib.Path(r"C:\Users\Giant\Documents\ClaudeHub"),
     "ClaudeScratch": pathlib.Path(r"C:\Users\Giant\Documents\ClaudeScratch"),
 }
-SESSION_FILE = REPO_ROOT / ".tmp" / "dev-supervisor" / "claude-sessions.json"
+SUPERVISOR_STATE_DIR = REPO_ROOT / ".supervisor"
+SESSION_FILE = SUPERVISOR_STATE_DIR / "claude-sessions.json"
+LEGACY_SESSION_FILE = REPO_ROOT / ".tmp" / "dev-supervisor" / "claude-sessions.json"
 ARCHIVE_ROOT = REPO_ROOT / "sources" / "internal-analysis" / "development-reviews"
 LEDGER_PATH = REPO_ROOT / "wiki" / "operations" / "development-supervisor-ledger.md"
 
@@ -98,6 +100,8 @@ def _redact(text: str) -> str:
 
 def _load_sessions(path: pathlib.Path | None = None) -> dict:
     path = SESSION_FILE if path is None else path
+    if path == SESSION_FILE and not path.exists() and LEGACY_SESSION_FILE.exists():
+        return json.loads(LEGACY_SESSION_FILE.read_text(encoding="utf-8"))
     if not path.exists():
         return {"version": 1, "sessions": {}}
     return json.loads(path.read_text(encoding="utf-8"))
@@ -135,6 +139,10 @@ def ensure_session_id(channel: str, workspace: str, role: str, stage: str) -> st
     return record["session_id"]
 
 
+def new_ephemeral_session_id() -> str:
+    return str(uuid.uuid4())
+
+
 def update_session_record(
     channel: str,
     workspace: str,
@@ -143,11 +151,16 @@ def update_session_record(
     *,
     prompt_hash: str,
     output_path: pathlib.Path,
+    status: str = "success",
+    failure_kind: str | None = None,
 ) -> None:
     data = _load_sessions()
     record = data.setdefault("sessions", {})[_session_key(channel, workspace, role, stage)]
     record["last_prompt_hash"] = prompt_hash
     record["last_output_path"] = str(output_path)
+    record["last_status"] = status
+    if failure_kind:
+        record["last_failure_kind"] = failure_kind
     record["updated_at"] = _now().isoformat()
     _save_sessions(data)
 
@@ -270,6 +283,9 @@ def archive_review(
     prompt_hash: str,
     requested_model: str | None,
     requested_effort: str | None,
+    session_mode: str,
+    review_status: str,
+    failure_kind: str | None,
     prompt: str,
     output: str,
 ) -> pathlib.Path:
@@ -293,6 +309,9 @@ session_ref: {session_ref_value}
 prompt_sha256_12: {prompt_hash}
 requested_model: {requested_model or "default"}
 requested_effort: {requested_effort or "default"}
+session_mode: {session_mode}
+review_status: {review_status}
+failure_kind: {failure_kind or "none"}
 ---
 
 # Development supervisor Claude review {stage} {prompt_hash}
@@ -319,6 +338,9 @@ def append_ledger(
     prompt_hash: str,
     requested_model: str | None,
     requested_effort: str | None,
+    session_mode: str,
+    review_status: str,
+    failure_kind: str | None,
     output_path: pathlib.Path,
 ) -> None:
     if not LEDGER_PATH.exists():
@@ -328,10 +350,24 @@ def append_ledger(
         f"- {_now().strftime('%Y-%m-%d %H:%M')} | channel={channel} | workspace={workspace} | "
         f"role={role} | stage={stage} | session_ref={session_ref_value} | "
         f"model={requested_model or 'default'} | effort={requested_effort or 'default'} | "
+        f"session_mode={session_mode} | status={review_status} | failure={failure_kind or 'none'} | "
         f"prompt_hash={prompt_hash} | archive={rel}\n"
     )
     with LEDGER_PATH.open("a", encoding="utf-8") as fh:
         fh.write(line)
+
+
+def classify_failure(output: str) -> str:
+    lowered = output.lower()
+    if "already in use" in lowered and "session id" in lowered:
+        return "session_busy"
+    if "session limit" in lowered or "hit your session limit" in lowered:
+        return "session_limit"
+    if "socket connection was closed" in lowered or "connection was closed unexpectedly" in lowered:
+        return "connection_closed"
+    if "timed out" in lowered or "timeout" in lowered:
+        return "timeout"
+    return "cli_error"
 
 
 def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Path:
@@ -352,7 +388,10 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
     if not claude_exe.exists():
         raise RuntimeError(f"Claude exe missing after check: {claude_exe}")
     workdir = pathlib.Path(check["Workdir"])
-    session_id = ensure_session_id(channel_name, args.workspace, args.role, args.stage)
+    if args.session_mode == "stage":
+        session_id = ensure_session_id(channel_name, args.workspace, args.role, args.stage)
+    else:
+        session_id = new_ephemeral_session_id()
     session_ref_value = session_ref(session_id)
     cmd = [
         str(claude_exe),
@@ -391,6 +430,47 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
     output = (completed.stdout or "").strip()
     if completed.returncode != 0:
         output = (output + "\n\nSTDERR:\n" + (completed.stderr or "").strip()).strip()
+        failure_kind = classify_failure(output)
+        out_path = archive_review(
+            channel=channel_name,
+            workspace=args.workspace,
+            role=args.role,
+            stage=args.stage,
+            session_ref_value=session_ref_value,
+            prompt_hash=prompt_hash,
+            requested_model=args.model,
+            requested_effort=args.effort,
+            session_mode=args.session_mode,
+            review_status="failed",
+            failure_kind=failure_kind,
+            prompt=prompt,
+            output=output,
+        )
+        if args.session_mode == "stage":
+            update_session_record(
+                channel_name,
+                args.workspace,
+                args.role,
+                args.stage,
+                prompt_hash=prompt_hash,
+                output_path=out_path,
+                status="failed",
+                failure_kind=failure_kind,
+            )
+        append_ledger(
+            channel=channel_name,
+            workspace=args.workspace,
+            role=args.role,
+            stage=args.stage,
+            session_ref_value=session_ref_value,
+            prompt_hash=prompt_hash,
+            requested_model=args.model,
+            requested_effort=args.effort,
+            session_mode=args.session_mode,
+            review_status="failed",
+            failure_kind=failure_kind,
+            output_path=out_path,
+        )
         raise RuntimeError(f"official review failed before archive: {output[:1000]}")
     out_path = archive_review(
         channel=channel_name,
@@ -401,17 +481,21 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
         prompt_hash=prompt_hash,
         requested_model=args.model,
         requested_effort=args.effort,
+        session_mode=args.session_mode,
+        review_status="success",
+        failure_kind=None,
         prompt=prompt,
         output=output,
     )
-    update_session_record(
-        channel_name,
-        args.workspace,
-        args.role,
-        args.stage,
-        prompt_hash=prompt_hash,
-        output_path=out_path,
-    )
+    if args.session_mode == "stage":
+        update_session_record(
+            channel_name,
+            args.workspace,
+            args.role,
+            args.stage,
+            prompt_hash=prompt_hash,
+            output_path=out_path,
+        )
     append_ledger(
         channel=channel_name,
         workspace=args.workspace,
@@ -421,6 +505,9 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
         prompt_hash=prompt_hash,
         requested_model=args.model,
         requested_effort=args.effort,
+        session_mode=args.session_mode,
+        review_status="success",
+        failure_kind=None,
         output_path=out_path,
     )
     return out_path
@@ -436,6 +523,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stage", default=DEFAULT_STAGE)
     parser.add_argument("--model", help="Claude model alias or full model name for this call, e.g. sonnet, opus, claude-opus-4-8")
     parser.add_argument("--effort", help="Claude reasoning effort for this call, e.g. low, medium, high, xhigh, max")
+    parser.add_argument(
+        "--session-mode",
+        choices=["fresh", "stage"],
+        default="fresh",
+        help=(
+            "fresh creates a new one-shot Claude session and carries context through review archives; "
+            "stage reuses one session id per channel/workspace/role/stage and may hit Claude session locks"
+        ),
+    )
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument("--check-only", action="store_true", help="Only run official channel CheckOnly")
     return parser

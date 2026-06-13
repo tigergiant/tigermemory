@@ -1,6 +1,7 @@
 .obsidian/
 Obsidian/
 .omx/
+.supervisor/
 *.base
 runtime/
 !runtime/
