@@ -44,6 +44,7 @@ def test_build_meta_records_actual_dim_from_entries(isolated_index_dir, monkeypa
     monkeypatch.setenv("EMBEDDING_BASE_URL", "http://example.test/v1")
     monkeypatch.setenv("EMBEDDING_MODEL", "test-model")
     monkeypatch.setenv("EMBEDDING_API_KEY", "k")
+    monkeypatch.setenv("TM_EMBED_SUMMARY_WEIGHT", "0.98")
     monkeypatch.setenv("EMBEDDING_DIMENSIONS", "9999")  # lying env hint
 
     entries = {"a.md": _make_entry("a.md", 1024), "b.md": _make_entry("b.md", 1024)}
@@ -56,7 +57,7 @@ def test_build_meta_records_actual_dim_from_entries(isolated_index_dir, monkeypa
     assert meta["entry_count"] == 2
     assert "hash_schema" in meta
     assert meta["summary_hash_schema"] == tm_embed_index.SUMMARY_HASH_SCHEMA.decode("utf-8")
-    assert meta["summary_vector_weight"] == tm_embed_index.SUMMARY_VECTOR_WEIGHT
+    assert meta["summary_vector_weight"] == 0.98
     assert "built_at" in meta
 
 
@@ -520,6 +521,7 @@ def test_search_uses_summary_vec_as_secondary_signal(isolated_index_dir, monkeyp
         "wiki",
         {"scope": "wiki", "embedding_dimensions": 2, "embedding_model": "test"},
     )
+    monkeypatch.setenv("TM_EMBED_SUMMARY_WEIGHT", "0.98")
     monkeypatch.setattr(tm_embed_index.tm_core, "embed_one", lambda query: [1.0, 0.0])
 
     hits = tm_embed_index.search("summary query", scope="wiki", k=1)
@@ -528,9 +530,10 @@ def test_search_uses_summary_vec_as_secondary_signal(isolated_index_dir, monkeyp
     breakdown = hits[0]["score_breakdown"]
     assert breakdown["summary_score"] > breakdown["page_score"]
     assert breakdown["summary_boosted"] is True
+    assert breakdown["summary_weight"] == 0.98
 
 
-def test_search_can_disable_summary_vec_with_env_weight(isolated_index_dir, monkeypatch):
+def test_search_uses_default_summary_weight_off_when_env_missing(isolated_index_dir, monkeypatch):
     tm_embed_index._save_index(
         "wiki",
         {
@@ -556,11 +559,59 @@ def test_search_can_disable_summary_vec_with_env_weight(isolated_index_dir, monk
         "wiki",
         {"scope": "wiki", "embedding_dimensions": 2, "embedding_model": "test"},
     )
+    monkeypatch.delenv("TM_EMBED_SUMMARY_WEIGHT", raising=False)
     monkeypatch.setattr(tm_embed_index.tm_core, "embed_one", lambda query: [1.0, 0.0])
-    monkeypatch.setenv("TM_EMBED_SUMMARY_WEIGHT", "0")
 
     hits = tm_embed_index.search("summary query", scope="wiki", k=1)
 
     assert hits[0]["path"] == "wiki/systems/head.md"
     assert hits[0]["score_breakdown"]["summary_weight"] == 0.0
     assert hits[0]["score_breakdown"]["summary_boosted"] is False
+
+
+@pytest.mark.parametrize(
+    "weight_env",
+    ["missing", "invalid"],
+)
+def test_search_does_not_boost_summary_when_summary_weight_is_zero_even_with_negative_page_score(
+    isolated_index_dir, monkeypatch, weight_env
+):
+    tm_embed_index._save_index(
+        "wiki",
+        {
+            "wiki/systems/negative-page.md": {
+                "path": "wiki/systems/negative-page.md",
+                "title": "Negative Page",
+                "hash": "h",
+                "mtime": 0,
+                "vec": [-1.0, 0.0],
+                "summary_hash": "s",
+                "summary_vec": [1.0, 0.0],
+            },
+        },
+    )
+    tm_embed_index._save_meta(
+        "wiki",
+        {"scope": "wiki", "embedding_dimensions": 2, "embedding_model": "test"},
+    )
+    if weight_env == "missing":
+        monkeypatch.delenv("TM_EMBED_SUMMARY_WEIGHT", raising=False)
+    else:
+        monkeypatch.setenv("TM_EMBED_SUMMARY_WEIGHT", "not-a-number")
+    monkeypatch.setattr(tm_embed_index.tm_core, "embed_one", lambda query: [1.0, 0.0])
+
+    hits = tm_embed_index.search("summary query", scope="wiki", k=1)
+
+    assert hits[0]["path"] == "wiki/systems/negative-page.md"
+    breakdown = hits[0]["score_breakdown"]
+    assert breakdown["summary_weight"] == 0.0
+    assert breakdown["summary_boosted"] is False
+    assert breakdown["selected_vector"] == "page"
+    assert hits[0]["score"] == breakdown["page_score"]
+    assert breakdown["page_score"] == -1.0
+    assert breakdown["summary_score"] == 1.0
+
+
+def test_summary_vector_weight_invalid_env_defaults_to_zero(monkeypatch):
+    monkeypatch.setenv("TM_EMBED_SUMMARY_WEIGHT", "not-a-number")
+    assert tm_embed_index._summary_vector_weight() == 0.0

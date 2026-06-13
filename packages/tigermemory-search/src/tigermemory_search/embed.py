@@ -331,11 +331,11 @@ def _allows_summary_vector(rel_path: str) -> bool:
 def _summary_vector_weight() -> float:
     raw = os.environ.get("TM_EMBED_SUMMARY_WEIGHT", "").strip()
     if not raw:
-        return SUMMARY_VECTOR_WEIGHT
+        return 0.0
     try:
         value = float(raw)
     except ValueError:
-        return SUMMARY_VECTOR_WEIGHT
+        return 0.0
     return min(1.0, max(0.0, value))
 
 
@@ -920,10 +920,15 @@ def search(
             continue
         page_score = _cosine(q_vec, vec)
         summary_vec = entry.get("summary_vec")
-        summary_score = _cosine(q_vec, summary_vec) if isinstance(summary_vec, list) else 0.0
+        has_summary_vec = isinstance(summary_vec, list)
+        summary_score = _cosine(q_vec, summary_vec) if has_summary_vec else 0.0
         summary_weight = _summary_vector_weight()
         weighted_summary_score = summary_score * summary_weight
-        summary_boosted = weighted_summary_score > page_score
+        summary_boosted = (
+            has_summary_vec
+            and summary_weight > 0.0
+            and weighted_summary_score > page_score
+        )
         vector_score = weighted_summary_score if summary_boosted else page_score
         if alpha > 0:
             part = _partition_of(entry["path"])
