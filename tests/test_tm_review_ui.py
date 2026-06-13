@@ -3334,6 +3334,20 @@ def test_canvas_payload_returns_candidate_warning_when_mem0_unavailable(tmp_path
     assert payload["candidate_warnings"] == ["待纳入星图候选读取失败：connection refused"]
 
 
+def test_canvas_candidates_degrade_when_mem0_config_missing(monkeypatch):
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(tm_review_ui, "_mem0_payload", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("missing runtime/openmemory/.env")))
+    monkeypatch.setattr(tm_review_ui, "_local_inbox_handoff_items", lambda *_args, **_kwargs: [])
+    tm_review_ui._API_CACHE.clear()
+
+    payload = tm_review_ui._load_canvas_candidates()
+
+    assert payload["canvas_candidates"] == []
+    assert payload["candidate_count"] == 0
+    assert payload["candidate_source"] == "mem0:session-handoff"
+    assert payload["candidate_warnings"] == ["待纳入星图候选读取失败：missing runtime/openmemory/.env"]
+
+
 def test_canvas_candidate_mem0_payload_can_use_env_fallback(monkeypatch):
     tm_review_ui._mem0_dashboard_reset_for_tests()
     seen = {}
