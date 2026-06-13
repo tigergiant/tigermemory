@@ -728,6 +728,15 @@ def test_funnel_compact_summary_includes_query_intent_bucket_metrics():
 
 
 def test_funnel_compare_matrix_env_is_explicit():
+    experimental_envs = {
+        "TM_EMBED_SUMMARY_WEIGHT",
+        "TM_HYBRID_MAP_ARM",
+        "TM_ANSWER_WIKI_MAP_BRIDGE",
+        "TM_ANSWER_WIKI_MAP",
+    }
+    for name, env in tm_answer_funnel_compare.MATRICES.items():
+        assert set(env) == experimental_envs, name
+
     assert tm_answer_funnel_compare.MATRICES["summary_off"] == {
         "TM_EMBED_SUMMARY_WEIGHT": "0",
         "TM_HYBRID_MAP_ARM": "0",
@@ -747,11 +756,13 @@ def test_funnel_compare_matrix_env_is_explicit():
         "TM_ANSWER_WIKI_MAP": "0",
     }
     assert tm_answer_funnel_compare.MATRICES["production"] == {
+        "TM_EMBED_SUMMARY_WEIGHT": "0",
         "TM_HYBRID_MAP_ARM": "0",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
         "TM_ANSWER_WIKI_MAP": "0",
     }
     assert tm_answer_funnel_compare.MATRICES["map_arm"] == {
+        "TM_EMBED_SUMMARY_WEIGHT": "0",
         "TM_HYBRID_MAP_ARM": "1",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
         "TM_ANSWER_WIKI_MAP": "0",

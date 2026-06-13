@@ -41,21 +41,27 @@ MATRICES: dict[str, dict[str, str]] = {
         "TM_ANSWER_WIKI_MAP": "0",
     },
     "production": {
+        "TM_EMBED_SUMMARY_WEIGHT": "0",
         "TM_HYBRID_MAP_ARM": "0",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
         "TM_ANSWER_WIKI_MAP": "0",
     },
     "map_arm": {
+        "TM_EMBED_SUMMARY_WEIGHT": "0",
         "TM_HYBRID_MAP_ARM": "1",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
         "TM_ANSWER_WIKI_MAP": "0",
     },
     "bridge": {
+        "TM_EMBED_SUMMARY_WEIGHT": "0",
         "TM_HYBRID_MAP_ARM": "0",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "1",
         "TM_ANSWER_WIKI_MAP": "0",
     },
-    "all_opt_in": {
+    # Safe combined experiment: legacy planner wiki-map stays off because it
+    # previously regressed the 25-case answer gate.
+    "safe_combined_opt_in": {
+        "TM_EMBED_SUMMARY_WEIGHT": "0.98",
         "TM_HYBRID_MAP_ARM": "1",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "1",
         "TM_ANSWER_WIKI_MAP": "0",
