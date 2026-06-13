@@ -114,15 +114,18 @@ def _run_matrix(
         cwd=tm_core.REPO_ROOT,
         env=env,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         check=False,
     )
     if completed.returncode != 0:
         error_path = output_dir / f"{matrix}.stderr.txt"
-        error_path.write_text(completed.stderr, encoding="utf-8")
+        error_path.write_text(completed.stderr or "", encoding="utf-8")
         raise RuntimeError(f"{matrix} diagnose failed with exit {completed.returncode}; stderr={error_path}")
-    report_path.write_text(completed.stdout, encoding="utf-8")
-    report = json.loads(completed.stdout)
+    stdout = completed.stdout or ""
+    report_path.write_text(stdout, encoding="utf-8")
+    report = json.loads(stdout)
     return {
         "matrix": matrix,
         "run_id": run_id,
