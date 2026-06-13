@@ -40,6 +40,13 @@ ALLOWED_EVAL_DIMENSIONS = {
     "action_grounding_seed",
 }
 ALLOWED_FRESHNESS_MODES = {"current", "historical", "stale_sensitive", "not_applicable"}
+ALLOWED_QUERY_INTENT_BUCKETS = {
+    "topic_locator",
+    "tail_detail",
+    "workflow_fact",
+    "negative",
+    "unspecified",
+}
 
 
 class _LegacyAnswerCompat:
@@ -97,6 +104,14 @@ def load_cases(path: str, *, allow_paper_seed_tmp: bool = False) -> list[dict[st
                         f"{path}:{line_no}: invalid freshness_mode {freshness_mode!r}; "
                         f"expected {sorted(ALLOWED_FRESHNESS_MODES)}"
                     )
+            query_intent_bucket = item.get("query_intent_bucket")
+            if query_intent_bucket is not None:
+                query_intent_bucket = str(query_intent_bucket)
+                if query_intent_bucket not in ALLOWED_QUERY_INTENT_BUCKETS:
+                    raise ValueError(
+                        f"{path}:{line_no}: invalid query_intent_bucket {query_intent_bucket!r}; "
+                        f"expected {sorted(ALLOWED_QUERY_INTENT_BUCKETS)}"
+                    )
             expected_warning = item.get("expected_warning")
             if expected_warning is not None and not (
                 isinstance(expected_warning, str)
@@ -118,6 +133,13 @@ def load_cases(path: str, *, allow_paper_seed_tmp: bool = False) -> list[dict[st
                 )
             cases.append(item)
     return cases
+
+
+def _query_intent_bucket(case: dict[str, Any]) -> str:
+    bucket = str(case.get("query_intent_bucket") or "unspecified")
+    if bucket not in ALLOWED_QUERY_INTENT_BUCKETS:
+        return "unspecified"
+    return bucket
 
 
 def default_run_id() -> str:
@@ -594,6 +616,7 @@ def _compact_diagnosis_row(row: dict[str, Any]) -> dict[str, Any]:
         "freshness_mode",
         "case_source",
         "case_source_ref",
+        "query_intent_bucket",
         "runtime_dependency",
         "actionability_expectation",
         "expected_evidence_paths",
@@ -651,6 +674,7 @@ def diagnose_case(
     """Run one answer case and attribute failures to the first likely layer."""
     expected_paths = [_normalize_case_path(path) for path in case.get("expected_evidence_paths", [])]
     forbidden_paths = [_normalize_case_path(path) for path in case.get("forbidden_evidence_paths", [])]
+    query_intent_bucket = _query_intent_bucket(case)
     top_k = min(max(int(case.get("top_k", 5)), 1), 10)
     probe_k = min(max(int(top_k_probe or case.get("top_k_probe", 10)), 1), 20)
     map_k = min(max(int(map_probe_k or case.get("map_probe_k", 80)), 1), 120)
@@ -833,6 +857,7 @@ def diagnose_case(
         "case_source_ref": case.get("case_source_ref"),
         "runtime_dependency": bool(case.get("runtime_dependency")),
         "actionability_expectation": case.get("actionability_expectation"),
+        "query_intent_bucket": query_intent_bucket,
         "expected_evidence_paths": expected_paths,
         "forbidden_evidence_paths": forbidden_paths,
         "missing_expected_paths": missing_expected_paths,
@@ -891,6 +916,20 @@ def summarize_diagnosis(results: list[dict[str, Any]]) -> dict[str, Any]:
     case_count = len(results)
     passed = sum(1 for item in results if item.get("passed"))
     expected_path_cases = [item for item in results if item.get("expected_evidence_paths")]
+    case_count_by_query_intent_bucket: dict[str, int] = {}
+    expected_path_case_count_by_bucket: dict[str, int] = {}
+    answer_evidence_hit_by_bucket: dict[str, int] = {}
+    for item in results:
+        bucket = _query_intent_bucket(item)
+        case_count_by_query_intent_bucket[bucket] = case_count_by_query_intent_bucket.get(bucket, 0) + 1
+    for item in expected_path_cases:
+        bucket = _query_intent_bucket(item)
+        expected_path_case_count_by_bucket[bucket] = (
+            expected_path_case_count_by_bucket.get(bucket, 0) + 1
+        )
+        answer_evidence_hit_by_bucket.setdefault(bucket, 0)
+        if item.get("answer_evidence_rank") is not None:
+            answer_evidence_hit_by_bucket[bucket] += 1
     lexical_hits = sum(1 for item in expected_path_cases if item.get("lexical_rank") is not None)
     hybrid_hits = sum(1 for item in expected_path_cases if item.get("hybrid_rank") is not None)
     anchor_hits = sum(1 for item in expected_path_cases if item.get("anchor_rank") is not None)
@@ -919,6 +958,9 @@ def summarize_diagnosis(results: list[dict[str, Any]]) -> dict[str, Any]:
         "passed": passed,
         "pass_rate": passed / case_count if case_count else 0.0,
         "expected_path_case_count": len(expected_path_cases),
+        "case_count_by_query_intent_bucket": case_count_by_query_intent_bucket,
+        "expected_path_case_count_by_bucket": expected_path_case_count_by_bucket,
+        "answer_evidence_hit_by_bucket": answer_evidence_hit_by_bucket,
         "lexical_hit": lexical_hits,
         "lexical_hit_rate": lexical_hits / len(expected_path_cases) if expected_path_cases else 1.0,
         "hybrid_hit": hybrid_hits,

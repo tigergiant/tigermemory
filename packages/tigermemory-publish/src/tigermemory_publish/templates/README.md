@@ -70,7 +70,18 @@ Search the Markdown Wiki as part of the same basic mode:
 ```powershell
 tm search --scope wiki --query "project canvas"
 tm search --scope all --query "local memory"
+tm search --scope wiki --query "项目画布"
 ```
+
+Ask without an online model:
+
+```powershell
+tm ask --offline --query "local memory" --scope all
+tm ask --offline --query "项目画布" --scope wiki
+```
+
+Offline ask only returns local evidence from SQLite and Markdown. It does not
+call an AI model and does not generate a final natural-language answer.
 
 Start the local dashboard:
 
@@ -78,7 +89,8 @@ Start the local dashboard:
 tm dashboard
 ```
 
-Then open `http://127.0.0.1:9777/health`.
+Then open `http://127.0.0.1:9777/start` for the beginner start page, or
+`http://127.0.0.1:9777/health` for system checks.
 
 ## Which Mode Should I Use?
 

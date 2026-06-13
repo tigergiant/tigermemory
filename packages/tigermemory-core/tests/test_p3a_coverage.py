@@ -48,8 +48,14 @@ def _http_error(code: int) -> urllib.error.HTTPError:
     return urllib.error.HTTPError("https://example.test", code, "boom", hdrs=None, fp=None)
 
 
+def _force_hybrid_profile(monkeypatch):
+    monkeypatch.delenv("TIGERMEMORY_PROFILE", raising=False)
+    monkeypatch.setattr(tm_core, "_runtime_profile_file_value", lambda: None)
+
+
 def test_mem0_write_delete_update_build_expected_requests(monkeypatch):
     calls = []
+    _force_hybrid_profile(monkeypatch)
     monkeypatch.setattr(tm_core, "mem0_base", lambda: "http://localhost:8765")
     monkeypatch.setattr(tm_core, "mem0_user_id", lambda: "unit-user")
 
@@ -410,6 +416,7 @@ def test_git_remote_and_staged_helpers(monkeypatch):
 
 
 def test_env_and_validate_helpers(monkeypatch):
+    _force_hybrid_profile(monkeypatch)
     values = {
         "MEM0_API_KEY": "key",
         "TM_MCP_API_KEY": "mcp",
@@ -433,6 +440,8 @@ def test_env_and_validate_helpers(monkeypatch):
 
 
 def test_tigermemory_profile_defaults_to_hybrid_when_env_missing(monkeypatch):
+    _force_hybrid_profile(monkeypatch)
+
     def missing_env(key):
         raise RuntimeError(f"{key} missing")
 
@@ -442,6 +451,7 @@ def test_tigermemory_profile_defaults_to_hybrid_when_env_missing(monkeypatch):
 
 
 def test_tigermemory_profile_accepts_local_value_case_insensitive(monkeypatch):
+    _force_hybrid_profile(monkeypatch)
     monkeypatch.setattr(tm_core, "_env_value", lambda key: " LOCAL " if key == "TIGERMEMORY_PROFILE" else "")
 
     assert tm_core.tigermemory_profile() == tm_core.TIGERMEMORY_PROFILE_LOCAL
@@ -449,12 +459,14 @@ def test_tigermemory_profile_accepts_local_value_case_insensitive(monkeypatch):
 
 def test_tigermemory_profile_prefers_process_env_over_runtime_file(monkeypatch):
     monkeypatch.setenv("TIGERMEMORY_PROFILE", "local")
+    monkeypatch.setattr(tm_core, "_runtime_profile_file_value", lambda: "hybrid")
     monkeypatch.setattr(tm_core, "_env_value", lambda key: "hybrid")
 
     assert tm_core.tigermemory_profile() == tm_core.TIGERMEMORY_PROFILE_LOCAL
 
 
 def test_tigermemory_profile_reads_runtime_profile_file(monkeypatch, tmp_path):
+    monkeypatch.delenv("TIGERMEMORY_PROFILE", raising=False)
     runtime_dir = tmp_path / "runtime" / "tigermemory"
     runtime_dir.mkdir(parents=True)
     (runtime_dir / "profile.env").write_text("TIGERMEMORY_PROFILE=local\n", encoding="utf-8")
@@ -465,6 +477,7 @@ def test_tigermemory_profile_reads_runtime_profile_file(monkeypatch, tmp_path):
 
 
 def test_tigermemory_profile_invalid_value_fails_safe_to_hybrid(monkeypatch):
+    _force_hybrid_profile(monkeypatch)
     monkeypatch.setattr(tm_core, "_env_value", lambda key: "offline" if key == "TIGERMEMORY_PROFILE" else "")
 
     assert tm_core.tigermemory_profile() == tm_core.TIGERMEMORY_PROFILE_HYBRID
@@ -510,6 +523,32 @@ def test_local_profile_mem0_search_uses_local_fts(monkeypatch, tmp_path):
     assert payload["results"][0]["source_agent"] == "codex"
     assert payload["search_backend"] == tm_core.TIGERMEMORY_PROFILE_LOCAL
     assert payload["results"][0]["route_info"]["vector_status"] == "fts5_only"
+
+
+def test_local_profile_mem0_search_bridges_chinese_natural_query(monkeypatch, tmp_path):
+    db_path = str(tmp_path / "local.sqlite")
+    monkeypatch.setattr(tm_core, "tigermemory_profile", lambda: tm_core.TIGERMEMORY_PROFILE_LOCAL)
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", db_path)
+
+    payload = json.loads(tm_core.mem0_write("codex", "systems", "虎哥的偏好是先看已验证事实，再看推断。"))
+    mem_id = payload["id"]
+    result = json.loads(tm_core.mem0_search("虎哥偏好", size=3))
+    short_result = json.loads(tm_core.mem0_search("偏好", size=3))
+
+    assert result["results"][0]["id"] == mem_id
+    assert short_result["results"][0]["id"] == mem_id
+
+
+def test_local_profile_mem0_fallback_does_not_append_single_term_english_noise(monkeypatch, tmp_path):
+    db_path = str(tmp_path / "local.sqlite")
+    monkeypatch.setattr(tm_core, "tigermemory_profile", lambda: tm_core.TIGERMEMORY_PROFILE_LOCAL)
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", db_path)
+
+    good = json.loads(tm_core.mem0_write("codex", "systems", "alpha beta exact local fact"))["id"]
+    tm_core.mem0_write("codex", "systems", "alpha only weak local fact")
+    result = json.loads(tm_core.mem0_search("alpha beta", size=5))
+
+    assert [item["id"] for item in result["results"]] == [good]
 
 
 def test_local_profile_mem0_get_reports_unavailable_after_uuid_validation(monkeypatch):

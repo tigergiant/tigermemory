@@ -75,7 +75,7 @@ def _detect_repo_root() -> pathlib.Path:
         return pathlib.Path(explicit).resolve()
     here = pathlib.Path(__file__).resolve()
     for ancestor in [here.parent, *here.parents]:
-        if (ancestor / ".git").is_dir() and (ancestor / "wiki").is_dir():
+        if (ancestor / ".git").exists() and (ancestor / "wiki").is_dir():
             return ancestor
     return here.parent.parent.parent.parent
 

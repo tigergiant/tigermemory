@@ -34,6 +34,11 @@ class _FakeOpener:
         return _FakeResponse()
 
 
+def _force_hybrid_profile(monkeypatch):
+    monkeypatch.delenv("TIGERMEMORY_PROFILE", raising=False)
+    monkeypatch.setattr(tm_core, "_runtime_profile_file_value", lambda: None)
+
+
 def test_render_inbox_body_adds_summary_cn_from_agent_chinese_line():
     body = "这条待审记忆说明：日报审批 UI 需要直接显示中文摘要。\nOriginal English details."
 
@@ -95,6 +100,7 @@ def test_render_inbox_body_overrides_bad_frontmatter_title():
 
 def test_mem0_request_bypasses_default_proxy_opener(monkeypatch):
     fake_opener = _FakeOpener()
+    _force_hybrid_profile(monkeypatch)
 
     def fail_urlopen(*_args, **_kwargs):
         raise AssertionError("mem0_request must not use default urlopen")
@@ -114,6 +120,7 @@ def test_mem0_request_bypasses_default_proxy_opener(monkeypatch):
 
 def test_mem0_search_uses_openmemory_search_query_param(monkeypatch):
     captured = {}
+    _force_hybrid_profile(monkeypatch)
 
     def fake_request(url, *, timeout):
         captured["url"] = url
@@ -136,6 +143,7 @@ def test_mem0_search_uses_openmemory_search_query_param(monkeypatch):
 
 def test_mem0_search_allows_explicit_substring_match_mode(monkeypatch):
     captured = {}
+    _force_hybrid_profile(monkeypatch)
 
     def fake_request(url, *, timeout):
         captured["url"] = url
@@ -152,6 +160,7 @@ def test_mem0_search_allows_explicit_substring_match_mode(monkeypatch):
 
 def test_verify_memory_id_active_hit_with_digest(monkeypatch, tmp_path):
     mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"
+    _force_hybrid_profile(monkeypatch)
     created = int(datetime.datetime(2026, 5, 16, 3, 23, 5, tzinfo=tm_core.TZ_CN).timestamp())
     text = "2026-05-16 T-X3.5 000001.DAT 242 rows"
     digest = tmp_path / "inbox" / "daily" / "2026-05-16.md"
@@ -188,6 +197,7 @@ def test_verify_memory_id_active_hit_with_digest(monkeypatch, tmp_path):
 
 def test_verify_memory_id_explains_outside_digest_window(monkeypatch, tmp_path):
     mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"
+    _force_hybrid_profile(monkeypatch)
     created = int(datetime.datetime(2026, 5, 16, 3, 23, 5, tzinfo=tm_core.TZ_CN).timestamp())
 
     monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
@@ -208,6 +218,7 @@ def test_verify_memory_id_explains_outside_digest_window(monkeypatch, tmp_path):
 
 def test_verify_memory_id_distinguishes_not_found_and_unreachable(monkeypatch):
     mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"
+    _force_hybrid_profile(monkeypatch)
 
     monkeypatch.setattr(tm_core, "mem0_get", lambda _id: (_ for _ in ()).throw(RuntimeError("Mem0 HTTP 404: nope")))
     assert tm_core.verify_memory_id(mem_id)["status"] == "not_found"
@@ -249,6 +260,7 @@ def test_verify_memory_id_uses_local_backend_for_readback_and_fts(monkeypatch, t
 def test_mem0_update_content_puts_content_only(monkeypatch):
     mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"
     captured = {}
+    _force_hybrid_profile(monkeypatch)
 
     def fake_request(url, data=None, *, timeout, method=None):
         captured.update({"url": url, "data": data, "timeout": timeout, "method": method})
@@ -767,6 +779,18 @@ def test_mem0_user_id_reads_env_when_set(monkeypatch, tmp_path):
     monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
 
     assert tm_core.mem0_user_id() == "alice"
+
+
+def test_env_value_can_use_explicit_openmemory_env_path(monkeypatch, tmp_path):
+    repo_env = tmp_path / "repo" / "runtime" / "openmemory" / ".env"
+    repo_env.parent.mkdir(parents=True)
+    repo_env.write_text("MEM0_USER_ID=repo\n", encoding="utf-8")
+    shared_env = tmp_path / "shared.env"
+    shared_env.write_text("MEM0_USER_ID=shared\n", encoding="utf-8")
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path / "repo")
+    monkeypatch.setenv("TIGERMEMORY_OPENMEMORY_ENV", str(shared_env))
+
+    assert tm_core.mem0_user_id() == "shared"
 
 
 def test_deepseek_endpoint_default_when_env_missing(monkeypatch, tmp_path):

@@ -32,7 +32,11 @@ tm init
 tm profile show
 "hello local memory" | tm write-memory --agent codex --topic systems
 tm search --query "hello local memory"
+tm ask --offline --query "hello local memory"
 ```
+
+`tm ask --offline` returns local evidence only. It must not call online Mem0 or
+an AI model in the public basic path.
 
 ## Runtime Profiles
 

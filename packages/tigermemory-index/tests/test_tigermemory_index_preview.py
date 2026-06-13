@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import pathlib
+import sys
 
 import pytest
+
+SRC_ROOT = pathlib.Path(__file__).resolve().parents[1] / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
 import tigermemory_index
 
@@ -215,3 +220,15 @@ def test_detect_repo_root_honors_env(tmp_path, monkeypatch):
     monkeypatch.setenv("TIGERMEMORY_ROOT", str(tmp_path))
 
     assert tigermemory_index._detect_repo_root() == tmp_path.resolve()
+
+
+def test_detect_repo_root_accepts_git_worktree_file(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    pkg = root / "packages" / "tigermemory-index" / "src" / "tigermemory_index"
+    pkg.mkdir(parents=True)
+    (root / "wiki").mkdir()
+    (root / ".git").write_text("gitdir: ../.git/worktrees/repo\n", encoding="utf-8")
+    monkeypatch.delenv("TIGERMEMORY_ROOT", raising=False)
+    monkeypatch.setattr(tigermemory_index, "__file__", str(pkg / "__init__.py"))
+
+    assert tigermemory_index._detect_repo_root() == root.resolve()

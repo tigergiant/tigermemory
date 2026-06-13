@@ -22,22 +22,46 @@ import tigermemory_core as tm_core
 
 
 MATRICES: dict[str, dict[str, str]] = {
+    "summary_off": {
+        "TM_EMBED_SUMMARY_WEIGHT": "0",
+        "TM_HYBRID_MAP_ARM": "0",
+        "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
+        "TM_ANSWER_WIKI_MAP": "0",
+    },
+    "summary_on": {
+        "TM_EMBED_SUMMARY_WEIGHT": "0.98",
+        "TM_HYBRID_MAP_ARM": "0",
+        "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
+        "TM_ANSWER_WIKI_MAP": "0",
+    },
+    "summary_on_map_arm": {
+        "TM_EMBED_SUMMARY_WEIGHT": "0.98",
+        "TM_HYBRID_MAP_ARM": "1",
+        "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
+        "TM_ANSWER_WIKI_MAP": "0",
+    },
     "production": {
+        "TM_EMBED_SUMMARY_WEIGHT": "0",
         "TM_HYBRID_MAP_ARM": "0",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
         "TM_ANSWER_WIKI_MAP": "0",
     },
     "map_arm": {
+        "TM_EMBED_SUMMARY_WEIGHT": "0",
         "TM_HYBRID_MAP_ARM": "1",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
         "TM_ANSWER_WIKI_MAP": "0",
     },
     "bridge": {
+        "TM_EMBED_SUMMARY_WEIGHT": "0",
         "TM_HYBRID_MAP_ARM": "0",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "1",
         "TM_ANSWER_WIKI_MAP": "0",
     },
-    "all_opt_in": {
+    # Safe combined experiment: legacy planner wiki-map stays off because it
+    # previously regressed the 25-case answer gate.
+    "safe_combined_opt_in": {
+        "TM_EMBED_SUMMARY_WEIGHT": "0.98",
         "TM_HYBRID_MAP_ARM": "1",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "1",
         "TM_ANSWER_WIKI_MAP": "0",
@@ -58,6 +82,9 @@ SUMMARY_KEYS = [
     "map_leak_bucket_counts",
     "map_leak_reason_category_counts",
     "evidence_gate_reason_category_counts",
+    "case_count_by_query_intent_bucket",
+    "expected_path_case_count_by_bucket",
+    "answer_evidence_hit_by_bucket",
     "prompt_budget_truncated_count",
     "failure_layer_counts",
 ]
@@ -114,15 +141,18 @@ def _run_matrix(
         cwd=tm_core.REPO_ROOT,
         env=env,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         check=False,
     )
     if completed.returncode != 0:
         error_path = output_dir / f"{matrix}.stderr.txt"
-        error_path.write_text(completed.stderr, encoding="utf-8")
+        error_path.write_text(completed.stderr or "", encoding="utf-8")
         raise RuntimeError(f"{matrix} diagnose failed with exit {completed.returncode}; stderr={error_path}")
-    report_path.write_text(completed.stdout, encoding="utf-8")
-    report = json.loads(completed.stdout)
+    stdout = completed.stdout or ""
+    report_path.write_text(stdout, encoding="utf-8")
+    report = json.loads(stdout)
     return {
         "matrix": matrix,
         "run_id": run_id,
@@ -164,7 +194,7 @@ def main() -> None:
 
     output_dir = Path(args.output_dir) if args.output_dir else _default_output_dir()
     output_dir.mkdir(parents=True, exist_ok=True)
-    matrices = args.matrix or ["production", "map_arm"]
+    matrices = args.matrix or ["summary_off", "summary_on", "summary_on_map_arm"]
     run_id_prefix = args.run_id_prefix or output_dir.name
 
     summaries = [

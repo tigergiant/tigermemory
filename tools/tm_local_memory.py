@@ -41,6 +41,24 @@ DEFAULT_EXPORT_PAGE_SIZE = 100
 DEFAULT_TOPICS_SAMPLE = 5
 SQLITE_SCHEMA_VERSION = 1
 FTS_QUERY_TOKEN_RE = re.compile(r"\s+")
+CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
+LATIN_TERM_RE = re.compile(r"[a-z0-9][a-z0-9._:/\\-]*", re.IGNORECASE)
+CJK_STOP_TERMS = {
+    "是谁",
+    "是什么",
+    "什么",
+    "怎么",
+    "如何",
+    "一下",
+    "帮我",
+    "请问",
+    "查询",
+    "搜索",
+    "看看",
+    "关于",
+    "是否",
+    "需要",
+}
 
 
 def _read_runtime_env() -> dict[str, str]:
@@ -406,6 +424,78 @@ def _build_fts_query(query: str) -> str:
     return " AND ".join(f'"{t}"' for t in terms)
 
 
+def _cjk_query_terms(query: str, *, max_terms: int = 48) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+
+    def add(term: str) -> None:
+        normalized = term.strip().lower()
+        if not normalized or normalized in seen or normalized in CJK_STOP_TERMS:
+            return
+        if CJK_RUN_RE.fullmatch(normalized):
+            if len(normalized) < 2:
+                return
+        elif len(normalized) < 2:
+            return
+        seen.add(normalized)
+        terms.append(normalized)
+
+    q = (query or "").strip()
+    if not q:
+        return []
+    for item in LATIN_TERM_RE.findall(q):
+        add(item)
+    for run in CJK_RUN_RE.findall(q):
+        cleaned = run
+        for stop in sorted(CJK_STOP_TERMS, key=len, reverse=True):
+            cleaned = cleaned.replace(stop, "")
+        add(cleaned)
+        if len(cleaned) >= 3:
+            for width in (4, 3, 2):
+                if len(cleaned) < width:
+                    continue
+                for idx in range(0, len(cleaned) - width + 1):
+                    add(cleaned[idx : idx + width])
+    return terms[:max_terms]
+
+
+def _fallback_ids_by_terms(conn: sqlite3.Connection, query: str, *, limit: int = 50) -> list[str]:
+    terms = _cjk_query_terms(query)
+    if not terms:
+        return []
+    rows = conn.execute(
+        """
+        SELECT id, content, topic, source_agent, metadata_json, created_at
+        FROM memories
+        WHERE state = 'active'
+        ORDER BY created_at DESC
+        LIMIT 500
+        """
+    ).fetchall()
+    q_lower = (query or "").strip().lower()
+    query_has_cjk = bool(CJK_RUN_RE.search(query or ""))
+    scored: list[tuple[int, int, str]] = []
+    for row in rows:
+        text = "\n".join(
+            str(row[key] or "")
+            for key in ("content", "topic", "source_agent", "metadata_json")
+        ).lower()
+        score = 0
+        if q_lower and q_lower in text:
+            score += 20
+        matched_terms = 0
+        for term in terms:
+            if term in text:
+                matched_terms += 1
+                score += 4 if CJK_RUN_RE.search(term) and len(term) >= 3 else 2
+        if not query_has_cjk and len(terms) >= 2 and matched_terms < 2 and q_lower not in text:
+            continue
+        if score > 0:
+            scored.append((score, int(row["created_at"]), str(row["id"])))
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [memory_id for _score, _created_at, memory_id in scored[:limit]]
+
+
 def _read_memory_by_id(conn: sqlite3.Connection, memory_id: str) -> dict[str, Any] | None:
     row = conn.execute(
         """
@@ -758,6 +848,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         if args.terms:
             joined_terms = " ".join(args.terms)
             fts_query = _build_fts_query(joined_terms)
+            found: list[str] = []
             if fts_query:
                 rows = conn.execute(
                     """
@@ -767,9 +858,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
                     (fts_query,),
                 ).fetchall()
                 found = [r["id"] for r in rows]
-                result["search_by_terms_ids"] = found
-                result["search_by_terms_count"] = len(found)
-                result["search_by_terms_self_hit"] = args.id in found
+            if args.id not in found:
+                for memory_id in _fallback_ids_by_terms(conn, joined_terms):
+                    if memory_id not in found:
+                        found.append(memory_id)
+            result["search_by_terms_ids"] = found
+            result["search_by_terms_count"] = len(found)
+            result["search_by_terms_self_hit"] = args.id in found
         print(json.dumps(result, ensure_ascii=False))
         if args.terms and result["search_by_terms_self_hit"] is False:
             return 2
