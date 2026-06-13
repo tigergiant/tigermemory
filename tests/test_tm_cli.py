@@ -341,6 +341,172 @@ def test_installed_style_cli_search_all_groups_memory_and_wiki(tmp_path) -> None
     assert payload["wiki"]["count"] >= 1
 
 
+def test_installed_style_cli_searches_local_memory_with_chinese_query(tmp_path) -> None:
+    env = _cli_subprocess_env(tmp_path)
+    env["TIGERMEMORY_PROFILE"] = "local"
+    db = tmp_path / "memory.sqlite"
+
+    write = subprocess.run(
+        [sys.executable, "-m", "tigermemory_cli", "write-memory", "--agent", "codex", "--topic", "systems", "--db", str(db)],
+        cwd=tmp_path,
+        input="虎哥的偏好是先看已验证事实，再看推断。",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=20,
+        check=False,
+    )
+    assert write.returncode == 0, write.stderr
+    memory_id = json.loads(write.stdout)["id"]
+
+    result = subprocess.run(
+        [sys.executable, "-m", "tigermemory_cli", "search", "--scope", "memory", "--query", "虎哥偏好", "--db", str(db)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=20,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["results"][0]["id"] == memory_id
+
+    short = subprocess.run(
+        [sys.executable, "-m", "tigermemory_cli", "search", "--scope", "memory", "--query", "偏好", "--db", str(db)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=20,
+        check=False,
+    )
+    assert short.returncode == 0, short.stderr
+    assert json.loads(short.stdout)["results"][0]["id"] == memory_id
+
+
+def test_installed_style_cli_searches_wiki_chinese_without_embedding(tmp_path) -> None:
+    env = _cli_subprocess_env(tmp_path)
+    env["EMBEDDING_BASE_URL"] = ""
+    page = tmp_path / "wiki" / "systems" / "starter-cn-search.md"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(
+        "\n".join([
+            "---",
+            'title: "本地中文检索"',
+            "updated: 2026-06-13",
+            "owner: codex",
+            "status: active",
+            "---",
+            "",
+            "# 本地中文检索",
+            "",
+            "TigerMemory 本地模式可以不用 Docker 搜索中文资料。",
+        ]),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "tigermemory_cli", "search", "--scope", "wiki", "--query", "中文资料"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=20,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["results"][0]["path"] == "wiki/systems/starter-cn-search.md"
+
+
+def test_installed_style_cli_ask_offline_returns_local_evidence(tmp_path) -> None:
+    env = _cli_subprocess_env(tmp_path)
+    db = tmp_path / "memory.sqlite"
+    page = tmp_path / "wiki" / "systems" / "starter-offline-ask.md"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(
+        "# 离线问答入口\n\n离线模式只组织本地依据，不调用在线模型。",
+        encoding="utf-8",
+    )
+
+    write = subprocess.run(
+        [sys.executable, "-m", "tigermemory_cli", "write-memory", "--agent", "codex", "--topic", "systems", "--db", str(db)],
+        cwd=tmp_path,
+        input="离线问答入口可以读取本地记忆证据。",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env | {"TIGERMEMORY_PROFILE": "local"},
+        timeout=20,
+        check=False,
+    )
+    assert write.returncode == 0, write.stderr
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "tigermemory_cli",
+            "ask",
+            "--offline",
+            "--scope",
+            "all",
+            "--query",
+            "离线问答入口",
+            "--db",
+            str(db),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env | {"TIGERMEMORY_PROFILE": "hybrid"},
+        timeout=20,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["offline"] is True
+    assert "不生成 AI 总结" in payload["answer"]
+    assert payload["memory"]["count"] >= 1
+    assert payload["wiki"]["count"] >= 1
+    assert {item["source"] for item in payload["evidence"]} >= {"memory", "wiki"}
+
+
+def test_cli_ask_offline_forces_local_profile_before_search(monkeypatch, capsys) -> None:
+    import tigermemory_core as tm_core
+
+    monkeypatch.setenv("TIGERMEMORY_PROFILE", "hybrid")
+
+    def fail_online_request(*_args, **_kwargs):
+        raise AssertionError("offline ask must not call online Mem0")
+
+    def fake_mem0_search(query: str, size: int = 5, *_args, **_kwargs) -> str:
+        assert os.environ["TIGERMEMORY_PROFILE"] == "local"
+        return json.dumps({
+            "count": 1,
+            "items": [{"id": "m1", "text": "虎哥本地证据", "topic": "systems", "source_agent": "codex"}],
+            "results": [{"id": "m1", "text": "虎哥本地证据", "topic": "systems", "source_agent": "codex"}],
+            "search_backend": "local",
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(tm_core, "mem0_request", fail_online_request)
+    monkeypatch.setattr(tm_core, "mem0_search", fake_mem0_search)
+    monkeypatch.setattr(tm_core, "search_wiki", lambda *_args, **_kwargs: [])
+
+    assert tigermemory_cli.main(["ask", "--offline", "--scope", "memory", "--query", "虎哥"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["offline"] is True
+    assert payload["memory"]["count"] == 1
+
+
 def test_published_snapshot_cli_detects_root_without_env(tmp_path) -> None:
     sys.path.insert(0, str(REPO_ROOT / "packages" / "tigermemory-publish" / "src"))
     import tigermemory_publish

@@ -164,6 +164,20 @@ def test_verify_reads_back_memory_and_term_search(tmp_path) -> None:
     assert rc_miss == 2
 
 
+def test_verify_uses_chinese_term_fallback(tmp_path) -> None:
+    source = tmp_path / "source.jsonl"
+    _write_jsonl(
+        source,
+        [{"id": "m1", "content": "虎哥的偏好是先看已验证事实，再看推断。", "metadata": {"source": "codex", "topic": "systems"}}],
+    )
+    db = tmp_path / "mem.sqlite"
+    tm_local_memory.main(["import", "--input", str(source), "--db", str(db)])
+
+    rc = tm_local_memory.main(["verify", "--db", str(db), "--id", "m1", "--terms", "虎哥偏好"])
+
+    assert rc == 0
+
+
 def test_backup_and_restore_cycle(tmp_path) -> None:
     source = tmp_path / "source.jsonl"
     _write_jsonl(source, [{"id": "m1", "content": "to backup", "metadata": {"source": "codex", "topic": "systems"}}])

@@ -512,6 +512,32 @@ def test_local_profile_mem0_search_uses_local_fts(monkeypatch, tmp_path):
     assert payload["results"][0]["route_info"]["vector_status"] == "fts5_only"
 
 
+def test_local_profile_mem0_search_bridges_chinese_natural_query(monkeypatch, tmp_path):
+    db_path = str(tmp_path / "local.sqlite")
+    monkeypatch.setattr(tm_core, "tigermemory_profile", lambda: tm_core.TIGERMEMORY_PROFILE_LOCAL)
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", db_path)
+
+    payload = json.loads(tm_core.mem0_write("codex", "systems", "虎哥的偏好是先看已验证事实，再看推断。"))
+    mem_id = payload["id"]
+    result = json.loads(tm_core.mem0_search("虎哥偏好", size=3))
+    short_result = json.loads(tm_core.mem0_search("偏好", size=3))
+
+    assert result["results"][0]["id"] == mem_id
+    assert short_result["results"][0]["id"] == mem_id
+
+
+def test_local_profile_mem0_fallback_does_not_append_single_term_english_noise(monkeypatch, tmp_path):
+    db_path = str(tmp_path / "local.sqlite")
+    monkeypatch.setattr(tm_core, "tigermemory_profile", lambda: tm_core.TIGERMEMORY_PROFILE_LOCAL)
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", db_path)
+
+    good = json.loads(tm_core.mem0_write("codex", "systems", "alpha beta exact local fact"))["id"]
+    tm_core.mem0_write("codex", "systems", "alpha only weak local fact")
+    result = json.loads(tm_core.mem0_search("alpha beta", size=5))
+
+    assert [item["id"] for item in result["results"]] == [good]
+
+
 def test_local_profile_mem0_get_reports_unavailable_after_uuid_validation(monkeypatch):
     monkeypatch.setattr(tm_core, "tigermemory_profile", lambda: tm_core.TIGERMEMORY_PROFILE_LOCAL)
 

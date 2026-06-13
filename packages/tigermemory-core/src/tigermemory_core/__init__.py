@@ -775,6 +775,24 @@ MEM0_UUID_RE = re.compile(
 
 _LOCAL_DB_DEFAULT_REL_PATH = pathlib.Path("data") / "tigermemory" / "memory.sqlite"
 _LOCAL_MEMORY_SCHEMA_VERSION = 1
+_LOCAL_CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
+_LOCAL_LATIN_TERM_RE = re.compile(r"[a-z0-9][a-z0-9._:/\\-]*", re.IGNORECASE)
+_LOCAL_CJK_STOP_TERMS = {
+    "是谁",
+    "是什么",
+    "什么",
+    "怎么",
+    "如何",
+    "一下",
+    "帮我",
+    "请问",
+    "查询",
+    "搜索",
+    "看看",
+    "关于",
+    "是否",
+    "需要",
+}
 
 
 def _local_db_path() -> pathlib.Path:
@@ -883,6 +901,92 @@ def _local_fts_query(query: str) -> str:
     return " AND ".join(f'"{term}"' for term in terms)
 
 
+def _local_cjk_query_terms(query: str, *, max_terms: int = 48) -> list[str]:
+    """Return lightweight CJK/Latin bridge terms for local sqlite fallback search.
+
+    SQLite FTS5's default tokenizer is not a reliable Chinese segmenter.  This
+    app-level bridge keeps the schema stable while making short Chinese natural
+    questions usable in local/basic mode.
+    """
+    terms: list[str] = []
+    seen: set[str] = set()
+
+    def add(term: str) -> None:
+        normalized = term.strip().lower()
+        if not normalized or normalized in seen or normalized in _LOCAL_CJK_STOP_TERMS:
+            return
+        if _LOCAL_CJK_RUN_RE.fullmatch(normalized):
+            if len(normalized) < 2:
+                return
+        elif len(normalized) < 2:
+            return
+        seen.add(normalized)
+        terms.append(normalized)
+
+    q = (query or "").strip()
+    if not q:
+        return []
+
+    for group in search_query_term_groups(q):
+        for item in group:
+            add(item)
+
+    for item in _LOCAL_LATIN_TERM_RE.findall(q):
+        add(item)
+
+    for run in _LOCAL_CJK_RUN_RE.findall(q):
+        cleaned = run
+        for stop in sorted(_LOCAL_CJK_STOP_TERMS, key=len, reverse=True):
+            cleaned = cleaned.replace(stop, "")
+        add(cleaned)
+        if len(cleaned) >= 3:
+            for width in (4, 3, 2):
+                if len(cleaned) < width:
+                    continue
+                for idx in range(0, len(cleaned) - width + 1):
+                    add(cleaned[idx : idx + width])
+
+    return terms[:max_terms]
+
+
+def _local_memory_fallback_rows(conn: sqlite3.Connection, query: str, size: int) -> list[sqlite3.Row]:
+    terms = _local_cjk_query_terms(query)
+    if not terms:
+        return []
+    rows = conn.execute(
+        """
+        SELECT id, content, topic, source_agent, route_decision, route_score,
+               metadata_json, created_at, updated_at, state, backend_origin, vector_status
+        FROM memories
+        WHERE state = 'active'
+        ORDER BY created_at DESC
+        LIMIT 500
+        """
+    ).fetchall()
+    q_lower = (query or "").strip().lower()
+    query_has_cjk = bool(_LOCAL_CJK_RUN_RE.search(query or ""))
+    scored: list[tuple[int, int, sqlite3.Row]] = []
+    for row in rows:
+        text = "\n".join(
+            str(row[key] or "")
+            for key in ("content", "topic", "source_agent", "metadata_json")
+        ).lower()
+        score = 0
+        if q_lower and q_lower in text:
+            score += 20
+        matched_terms = 0
+        for term in terms:
+            if term in text:
+                matched_terms += 1
+                score += 4 if _LOCAL_CJK_RUN_RE.search(term) and len(term) >= 3 else 2
+        if not query_has_cjk and len(terms) >= 2 and matched_terms < 2 and q_lower not in text:
+            continue
+        if score > 0:
+            scored.append((score, int(row["created_at"]), row))
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [row for _score, _created_at, row in scored[: max(1, int(size))]]
+
+
 def _local_memory_row_to_item(row: sqlite3.Row, *, include_route_info: bool = True) -> dict[str, Any]:
     meta, _meta_warn = _ensure_local_metadata_json(row["metadata_json"])
     route_decision = row["route_decision"]
@@ -936,21 +1040,33 @@ def _local_search_local_memory(conn: sqlite3.Connection, query: str, size: int =
         row = _local_read_memory_by_id(conn, q)
         return [row] if row else []
     fts_query = _local_fts_query(q)
-    if not fts_query:
-        return []
-    rows = conn.execute(
-        """
-        SELECT m.id, m.content, m.topic, m.source_agent, m.route_decision, m.route_score,
-               m.metadata_json, m.created_at, m.updated_at, m.state, m.backend_origin, m.vector_status
-        FROM memories AS m
-        WHERE m.id IN (
-            SELECT id FROM memories_fts WHERE memories_fts MATCH ?
-        )
-        ORDER BY m.created_at DESC
-        LIMIT ?
-        """,
-        (fts_query, limit),
-    ).fetchall()
+    rows: list[sqlite3.Row] = []
+    if fts_query:
+        try:
+            rows = conn.execute(
+                """
+                SELECT m.id, m.content, m.topic, m.source_agent, m.route_decision, m.route_score,
+                       m.metadata_json, m.created_at, m.updated_at, m.state, m.backend_origin, m.vector_status
+                FROM memories AS m
+                WHERE m.id IN (
+                    SELECT id FROM memories_fts WHERE memories_fts MATCH ?
+                )
+                ORDER BY m.created_at DESC
+                LIMIT ?
+                """,
+                (fts_query, limit),
+            ).fetchall()
+        except sqlite3.Error:
+            rows = []
+    seen = {str(row["id"]) for row in rows}
+    if len(rows) < limit:
+        for row in _local_memory_fallback_rows(conn, q, limit):
+            if str(row["id"]) in seen:
+                continue
+            rows.append(row)
+            seen.add(str(row["id"]))
+            if len(rows) >= limit:
+                break
     return [_local_memory_row_to_item(row, include_route_info=True) for row in rows]
 
 

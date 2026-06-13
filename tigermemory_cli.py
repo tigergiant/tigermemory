@@ -249,6 +249,81 @@ def cmd_search(args: argparse.Namespace) -> int:
         return 4
 
 
+def _ask_evidence_from_memory(payload: dict, limit: int) -> list[dict]:
+    out: list[dict] = []
+    for item in (payload.get("items") or payload.get("results") or [])[:limit]:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or item.get("content") or "")
+        out.append({
+            "source": "memory",
+            "id": item.get("id"),
+            "topic": item.get("topic"),
+            "source_agent": item.get("source_agent") or item.get("source"),
+            "snippet": text[:260],
+        })
+    return out
+
+
+def _ask_evidence_from_wiki(results: list[dict], limit: int) -> list[dict]:
+    out: list[dict] = []
+    for item in results[:limit]:
+        if not isinstance(item, dict):
+            continue
+        out.append({
+            "source": "wiki",
+            "path": item.get("path"),
+            "title": item.get("title"),
+            "snippet": item.get("snippet"),
+            "score": item.get("score"),
+        })
+    return out
+
+
+def cmd_ask(args: argparse.Namespace) -> int:
+    if not args.offline:
+        print("tm ask currently supports --offline only; use it to return local evidence without AI summary.", file=sys.stderr)
+        return 2
+    if args.db:
+        os.environ["TIGERMEMORY_LOCAL_DB"] = args.db
+    os.environ["TIGERMEMORY_PROFILE"] = "local"
+    try:
+        import json
+        import tigermemory_core as tm_core
+
+        memory_payload: dict = {"count": 0, "items": [], "results": [], "search_backend": "local"}
+        wiki_results: list[dict] = []
+        if args.scope in {"memory", "all"}:
+            memory_payload = json.loads(tm_core.mem0_search(args.query, args.size))
+        if args.scope in {"wiki", "all"}:
+            wiki_results = tm_core.search_wiki(args.query, size=args.size, include_sources=True)
+        evidence = [
+            *_ask_evidence_from_memory(memory_payload, args.size),
+            *_ask_evidence_from_wiki(wiki_results, args.size),
+        ]
+        print(json.dumps({
+            "query": args.query,
+            "scope": args.scope,
+            "offline": True,
+            "answer": "离线模式只返回本地依据，不生成 AI 总结。",
+            "memory": memory_payload,
+            "wiki": {
+                "count": len(wiki_results),
+                "items": wiki_results,
+                "results": wiki_results,
+                "search_backend": "wiki_lexical",
+            },
+            "evidence": evidence[: max(1, args.size) * 2],
+        }, ensure_ascii=False))
+        return 0
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
+        return 4
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     if args.db:
         os.environ["TIGERMEMORY_LOCAL_DB"] = args.db
@@ -327,6 +402,14 @@ def build_parser() -> argparse.ArgumentParser:
     search_p.add_argument("--scope", choices=["memory", "wiki", "all"], default="memory", help="default: memory")
     search_p.add_argument("--db", default=None)
     search_p.set_defaults(func=cmd_search)
+
+    ask_p = sub.add_parser("ask", help="answer from local evidence; offline mode does not call an AI model")
+    ask_p.add_argument("--query", required=True)
+    ask_p.add_argument("--size", type=int, default=5)
+    ask_p.add_argument("--scope", choices=["memory", "wiki", "all"], default="all", help="default: all")
+    ask_p.add_argument("--db", default=None)
+    ask_p.add_argument("--offline", action="store_true", help="required: return evidence only, without AI summary")
+    ask_p.set_defaults(func=cmd_ask)
 
     verify_p = sub.add_parser("verify", help="verify a memory id")
     verify_p.add_argument("--id", required=True)
