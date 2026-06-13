@@ -857,7 +857,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v62" in response.text
+    assert "tigermemory-memory-ops-v63" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -950,6 +950,13 @@ def test_start_page_i18n_keys_are_complete():
     assert keys
     assert sorted(keys - set(data["zh"])) == []
     assert sorted(keys - set(data["en"])) == []
+
+
+def test_i18n_missing_keys_keep_html_fallback_text():
+    i18n_js = (tm_review_ui.STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
+
+    assert "el.textContent = key" not in i18n_js
+    assert 'el.removeAttribute("data-i18n-missing")' in i18n_js
 
 
 def test_dashboard_git_helpers_do_not_climb_to_parent_repo(tmp_path, monkeypatch):
