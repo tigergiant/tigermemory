@@ -1111,6 +1111,42 @@ def test_best_excerpt_prefers_distinct_query_terms_over_repeats():
     assert excerpt.startswith("## P2 完成报告")
 
 
+def test_planner_expansion_terms_keep_api_endpoint_excerpt(monkeypatch):
+    query = "怎么调用记忆检索接口"
+    planner = {
+        "expanded_queries": [
+            query,
+            "/search_memories /memory/answer /read_wiki search_tigermemory",
+        ],
+        "evidence_terms": [],
+    }
+    evidence_query = tm_answer._planner_evidence_query(query, planner)
+    assert "/search_memories" in evidence_query
+
+    content = "\n\n".join([
+        "# tm_http 端点契约",
+        "## 摘要\n\ntigermemory 的 FastAPI 包装层对外暴露 HTTP 端点。",
+        "#### `POST /search_memories`\n\n请求：`{ \"query\": \"string\", \"limit\": 5 }`。用于在 Mem0 检索记忆。",
+    ])
+
+    monkeypatch.setattr(tm_answer, "_read_hit_content", lambda _path: content)
+    evidence, _gate = tm_answer.expand_evidence(
+        evidence_query,
+        _search_result({
+            "source": "wiki",
+            "path": "wiki/systems/tm_http-endpoints.md",
+            "title": "tm_http 端点契约",
+            "snippet": "# tm_http 端点契约",
+            "score": 1.0,
+        }),
+        max_evidence=1,
+        query_class="synthesis",
+    )
+
+    assert evidence
+    assert "/search_memories" in evidence[0]["excerpt"]
+
+
 def test_memory_answer_core_drops_unsupported_claims(monkeypatch, tmp_path):
     monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
     monkeypatch.setattr(

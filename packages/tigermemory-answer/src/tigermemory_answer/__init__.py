@@ -1229,9 +1229,20 @@ def _planner_evidence_query(query: str, planner: dict[str, Any]) -> str:
         max_items=QUERY_PLANNER_MAX_EVIDENCE_TERMS,
         max_chars=80,
     )
-    if not terms:
-        return query
-    return " ".join([query] + terms)
+    expanded_queries = _dedupe_planner_items(
+        [
+            item
+            for item in (planner.get("expanded_queries") or [])
+            if str(item).strip() and str(item).strip() != str(query).strip()
+        ],
+        max_items=3,
+        max_chars=120,
+    )
+    if terms:
+        return " ".join([query] + terms)
+    if expanded_queries:
+        return " ".join([query] + expanded_queries)
+    return query
 
 
 def _trace_raw_query_enabled() -> bool:
