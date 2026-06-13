@@ -108,6 +108,8 @@ def test_archive_redacts_secret_like_text(monkeypatch, tmp_path):
         stage="p0",
         session_ref_value=supervisor.session_ref(raw_session_id),
         prompt_hash="abc123",
+        requested_model="sonnet",
+        requested_effort="medium",
         prompt="please review api_key=secret-token and Bearer verysecretbearertoken",
         output="ok sk-abcdefghijklmnop",
     )
@@ -115,7 +117,61 @@ def test_archive_redacts_secret_like_text(monkeypatch, tmp_path):
     text = out_path.read_text(encoding="utf-8")
     assert raw_session_id not in text
     assert f"session_ref: {supervisor.session_ref(raw_session_id)}" in text
+    assert "requested_model: sonnet" in text
+    assert "requested_effort: medium" in text
     assert "secret-token" not in text
     assert "verysecretbearertoken" not in text
     assert "sk-abcdefghijklmnop" not in text
     assert "[REDACTED]" in text
+
+
+def test_run_review_passes_model_and_effort_without_changing_session_key(monkeypatch, tmp_path):
+    claude_exe = tmp_path / "claude.exe"
+    claude_exe.write_text("", encoding="utf-8")
+    monkeypatch.setattr(supervisor, "OFFICIAL_LAUNCHER", tmp_path / "start-official-claude.ps1")
+    supervisor.OFFICIAL_LAUNCHER.write_text("# noop\n", encoding="utf-8")
+    monkeypatch.setattr(supervisor, "ARCHIVE_ROOT", tmp_path / "reviews")
+    monkeypatch.setattr(supervisor, "LEDGER_PATH", tmp_path / "ledger.md")
+    monkeypatch.setattr(supervisor, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(supervisor, "SESSION_FILE", tmp_path / "sessions.json")
+    supervisor.LEDGER_PATH.write_text("# Ledger\n\n## 审核调用记录\n", encoding="utf-8")
+
+    payload = {
+        "ClaudeExe": str(claude_exe),
+        "Workdir": str(tmp_path),
+        "ProxyExitLocation": "US",
+        "AnthropicAuthToken": "unset",
+        "AnthropicBaseUrl": None,
+    }
+    calls = []
+
+    def fake_runner(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[0] == "powershell":
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="review ok", stderr="")
+
+    args = supervisor.build_parser().parse_args(
+        [
+            "--stage",
+            "pmodel",
+            "--model",
+            "sonnet",
+            "--effort",
+            "medium",
+            "review this",
+        ]
+    )
+    out_path = supervisor.run_review(args, runner=fake_runner)
+
+    claude_cmd = calls[-1]
+    assert "--model" in claude_cmd
+    assert claude_cmd[claude_cmd.index("--model") + 1] == "sonnet"
+    assert "--effort" in claude_cmd
+    assert claude_cmd[claude_cmd.index("--effort") + 1] == "medium"
+    assert out_path.exists()
+    text = out_path.read_text(encoding="utf-8")
+    assert "requested_model: sonnet" in text
+    assert "requested_effort: medium" in text
+    data = json.loads((tmp_path / "sessions.json").read_text(encoding="utf-8"))
+    assert "claude-official-review|TigerMemory|tiger-development-reviewer|pmodel" in data["sessions"]

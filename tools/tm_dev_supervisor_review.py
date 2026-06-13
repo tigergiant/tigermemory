@@ -268,6 +268,8 @@ def archive_review(
     stage: str,
     session_ref_value: str,
     prompt_hash: str,
+    requested_model: str | None,
+    requested_effort: str | None,
     prompt: str,
     output: str,
 ) -> pathlib.Path:
@@ -289,6 +291,8 @@ review_role: {role}
 stage: {stage}
 session_ref: {session_ref_value}
 prompt_sha256_12: {prompt_hash}
+requested_model: {requested_model or "default"}
+requested_effort: {requested_effort or "default"}
 ---
 
 # Development supervisor Claude review {stage} {prompt_hash}
@@ -313,6 +317,8 @@ def append_ledger(
     stage: str,
     session_ref_value: str,
     prompt_hash: str,
+    requested_model: str | None,
+    requested_effort: str | None,
     output_path: pathlib.Path,
 ) -> None:
     if not LEDGER_PATH.exists():
@@ -321,6 +327,7 @@ def append_ledger(
     line = (
         f"- {_now().strftime('%Y-%m-%d %H:%M')} | channel={channel} | workspace={workspace} | "
         f"role={role} | stage={stage} | session_ref={session_ref_value} | "
+        f"model={requested_model or 'default'} | effort={requested_effort or 'default'} | "
         f"prompt_hash={prompt_hash} | archive={rel}\n"
     )
     with LEDGER_PATH.open("a", encoding="utf-8") as fh:
@@ -354,6 +361,13 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
         args.role,
         "--permission-mode",
         "plan",
+    ]
+    if args.model:
+        cmd.extend(["--model", args.model])
+    if args.effort:
+        cmd.extend(["--effort", args.effort])
+    cmd.extend(
+        [
         "--session-id",
         session_id,
         "--name",
@@ -361,7 +375,8 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
         "--output-format",
         "text",
         prompt,
-    ]
+        ]
+    )
     completed = runner(
         cmd,
         cwd=str(workdir),
@@ -384,6 +399,8 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
         stage=args.stage,
         session_ref_value=session_ref_value,
         prompt_hash=prompt_hash,
+        requested_model=args.model,
+        requested_effort=args.effort,
         prompt=prompt,
         output=output,
     )
@@ -402,6 +419,8 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
         stage=args.stage,
         session_ref_value=session_ref_value,
         prompt_hash=prompt_hash,
+        requested_model=args.model,
+        requested_effort=args.effort,
         output_path=out_path,
     )
     return out_path
@@ -415,6 +434,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace", choices=sorted(WORKSPACES), default=DEFAULT_WORKSPACE)
     parser.add_argument("--role", default=DEFAULT_ROLE)
     parser.add_argument("--stage", default=DEFAULT_STAGE)
+    parser.add_argument("--model", help="Claude model alias or full model name for this call, e.g. sonnet, opus, claude-opus-4-8")
+    parser.add_argument("--effort", help="Claude reasoning effort for this call, e.g. low, medium, high, xhigh, max")
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument("--check-only", action="store_true", help="Only run official channel CheckOnly")
     return parser
