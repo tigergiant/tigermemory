@@ -503,6 +503,94 @@ def test_diagnose_case_flags_mixed_partition_evidence(tmp_path, monkeypatch):
     assert result["outside_partition_paths"] == ["wiki/operations/wrong-contract.md"]
 
 
+def test_diagnose_case_carries_query_intent_bucket_default(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_answer_eval.tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_answer_eval.tm_core, "search_wiki", lambda *a, **k: [])
+    monkeypatch.setattr(tm_answer_eval.tm_core, "search_wiki_hybrid", lambda *a, **k: [])
+
+    def fake_memory_answer_core(query: str, **kwargs):
+        return {
+            "status": "ok",
+            "answer": "alpha",
+            "summary": "alpha",
+            "claims": [{"id": "c1", "text": "alpha", "support": ["e1"]}],
+            "evidence": [{"id": "e1", "path": "wiki/systems/contract.md", "excerpt": "alpha"}],
+            "warnings": [],
+            "run_id": kwargs.get("run_id"),
+            "trace_id": "trace-bucket",
+            "trace": {
+                "calls": [{"primary_scope": "wiki"}],
+                "evidence_gate": [{
+                    "path": "wiki/systems/contract.md",
+                    "keep": True,
+                    "reason": "kept",
+                }],
+            },
+        }
+
+    monkeypatch.setattr(tm_answer_eval.tm_answer, "memory_answer_core", fake_memory_answer_core)
+
+    result = tm_answer_eval.diagnose_case(
+        {
+            "id": "bucket-default",
+            "query": "query intent bucket example",
+            "expected_status": "ok",
+            "expected_evidence_paths": ["wiki/systems/contract.md"],
+            "must_contain": ["alpha"],
+        },
+        run_id="diag-test",
+    )
+
+    assert result["query_intent_bucket"] == "unspecified"
+
+
+def test_summarize_diagnosis_reports_query_intent_bucket_answer_evidence_metrics():
+    summary = tm_answer_eval.summarize_diagnosis([
+        {
+            "passed": True,
+            "query_intent_bucket": "workflow_fact",
+            "expected_evidence_paths": ["wiki/systems/contract.md"],
+            "answer_evidence_rank": 1,
+        },
+        {
+            "passed": False,
+            "query_intent_bucket": "topic_locator",
+            "expected_evidence_paths": ["wiki/systems/rule.md"],
+            "answer_evidence_rank": None,
+        },
+        {
+            "passed": False,
+            "query_intent_bucket": "negative",
+            "expected_evidence_paths": ["wiki/systems/unknown.md"],
+            "answer_evidence_rank": None,
+        },
+        {
+            "passed": True,
+            "query_intent_bucket": "unspecified",
+            "expected_evidence_paths": [],
+            "answer_evidence_rank": None,
+        },
+    ])
+
+    assert summary["case_count"] == 4
+    assert summary["case_count_by_query_intent_bucket"] == {
+        "workflow_fact": 1,
+        "topic_locator": 1,
+        "negative": 1,
+        "unspecified": 1,
+    }
+    assert summary["expected_path_case_count_by_bucket"] == {
+        "workflow_fact": 1,
+        "topic_locator": 1,
+        "negative": 1,
+    }
+    assert summary["answer_evidence_hit_by_bucket"] == {
+        "workflow_fact": 1,
+        "topic_locator": 0,
+        "negative": 0,
+    }
+
+
 def test_diagnose_compact_redacts_query(tmp_path, monkeypatch, capsys):
     cases = tmp_path / "cases.jsonl"
     cases.write_text(
@@ -586,7 +674,78 @@ def test_memory_answer_p310_holdout_fixture_is_independent():
     assert all(not str(case["id"]).startswith("p35-") for case in holdout)
 
 
+def test_query_intent_bucket_field_is_present_and_valid_in_answer_fixtures():
+    allowed = {
+        "topic_locator",
+        "tail_detail",
+        "workflow_fact",
+        "negative",
+        "unspecified",
+    }
+    for fixture in [
+        str(REPO_ROOT / "tests" / "fixtures" / "memory_answer_diagnosis_100.jsonl"),
+        str(REPO_ROOT / "tests" / "fixtures" / "memory_answer_holdout_p310.jsonl"),
+    ]:
+        cases = tm_answer_eval.load_cases(fixture)
+        assert all(case.get("query_intent_bucket") in allowed for case in cases)
+
+
+def test_load_cases_rejects_invalid_query_intent_bucket(tmp_path):
+    cases = tmp_path / "cases.jsonl"
+    cases.write_text(
+        json.dumps({
+            "id": "bad-bucket",
+            "query": "bad bucket",
+            "query_intent_bucket": "topic-locator",
+        }, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    try:
+        tm_answer_eval.load_cases(str(cases))
+    except ValueError as exc:
+        assert "invalid query_intent_bucket" in str(exc)
+    else:
+        raise AssertionError("expected invalid query_intent_bucket to be rejected")
+
+
+def test_funnel_compact_summary_includes_query_intent_bucket_metrics():
+    report = {
+        "case_count": 2,
+        "passed": 1,
+        "expected_path_case_count": 2,
+        "answer_evidence_hit": 1,
+        "case_count_by_query_intent_bucket": {"workflow_fact": 1, "topic_locator": 1},
+        "expected_path_case_count_by_bucket": {"workflow_fact": 1, "topic_locator": 1},
+        "answer_evidence_hit_by_bucket": {"workflow_fact": 1, "topic_locator": 0},
+    }
+
+    compact = tm_answer_funnel_compare._compact_summary(report)
+
+    assert compact["case_count_by_query_intent_bucket"] == {"workflow_fact": 1, "topic_locator": 1}
+    assert compact["expected_path_case_count_by_bucket"] == {"workflow_fact": 1, "topic_locator": 1}
+    assert compact["answer_evidence_hit_by_bucket"] == {"workflow_fact": 1, "topic_locator": 0}
+
+
 def test_funnel_compare_matrix_env_is_explicit():
+    assert tm_answer_funnel_compare.MATRICES["summary_off"] == {
+        "TM_EMBED_SUMMARY_WEIGHT": "0",
+        "TM_HYBRID_MAP_ARM": "0",
+        "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
+        "TM_ANSWER_WIKI_MAP": "0",
+    }
+    assert tm_answer_funnel_compare.MATRICES["summary_on"] == {
+        "TM_EMBED_SUMMARY_WEIGHT": "0.98",
+        "TM_HYBRID_MAP_ARM": "0",
+        "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
+        "TM_ANSWER_WIKI_MAP": "0",
+    }
+    assert tm_answer_funnel_compare.MATRICES["summary_on_map_arm"] == {
+        "TM_EMBED_SUMMARY_WEIGHT": "0.98",
+        "TM_HYBRID_MAP_ARM": "1",
+        "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
+        "TM_ANSWER_WIKI_MAP": "0",
+    }
     assert tm_answer_funnel_compare.MATRICES["production"] == {
         "TM_HYBRID_MAP_ARM": "0",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "0",

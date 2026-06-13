@@ -656,9 +656,16 @@ def staged_blob(path: str) -> str | None:
 
 # ---------- Mem0 ----------
 
+def _openmemory_env_path() -> Path:
+    override = os.environ.get("TIGERMEMORY_OPENMEMORY_ENV", "").strip()
+    if override:
+        return pathlib.Path(override).expanduser().resolve()
+    return REPO_ROOT / "runtime" / "openmemory" / ".env"
+
+
 def _env_value(key: str) -> str:
     """Read KEY=value from runtime/openmemory/.env. Raises RuntimeError if missing."""
-    env_path = REPO_ROOT / "runtime" / "openmemory" / ".env"
+    env_path = _openmemory_env_path()
     if not env_path.exists():
         raise RuntimeError(f"missing {env_path} — configure {key} first")
     for line in env_path.read_text(encoding="utf-8").splitlines():

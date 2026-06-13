@@ -205,3 +205,17 @@ def test_detect_repo_root_honors_env(tmp_path, monkeypatch):
     monkeypatch.setenv("TIGERMEMORY_ROOT", str(tmp_path))
 
     assert tigermemory_persona._detect_repo_root() == tmp_path.resolve()
+
+
+def test_detect_repo_root_accepts_git_file_worktree(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    nested = repo / "packages" / "tigermemory-persona" / "src" / "tigermemory_persona"
+    nested.mkdir(parents=True)
+    (repo / ".git").write_text("gitdir: ../.git/worktrees/repo\n", encoding="utf-8")
+    (repo / "wiki").mkdir()
+    fake_file = nested / "__init__.py"
+    fake_file.write_text("# fake\n", encoding="utf-8")
+    monkeypatch.delenv("TIGERMEMORY_ROOT", raising=False)
+    monkeypatch.setattr(tigermemory_persona, "__file__", str(fake_file))
+
+    assert tigermemory_persona._detect_repo_root() == repo.resolve()

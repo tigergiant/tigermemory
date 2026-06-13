@@ -769,6 +769,18 @@ def test_mem0_user_id_reads_env_when_set(monkeypatch, tmp_path):
     assert tm_core.mem0_user_id() == "alice"
 
 
+def test_env_value_can_use_explicit_openmemory_env_path(monkeypatch, tmp_path):
+    repo_env = tmp_path / "repo" / "runtime" / "openmemory" / ".env"
+    repo_env.parent.mkdir(parents=True)
+    repo_env.write_text("MEM0_USER_ID=repo\n", encoding="utf-8")
+    shared_env = tmp_path / "shared.env"
+    shared_env.write_text("MEM0_USER_ID=shared\n", encoding="utf-8")
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path / "repo")
+    monkeypatch.setenv("TIGERMEMORY_OPENMEMORY_ENV", str(shared_env))
+
+    assert tm_core.mem0_user_id() == "shared"
+
+
 def test_deepseek_endpoint_default_when_env_missing(monkeypatch, tmp_path):
     env_path = tmp_path / "runtime" / "openmemory" / ".env"
     env_path.parent.mkdir(parents=True)

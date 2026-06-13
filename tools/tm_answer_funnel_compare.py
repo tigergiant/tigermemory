@@ -22,6 +22,24 @@ import tigermemory_core as tm_core
 
 
 MATRICES: dict[str, dict[str, str]] = {
+    "summary_off": {
+        "TM_EMBED_SUMMARY_WEIGHT": "0",
+        "TM_HYBRID_MAP_ARM": "0",
+        "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
+        "TM_ANSWER_WIKI_MAP": "0",
+    },
+    "summary_on": {
+        "TM_EMBED_SUMMARY_WEIGHT": "0.98",
+        "TM_HYBRID_MAP_ARM": "0",
+        "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
+        "TM_ANSWER_WIKI_MAP": "0",
+    },
+    "summary_on_map_arm": {
+        "TM_EMBED_SUMMARY_WEIGHT": "0.98",
+        "TM_HYBRID_MAP_ARM": "1",
+        "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
+        "TM_ANSWER_WIKI_MAP": "0",
+    },
     "production": {
         "TM_HYBRID_MAP_ARM": "0",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
@@ -58,6 +76,9 @@ SUMMARY_KEYS = [
     "map_leak_bucket_counts",
     "map_leak_reason_category_counts",
     "evidence_gate_reason_category_counts",
+    "case_count_by_query_intent_bucket",
+    "expected_path_case_count_by_bucket",
+    "answer_evidence_hit_by_bucket",
     "prompt_budget_truncated_count",
     "failure_layer_counts",
 ]
@@ -167,7 +188,7 @@ def main() -> None:
 
     output_dir = Path(args.output_dir) if args.output_dir else _default_output_dir()
     output_dir.mkdir(parents=True, exist_ok=True)
-    matrices = args.matrix or ["production", "map_arm"]
+    matrices = args.matrix or ["summary_off", "summary_on", "summary_on_map_arm"]
     run_id_prefix = args.run_id_prefix or output_dir.name
 
     summaries = [
