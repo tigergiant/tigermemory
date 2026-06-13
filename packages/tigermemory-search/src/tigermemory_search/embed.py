@@ -319,11 +319,24 @@ _HASH_SCHEMA = b"v8-compact-page-input-6144"
 # an equally relevant full-page vector still wins, but a strong summary-only
 # match can rescue long pages whose important content is beyond the page head.
 SUMMARY_VECTOR_WEIGHT = 0.98
+PERSON_PATH_PREFIXES = ("wiki/person/", "sources/person/")
 
 
 def _allows_summary_vector(rel_path: str) -> bool:
-    """Return whether runtime index may store summary text/vector for a page."""
-    return not rel_path.replace("\\", "/").startswith("wiki/person/")
+    """Return whether runtime index may store a summary vector for a page."""
+    rel = rel_path.replace("\\", "/").lstrip("/")
+    return not rel.startswith(PERSON_PATH_PREFIXES)
+
+
+def _summary_vector_weight() -> float:
+    raw = os.environ.get("TM_EMBED_SUMMARY_WEIGHT", "").strip()
+    if not raw:
+        return SUMMARY_VECTOR_WEIGHT
+    try:
+        value = float(raw)
+    except ValueError:
+        return SUMMARY_VECTOR_WEIGHT
+    return min(1.0, max(0.0, value))
 
 
 def _content_hash(rel_path: str, title: str, aliases: list[str], body: str) -> str:
@@ -580,7 +593,7 @@ def _build_meta(scope: str, entries: dict[str, dict[str, Any]]) -> dict[str, Any
         "embedding_dimensions_env_hint": env_dim,
         "hash_schema": _HASH_SCHEMA.decode("utf-8", errors="replace"),
         "summary_hash_schema": SUMMARY_HASH_SCHEMA.decode("utf-8", errors="replace"),
-        "summary_vector_weight": SUMMARY_VECTOR_WEIGHT,
+        "summary_vector_weight": _summary_vector_weight(),
         "entry_count": len(entries),
         "summary_vector_count": sum(1 for entry in entries.values() if isinstance(entry.get("summary_vec"), list)),
         "built_at": built_at,
@@ -771,7 +784,6 @@ def build(scope: str = "wiki", *, force: bool = False, batch_log: int = 50) -> d
         else:
             pending.append((f"{rel}#page", rel, "page", text_for_embed))
         if summary:
-            entry["summary"] = summary
             entry["summary_hash"] = summary_hash
             if (
                 prior
@@ -909,7 +921,8 @@ def search(
         page_score = _cosine(q_vec, vec)
         summary_vec = entry.get("summary_vec")
         summary_score = _cosine(q_vec, summary_vec) if isinstance(summary_vec, list) else 0.0
-        weighted_summary_score = summary_score * SUMMARY_VECTOR_WEIGHT
+        summary_weight = _summary_vector_weight()
+        weighted_summary_score = summary_score * summary_weight
         summary_boosted = weighted_summary_score > page_score
         vector_score = weighted_summary_score if summary_boosted else page_score
         if alpha > 0:
@@ -925,7 +938,7 @@ def search(
             "weighted_summary_score": round(weighted_summary_score, 4),
             "vector_score": round(vector_score, 4),
             "selected_vector": "summary" if summary_boosted else "page",
-            "summary_weight": SUMMARY_VECTOR_WEIGHT,
+            "summary_weight": summary_weight,
             "summary_boosted": summary_boosted,
             "partition_score": round(p_s, 4),
             "propagation_alpha": alpha,

@@ -283,7 +283,7 @@ def test_build_stores_summary_vec_when_summary_exists(isolated_index_dir, tmp_pa
 
     assert result["summary_vectors"] == 1
     entry = entries["wiki/systems/long.md"]
-    assert entry["summary"] == "Deep unique signal about p311 summary vectors."
+    assert "summary" not in entry
     assert entry["summary_hash"]
     assert entry["summary_vec"] == [2.0]
     assert len(embedded_texts) == 2
@@ -308,6 +308,32 @@ def test_build_does_not_store_person_summary_plaintext(isolated_index_dir, tmp_p
     result = tm_embed_index.build(scope="wiki", force=True, batch_log=10)
     entries = tm_embed_index._load_index("wiki")
     entry = entries["wiki/person/tiger.md"]
+
+    assert result["summary_vectors"] == 0
+    assert "summary" not in entry
+    assert "summary_hash" not in entry
+    assert "summary_vec" not in entry
+
+
+def test_build_does_not_store_sources_person_summary_vector(isolated_index_dir, tmp_path, monkeypatch):
+    repo = tmp_path
+    page = repo / "sources" / "person" / "tiger.md"
+    page.parent.mkdir(parents=True)
+    page.write_text(
+        "---\ntitle: Tiger Source\n---\n"
+        "# Tiger Source\n\n"
+        "## 摘要\n\n"
+        "Private source summary should not be copied into runtime index.\n\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tm_embed_index, "REPO_ROOT", repo)
+    monkeypatch.setattr(tm_embed_index.tm_core, "REPO_ROOT", repo)
+    monkeypatch.setattr(tm_embed_index, "SCOPES", {"wiki": ("sources",)})
+    monkeypatch.setattr(tm_embed_index.tm_core, "embed_texts", lambda texts: [[1.0] for _ in texts])
+
+    result = tm_embed_index.build(scope="wiki", force=True, batch_log=10)
+    entries = tm_embed_index._load_index("wiki")
+    entry = entries["sources/person/tiger.md"]
 
     assert result["summary_vectors"] == 0
     assert "summary" not in entry
@@ -434,6 +460,39 @@ def test_build_rejects_incremental_backfill_model_mismatch(isolated_index_dir, t
         tm_embed_index.build(scope="wiki", force=False, batch_log=10)
 
 
+def test_build_drops_stale_summary_vec_when_page_summary_removed(isolated_index_dir, tmp_path, monkeypatch):
+    repo = tmp_path
+    page = repo / "wiki" / "systems" / "long.md"
+    page.parent.mkdir(parents=True)
+    page.write_text("# Long Page\n\nNo summary remains.", encoding="utf-8")
+    rel = "wiki/systems/long.md"
+    tm_embed_index._save_index(
+        "wiki",
+        {
+            rel: {
+                "path": rel,
+                "title": "Long Page",
+                "hash": "old",
+                "mtime": 0,
+                "vec": [1.0, 0.0],
+                "summary_hash": "old-summary",
+                "summary_vec": [0.0, 1.0],
+            }
+        },
+    )
+    monkeypatch.setattr(tm_embed_index, "REPO_ROOT", repo)
+    monkeypatch.setattr(tm_embed_index.tm_core, "REPO_ROOT", repo)
+    monkeypatch.setattr(tm_embed_index, "SCOPES", {"wiki": ("wiki",)})
+    monkeypatch.setattr(tm_embed_index.tm_core, "embed_texts", lambda texts: [[1.0, 0.0] for _ in texts])
+
+    result = tm_embed_index.build(scope="wiki", force=False, batch_log=10)
+    entry = tm_embed_index._load_index("wiki")[rel]
+
+    assert result["summary_vectors"] == 0
+    assert "summary_hash" not in entry
+    assert "summary_vec" not in entry
+
+
 def test_search_uses_summary_vec_as_secondary_signal(isolated_index_dir, monkeypatch):
     tm_embed_index._save_index(
         "wiki",
@@ -469,3 +528,39 @@ def test_search_uses_summary_vec_as_secondary_signal(isolated_index_dir, monkeyp
     breakdown = hits[0]["score_breakdown"]
     assert breakdown["summary_score"] > breakdown["page_score"]
     assert breakdown["summary_boosted"] is True
+
+
+def test_search_can_disable_summary_vec_with_env_weight(isolated_index_dir, monkeypatch):
+    tm_embed_index._save_index(
+        "wiki",
+        {
+            "wiki/systems/long.md": {
+                "path": "wiki/systems/long.md",
+                "title": "Long",
+                "hash": "h",
+                "mtime": 0,
+                "vec": [0.0, 0.8],
+                "summary_hash": "s",
+                "summary_vec": [1.0, 0.0],
+            },
+            "wiki/systems/head.md": {
+                "path": "wiki/systems/head.md",
+                "title": "Head",
+                "hash": "h2",
+                "mtime": 0,
+                "vec": [0.0, 1.0],
+            },
+        },
+    )
+    tm_embed_index._save_meta(
+        "wiki",
+        {"scope": "wiki", "embedding_dimensions": 2, "embedding_model": "test"},
+    )
+    monkeypatch.setattr(tm_embed_index.tm_core, "embed_one", lambda query: [1.0, 0.0])
+    monkeypatch.setenv("TM_EMBED_SUMMARY_WEIGHT", "0")
+
+    hits = tm_embed_index.search("summary query", scope="wiki", k=1)
+
+    assert hits[0]["path"] == "wiki/systems/head.md"
+    assert hits[0]["score_breakdown"]["summary_weight"] == 0.0
+    assert hits[0]["score_breakdown"]["summary_boosted"] is False
