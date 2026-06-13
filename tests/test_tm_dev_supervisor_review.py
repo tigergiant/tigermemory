@@ -30,8 +30,13 @@ def test_official_env_clears_custom_provider_keys():
     assert env["CLAUDE_CONFIG_DIR"].endswith("ClaudeCodeOfficial\\config")
 
 
-def test_api_test_channel_is_not_automated():
-    assert supervisor.main(["--channel", "api_test", "draft check"]) == 2
+def test_api_test_env_uses_legacy_proxy_without_forcing_official_config():
+    env = supervisor.api_test_env({"PATH": "keep", "ANTHROPIC_AUTH_TOKEN": "legacy-secret"})
+
+    assert env["PATH"] == "keep"
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "legacy-secret"
+    assert env["HTTP_PROXY"] == "http://127.0.0.1:7890"
+    assert "CLAUDE_CONFIG_DIR" not in env
 
 
 def test_session_id_is_stable_per_channel_workspace_role_stage(monkeypatch, tmp_path):
@@ -69,6 +74,27 @@ def test_run_official_check_rejects_uncleared_provider_env(monkeypatch, tmp_path
         assert "did not clear custom Anthropic" in str(exc)
     else:
         raise AssertionError("expected provider env guard to fail")
+
+
+def test_run_api_test_check_uses_whitelisted_workspace_and_version(monkeypatch, tmp_path):
+    claude_exe = tmp_path / "claude.exe"
+    claude_exe.write_text("", encoding="utf-8")
+    workspace = tmp_path / "TigerMemory"
+    workspace.mkdir()
+    monkeypatch.setattr(supervisor, "API_TEST_EXE", claude_exe)
+    monkeypatch.setattr(supervisor, "WORKSPACES", {"TigerMemory": workspace})
+
+    def fake_runner(cmd, **kwargs):
+        assert cmd == [str(claude_exe), "--version"]
+        assert kwargs["cwd"] == str(workspace)
+        assert kwargs["env"]["HTTP_PROXY"] == "http://127.0.0.1:7890"
+        return subprocess.CompletedProcess(cmd, 0, stdout="2.1.110 (Claude Code)\n", stderr="")
+
+    payload = supervisor.run_api_test_check("TigerMemory", runner=fake_runner)
+
+    assert payload["Channel"] == "claude-api-test"
+    assert payload["ProviderSecretRead"] is False
+    assert payload["Workdir"] == str(workspace)
 
 
 def test_archive_redacts_secret_like_text(monkeypatch, tmp_path):
