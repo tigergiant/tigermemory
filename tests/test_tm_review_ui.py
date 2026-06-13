@@ -857,7 +857,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v61" in response.text
+    assert "tigermemory-memory-ops-v62" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -903,7 +903,7 @@ def test_dashboard_shell_pages_are_no_store(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     client.get("/", headers=HOST, follow_redirects=False)
 
-    for path in ["/review", "/health", "/quality", "/canvas", "/settings"]:
+    for path in ["/start", "/review", "/health", "/quality", "/canvas", "/settings"]:
         response = client.get(path, headers=HOST)
         assert response.status_code == 200
         assert response.headers["Cache-Control"].startswith("no-store")
@@ -919,6 +919,37 @@ def test_review_route_returns_page_shell_not_bare_json(tmp_path, monkeypatch):
     assert "text/html" in response.headers["content-type"]
     assert "<body" in response.text
     assert "detail" not in response.text[:120]
+
+
+def test_start_route_returns_beginner_shell(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/start", headers=HOST)
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert response.headers["Cache-Control"].startswith("no-store")
+    assert 'body data-page="start"' in response.text
+    assert "tm ask --offline" in response.text
+    assert "data-copy-command" in response.text
+    assert "window.tmPages.start.init" in response.text
+    assert "/static/dashboard-common.js" in response.text
+    assert "/static/dashboard-pages.js" in response.text
+
+
+def test_start_page_i18n_keys_are_complete():
+    html = (tm_review_ui.STATIC_DIR / "start.html").read_text(encoding="utf-8")
+    data = json.loads((tm_review_ui.STATIC_DIR / "i18n.json").read_text(encoding="utf-8"))
+    keys = {
+        token.split('"', 1)[0]
+        for token in html.split('data-i18n="')[1:]
+        if token.split('"', 1)[0]
+    }
+
+    assert keys
+    assert sorted(keys - set(data["zh"])) == []
+    assert sorted(keys - set(data["en"])) == []
 
 
 def test_dashboard_git_helpers_do_not_climb_to_parent_repo(tmp_path, monkeypatch):
@@ -1030,7 +1061,10 @@ def test_dashboard_data_pages_return_fast_shells(tmp_path, monkeypatch):
     health = client.get("/health", headers=HOST)
     quality = client.get("/quality", headers=HOST)
     settings = client.get("/settings", headers=HOST)
+    start = client.get("/start", headers=HOST)
 
+    assert start.status_code == 200
+    assert "window.tmPages.start.init" in start.text
     assert health.status_code == 200
     assert '"loading": true' in health.text
     assert "window.tmPages.health.init" in health.text
@@ -1097,8 +1131,8 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     client.get("/", headers=HOST, follow_redirects=False)
 
-    # 5 pages list
-    pages = ["/digest/2026-05-21", "/health", "/quality", "/agent-tools", "/settings"]
+    # dashboard shell pages
+    pages = ["/start", "/digest/2026-05-21", "/health", "/quality", "/agent-tools", "/settings"]
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_digest(tmp_path)
 
@@ -1110,11 +1144,13 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
 
     # 2. dashboard-pages.js 被 digest / health / quality / settings / agent-tools 引用
     digest = client.get("/digest/2026-05-21", headers=HOST)
+    start = client.get("/start", headers=HOST)
     health = client.get("/health", headers=HOST)
     quality = client.get("/quality", headers=HOST)
     settings = client.get("/settings", headers=HOST)
     agent_tools = client.get("/agent-tools", headers=HOST)
     assert "/static/dashboard-pages.js" in digest.text
+    assert "/static/dashboard-pages.js" in start.text
     assert "/static/dashboard-pages.js" in health.text
     assert "/static/dashboard-pages.js" in quality.text
     assert "/static/dashboard-pages.js" in settings.text
@@ -1127,6 +1163,8 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "/static/dashboard-pages.js" in sw_res.text
 
     # 4. health/quality/settings/digest/agent-tools 页面不再直接出现 inline 定义，且 digest 使用 init
+    assert "window.tmPages.start.init" in start.text
+    assert "function copyCommand" not in start.text
     assert "window.tmPages.daily.init" in digest.text
     assert "function renderInbox" not in digest.text
     assert "function openWikiModal" not in digest.text
@@ -1141,9 +1179,10 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "async function runDoctor" not in agent_tools.text
     assert "async function runEval" not in agent_tools.text
 
-    # 5. dashboard-pages.js 中存在 window.tmPages.settings, window.tmPages.daily, window.tmPages.agentTools，以及 AbortController 事件清理机制
+    # 5. dashboard-pages.js 中存在 window.tmPages.start, window.tmPages.settings, window.tmPages.daily, window.tmPages.agentTools，以及 AbortController 事件清理机制
     js_content = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
     assert "clearInterval" in js_content
+    assert "window.tmPages.start" in js_content
     assert "window.tmPages.settings" in js_content
     assert "window.tmPages.daily" in js_content
     assert "window.tmPages.agentTools" in js_content
@@ -1153,6 +1192,7 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     # 6. dashboard-common.js 中存在 window.tmDashboardRouter 及其初始化和导航拦截逻辑
     common_js = (tm_review_ui.STATIC_DIR / "dashboard-common.js").read_text(encoding="utf-8")
     assert "window.tmDashboardRouter" in common_js
+    assert "path === '/start'" in common_js
     assert "tmDashboardRouter = {" in common_js
     assert "navigateTo(" in common_js
     assert "window.history.pushState" in common_js

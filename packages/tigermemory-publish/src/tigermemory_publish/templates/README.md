@@ -89,7 +89,8 @@ Start the local dashboard:
 tm dashboard
 ```
 
-Then open `http://127.0.0.1:9777/health`.
+Then open `http://127.0.0.1:9777/start` for the beginner start page, or
+`http://127.0.0.1:9777/health` for system checks.
 
 ## Which Mode Should I Use?
 

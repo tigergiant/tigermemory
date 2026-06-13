@@ -78,7 +78,8 @@ Start the dashboard:
 tm dashboard
 ```
 
-Then open `http://127.0.0.1:9777/health`.
+Then open `http://127.0.0.1:9777/start` for the beginner start page, or
+`http://127.0.0.1:9777/health` for system checks.
 
 The `tm dashboard` quick-start command uses port `9777`. The long-running
 private `tm-dashboard` service used by this development repository still uses

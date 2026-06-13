@@ -197,6 +197,7 @@ def _build_fake_repo(root: pathlib.Path) -> None:
         (path / "asset.txt").write_text("asset\n", encoding="utf-8")
         if rel == "tools/static":
             for name in (
+                "start.html",
                 "review.html",
                 "health.html",
                 "quality.html",
@@ -384,6 +385,7 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     assert not (dest / "tools" / "tm_dummy.py").exists()
     assert (dest / "tools" / "tm_io.py").is_file()
     assert (dest / "tools" / "static" / "asset.txt").is_file()
+    assert (dest / "tools" / "static" / "start.html").is_file()
     assert (dest / "tools" / "static" / "review.html").is_file()
     assert (dest / "tools" / "static" / "health.html").is_file()
     assert (dest / "tools" / "static" / "quality.html").is_file()
