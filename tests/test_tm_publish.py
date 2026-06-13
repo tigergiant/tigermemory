@@ -146,12 +146,19 @@ def _build_fake_repo(root: pathlib.Path) -> None:
                 "That npm package is a different Node/TypeScript Claude Code memory server.\n\n"
                 "## Which Mode Should I Use?\n\n"
                 "Start with **local** unless you already know you need a shared memory service.\n\n"
+                "Use `tm ask --offline --query \"hello local memory\"` to return local evidence without AI.\n\n"
                 "Do not install WSL, Docker, Qdrant, Caddy, or OpenMemory just to try the basic mode.\n"
                 "Do not use `python -m tm`; use the installed `tm` console script.\n",
                 encoding="utf-8",
             )
+        elif dst == "AGENTS.md":
+            path.write_text(
+                "# public AGENTS\n\n"
+                "tm ask --offline returns local evidence only and must not call online Mem0.\n",
+                encoding="utf-8",
+            )
         elif dst == "index.md":
-            path.write_text("# public index\n\nNo private endpoint here.\n", encoding="utf-8")
+            path.write_text("# public index\n\nNo private endpoint here.\n\nUse `tm ask --offline` for local evidence.\n", encoding="utf-8")
         elif dst == "LICENSE":
             path.write_text("AGPL-3.0-or-later\n", encoding="utf-8")
         elif dst == "THIRD_PARTY_NOTICES.md":
@@ -358,8 +365,11 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     assert "different Node/TypeScript Claude Code memory server" in public_readme
     assert "Which Mode Should I Use?" in public_readme
     assert "Start with **local**" in public_readme
+    assert "tm ask --offline" in public_readme
     assert "Do not install WSL, Docker, Qdrant, Caddy, or OpenMemory just to try the basic" in public_readme
     assert "Do not use `python -m tm`" in public_readme
+    assert "tm ask --offline" in (dest / "AGENTS.md").read_text(encoding="utf-8")
+    assert "tm ask --offline" in (dest / "index.md").read_text(encoding="utf-8")
     public_pyproject = (dest / "pyproject.toml").read_text(encoding="utf-8")
     assert "AGPL-3.0-or-later" in public_pyproject
     assert "tm = 'tigermemory_cli:main'" in public_pyproject

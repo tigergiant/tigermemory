@@ -570,6 +570,31 @@ def test_published_snapshot_cli_detects_root_without_env(tmp_path) -> None:
     wiki_payload = json.loads(wiki.stdout)
     assert wiki_payload["results"][0]["path"] == "wiki/operations/project-canvas.md"
 
+    ask = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "tigermemory_cli",
+            "ask",
+            "--offline",
+            "--scope",
+            "memory",
+            "--query",
+            "published snapshot local recall",
+        ],
+        cwd=snapshot,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=20,
+        check=False,
+    )
+    assert ask.returncode == 0, ask.stderr
+    ask_payload = json.loads(ask.stdout)
+    assert ask_payload["offline"] is True
+    assert ask_payload["memory"]["results"][0]["id"] == memory_id
+
 
 def test_publish_passthrough_accepts_tool_options(monkeypatch) -> None:
     calls: list[tuple[str, list[str]]] = []

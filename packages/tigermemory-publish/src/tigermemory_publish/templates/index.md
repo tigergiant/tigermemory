@@ -9,6 +9,8 @@ content, CLI, dashboard assets, publish guard, and basic runtime templates.
 - Run `py -m pip install -e .`.
 - Run `tm init` and `tm profile show`.
 - Use `tm profile guide local` before changing runtime mode.
+- Use `tm ask --offline` when you want local evidence without connecting an AI
+  model.
 
 ## Included Areas
 
