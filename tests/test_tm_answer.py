@@ -1147,6 +1147,60 @@ def test_planner_expansion_terms_keep_api_endpoint_excerpt(monkeypatch):
     assert "/search_memories" in evidence[0]["excerpt"]
 
 
+def test_high_confidence_map_hit_can_pass_weak_evidence_gate(monkeypatch):
+    monkeypatch.setattr(
+        tm_answer,
+        "_read_hit_content",
+        lambda _path: "# AGENTS.md\n\n本页是开工规则。",
+    )
+
+    evidence, gate = tm_answer.expand_evidence(
+        "紫色火山如何清洗月亮",
+        _search_result({
+            "source": "wiki",
+            "path": "wiki/systems/startup-rules.md",
+            "title": "Startup Rules",
+            "snippet": "本页是开工规则。",
+            "score": 0.02,
+            "score_breakdown": {"map_score": 42.0, "map_rank": 1},
+        }),
+        max_evidence=1,
+        query_class="recall",
+    )
+
+    assert evidence
+    assert evidence[0]["path"] == "wiki/systems/startup-rules.md"
+    assert evidence[0]["match_count"] == 0
+    assert gate[0]["reason"] == "high authority fallback"
+    assert gate[0]["selected"] is True
+
+
+def test_low_confidence_map_hit_still_fails_weak_evidence_gate(monkeypatch):
+    monkeypatch.setattr(
+        tm_answer,
+        "_read_hit_content",
+        lambda _path: "# AGENTS.md\n\n本页是开工规则。",
+    )
+
+    evidence, gate = tm_answer.expand_evidence(
+        "紫色火山如何清洗月亮",
+        _search_result({
+            "source": "wiki",
+            "path": "wiki/systems/startup-rules.md",
+            "title": "Startup Rules",
+            "snippet": "本页是开工规则。",
+            "score": 0.02,
+            "score_breakdown": {"map_score": 23.0, "map_rank": 1},
+        }),
+        max_evidence=1,
+        query_class="recall",
+    )
+
+    assert evidence == []
+    assert gate[0]["keep"] is False
+    assert gate[0]["validity"] == "weak_filtered"
+
+
 def test_memory_answer_core_drops_unsupported_claims(monkeypatch, tmp_path):
     monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
     monkeypatch.setattr(

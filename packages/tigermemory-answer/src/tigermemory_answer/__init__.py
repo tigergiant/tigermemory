@@ -473,6 +473,9 @@ STALE_CONFLICT_WINDOW_DAYS = 7
 WEAK_EVIDENCE_MIN_RELEVANCE = 1.0
 WEAK_EVIDENCE_MIN_MATCHES = 1
 MUST_READ_THRESHOLD = 70.0
+MAP_EVIDENCE_SIGNAL_MIN_SCORE = 24.0
+MAP_EVIDENCE_SIGNAL_TOP_RANK = 10
+MAP_EVIDENCE_SIGNAL_RELEVANCE_BOOST = 0.85
 
 ANSWER_PROMPT = """You are tigermemory's evidence-first memory answerer.
 
@@ -1890,6 +1893,19 @@ def _relevance_score(query: str, evidence: dict[str, Any]) -> tuple[float, int, 
     raw_score = evidence.get("score", 0.0)
     score = float(raw_score) if isinstance(raw_score, (int, float)) else 0.0
     relevance = len(matched) + min(max(score, 0.0), 20.0) / 20.0
+    breakdown = evidence.get("score_breakdown")
+    if isinstance(breakdown, dict):
+        try:
+            map_score = float(breakdown.get("map_score") or 0.0)
+            map_rank = int(breakdown.get("map_rank") or 0)
+        except (TypeError, ValueError):
+            map_score = 0.0
+            map_rank = 0
+        if (
+            1 <= map_rank <= MAP_EVIDENCE_SIGNAL_TOP_RANK
+            and map_score >= MAP_EVIDENCE_SIGNAL_MIN_SCORE
+        ):
+            relevance += MAP_EVIDENCE_SIGNAL_RELEVANCE_BOOST
     return relevance, len(matched), matched
 
 
