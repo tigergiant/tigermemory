@@ -198,6 +198,95 @@ def _write_investment_wiki_proposal(
     return path
 
 
+def _write_p310_report(root: pathlib.Path, folder: str, matrix: str, *, evidence: int, leak: int) -> pathlib.Path:
+    path = root / ".tmp" / folder / f"{matrix}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "case_count": 30,
+                "passed": 20,
+                "expected_path_case_count": 26,
+                "answer_evidence_hit": evidence,
+                "evidence_gate_hit": evidence + 2,
+                "map_hit_but_evidence_miss": leak,
+                "map_leak_reason_category_counts": {"relevance": leak},
+                "answer_evidence_hit_by_bucket": {"workflow_fact": evidence},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_retrieval_release_status_reads_latest_p310_holdout(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.delenv("TM_HYBRID_MAP_ARM", raising=False)
+    monkeypatch.delenv("TM_EMBED_SUMMARY_WEIGHT", raising=False)
+    monkeypatch.delenv("TM_ANSWER_WIKI_MAP_BRIDGE", raising=False)
+    monkeypatch.delenv("TM_ANSWER_WIKI_MAP", raising=False)
+    _write_p310_report(tmp_path, "p310-funnel-old", "production", evidence=17, leak=8)
+    _write_p310_report(tmp_path, "p310-funnel-new", "map_arm", evidence=21, leak=4)
+
+    payload = tm_review_ui._dashboard_retrieval_release_status()
+
+    assert payload["decision"] == "default_candidate"
+    assert payload["default_enabled"] is False
+    assert payload["deltas"]["answer_evidence_hit"] == 4
+    assert payload["deltas"]["map_hit_but_evidence_miss"] == -4
+    assert payload["latest"]["map_arm"]["answer_evidence_hit"] == 21
+
+
+def test_retrieval_release_status_reports_missing_map_arm_evidence(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+
+    payload = tm_review_ui._dashboard_retrieval_release_status()
+
+    assert payload["decision"] == "no_recent_map_arm_evidence"
+    assert payload["warnings"] == []
+
+
+def test_retrieval_release_status_reports_missing_production_baseline(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    _write_p310_report(tmp_path, "p310-funnel-new", "map_arm", evidence=21, leak=4)
+
+    payload = tm_review_ui._dashboard_retrieval_release_status()
+
+    assert payload["decision"] == "needs_production_baseline"
+    assert payload["latest"]["production"] is None
+    assert payload["latest"]["map_arm"]["answer_evidence_hit"] == 21
+
+
+def test_retrieval_release_status_reports_corrupt_p310_json(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    _write_p310_report(tmp_path, "p310-funnel-old", "production", evidence=17, leak=8)
+    bad = tmp_path / ".tmp" / "p310-funnel-new" / "map_arm.json"
+    bad.parent.mkdir(parents=True, exist_ok=True)
+    bad.write_text("{not-json", encoding="utf-8")
+
+    payload = tm_review_ui._dashboard_retrieval_release_status()
+
+    assert payload["decision"] == "artifact_error"
+    assert payload["latest"]["map_arm"] is None
+    assert payload["warnings"]
+    assert "map_arm holdout" in payload["warnings"][0]
+
+
+def test_retrieval_release_status_reports_runtime_flag(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setenv("TM_HYBRID_MAP_ARM", "1")
+    monkeypatch.setenv("TM_EMBED_SUMMARY_WEIGHT", "0")
+    monkeypatch.setenv("TM_ANSWER_WIKI_MAP_BRIDGE", "0")
+    monkeypatch.setenv("TM_ANSWER_WIKI_MAP", "0")
+
+    payload = tm_review_ui._dashboard_retrieval_release_status()
+
+    assert payload["default_enabled"] is True
+    assert payload["flags"]["hybrid_map_arm_enabled"] is True
+    assert payload["flags"]["planner_wiki_map_enabled"] is False
+
+
 def test_host_header_rejects_non_localhost(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
 
