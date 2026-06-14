@@ -9,6 +9,8 @@ import pathlib
 import re
 import subprocess
 import sys
+import threading
+import time
 import uuid
 from zoneinfo import ZoneInfo
 
@@ -39,6 +41,7 @@ WORKSPACES = {
 SUPERVISOR_STATE_DIR = REPO_ROOT / ".supervisor"
 SESSION_FILE = SUPERVISOR_STATE_DIR / "claude-sessions.json"
 LEGACY_SESSION_FILE = REPO_ROOT / ".tmp" / "dev-supervisor" / "claude-sessions.json"
+RUN_LOG_ROOT = SUPERVISOR_STATE_DIR / "run-logs"
 ARCHIVE_ROOT = REPO_ROOT / "sources" / "internal-analysis" / "development-reviews"
 LEDGER_PATH = REPO_ROOT / "wiki" / "operations" / "development-supervisor-ledger.md"
 
@@ -115,6 +118,123 @@ def _yaml_list(key: str, values: list[str]) -> str:
         safe = _redact(value).replace("'", "''")
         rows.append(f"  - '{safe}'")
     return "\n".join(rows)
+
+
+def _run_log_path(stage: str, role: str, prompt_hash: str) -> pathlib.Path:
+    date = _now().strftime("%Y-%m-%d")
+    safe_stage = re.sub(r"[^A-Za-z0-9_.-]+", "-", stage).strip("-") or "stage"
+    safe_role = re.sub(r"[^A-Za-z0-9_.-]+", "-", role).strip("-") or "role"
+    return RUN_LOG_ROOT / date / f"{safe_stage}-{safe_role}-{prompt_hash}.log"
+
+
+def _terminate_process(process: subprocess.Popen, *, grace_seconds: float = 5.0) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=grace_seconds)
+
+
+def run_streaming_command(
+    cmd: list[str],
+    *,
+    cwd: str,
+    env: dict[str, str],
+    timeout: int,
+    stall_timeout: int,
+    heartbeat_interval: int,
+    log_path: pathlib.Path,
+    popen_factory=subprocess.Popen,
+) -> subprocess.CompletedProcess:
+    """Run Claude while mirroring output into a local run log.
+
+    A nonzero hard timeout is only a last-resort safety stop. By default,
+    stall_timeout is disabled because Claude can legitimately think for a long
+    time without emitting user-visible text.
+    """
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+    start = time.monotonic()
+    last_activity = [start]
+    next_heartbeat = start + heartbeat_interval if heartbeat_interval > 0 else None
+    forced_returncode: int | None = None
+
+    with log_path.open("w", encoding="utf-8", buffering=1) as log:
+        log.write(f"# Claude supervisor run log\nstarted_at: {_now().isoformat()}\n\n")
+        lock = threading.Lock()
+
+        def reader(stream, label: str, chunks: list[str]) -> None:
+            try:
+                for line in iter(stream.readline, ""):
+                    if not line:
+                        break
+                    with lock:
+                        chunks.append(line)
+                        log.write(f"[{label}] {line}")
+                        last_activity[0] = time.monotonic()
+            finally:
+                stream.close()
+
+        process = popen_factory(
+            cmd,
+            cwd=cwd,
+            env=env,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        stdout_thread = threading.Thread(target=reader, args=(process.stdout, "stdout", stdout_chunks), daemon=True)
+        stderr_thread = threading.Thread(target=reader, args=(process.stderr, "stderr", stderr_chunks), daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+
+        while process.poll() is None:
+            now = time.monotonic()
+            elapsed = now - start
+            idle = now - last_activity[0]
+            if next_heartbeat is not None and now >= next_heartbeat:
+                msg = (
+                    f"Claude still running: elapsed={int(elapsed)}s, "
+                    f"idle={int(idle)}s, log={log_path}"
+                )
+                print(msg, file=sys.stderr, flush=True)
+                with lock:
+                    log.write(f"[heartbeat] {msg}\n")
+                next_heartbeat = now + heartbeat_interval
+            if timeout > 0 and elapsed >= timeout:
+                msg = f"Claude review hard timeout after {timeout} seconds; run log: {log_path}"
+                with lock:
+                    stderr_chunks.append(msg)
+                    log.write(f"[hard_timeout] {msg}\n")
+                _terminate_process(process)
+                forced_returncode = 124
+                break
+            if stall_timeout > 0 and idle >= stall_timeout:
+                msg = (
+                    f"Claude review had no stream activity for {stall_timeout} seconds; "
+                    f"run log: {log_path}"
+                )
+                with lock:
+                    stderr_chunks.append(msg)
+                    log.write(f"[stall_timeout] {msg}\n")
+                _terminate_process(process)
+                forced_returncode = 124
+                break
+            time.sleep(1)
+
+        stdout_thread.join(timeout=2)
+        stderr_thread.join(timeout=2)
+        stdout = "".join(stdout_chunks)
+        stderr = "".join(stderr_chunks)
+        returncode = forced_returncode if forced_returncode is not None else process.returncode
+        log.write(f"\nfinished_at: {_now().isoformat()}\nreturncode: {returncode}\n")
+        return subprocess.CompletedProcess(cmd, returncode, stdout, stderr)
 
 
 def resolve_add_dirs(values: list[str], *, workdir: pathlib.Path) -> list[str]:
@@ -329,6 +449,7 @@ def archive_review(
     prompt: str,
     output: str,
     add_dirs: list[str] | None = None,
+    run_log_path: pathlib.Path | None = None,
 ) -> pathlib.Path:
     date = _now().strftime("%Y-%m-%d")
     out_dir = ARCHIVE_ROOT / date
@@ -353,6 +474,7 @@ requested_effort: {requested_effort or "default"}
 session_mode: {session_mode}
 review_status: {review_status}
 failure_kind: {failure_kind or "none"}
+run_log_path: {str(run_log_path) if run_log_path else "none"}
 {_yaml_list("add_dirs", add_dirs or [])}
 ---
 
@@ -407,6 +529,10 @@ def classify_failure(output: str) -> str:
         return "session_limit"
     if "socket connection was closed" in lowered or "connection was closed unexpectedly" in lowered:
         return "connection_closed"
+    if "no stream activity" in lowered:
+        return "stall_timeout"
+    if "hard timeout" in lowered:
+        return "hard_timeout"
     if "timed out" in lowered or "timeout" in lowered:
         return "timeout"
     return "cli_error"
@@ -461,18 +587,30 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
         prompt,
         ]
     )
+    run_log_path = _run_log_path(args.stage, args.role, prompt_hash)
     try:
-        completed = runner(
-            cmd,
-            cwd=str(workdir),
-            env=run_env,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
-            check=False,
-            timeout=args.timeout,
-        )
+        if runner is subprocess.run:
+            completed = run_streaming_command(
+                cmd,
+                cwd=str(workdir),
+                env=run_env,
+                timeout=args.timeout,
+                stall_timeout=args.stall_timeout,
+                heartbeat_interval=args.heartbeat_interval,
+                log_path=run_log_path,
+            )
+        else:
+            completed = runner(
+                cmd,
+                cwd=str(workdir),
+                env=run_env,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                check=False,
+                timeout=args.timeout,
+            )
     except subprocess.TimeoutExpired as exc:
         output = (
             f"Claude review timed out after {args.timeout} seconds.\n\n"
@@ -494,6 +632,7 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
             prompt=prompt,
             output=output,
             add_dirs=add_dirs,
+            run_log_path=run_log_path,
         )
         append_ledger(
             channel=channel_name,
@@ -529,6 +668,7 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
             prompt=prompt,
             output=output,
             add_dirs=add_dirs,
+            run_log_path=run_log_path,
         )
         if args.session_mode == "stage":
             update_session_record(
@@ -571,6 +711,7 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
         prompt=prompt,
         output=output,
         add_dirs=add_dirs,
+        run_log_path=run_log_path,
     )
     if args.session_mode == "stage":
         update_session_record(
@@ -618,7 +759,24 @@ def build_parser() -> argparse.ArgumentParser:
             "stage reuses one session id per channel/workspace/role/stage and may hit Claude session locks"
         ),
     )
-    parser.add_argument("--timeout", type=int, default=900)
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=3600,
+        help="Hard safety timeout in seconds; 0 disables it. Default is 3600 for slow formal reviews.",
+    )
+    parser.add_argument(
+        "--stall-timeout",
+        type=int,
+        default=0,
+        help="Optional no-stream-activity timeout in seconds; 0 disables it because Claude may think silently.",
+    )
+    parser.add_argument(
+        "--heartbeat-interval",
+        type=int,
+        default=60,
+        help="Seconds between local heartbeat lines while Claude is still running; 0 disables heartbeat output.",
+    )
     parser.add_argument("--check-only", action="store_true", help="Only run official channel CheckOnly")
     return parser
 

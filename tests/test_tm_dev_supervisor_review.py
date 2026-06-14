@@ -39,6 +39,59 @@ def test_api_test_env_uses_legacy_proxy_without_forcing_official_config():
     assert "CLAUDE_CONFIG_DIR" not in env
 
 
+def test_streaming_command_writes_stdout_stderr_to_run_log(tmp_path):
+    log_path = tmp_path / "run.log"
+    result = supervisor.run_streaming_command(
+        [
+            sys.executable,
+            "-c",
+            "import sys; print('hello stdout', flush=True); print('hello stderr', file=sys.stderr, flush=True)",
+        ],
+        cwd=str(tmp_path),
+        env={},
+        timeout=5,
+        stall_timeout=0,
+        heartbeat_interval=0,
+        log_path=log_path,
+    )
+
+    assert result.returncode == 0
+    assert "hello stdout" in result.stdout
+    assert "hello stderr" in result.stderr
+    text = log_path.read_text(encoding="utf-8")
+    assert "[stdout] hello stdout" in text
+    assert "[stderr] hello stderr" in text
+
+
+def test_streaming_command_hard_timeout_keeps_partial_output(tmp_path):
+    log_path = tmp_path / "timeout.log"
+    result = supervisor.run_streaming_command(
+        [
+            sys.executable,
+            "-c",
+            "import time; print('partial stdout', flush=True); time.sleep(5)",
+        ],
+        cwd=str(tmp_path),
+        env={},
+        timeout=1,
+        stall_timeout=0,
+        heartbeat_interval=0,
+        log_path=log_path,
+    )
+
+    assert result.returncode == 124
+    assert "partial stdout" in result.stdout
+    assert "hard timeout" in result.stderr
+    text = log_path.read_text(encoding="utf-8")
+    assert "partial stdout" in text
+    assert "[hard_timeout]" in text
+
+
+def test_classify_streaming_timeout_failures():
+    assert supervisor.classify_failure("Claude review hard timeout after 3600 seconds") == "hard_timeout"
+    assert supervisor.classify_failure("Claude review had no stream activity for 600 seconds") == "stall_timeout"
+
+
 def test_session_id_is_stable_per_channel_workspace_role_stage(monkeypatch, tmp_path):
     session_path = tmp_path / "claude-sessions.json"
     monkeypatch.setattr(supervisor, "SESSION_FILE", session_path)
