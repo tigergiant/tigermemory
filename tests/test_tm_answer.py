@@ -558,6 +558,118 @@ def _map_plan_with_candidate(path: str, *, title: str = "Bridge Target", score: 
     }
 
 
+def test_memory_answer_core_hybrid_map_arm_widening_is_off_by_default(monkeypatch, tmp_path):
+    path = tmp_path / "wiki" / "systems" / "wrong-memory-answer.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("# Wrong Memory Answer\nalpha unrelated", encoding="utf-8")
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
+    monkeypatch.delenv(tm_answer.HYBRID_MAP_ARM_ENV, raising=False)
+    monkeypatch.delenv(tm_answer.WIKI_MAP_BRIDGE_ENV, raising=False)
+    monkeypatch.setattr(tm_answer.tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+
+    def fail_map_candidate_plan(*_args, **_kwargs):
+        raise AssertionError("hybrid map arm widening should not probe wiki_map when env is unset")
+
+    monkeypatch.setattr(tm_answer, "_map_candidate_plan", fail_map_candidate_plan)
+    monkeypatch.setattr(
+        tm_answer.tm_search,
+        "search_tigermemory",
+        lambda *_args, **_kwargs: _search_result({
+            "source": "wiki",
+            "path": "wiki/systems/wrong-memory-answer.md",
+            "title": "Wrong Memory Answer",
+            "snippet": "alpha unrelated",
+            "score": 10.0,
+        }),
+    )
+    monkeypatch.setattr(
+        tm_answer,
+        "_call_memory_answer_llm",
+        lambda *_args, **_kwargs: (
+            True,
+            {
+                "status": "ok",
+                "answer": "alpha unrelated",
+                "summary": "wrong evidence used",
+                "claims": [{"id": "c1", "text": "wrong", "support": ["e1"], "confidence": 0.5}],
+                "warnings": [],
+            },
+        ),
+    )
+
+    result = tm_answer.memory_answer_core("alpha target", scope="wiki", run_id="map-arm-widening-off")
+
+    widening = result["trace"]["hybrid_map_arm_evidence_widening"]
+    assert widening["enabled"] is False
+    assert widening["status"] == "disabled"
+
+
+def test_memory_answer_core_hybrid_map_arm_widens_evidence_candidates(monkeypatch, tmp_path):
+    for rel, body in {
+        "wiki/systems/wrong-memory-answer.md": "# Wrong Memory Answer\nalpha unrelated",
+        "wiki/systems/map-arm-target.md": "# Map Arm Target\nalpha target answer",
+    }.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    monkeypatch.setenv(tm_answer.QUERY_PLANNER_ENV, "0")
+    monkeypatch.setenv(tm_answer.HYBRID_MAP_ARM_ENV, "1")
+    monkeypatch.delenv(tm_answer.WIKI_MAP_BRIDGE_ENV, raising=False)
+    monkeypatch.setattr(tm_answer.tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+    monkeypatch.setattr(
+        tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: _map_plan_with_candidate(
+            "wiki/systems/map-arm-target.md",
+            title="Map Arm Target",
+            score=30.0,
+        ),
+    )
+    monkeypatch.setattr(
+        tm_answer.tm_search,
+        "search_tigermemory",
+        lambda *_args, **_kwargs: _search_result({
+            "source": "wiki",
+            "path": "wiki/systems/wrong-memory-answer.md",
+            "title": "Wrong Memory Answer",
+            "snippet": "alpha unrelated",
+            "score": 10.0,
+        }),
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_llm(_query: str, evidence: list[dict]):
+        captured["evidence_paths"] = [item["path"] for item in evidence]
+        return True, {
+            "status": "ok",
+            "answer": "alpha target answer",
+            "summary": "map arm target used",
+            "claims": [{"id": "c1", "text": "map arm target", "support": ["e1"], "confidence": 0.9}],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", fake_llm)
+
+    result = tm_answer.memory_answer_core("alpha target", scope="wiki", run_id="map-arm-widening")
+
+    assert result["status"] == "ok"
+    assert "wiki/systems/map-arm-target.md" in captured["evidence_paths"]
+    widening = result["trace"]["hybrid_map_arm_evidence_widening"]
+    assert widening["enabled"] is True
+    assert widening["added_count"] == 1
+    assert result["trace"]["map_to_evidence_bridge"]["enabled"] is False
+    gate = result["trace"]["evidence_gate"]
+    assert any(
+        item["path"] == "wiki/systems/map-arm-target.md"
+        and item.get("bridge_source") == "hybrid_map_arm"
+        and item.get("keep") is True
+        for item in gate
+    )
+
+
 def test_memory_answer_core_does_not_use_wiki_map_bridge_by_default(monkeypatch, tmp_path):
     target = tmp_path / "wiki" / "systems" / "bridge-target.md"
     target.parent.mkdir(parents=True)

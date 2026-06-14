@@ -476,6 +476,8 @@ MUST_READ_THRESHOLD = 70.0
 MAP_EVIDENCE_SIGNAL_MIN_SCORE = 24.0
 MAP_EVIDENCE_SIGNAL_TOP_RANK = 10
 MAP_EVIDENCE_SIGNAL_RELEVANCE_BOOST = 0.85
+HYBRID_MAP_ARM_ENV = "TM_HYBRID_MAP_ARM"
+HYBRID_MAP_ARM_WIDEN_MAX_CANDIDATES = 4
 
 ANSWER_PROMPT = """You are tigermemory's evidence-first memory answerer.
 
@@ -2775,6 +2777,88 @@ def _bridge_hit_from_map_candidate(item: dict[str, Any]) -> dict[str, Any] | Non
     }
 
 
+def _hybrid_map_arm_enabled_for_answer() -> bool:
+    return str(os.environ.get(HYBRID_MAP_ARM_ENV) or "").strip().lower() in {
+        "1",
+        "true",
+        "on",
+        "enabled",
+        "yes",
+        "force",
+    }
+
+
+def _hybrid_map_arm_widen_hit_from_candidate(item: dict[str, Any]) -> dict[str, Any] | None:
+    hit = _bridge_hit_from_map_candidate(item)
+    if not hit:
+        return None
+    hit["bridge_source"] = "hybrid_map_arm"
+    return hit
+
+
+def _apply_hybrid_map_arm_evidence_widening(
+    query: str,
+    search_result: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    trace: dict[str, Any] = {
+        "enabled": False,
+        "status": "disabled",
+        "candidate_count": 0,
+        "added_count": 0,
+        "min_score": MAP_EVIDENCE_SIGNAL_MIN_SCORE,
+    }
+    if not _hybrid_map_arm_enabled_for_answer():
+        return search_result, trace
+
+    trace["enabled"] = True
+    trace["status"] = "ok"
+    plan = _map_candidate_plan(query, limit=MAP_EVIDENCE_SIGNAL_TOP_RANK)
+    if plan.get("degraded"):
+        trace["status"] = "degraded"
+        trace["error"] = str(plan.get("error") or "unknown")
+        return search_result, trace
+
+    candidates = [item for item in plan.get("candidates") or [] if isinstance(item, dict)]
+    trace["candidate_count"] = len(candidates)
+    existing = {
+        (str(hit.get("source") or ""), str(hit.get("path") or ""))
+        for hit in _iter_hits(search_result)
+    }
+    widened_hits: list[dict[str, Any]] = []
+    below_min_score_count = 0
+    for item in candidates[:MAP_EVIDENCE_SIGNAL_TOP_RANK]:
+        score = float(item.get("score") or 0.0)
+        if score < MAP_EVIDENCE_SIGNAL_MIN_SCORE:
+            below_min_score_count += 1
+            continue
+        hit = _hybrid_map_arm_widen_hit_from_candidate(item)
+        if not hit:
+            continue
+        key = (str(hit.get("source") or ""), str(hit.get("path") or ""))
+        if key in existing:
+            continue
+        existing.add(key)
+        widened_hits.append(hit)
+        if len(widened_hits) >= HYBRID_MAP_ARM_WIDEN_MAX_CANDIDATES:
+            break
+    trace["below_min_score_count"] = below_min_score_count
+    if not widened_hits:
+        trace["status"] = "no_new_candidates"
+        return search_result, trace
+
+    merged = dict(search_result)
+    groups = {key: list(value) for key, value in (search_result.get("groups") or {}).items()}
+    for hit in widened_hits:
+        groups.setdefault(str(hit.get("source") or "wiki"), []).append(hit)
+    merged["groups"] = groups
+    warnings = list(search_result.get("warnings") or [])
+    warnings.append(f"hybrid_map_arm_widened_candidates={len(widened_hits)}")
+    merged["warnings"] = warnings
+    trace["added_count"] = len(widened_hits)
+    trace["top_paths_hash"] = _hash_paths([str(hit.get("path") or "") for hit in widened_hits])
+    return merged, trace
+
+
 def _apply_wiki_map_bridge(query: str, search_result: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     trace: dict[str, Any] = {
         "enabled": False,
@@ -3340,6 +3424,8 @@ def memory_answer_core(
     evidence_query = _planner_evidence_query(q, planner)
     search_result = _merge_search_results(q, search_results)
     trace["planner"]["evidence_query_hash"] = query_hash(evidence_query)
+    search_result, map_arm_widening_trace = _apply_hybrid_map_arm_evidence_widening(q, search_result)
+    trace["hybrid_map_arm_evidence_widening"] = map_arm_widening_trace
     evidence, evidence_gate = expand_evidence(evidence_query, search_result, evidence_limit, query_class)
     map_bridge_trace: dict[str, Any] = {
         "enabled": _wiki_map_bridge_enabled(),
