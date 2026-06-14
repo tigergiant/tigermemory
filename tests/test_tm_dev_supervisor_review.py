@@ -253,6 +253,41 @@ def test_run_api_test_check_uses_whitelisted_workspace_and_version(monkeypatch, 
     assert payload["Workdir"] == str(workspace)
 
 
+def test_api_test_review_uses_same_archive_and_ledger_spine(monkeypatch, tmp_path):
+    claude_exe = tmp_path / "claude.exe"
+    claude_exe.write_text("", encoding="utf-8")
+    monkeypatch.setattr(supervisor, "API_TEST_EXE", claude_exe)
+    monkeypatch.setattr(supervisor, "WORKSPACES", {"TigerMemory": tmp_path})
+    monkeypatch.setattr(supervisor, "ARCHIVE_ROOT", tmp_path / "reviews")
+    monkeypatch.setattr(supervisor, "LEDGER_PATH", tmp_path / "ledger.md")
+    monkeypatch.setattr(supervisor, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(supervisor, "SESSION_FILE", tmp_path / "sessions.json")
+    supervisor.LEDGER_PATH.write_text("# Ledger\n\n## 审核调用记录\n", encoding="utf-8")
+
+    calls = []
+
+    def fake_runner(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd == [str(claude_exe), "--version"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="2.1.110 (Claude Code)\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="api draft review ok", stderr="")
+
+    args = supervisor.build_parser().parse_args(
+        ["--channel", "api_test", "--stage", "papi", "review this"]
+    )
+    out_path = supervisor.run_review(args, runner=fake_runner)
+
+    assert out_path.exists()
+    assert out_path.is_relative_to(tmp_path / "reviews")
+    text = out_path.read_text(encoding="utf-8")
+    assert "channel: claude-api-test" in text
+    assert "api draft review ok" in text
+    ledger = supervisor.LEDGER_PATH.read_text(encoding="utf-8")
+    assert "channel=claude-api-test" in ledger
+    assert "stage=papi" in ledger
+    assert "archive=reviews/" in ledger
+
+
 def test_archive_redacts_secret_like_text(monkeypatch, tmp_path):
     monkeypatch.setattr(supervisor, "ARCHIVE_ROOT", tmp_path / "development-reviews")
     raw_session_id = "00000000-0000-0000-0000-000000000000"
