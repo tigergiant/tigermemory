@@ -118,6 +118,16 @@ def _write_digest(root: pathlib.Path, date: str = "2026-05-21") -> pathlib.Path:
             "",
             "**影响范围**：tools/tm_route.py",
             "",
+            "**Spec Capsule**：complete",
+            "",
+            "- 问题：路由 prompt 需要更明确的验收证据。",
+            "- 证据：fixture evidence",
+            "- 约束：只能通过 ask-confirm 应用。",
+            "- 方案：补充 prompt 文字和回归测试。",
+            "- 验收：route 测试通过。",
+            "- 回滚：revert cron-apply commit。",
+            "- 是否需要虎哥确认：需要。",
+            "",
             "## 📈 自评指标",
             "",
             "- 当日自评：76",
@@ -467,6 +477,8 @@ def test_api_digest_parses_expected_sections(tmp_path, monkeypatch):
     assert data["digest"]["inbox_rows"][0]["wiki_target"]["path"].startswith("wiki/systems/")
     assert data["digest"]["inbox_rows"][0]["wiki_target"]["similar"][0]["path"] == "wiki/systems/review-ui-approval.md"
     assert data["digest"]["proposals"][0]["id"] == "proposal-2026-05-21-001"
+    assert data["digest"]["proposals"][0]["spec_capsule"]["status"] == "complete"
+    assert data["digest"]["proposals"][0]["spec_capsule"]["items"]["problem"].startswith("路由 prompt")
 
 
 def test_api_cron_intake_returns_compact_persisted_report_summary(tmp_path, monkeypatch):
@@ -536,6 +548,8 @@ def test_daily_page_static_assets_wire_cron_intake_card():
     assert "runWikiProposalApproval" in pages_js
     assert "wikiTargetFromLedgerRow" in pages_js
     assert "openWikiProposalBatchModal" in pages_js
+    assert "proposalSpecCapsuleHtml" in pages_js
+    assert "Spec Capsule" in pages_js
     assert "investment-archive" in pages_js
     assert "enqueueWikiProposalInvestmentArchive" in pages_js
     assert "investment-wiki" in pages_js

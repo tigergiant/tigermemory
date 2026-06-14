@@ -70,6 +70,31 @@ def test_daily_digest_decision_block_and_frontmatter_counts(tmp_path):
         json.dumps({"type": "wiki-doc", "trigger": "fixture", "impact": "wiki/operations/x.md"}),
         encoding="utf-8",
     )
+    (pdir / "spec-capsule.md").write_text(
+        "\n".join([
+            "## 问题",
+            "日报 proposal 需要把为什么改说清楚。",
+            "",
+            "## 证据",
+            "fixture evidence",
+            "",
+            "## 约束",
+            "只改 operations wiki。",
+            "",
+            "## 方案",
+            "补一条 wiki-doc proposal。",
+            "",
+            "## 验收",
+            "lint-page 通过。",
+            "",
+            "## 回滚",
+            "revert proposal commit。",
+            "",
+            "## 是否需要虎哥确认",
+            "需要。",
+        ]),
+        encoding="utf-8",
+    )
 
     report = tm_memory_reflection.render_daily_report(
         date="2026-05-15",
@@ -97,6 +122,8 @@ def test_daily_digest_decision_block_and_frontmatter_counts(tmp_path):
     assert "有 1 个 Proposed Change 需要裁决" in report
     assert "有 1 条 inbox 达到 14 天兜底" in report
     assert "建议行动：优先裁决 Proposed Changes。" in report
+    assert "**Spec Capsule**：complete" in report
+    assert "- 问题：日报 proposal 需要把为什么改说清楚。" in report
 
 
 def test_daily_digest_renders_mem0_audit_candidates(tmp_path):

@@ -40,6 +40,11 @@ try:
 except Exception:  # pragma: no cover - degraded local runtime
     tm_mem0_audit = None  # type: ignore[assignment]
 
+try:
+    import tm_spec_capsule
+except Exception:  # pragma: no cover - degraded local runtime
+    tm_spec_capsule = None  # type: ignore[assignment]
+
 INBOX_DIR = REPO_ROOT / "inbox"
 OPERATIONS_DIR = REPO_ROOT / "wiki" / "operations"
 PROPOSAL_ROOT = REPO_ROOT / ".tmp" / "cron-proposals"
@@ -723,11 +728,13 @@ def load_proposals(date: str, *, proposal_root: pathlib.Path = PROPOSAL_ROOT) ->
             except json.JSONDecodeError:
                 meta = {"warning": "proposal.json is invalid JSON"}
         patch_path = pdir / "patch"
+        patch_text = ""
         patch_preview = ""
         patch_lines = 0
         if patch_path.exists():
             try:
-                lines = patch_path.read_text(encoding="utf-8").splitlines()
+                patch_text = patch_path.read_text(encoding="utf-8")
+                lines = patch_text.splitlines()
             except OSError:
                 lines = []
             patch_lines = len([line for line in lines if line.strip()])
@@ -743,19 +750,64 @@ def load_proposals(date: str, *, proposal_root: pathlib.Path = PROPOSAL_ROOT) ->
                 replay = {"error": "invalid replay-result.json"}
         applied = (pdir / "applied.json").exists()
         rejected = (pdir / "rejected.json").exists()
+        proposal_type = meta.get("type") or meta.get("proposal_type") or "other"
+        if tm_spec_capsule is not None:
+            capsule = tm_spec_capsule.load_proposal_capsule(pdir, meta=meta)
+            capsule_required = tm_spec_capsule.capsule_required_for(
+                str(proposal_type),
+                patch_text=patch_text,
+                meta=meta,
+            )
+        else:
+            capsule = {"present": False, "ok": False, "missing_sections": []}
+            capsule_required = False
         proposals.append({
             "id": pdir.name,
-            "type": meta.get("type") or meta.get("proposal_type") or "other",
+            "type": proposal_type,
             "trigger": meta.get("trigger") or meta.get("evidence") or "not provided",
             "impact": meta.get("impact") or "not provided",
             "summary": meta.get("summary") or meta.get("diff_summary") or "",
             "patch_preview": patch_preview,
             "patch_lines": patch_lines,
             "replay": replay,
+            "spec_capsule": capsule,
+            "spec_capsule_required": capsule_required,
             "applied": applied,
             "rejected": rejected,
         })
     return proposals
+
+
+def _append_proposal_spec_capsule(lines: list[str], proposal: dict[str, Any]) -> None:
+    capsule = proposal.get("spec_capsule") or {}
+    required = bool(proposal.get("spec_capsule_required"))
+    present = bool(capsule.get("present"))
+    ok = bool(capsule.get("ok"))
+    missing = capsule.get("missing_sections") or []
+    summary = capsule.get("summary") if isinstance(capsule.get("summary"), dict) else {}
+    status = "complete" if ok else ("missing" if required and not present else "incomplete" if present else "not_required")
+    lines.extend([
+        "**Spec Capsule**："
+        + status
+        + ("（高风险提案建议先补齐卡片）" if required and not ok else ""),
+        "",
+    ])
+    if ok or present:
+        for key, label in (
+            ("problem", "问题"),
+            ("evidence", "证据"),
+            ("constraints", "约束"),
+            ("solution", "方案"),
+            ("acceptance", "验收"),
+            ("rollback", "回滚"),
+            ("needs_tiger_confirmation", "是否需要虎哥确认"),
+        ):
+            value = str(summary.get(key) or "").strip()
+            if value:
+                lines.append(f"- {label}：{value}")
+        if missing:
+            lines.append(f"- 缺失：{', '.join(str(item) for item in missing)}")
+        lines.append("")
 
 
 def _applied_rows(*, proposal_root: pathlib.Path = PROPOSAL_ROOT, limit: int = 10) -> list[dict[str, Any]]:
@@ -1797,6 +1849,9 @@ def render_daily_report(
                 "",
                 f"**影响范围**：{proposal['impact']}",
                 "",
+            ])
+            _append_proposal_spec_capsule(lines, proposal)
+            lines.extend([
                 "**7 天 replay 结果**：",
                 "",
                 f"- recommendation: {replay.get('recommendation', 'not_run')}",
