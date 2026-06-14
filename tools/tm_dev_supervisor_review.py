@@ -22,6 +22,7 @@ OFFICIAL_LAUNCHER = pathlib.Path(
     r"C:\Users\Giant\AppData\Local\ClaudeCodeOfficial\start-official-claude.ps1"
 )
 API_TEST_EXE = pathlib.Path(r"C:\Users\Giant\AppData\Local\Microsoft\WinGet\Links\claude.exe")
+API_TEST_EXPECTED_VERSION = "2.1.110"
 OFFICIAL_CONFIG_DIR = pathlib.Path(r"C:\Users\Giant\AppData\Local\ClaudeCodeOfficial\config")
 OFFICIAL_PLUGIN_DIR = pathlib.Path(r"C:\Users\Giant\AppData\Local\ClaudeCodeOfficial\plugins")
 OFFICIAL_TMP_DIR = pathlib.Path(r"C:\Users\Giant\AppData\Local\ClaudeCodeOfficial\tmp")
@@ -95,6 +96,14 @@ def _redact(text: str) -> str:
     value = text
     for pattern in SECRET_PATTERNS:
         value = pattern.sub(lambda m: (m.group(1) if m.groups() else "") + "[REDACTED]", value)
+    return value
+
+
+def _coerce_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
     return value
 
 
@@ -183,7 +192,10 @@ def update_session_record(
     failure_kind: str | None = None,
 ) -> None:
     data = _load_sessions()
-    record = data.setdefault("sessions", {})[_session_key(channel, workspace, role, stage)]
+    key = _session_key(channel, workspace, role, stage)
+    record = data.setdefault("sessions", {}).get(key)
+    if record is None:
+        raise RuntimeError(f"session record not found for {key}; call ensure_session_id first")
     record["last_prompt_hash"] = prompt_hash
     record["last_output_path"] = str(output_path)
     record["last_status"] = status
@@ -252,7 +264,7 @@ def run_api_test_check(workspace: str, *, runner=subprocess.run) -> dict:
     if completed.returncode != 0:
         raise RuntimeError(f"api_test version check failed: {(completed.stderr or completed.stdout).strip()}")
     version = (completed.stdout or "").strip()
-    if "2.1.110" not in version:
+    if API_TEST_EXPECTED_VERSION not in version:
         raise RuntimeError(f"api_test Claude version changed: {version}")
     return {
         "Workspace": workspace,
@@ -449,17 +461,55 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
         prompt,
         ]
     )
-    completed = runner(
-        cmd,
-        cwd=str(workdir),
-        env=run_env,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-        check=False,
-        timeout=args.timeout,
-    )
+    try:
+        completed = runner(
+            cmd,
+            cwd=str(workdir),
+            env=run_env,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            timeout=args.timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = (
+            f"Claude review timed out after {args.timeout} seconds.\n\n"
+            f"STDOUT:\n{_coerce_output(exc.output).strip()}\n\n"
+            f"STDERR:\n{_coerce_output(exc.stderr).strip()}"
+        ).strip()
+        out_path = archive_review(
+            channel=channel_name,
+            workspace=args.workspace,
+            role=args.role,
+            stage=args.stage,
+            session_ref_value=session_ref_value,
+            prompt_hash=prompt_hash,
+            requested_model=args.model,
+            requested_effort=args.effort,
+            session_mode=args.session_mode,
+            review_status="failed",
+            failure_kind="timeout",
+            prompt=prompt,
+            output=output,
+            add_dirs=add_dirs,
+        )
+        append_ledger(
+            channel=channel_name,
+            workspace=args.workspace,
+            role=args.role,
+            stage=args.stage,
+            session_ref_value=session_ref_value,
+            prompt_hash=prompt_hash,
+            requested_model=args.model,
+            requested_effort=args.effort,
+            session_mode=args.session_mode,
+            review_status="failed",
+            failure_kind="timeout",
+            output_path=out_path,
+        )
+        raise RuntimeError(f"official review timed out and was archived: {out_path}") from exc
     output = (completed.stdout or "").strip()
     if completed.returncode != 0:
         output = (output + "\n\nSTDERR:\n" + (completed.stderr or "").strip()).strip()
@@ -505,7 +555,7 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
             failure_kind=failure_kind,
             output_path=out_path,
         )
-        raise RuntimeError(f"official review failed before archive: {output[:1000]}")
+        raise RuntimeError(f"review failed ({channel_name}), archived at {out_path}: {output[:500]}")
     out_path = archive_review(
         channel=channel_name,
         workspace=args.workspace,
