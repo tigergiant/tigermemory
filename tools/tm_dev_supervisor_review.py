@@ -894,6 +894,7 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
         f"dev-supervisor-{args.stage}",
         "--output-format",
         "text",
+        "--",
         prompt,
         ]
     )

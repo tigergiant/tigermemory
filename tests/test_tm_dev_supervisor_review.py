@@ -555,6 +555,43 @@ def test_run_review_defaults_to_fresh_session_without_persistent_registry(monkey
     assert "session_mode: fresh" in out_path.read_text(encoding="utf-8")
 
 
+def test_run_review_separates_prompt_that_starts_with_dash(monkeypatch, tmp_path):
+    isolate_limit_state(monkeypatch, tmp_path)
+    claude_exe = tmp_path / "claude.exe"
+    claude_exe.write_text("", encoding="utf-8")
+    monkeypatch.setattr(supervisor, "OFFICIAL_LAUNCHER", tmp_path / "start-official-claude.ps1")
+    supervisor.OFFICIAL_LAUNCHER.write_text("# noop\n", encoding="utf-8")
+    monkeypatch.setattr(supervisor, "ARCHIVE_ROOT", tmp_path / "reviews")
+    monkeypatch.setattr(supervisor, "LEDGER_PATH", tmp_path / "ledger.md")
+    monkeypatch.setattr(supervisor, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(supervisor, "SESSION_FILE", tmp_path / "sessions.json")
+    supervisor.LEDGER_PATH.write_text("# Ledger\n\n## 审核调用记录\n", encoding="utf-8")
+
+    payload = {
+        "ClaudeExe": str(claude_exe),
+        "Workdir": str(tmp_path),
+        "ProxyExitLocation": "US",
+        "AnthropicAuthToken": "unset",
+        "AnthropicBaseUrl": None,
+    }
+    calls = []
+
+    def fake_runner(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[0] == "powershell":
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="review ok", stderr="")
+
+    prompt_file = tmp_path / "prompt.md"
+    prompt_file.write_text("---\ntitle: frontmatter\n---\nreview this", encoding="utf-8")
+    args = supervisor.build_parser().parse_args(["--stage", "pdash", "--prompt-file", str(prompt_file)])
+    supervisor.run_review(args, runner=fake_runner)
+
+    claude_cmd = calls[-1]
+    assert "--" in claude_cmd
+    assert claude_cmd[claude_cmd.index("--") + 1].startswith("---\n")
+
+
 def test_run_review_archives_session_busy_failure(monkeypatch, tmp_path):
     isolate_limit_state(monkeypatch, tmp_path)
     claude_exe = tmp_path / "claude.exe"
