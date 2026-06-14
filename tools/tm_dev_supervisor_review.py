@@ -98,6 +98,34 @@ def _redact(text: str) -> str:
     return value
 
 
+def _yaml_list(key: str, values: list[str]) -> str:
+    if not values:
+        return f"{key}: []"
+    rows = [f"{key}:"]
+    for value in values:
+        safe = _redact(value).replace("'", "''")
+        rows.append(f"  - '{safe}'")
+    return "\n".join(rows)
+
+
+def resolve_add_dirs(values: list[str], *, workdir: pathlib.Path) -> list[str]:
+    resolved: list[str] = []
+    for raw in values:
+        path = pathlib.Path(raw)
+        if not path.is_absolute():
+            path = workdir / path
+        if path.is_file():
+            path = path.parent
+        if not path.exists():
+            raise RuntimeError(f"add-dir does not exist: {path}")
+        if not path.is_dir():
+            raise RuntimeError(f"add-dir is not a directory: {path}")
+        item = str(path)
+        if item not in resolved:
+            resolved.append(item)
+    return resolved
+
+
 def _load_sessions(path: pathlib.Path | None = None) -> dict:
     path = SESSION_FILE if path is None else path
     if path == SESSION_FILE and not path.exists() and LEGACY_SESSION_FILE.exists():
@@ -288,6 +316,7 @@ def archive_review(
     failure_kind: str | None,
     prompt: str,
     output: str,
+    add_dirs: list[str] | None = None,
 ) -> pathlib.Path:
     date = _now().strftime("%Y-%m-%d")
     out_dir = ARCHIVE_ROOT / date
@@ -312,6 +341,7 @@ requested_effort: {requested_effort or "default"}
 session_mode: {session_mode}
 review_status: {review_status}
 failure_kind: {failure_kind or "none"}
+{_yaml_list("add_dirs", add_dirs or [])}
 ---
 
 # Development supervisor Claude review {stage} {prompt_hash}
@@ -388,6 +418,7 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
     if not claude_exe.exists():
         raise RuntimeError(f"Claude exe missing after check: {claude_exe}")
     workdir = pathlib.Path(check["Workdir"])
+    add_dirs = resolve_add_dirs(args.add_dir, workdir=workdir)
     if args.session_mode == "stage":
         session_id = ensure_session_id(channel_name, args.workspace, args.role, args.stage)
     else:
@@ -401,6 +432,8 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
         "--permission-mode",
         "plan",
     ]
+    for directory in add_dirs:
+        cmd.extend(["--add-dir", directory])
     if args.model:
         cmd.extend(["--model", args.model])
     if args.effort:
@@ -445,6 +478,7 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
             failure_kind=failure_kind,
             prompt=prompt,
             output=output,
+            add_dirs=add_dirs,
         )
         if args.session_mode == "stage":
             update_session_record(
@@ -486,6 +520,7 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
         failure_kind=None,
         prompt=prompt,
         output=output,
+        add_dirs=add_dirs,
     )
     if args.session_mode == "stage":
         update_session_record(
@@ -523,6 +558,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stage", default=DEFAULT_STAGE)
     parser.add_argument("--model", help="Claude model alias or full model name for this call, e.g. sonnet, opus, claude-opus-4-8")
     parser.add_argument("--effort", help="Claude reasoning effort for this call, e.g. low, medium, high, xhigh, max")
+    parser.add_argument("--add-dir", action="append", default=[], help="Extra directory Claude may read for this review; repeatable")
     parser.add_argument(
         "--session-mode",
         choices=["fresh", "stage"],

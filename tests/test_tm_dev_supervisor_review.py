@@ -262,3 +262,50 @@ def test_run_review_archives_session_busy_failure(monkeypatch, tmp_path):
     assert "review_status: failed" in text
     assert "failure_kind: session_busy" in text
     assert "status=failed" in supervisor.LEDGER_PATH.read_text(encoding="utf-8")
+
+
+def test_run_review_passes_add_dir_and_archives_it(monkeypatch, tmp_path):
+    claude_exe = tmp_path / "claude.exe"
+    claude_exe.write_text("", encoding="utf-8")
+    extra_dir = tmp_path / "external-config"
+    extra_dir.mkdir()
+    monkeypatch.setattr(supervisor, "OFFICIAL_LAUNCHER", tmp_path / "start-official-claude.ps1")
+    supervisor.OFFICIAL_LAUNCHER.write_text("# noop\n", encoding="utf-8")
+    monkeypatch.setattr(supervisor, "ARCHIVE_ROOT", tmp_path / "reviews")
+    monkeypatch.setattr(supervisor, "LEDGER_PATH", tmp_path / "ledger.md")
+    monkeypatch.setattr(supervisor, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(supervisor, "SESSION_FILE", tmp_path / "sessions.json")
+    supervisor.LEDGER_PATH.write_text("# Ledger\n\n## 审核调用记录\n", encoding="utf-8")
+
+    payload = {
+        "ClaudeExe": str(claude_exe),
+        "Workdir": str(tmp_path),
+        "ProxyExitLocation": "US",
+        "AnthropicAuthToken": "unset",
+        "AnthropicBaseUrl": None,
+    }
+    calls = []
+
+    def fake_runner(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[0] == "powershell":
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="review ok", stderr="")
+
+    args = supervisor.build_parser().parse_args(
+        [
+            "--stage",
+            "padddir",
+            "--add-dir",
+            str(extra_dir),
+            "review this",
+        ]
+    )
+    out_path = supervisor.run_review(args, runner=fake_runner)
+
+    claude_cmd = calls[-1]
+    assert "--add-dir" in claude_cmd
+    assert claude_cmd[claude_cmd.index("--add-dir") + 1] == str(extra_dir)
+    text = out_path.read_text(encoding="utf-8")
+    assert "add_dirs:" in text
+    assert str(extra_dir) in text
