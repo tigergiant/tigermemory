@@ -320,6 +320,19 @@ def _run_log_path(stage: str, role: str, prompt_hash: str) -> pathlib.Path:
     return RUN_LOG_ROOT / date / f"{safe_stage}-{safe_role}-{prompt_hash}.log"
 
 
+def _next_available_path(path: pathlib.Path) -> pathlib.Path:
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    parent = path.parent
+    for index in range(2, 1000):
+        candidate = parent / f"{stem}-retry{index}{suffix}"
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError(f"could not find available archive path for {path}")
+
+
 def _terminate_process(process: subprocess.Popen, *, grace_seconds: float = 5.0) -> None:
     if process.poll() is not None:
         return
@@ -732,7 +745,7 @@ def archive_review(
     date = _now().strftime("%Y-%m-%d")
     out_dir = ARCHIVE_ROOT / date
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{stage}-{role}-{prompt_hash}.md"
+    out_path = _next_available_path(out_dir / f"{stage}-{role}-{prompt_hash}.md")
     body = f"""---
 title: "Development supervisor Claude review {stage} {prompt_hash}"
 owner: codex

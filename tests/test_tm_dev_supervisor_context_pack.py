@@ -63,3 +63,46 @@ def test_write_context_pack_defaults_to_tmp_supervisor_dir(monkeypatch, tmp_path
     assert out_path.parent == tmp_path / "packs"
     assert out_path.name.endswith("-P3.13-Context.md")
     assert out_path.read_text(encoding="utf-8") == "hello"
+
+
+def test_context_pack_includes_failed_archive_delta_and_recent_official_success(monkeypatch, tmp_path):
+    monkeypatch.setattr(context_pack, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(context_pack, "LEDGER_PATH", tmp_path / "wiki" / "operations" / "development-supervisor-ledger.md")
+    (tmp_path / "wiki" / "operations").mkdir(parents=True)
+    context_pack.LEDGER_PATH.write_text(
+        "# Ledger\n\n## 审核调用记录\n"
+        "- 2026-06-14 16:20 | channel=claude-official-review | workspace=TigerMemory | "
+        "role=tiger-development-reviewer | stage=ok-stage | session_ref=abc | model=sonnet | "
+        "effort=high | session_mode=fresh | status=success | failure=none | prompt_hash=hash | "
+        "archive=sources/review-ok.md\n",
+        encoding="utf-8",
+    )
+    archive = tmp_path / "failed.md"
+    archive.write_text(
+        "---\n"
+        "review_status: failed\n"
+        "failure_kind: session_limit\n"
+        "---\n\n"
+        "## Original Task\n\n- git_head: `oldhead123456`\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(context_pack, "_git_head", lambda: "newhead123456")
+    monkeypatch.setattr(context_pack, "_git_diff_names", lambda old, new: ["tools/example.py"] if old and new else [])
+
+    text = context_pack.build_context_pack(
+        objective="review",
+        stage="resume",
+        files=[],
+        review_archives=[str(archive)],
+        memory_queries=[],
+        read_pages=[],
+        notes=[],
+    )
+
+    assert "## Archive Continuity Checks" in text
+    assert "review_status=failed" in text
+    assert "archive_git_head=oldhead123456" in text
+    assert "current_git_head=newhead123456" in text
+    assert "changed_since_archive: `tools/example.py`" in text
+    assert "## Recent Official Review Successes" in text
+    assert "stage=ok-stage" in text

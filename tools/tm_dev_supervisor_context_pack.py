@@ -5,12 +5,14 @@ import datetime as _dt
 import pathlib
 import re
 import subprocess
+from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 TZ_CN = ZoneInfo("Asia/Shanghai")
 OUT_DIR = REPO_ROOT / ".tmp" / "dev-supervisor" / "context-packs"
+LEDGER_PATH = REPO_ROOT / "wiki" / "operations" / "development-supervisor-ledger.md"
 
 DEFAULT_READ_PAGES = (
     "wiki/operations/project-canvas.md",
@@ -89,6 +91,88 @@ def _git_head() -> str:
     return completed.stdout.strip() or "unknown"
 
 
+def _git_diff_names(old_head: str, new_head: str) -> list[str]:
+    if not old_head or old_head == "unknown" or not new_head or new_head == "unknown":
+        return []
+    completed = subprocess.run(
+        ["git", "diff", "--name-only", f"{old_head}..{new_head}"],
+        cwd=str(REPO_ROOT),
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return []
+    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+
+
+def _extract_archive_field(text: str, field: str) -> str | None:
+    match = re.search(rf"^\s*(?:-\s*)?{re.escape(field)}:\s*`?([^`\n]+)`?\s*$", text, re.MULTILINE)
+    if not match:
+        return None
+    return match.group(1).strip()
+
+
+def _archive_status(path_value: str) -> dict:
+    path = _resolve_path(path_value)
+    if not path.exists():
+        return {"path": str(path), "exists": False}
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return {
+        "path": str(path),
+        "exists": True,
+        "review_status": _extract_archive_field(text, "review_status"),
+        "failure_kind": _extract_archive_field(text, "failure_kind"),
+        "git_head": _extract_archive_field(text, "git_head"),
+    }
+
+
+@dataclass
+class LedgerCall:
+    timestamp: str
+    channel: str
+    stage: str
+    status: str
+    failure: str
+    archive: str
+
+
+def _parse_ledger_call(line: str) -> LedgerCall | None:
+    if not line.startswith("- ") or "channel=" not in line or "stage=" not in line:
+        return None
+    parts = [part.strip() for part in line[2:].split("|")]
+    timestamp = parts[0] if parts else "unknown"
+    fields: dict[str, str] = {}
+    for part in parts[1:]:
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        fields[key.strip()] = value.strip()
+    if not fields:
+        return None
+    return LedgerCall(
+        timestamp=timestamp,
+        channel=fields.get("channel", ""),
+        stage=fields.get("stage", ""),
+        status=fields.get("status", ""),
+        failure=fields.get("failure", ""),
+        archive=fields.get("archive", ""),
+    )
+
+
+def _recent_official_successes(limit: int = 3) -> list[LedgerCall]:
+    if not LEDGER_PATH.exists():
+        return []
+    calls: list[LedgerCall] = []
+    for line in LEDGER_PATH.read_text(encoding="utf-8", errors="replace").splitlines():
+        call = _parse_ledger_call(line)
+        if call and call.channel == "claude-official-review" and call.status == "success":
+            calls.append(call)
+    return calls[-limit:]
+
+
 def build_context_pack(
     *,
     objective: str,
@@ -103,6 +187,7 @@ def build_context_pack(
     all_memory_queries = list(dict.fromkeys([*DEFAULT_MEMORY_QUERIES, *memory_queries]))
     all_files = list(dict.fromkeys(files))
     all_archives = list(dict.fromkeys(review_archives))
+    current_head = _git_head()
     warnings = _budget_warnings(
         file_count=len(all_files),
         archive_count=len(all_archives),
@@ -128,7 +213,7 @@ def build_context_pack(
         "## Current Snapshot",
         "",
         f"- repo: `{REPO_ROOT}`",
-        f"- git_head: `{_git_head()}`",
+        f"- git_head: `{current_head}`",
         f"- stage: `{stage}`",
         "",
         "## Pack Budget",
@@ -175,6 +260,45 @@ def build_context_pack(
             lines.append(f"- [{_path_status(item)}] `{_display_path(item)}`")
     else:
         lines.append("- none specified")
+
+    lines.extend(["", "## Archive Continuity Checks", ""])
+    continuity_rows: list[str] = []
+    for item in all_archives:
+        status = _archive_status(item)
+        if not status.get("exists"):
+            continue
+        review_status = status.get("review_status") or "unknown"
+        failure_kind = status.get("failure_kind") or "unknown"
+        failed_head = status.get("git_head") or ""
+        if review_status == "failed" or failure_kind not in ("none", "unknown", ""):
+            continuity_rows.append(
+                f"- `{status['path']}`: review_status={review_status}, failure_kind={failure_kind}, "
+                f"archive_git_head={failed_head or 'unknown'}, current_git_head={current_head}"
+            )
+            changed = _git_diff_names(failed_head, current_head)
+            if changed:
+                for path in changed[:20]:
+                    continuity_rows.append(f"  - changed_since_archive: `{path}`")
+                if len(changed) > 20:
+                    continuity_rows.append(f"  - changed_since_archive: ... {len(changed) - 20} more")
+            elif failed_head:
+                continuity_rows.append("  - changed_since_archive: none")
+            else:
+                continuity_rows.append("  - changed_since_archive: unavailable; archive did not expose git_head")
+    if continuity_rows:
+        lines.extend(continuity_rows)
+    else:
+        lines.append("- no failed archive with git head was supplied")
+
+    lines.extend(["", "## Recent Official Review Successes", ""])
+    successes = _recent_official_successes()
+    if successes:
+        for call in successes:
+            lines.append(
+                f"- {call.timestamp} | stage={call.stage} | status={call.status} | archive=`{call.archive}`"
+            )
+    else:
+        lines.append("- none found in development supervisor ledger")
 
     lines.extend(["", "## Extra Notes", ""])
     if notes:

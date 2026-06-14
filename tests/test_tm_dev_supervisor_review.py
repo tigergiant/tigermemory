@@ -464,6 +464,47 @@ def test_archive_redacts_secret_like_text(monkeypatch, tmp_path):
     assert "[REDACTED]" in text
 
 
+def test_archive_review_does_not_overwrite_existing_artifact(monkeypatch, tmp_path):
+    monkeypatch.setattr(supervisor, "ARCHIVE_ROOT", tmp_path / "development-reviews")
+
+    first = supervisor.archive_review(
+        channel="claude-official-review",
+        workspace="TigerMemory",
+        role="tiger-development-reviewer",
+        stage="same-stage",
+        session_ref_value="first",
+        prompt_hash="abc123",
+        requested_model="sonnet",
+        requested_effort="medium",
+        session_mode="fresh",
+        review_status="failed",
+        failure_kind="cli_error",
+        prompt="review",
+        output="failed",
+    )
+    second = supervisor.archive_review(
+        channel="claude-official-review",
+        workspace="TigerMemory",
+        role="tiger-development-reviewer",
+        stage="same-stage",
+        session_ref_value="second",
+        prompt_hash="abc123",
+        requested_model="sonnet",
+        requested_effort="medium",
+        session_mode="fresh",
+        review_status="success",
+        failure_kind=None,
+        prompt="review",
+        output="ok",
+    )
+
+    assert first != second
+    assert first.exists()
+    assert second.exists()
+    assert "review_status: failed" in first.read_text(encoding="utf-8")
+    assert "review_status: success" in second.read_text(encoding="utf-8")
+
+
 def test_run_review_passes_model_and_effort_without_changing_session_key(monkeypatch, tmp_path):
     isolate_limit_state(monkeypatch, tmp_path)
     claude_exe = tmp_path / "claude.exe"
