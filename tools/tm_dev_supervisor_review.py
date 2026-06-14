@@ -42,6 +42,7 @@ SUPERVISOR_STATE_DIR = REPO_ROOT / ".supervisor"
 SESSION_FILE = SUPERVISOR_STATE_DIR / "claude-sessions.json"
 LEGACY_SESSION_FILE = REPO_ROOT / ".tmp" / "dev-supervisor" / "claude-sessions.json"
 RUN_LOG_ROOT = SUPERVISOR_STATE_DIR / "run-logs"
+LIMIT_STATE_FILE = SUPERVISOR_STATE_DIR / "claude-limits.json"
 ARCHIVE_ROOT = REPO_ROOT / "sources" / "internal-analysis" / "development-reviews"
 LEDGER_PATH = REPO_ROOT / "wiki" / "operations" / "development-supervisor-ledger.md"
 
@@ -108,6 +109,93 @@ def _coerce_output(value: str | bytes | None) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return value
+
+
+def _parse_session_limit_reset(output: str, *, now: _dt.datetime | None = None) -> _dt.datetime | None:
+    match = re.search(r"resets?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", output, re.IGNORECASE)
+    if not match:
+        return None
+    base = now or _now()
+    hour = int(match.group(1))
+    minute = int(match.group(2) or "0")
+    marker = (match.group(3) or "").lower()
+    if marker == "pm" and hour < 12:
+        hour += 12
+    if marker == "am" and hour == 12:
+        hour = 0
+    if hour > 23 or minute > 59:
+        return None
+    reset_at = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if reset_at <= base:
+        reset_at += _dt.timedelta(days=1)
+    return reset_at
+
+
+def _load_limit_state(path: pathlib.Path | None = None) -> dict:
+    path = LIMIT_STATE_FILE if path is None else path
+    if not path.exists():
+        return {"version": 1, "channels": {}}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _save_limit_state(data: dict, path: pathlib.Path | None = None) -> None:
+    path = LIMIT_STATE_FILE if path is None else path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def record_session_limit(channel: str, output: str, *, now: _dt.datetime | None = None) -> _dt.datetime | None:
+    reset_at = _parse_session_limit_reset(output, now=now)
+    if reset_at is None:
+        return None
+    data = _load_limit_state()
+    channels = data.setdefault("channels", {})
+    channels[channel] = {
+        "reset_at": reset_at.isoformat(),
+        "updated_at": (now or _now()).isoformat(),
+        "message_sha256_12": _sha12(output),
+    }
+    _save_limit_state(data)
+    return reset_at
+
+
+def _archive_session_limit_reset(channel: str, *, now: _dt.datetime | None = None) -> _dt.datetime | None:
+    date = (now or _now()).strftime("%Y-%m-%d")
+    day_dir = ARCHIVE_ROOT / date
+    if not day_dir.exists():
+        return None
+    candidates = sorted(day_dir.glob("*.md"), key=lambda path: path.stat().st_mtime, reverse=True)
+    for path in candidates:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if f"channel: {channel}" not in text or "failure_kind: session_limit" not in text:
+            continue
+        reset_at = _parse_session_limit_reset(text, now=now)
+        if reset_at is not None:
+            return reset_at
+    return None
+
+
+def active_limit_cooldown(channel: str, *, now: _dt.datetime | None = None) -> _dt.datetime | None:
+    current = now or _now()
+    data = _load_limit_state()
+    record = data.get("channels", {}).get(channel)
+    if record:
+        try:
+            reset_at = _dt.datetime.fromisoformat(record["reset_at"])
+        except (KeyError, ValueError):
+            reset_at = None
+        if reset_at is not None and reset_at > current:
+            return reset_at
+    reset_at = _archive_session_limit_reset(channel, now=current)
+    if reset_at is not None and reset_at > current:
+        data.setdefault("channels", {})[channel] = {
+            "reset_at": reset_at.isoformat(),
+            "updated_at": current.isoformat(),
+            "message_sha256_12": "from-archive",
+        }
+        _save_limit_state(data)
+        return reset_at
+    return None
 
 
 def _yaml_list(key: str, values: list[str]) -> str:
@@ -517,8 +605,24 @@ def append_ledger(
         f"session_mode={session_mode} | status={review_status} | failure={failure_kind or 'none'} | "
         f"prompt_hash={prompt_hash} | archive={rel}\n"
     )
-    with LEDGER_PATH.open("a", encoding="utf-8") as fh:
-        fh.write(line)
+    text = LEDGER_PATH.read_text(encoding="utf-8")
+    marker = "## 审核调用记录"
+    marker_pos = text.find(marker)
+    if marker_pos == -1:
+        LEDGER_PATH.write_text(text.rstrip() + "\n\n" + marker + "\n" + line, encoding="utf-8")
+        return
+    insert_start = text.find("\n", marker_pos)
+    if insert_start == -1:
+        LEDGER_PATH.write_text(text.rstrip() + "\n" + line, encoding="utf-8")
+        return
+    next_heading = text.find("\n## ", insert_start + 1)
+    if next_heading == -1:
+        new_text = text.rstrip() + "\n" + line
+    else:
+        prefix = text[:next_heading].rstrip()
+        suffix = text[next_heading:].lstrip("\n")
+        new_text = prefix + "\n" + line + "\n" + suffix
+    LEDGER_PATH.write_text(new_text, encoding="utf-8")
 
 
 def classify_failure(output: str) -> str:
@@ -543,6 +647,13 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
     prompt_hash = _sha12(prompt)
     if args.channel == "official_review":
         channel_name = OFFICIAL_CHANNEL
+        if not args.ignore_limit_cooldown:
+            reset_at = active_limit_cooldown(channel_name)
+            if reset_at is not None:
+                raise RuntimeError(
+                    f"{channel_name} is in session-limit cooldown until {reset_at.isoformat()}; "
+                    "retry after reset or pass --ignore-limit-cooldown to force a call."
+                )
         check = run_official_check(args.workspace, runner=runner)
         claude_exe = pathlib.Path(check["ClaudeExe"])
         run_env = official_env()
@@ -653,6 +764,8 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
     if completed.returncode != 0:
         output = (output + "\n\nSTDERR:\n" + (completed.stderr or "").strip()).strip()
         failure_kind = classify_failure(output)
+        if failure_kind == "session_limit":
+            record_session_limit(channel_name, output)
         out_path = archive_review(
             channel=channel_name,
             workspace=args.workspace,
@@ -777,6 +890,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=60,
         help="Seconds between local heartbeat lines while Claude is still running; 0 disables heartbeat output.",
     )
+    parser.add_argument(
+        "--ignore-limit-cooldown",
+        action="store_true",
+        help="Force a Claude call even when a recent session-limit reset time says the channel is cooling down.",
+    )
     parser.add_argument("--check-only", action="store_true", help="Only run official channel CheckOnly")
     return parser
 
@@ -791,7 +909,11 @@ def main(argv: list[str] | None = None) -> int:
             payload = run_api_test_check(args.workspace)
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
-    out_path = run_review(args)
+    try:
+        out_path = run_review(args)
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     print(str(out_path))
     return 0
 

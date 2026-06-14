@@ -21,6 +21,10 @@ DEFAULT_READ_PAGES = (
 DEFAULT_MEMORY_QUERIES = (
     "memory_type: session-handoff tigermemory development supervisor",
 )
+MAX_RECOMMENDED_FILES = 10
+MAX_RECOMMENDED_ARCHIVES = 3
+MAX_RECOMMENDED_READ_PAGES = 8
+MAX_RECOMMENDED_MEMORY_QUERIES = 5
 
 
 def _now() -> _dt.datetime:
@@ -46,6 +50,25 @@ def _display_path(value: str) -> str:
 
 def _path_status(value: str) -> str:
     return "exists" if _resolve_path(value).exists() else "missing"
+
+
+def _budget_warnings(*, file_count: int, archive_count: int, read_page_count: int, memory_query_count: int) -> list[str]:
+    warnings: list[str] = []
+    if file_count > MAX_RECOMMENDED_FILES:
+        warnings.append(f"local_files={file_count} exceeds recommended {MAX_RECOMMENDED_FILES}; split or summarize first.")
+    if archive_count > MAX_RECOMMENDED_ARCHIVES:
+        warnings.append(
+            f"review_archives={archive_count} exceeds recommended {MAX_RECOMMENDED_ARCHIVES}; pass only decision-critical archives."
+        )
+    if read_page_count > MAX_RECOMMENDED_READ_PAGES:
+        warnings.append(
+            f"read_pages={read_page_count} exceeds recommended {MAX_RECOMMENDED_READ_PAGES}; prefer project-map/index pages."
+        )
+    if memory_query_count > MAX_RECOMMENDED_MEMORY_QUERIES:
+        warnings.append(
+            f"memory_queries={memory_query_count} exceeds recommended {MAX_RECOMMENDED_MEMORY_QUERIES}; merge overlapping queries."
+        )
+    return warnings
 
 
 def _git_head() -> str:
@@ -80,6 +103,12 @@ def build_context_pack(
     all_memory_queries = list(dict.fromkeys([*DEFAULT_MEMORY_QUERIES, *memory_queries]))
     all_files = list(dict.fromkeys(files))
     all_archives = list(dict.fromkeys(review_archives))
+    warnings = _budget_warnings(
+        file_count=len(all_files),
+        archive_count=len(all_archives),
+        read_page_count=len(all_read_pages),
+        memory_query_count=len(all_memory_queries),
+    )
 
     lines: list[str] = [
         "# TigerMemory Claude Context Pack",
@@ -102,9 +131,30 @@ def build_context_pack(
         f"- git_head: `{_git_head()}`",
         f"- stage: `{stage}`",
         "",
-        "## TigerMemory Pages To Read First",
+        "## Pack Budget",
+        "",
+        f"- local_files: {len(all_files)} / recommended <= {MAX_RECOMMENDED_FILES}",
+        f"- review_archives: {len(all_archives)} / recommended <= {MAX_RECOMMENDED_ARCHIVES}",
+        f"- read_pages: {len(all_read_pages)} / recommended <= {MAX_RECOMMENDED_READ_PAGES}",
+        f"- memory_queries: {len(all_memory_queries)} / recommended <= {MAX_RECOMMENDED_MEMORY_QUERIES}",
+        f"- budget_status: {'needs_shrinking' if warnings else 'ok'}",
+        "",
+        "## Budget Warnings",
         "",
     ]
+    if warnings:
+        for warning in warnings:
+            lines.append(f"- {warning}")
+    else:
+        lines.append("- none")
+
+    lines.extend(
+        [
+            "",
+            "## TigerMemory Pages To Read First",
+            "",
+        ]
+    )
     for page in all_read_pages:
         lines.append(f"- `read_page(path=\"{page}\")`")
 
@@ -197,4 +247,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

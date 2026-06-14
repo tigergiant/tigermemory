@@ -12,6 +12,10 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 import tm_dev_supervisor_review as supervisor
 
 
+def isolate_limit_state(monkeypatch, tmp_path):
+    monkeypatch.setattr(supervisor, "LIMIT_STATE_FILE", tmp_path / "limits.json")
+
+
 def test_official_env_clears_custom_provider_keys():
     env = supervisor.official_env(
         {
@@ -90,6 +94,105 @@ def test_streaming_command_hard_timeout_keeps_partial_output(tmp_path):
 def test_classify_streaming_timeout_failures():
     assert supervisor.classify_failure("Claude review hard timeout after 3600 seconds") == "hard_timeout"
     assert supervisor.classify_failure("Claude review had no stream activity for 600 seconds") == "stall_timeout"
+
+
+def test_parse_and_record_session_limit_reset(monkeypatch, tmp_path):
+    limit_path = tmp_path / "limits.json"
+    monkeypatch.setattr(supervisor, "LIMIT_STATE_FILE", limit_path)
+    now = supervisor._dt.datetime(2026, 6, 14, 13, 5, tzinfo=supervisor.TZ_CN)
+
+    reset_at = supervisor.record_session_limit(
+        "claude-official-review",
+        "You've hit your session limit · resets 3:30pm (Asia/Shanghai)",
+        now=now,
+    )
+
+    assert reset_at == supervisor._dt.datetime(2026, 6, 14, 15, 30, tzinfo=supervisor.TZ_CN)
+    data = json.loads(limit_path.read_text(encoding="utf-8"))
+    assert data["channels"]["claude-official-review"]["reset_at"].startswith("2026-06-14T15:30:00")
+
+
+def test_active_limit_cooldown_uses_today_archive(monkeypatch, tmp_path):
+    monkeypatch.setattr(supervisor, "LIMIT_STATE_FILE", tmp_path / "limits.json")
+    archive_root = tmp_path / "reviews"
+    day_dir = archive_root / "2026-06-14"
+    day_dir.mkdir(parents=True)
+    (day_dir / "failed.md").write_text(
+        "channel: claude-official-review\nfailure_kind: session_limit\n"
+        "You've hit your session limit · resets 3:30pm (Asia/Shanghai)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(supervisor, "ARCHIVE_ROOT", archive_root)
+    now = supervisor._dt.datetime(2026, 6, 14, 13, 5, tzinfo=supervisor.TZ_CN)
+
+    reset_at = supervisor.active_limit_cooldown("claude-official-review", now=now)
+
+    assert reset_at == supervisor._dt.datetime(2026, 6, 14, 15, 30, tzinfo=supervisor.TZ_CN)
+    assert (tmp_path / "limits.json").exists()
+
+
+def test_run_review_respects_session_limit_cooldown(monkeypatch, tmp_path):
+    monkeypatch.setattr(supervisor, "LIMIT_STATE_FILE", tmp_path / "limits.json")
+    reset_at = supervisor._dt.datetime.now(supervisor.TZ_CN) + supervisor._dt.timedelta(hours=1)
+    supervisor._save_limit_state(
+        {
+            "version": 1,
+            "channels": {
+                "claude-official-review": {
+                    "reset_at": reset_at.isoformat(),
+                    "updated_at": supervisor._dt.datetime.now(supervisor.TZ_CN).isoformat(),
+                }
+            },
+        }
+    )
+
+    called = False
+
+    def fake_runner(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+
+    args = supervisor.build_parser().parse_args(["--stage", "pcooldown", "review this"])
+    try:
+        supervisor.run_review(args, runner=fake_runner)
+    except RuntimeError as exc:
+        assert "session-limit cooldown" in str(exc)
+    else:
+        raise AssertionError("expected cooldown RuntimeError")
+    assert called is False
+
+
+def test_append_ledger_inserts_under_review_section(monkeypatch, tmp_path):
+    ledger = tmp_path / "ledger.md"
+    ledger.write_text(
+        "# Ledger\n\n## 审核调用记录\n- old\n\n## 来源\n\n- source\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(supervisor, "LEDGER_PATH", ledger)
+    monkeypatch.setattr(supervisor, "REPO_ROOT", tmp_path)
+    review = tmp_path / "sources" / "review.md"
+    review.parent.mkdir()
+    review.write_text("x", encoding="utf-8")
+
+    supervisor.append_ledger(
+        channel="claude-official-review",
+        workspace="TigerMemory",
+        role="tiger-development-reviewer",
+        stage="p",
+        session_ref_value="ref",
+        prompt_hash="hash",
+        requested_model="sonnet",
+        requested_effort="high",
+        session_mode="fresh",
+        review_status="success",
+        failure_kind=None,
+        output_path=review,
+    )
+
+    text = ledger.read_text(encoding="utf-8")
+    assert text.index("stage=p") < text.index("## 来源")
+    assert text.rstrip().endswith("- source")
 
 
 def test_session_id_is_stable_per_channel_workspace_role_stage(monkeypatch, tmp_path):
@@ -184,6 +287,7 @@ def test_archive_redacts_secret_like_text(monkeypatch, tmp_path):
 
 
 def test_run_review_passes_model_and_effort_without_changing_session_key(monkeypatch, tmp_path):
+    isolate_limit_state(monkeypatch, tmp_path)
     claude_exe = tmp_path / "claude.exe"
     claude_exe.write_text("", encoding="utf-8")
     monkeypatch.setattr(supervisor, "OFFICIAL_LAUNCHER", tmp_path / "start-official-claude.ps1")
@@ -238,6 +342,7 @@ def test_run_review_passes_model_and_effort_without_changing_session_key(monkeyp
 
 
 def test_run_review_defaults_to_fresh_session_without_persistent_registry(monkeypatch, tmp_path):
+    isolate_limit_state(monkeypatch, tmp_path)
     claude_exe = tmp_path / "claude.exe"
     claude_exe.write_text("", encoding="utf-8")
     monkeypatch.setattr(supervisor, "OFFICIAL_LAUNCHER", tmp_path / "start-official-claude.ps1")
@@ -273,6 +378,7 @@ def test_run_review_defaults_to_fresh_session_without_persistent_registry(monkey
 
 
 def test_run_review_archives_session_busy_failure(monkeypatch, tmp_path):
+    isolate_limit_state(monkeypatch, tmp_path)
     claude_exe = tmp_path / "claude.exe"
     claude_exe.write_text("", encoding="utf-8")
     monkeypatch.setattr(supervisor, "OFFICIAL_LAUNCHER", tmp_path / "start-official-claude.ps1")
@@ -318,6 +424,7 @@ def test_run_review_archives_session_busy_failure(monkeypatch, tmp_path):
 
 
 def test_run_review_passes_add_dir_and_archives_it(monkeypatch, tmp_path):
+    isolate_limit_state(monkeypatch, tmp_path)
     claude_exe = tmp_path / "claude.exe"
     claude_exe.write_text("", encoding="utf-8")
     extra_dir = tmp_path / "external-config"
@@ -365,6 +472,7 @@ def test_run_review_passes_add_dir_and_archives_it(monkeypatch, tmp_path):
 
 
 def test_run_review_archives_timeout_failure(monkeypatch, tmp_path):
+    isolate_limit_state(monkeypatch, tmp_path)
     claude_exe = tmp_path / "claude.exe"
     claude_exe.write_text("", encoding="utf-8")
     monkeypatch.setattr(supervisor, "OFFICIAL_LAUNCHER", tmp_path / "start-official-claude.ps1")

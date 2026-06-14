@@ -27,11 +27,32 @@ def test_context_pack_includes_bounded_tigermemory_queries(monkeypatch, tmp_path
     )
 
     assert "不要默认全仓扫描" in text
+    assert "## Pack Budget" in text
+    assert "budget_status: ok" in text
     assert 'read_page(path="wiki/operations/project-canvas.md")' in text
     assert 'read_page(path="wiki/systems/example.md")' in text
     assert 'search_memories(query="memory_type: session-handoff supervisor", size=3)' in text
     assert f"[exists] `{target}`" in text
     assert "stay read-only" in text
+
+
+def test_context_pack_marks_overbroad_inputs(monkeypatch, tmp_path):
+    monkeypatch.setattr(context_pack, "REPO_ROOT", tmp_path)
+
+    text = context_pack.build_context_pack(
+        objective="review",
+        stage="wide",
+        files=[f"f{i}.md" for i in range(context_pack.MAX_RECOMMENDED_FILES + 1)],
+        review_archives=[f"a{i}.md" for i in range(context_pack.MAX_RECOMMENDED_ARCHIVES + 1)],
+        memory_queries=[f"q{i}" for i in range(context_pack.MAX_RECOMMENDED_MEMORY_QUERIES + 1)],
+        read_pages=[f"wiki/systems/p{i}.md" for i in range(context_pack.MAX_RECOMMENDED_READ_PAGES + 1)],
+        notes=[],
+    )
+
+    assert "budget_status: needs_shrinking" in text
+    assert "local_files=" in text
+    assert "review_archives=" in text
+    assert "memory_queries=" in text
 
 
 def test_write_context_pack_defaults_to_tmp_supervisor_dir(monkeypatch, tmp_path):
@@ -42,4 +63,3 @@ def test_write_context_pack_defaults_to_tmp_supervisor_dir(monkeypatch, tmp_path
     assert out_path.parent == tmp_path / "packs"
     assert out_path.name.endswith("-P3.13-Context.md")
     assert out_path.read_text(encoding="utf-8") == "hello"
-
