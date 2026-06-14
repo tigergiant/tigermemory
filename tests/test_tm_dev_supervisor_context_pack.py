@@ -55,7 +55,7 @@ def test_context_pack_marks_overbroad_inputs(monkeypatch, tmp_path):
     assert "memory_queries=" in text
 
 
-def test_write_context_pack_defaults_to_tmp_supervisor_dir(monkeypatch, tmp_path):
+def test_write_context_pack_defaults_to_supervisor_state_dir(monkeypatch, tmp_path):
     monkeypatch.setattr(context_pack, "OUT_DIR", tmp_path / "packs")
 
     out_path = context_pack.write_context_pack("hello", stage="P3.13 / Context")

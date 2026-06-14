@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 TZ_CN = ZoneInfo("Asia/Shanghai")
-OUT_DIR = REPO_ROOT / ".tmp" / "dev-supervisor" / "context-packs"
+OUT_DIR = REPO_ROOT / ".supervisor" / "context-packs"
 LEDGER_PATH = REPO_ROOT / "wiki" / "operations" / "development-supervisor-ledger.md"
 
 DEFAULT_READ_PAGES = (
@@ -345,7 +345,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--memory-query", action="append", default=[], help="TigerMemory search_memories query Claude should prefer")
     parser.add_argument("--read-page", action="append", default=[], help="TigerMemory read_page path Claude should read first")
     parser.add_argument("--note", action="append", default=[], help="Extra bounded instruction or caveat")
-    parser.add_argument("--out", help="Output markdown path; defaults under .tmp/dev-supervisor/context-packs")
+    parser.add_argument("--out", help="Output markdown path; defaults under .supervisor/context-packs")
     parser.add_argument("--print", action="store_true", help="Print the generated markdown instead of only the output path")
     return parser
 
