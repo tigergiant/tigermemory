@@ -112,7 +112,7 @@ def test_parse_and_record_session_limit_reset(monkeypatch, tmp_path):
     assert data["channels"]["claude-official-review"]["reset_at"].startswith("2026-06-14T15:30:00")
 
 
-def test_active_limit_cooldown_uses_today_archive(monkeypatch, tmp_path):
+def test_active_limit_cooldown_does_not_infer_from_archives(monkeypatch, tmp_path):
     monkeypatch.setattr(supervisor, "LIMIT_STATE_FILE", tmp_path / "limits.json")
     archive_root = tmp_path / "reviews"
     day_dir = archive_root / "2026-06-14"
@@ -127,12 +127,78 @@ def test_active_limit_cooldown_uses_today_archive(monkeypatch, tmp_path):
 
     reset_at = supervisor.active_limit_cooldown("claude-official-review", now=now)
 
-    assert reset_at == supervisor._dt.datetime(2026, 6, 14, 15, 30, tzinfo=supervisor.TZ_CN)
-    assert (tmp_path / "limits.json").exists()
+    assert reset_at is None
+    assert not (tmp_path / "limits.json").exists()
+
+
+def test_parse_usage_status_from_claude_code_json():
+    now = supervisor._dt.datetime(2026, 6, 14, 16, 20, tzinfo=supervisor.TZ_CN)
+    output = json.dumps(
+        {
+            "type": "result",
+            "result": (
+                "You are currently using your subscription to power your Claude Code usage\n\n"
+                "Current session: 13% used · resets Jun 14, 9:10pm (Asia/Shanghai)\n"
+                "Current week (all models): 23% used · resets Jun 14, 10pm (Asia/Shanghai)"
+            ),
+        }
+    )
+
+    usage = supervisor.parse_usage_status(output, now=now)
+
+    assert usage["windows"]["five_hour"]["used_percentage"] == 13
+    assert usage["windows"]["five_hour"]["resets_at"].startswith("2026-06-14T21:10:00")
+    assert usage["windows"]["seven_day"]["used_percentage"] == 23
+
+
+def test_parse_usage_status_tolerates_garbled_separator():
+    now = supervisor._dt.datetime(2026, 6, 14, 16, 20, tzinfo=supervisor.TZ_CN)
+    output = json.dumps(
+        {
+            "result": (
+                "Current session: 13% used бд resets Jun 14, 9:10pm (Asia/Shanghai)\n"
+                "Current week (all models): 23% used ??? resets Jun 14, 10pm (Asia/Shanghai)"
+            )
+        }
+    )
+
+    usage = supervisor.parse_usage_status(output, now=now)
+
+    assert usage["windows"]["five_hour"]["used_percentage"] == 13
+    assert usage["windows"]["seven_day"]["used_percentage"] == 23
+
+
+def test_active_usage_limit_only_blocks_exhausted_window():
+    now = supervisor._dt.datetime(2026, 6, 14, 16, 20, tzinfo=supervisor.TZ_CN)
+    available = {
+        "windows": {
+            "five_hour": {
+                "used_percentage": 13,
+                "resets_at": "2026-06-14T21:10:00+08:00",
+            }
+        }
+    }
+    exhausted = {
+        "windows": {
+            "five_hour": {
+                "used_percentage": 100,
+                "resets_at": "2026-06-14T21:10:00+08:00",
+            }
+        }
+    }
+
+    assert supervisor.active_usage_limit(available, now=now) is None
+    assert supervisor.active_usage_limit(exhausted, now=now) == supervisor._dt.datetime(
+        2026, 6, 14, 21, 10, tzinfo=supervisor.TZ_CN
+    )
 
 
 def test_run_review_respects_session_limit_cooldown(monkeypatch, tmp_path):
     monkeypatch.setattr(supervisor, "LIMIT_STATE_FILE", tmp_path / "limits.json")
+    launcher = tmp_path / "start-official-claude.ps1"
+    launcher.write_text("# noop\n", encoding="utf-8")
+    monkeypatch.setattr(supervisor, "OFFICIAL_LAUNCHER", launcher)
+    claude_exe = tmp_path / "claude.exe"
     reset_at = supervisor._dt.datetime.now(supervisor.TZ_CN) + supervisor._dt.timedelta(hours=1)
     supervisor._save_limit_state(
         {
@@ -146,21 +212,98 @@ def test_run_review_respects_session_limit_cooldown(monkeypatch, tmp_path):
         }
     )
 
-    called = False
+    payload = {
+        "ClaudeExe": str(claude_exe),
+        "Workdir": str(tmp_path),
+        "ProxyExitLocation": "US",
+        "AnthropicAuthToken": "unset",
+        "AnthropicBaseUrl": None,
+    }
+    review_called = False
 
-    def fake_runner(*_args, **_kwargs):
-        nonlocal called
-        called = True
-        return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+    def fake_runner(cmd, **_kwargs):
+        nonlocal review_called
+        if cmd[0] == "powershell":
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+        if "/usage" in cmd:
+            usage = json.dumps(
+                {
+                    "result": (
+                        "Current session: 100% used · resets Jun 14, 9:10pm (Asia/Shanghai)\n"
+                        "Current week (all models): 23% used · resets Jun 14, 10pm (Asia/Shanghai)"
+                    )
+                }
+            )
+            return subprocess.CompletedProcess(cmd, 0, stdout=usage, stderr="")
+        review_called = True
+        return subprocess.CompletedProcess(cmd, 0, stdout="review ok", stderr="")
 
     args = supervisor.build_parser().parse_args(["--stage", "pcooldown", "review this"])
     try:
         supervisor.run_review(args, runner=fake_runner)
     except RuntimeError as exc:
-        assert "session-limit cooldown" in str(exc)
+        assert "confirmed by Claude CLI /usage" in str(exc)
     else:
         raise AssertionError("expected cooldown RuntimeError")
-    assert called is False
+    assert review_called is False
+
+
+def test_run_review_clears_stale_cooldown_when_usage_says_available(monkeypatch, tmp_path):
+    monkeypatch.setattr(supervisor, "LIMIT_STATE_FILE", tmp_path / "limits.json")
+    launcher = tmp_path / "start-official-claude.ps1"
+    launcher.write_text("# noop\n", encoding="utf-8")
+    monkeypatch.setattr(supervisor, "OFFICIAL_LAUNCHER", launcher)
+    monkeypatch.setattr(supervisor, "ARCHIVE_ROOT", tmp_path / "reviews")
+    monkeypatch.setattr(supervisor, "LEDGER_PATH", tmp_path / "ledger.md")
+    monkeypatch.setattr(supervisor, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(supervisor, "SESSION_FILE", tmp_path / "sessions.json")
+    supervisor.LEDGER_PATH.write_text("# Ledger\n\n## 审核调用记录\n", encoding="utf-8")
+    claude_exe = tmp_path / "claude.exe"
+    claude_exe.write_text("", encoding="utf-8")
+    reset_at = supervisor._dt.datetime.now(supervisor.TZ_CN) + supervisor._dt.timedelta(hours=1)
+    supervisor._save_limit_state(
+        {
+            "version": 1,
+            "channels": {
+                "claude-official-review": {
+                    "reset_at": reset_at.isoformat(),
+                    "updated_at": supervisor._dt.datetime.now(supervisor.TZ_CN).isoformat(),
+                }
+            },
+        }
+    )
+    payload = {
+        "ClaudeExe": str(claude_exe),
+        "Workdir": str(tmp_path),
+        "ProxyExitLocation": "US",
+        "AnthropicAuthToken": "unset",
+        "AnthropicBaseUrl": None,
+    }
+    review_called = False
+
+    def fake_runner(cmd, **_kwargs):
+        nonlocal review_called
+        if cmd[0] == "powershell":
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+        if "/usage" in cmd:
+            usage = json.dumps(
+                {
+                    "result": (
+                        "Current session: 13% used · resets Jun 14, 9:10pm (Asia/Shanghai)\n"
+                        "Current week (all models): 23% used · resets Jun 14, 10pm (Asia/Shanghai)"
+                    )
+                }
+            )
+            return subprocess.CompletedProcess(cmd, 0, stdout=usage, stderr="")
+        review_called = True
+        return subprocess.CompletedProcess(cmd, 0, stdout="review ok", stderr="")
+
+    args = supervisor.build_parser().parse_args(["--stage", "pcooldown-clear", "review this"])
+    out_path = supervisor.run_review(args, runner=fake_runner)
+
+    assert review_called is True
+    assert out_path.exists()
+    assert "claude-official-review" not in supervisor._load_limit_state()["channels"]
 
 
 def test_append_ledger_inserts_under_review_section(monkeypatch, tmp_path):

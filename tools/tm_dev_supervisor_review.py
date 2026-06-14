@@ -159,22 +159,6 @@ def record_session_limit(channel: str, output: str, *, now: _dt.datetime | None 
     return reset_at
 
 
-def _archive_session_limit_reset(channel: str, *, now: _dt.datetime | None = None) -> _dt.datetime | None:
-    date = (now or _now()).strftime("%Y-%m-%d")
-    day_dir = ARCHIVE_ROOT / date
-    if not day_dir.exists():
-        return None
-    candidates = sorted(day_dir.glob("*.md"), key=lambda path: path.stat().st_mtime, reverse=True)
-    for path in candidates:
-        text = path.read_text(encoding="utf-8", errors="replace")
-        if f"channel: {channel}" not in text or "failure_kind: session_limit" not in text:
-            continue
-        reset_at = _parse_session_limit_reset(text, now=now)
-        if reset_at is not None:
-            return reset_at
-    return None
-
-
 def active_limit_cooldown(channel: str, *, now: _dt.datetime | None = None) -> _dt.datetime | None:
     current = now or _now()
     data = _load_limit_state()
@@ -186,16 +170,137 @@ def active_limit_cooldown(channel: str, *, now: _dt.datetime | None = None) -> _
             reset_at = None
         if reset_at is not None and reset_at > current:
             return reset_at
-    reset_at = _archive_session_limit_reset(channel, now=current)
-    if reset_at is not None and reset_at > current:
-        data.setdefault("channels", {})[channel] = {
-            "reset_at": reset_at.isoformat(),
-            "updated_at": current.isoformat(),
-            "message_sha256_12": "from-archive",
-        }
-        _save_limit_state(data)
-        return reset_at
     return None
+
+
+_MONTHS = {
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
+    "may": 5,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
+}
+
+
+def _parse_usage_reset(value: str, *, now: _dt.datetime | None = None) -> _dt.datetime | None:
+    base = now or _now()
+    text = value.strip()
+    match = re.search(
+        r"([A-Za-z]{3,9})\s+(\d{1,2}),\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)",
+        text,
+        re.IGNORECASE,
+    )
+    if match:
+        month = _MONTHS.get(match.group(1).lower())
+        if month is None:
+            return None
+        day = int(match.group(2))
+        hour = int(match.group(3))
+        minute = int(match.group(4) or "0")
+        marker = match.group(5).lower()
+        if marker == "pm" and hour < 12:
+            hour += 12
+        if marker == "am" and hour == 12:
+            hour = 0
+        try:
+            reset_at = base.replace(month=month, day=day, hour=hour, minute=minute, second=0, microsecond=0)
+        except ValueError:
+            return None
+        if reset_at < base - _dt.timedelta(days=180):
+            reset_at = reset_at.replace(year=reset_at.year + 1)
+        return reset_at
+    return _parse_session_limit_reset(text, now=base)
+
+
+def parse_usage_status(output: str, *, now: _dt.datetime | None = None) -> dict:
+    """Parse Claude Code `/usage` output.
+
+    Claude Code currently exposes subscription limits through the interactive
+    `/usage` command and status-line JSON. The wrapper uses `/usage` as the
+    cheap CLI probe before trusting a cached local cooldown.
+    """
+    raw_text = output.strip()
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError:
+        result = raw_text
+    else:
+        result = str(payload.get("result") or payload.get("message") or raw_text)
+
+    windows: dict[str, dict] = {}
+    patterns = {
+        "five_hour": r"Current session:\s*([0-9]+(?:\.[0-9]+)?)%\s*used\b.*?\bresets\s+([^\n(]+)",
+        "seven_day": r"Current week(?:\s*\(all models\))?:\s*([0-9]+(?:\.[0-9]+)?)%\s*used\b.*?\bresets\s+([^\n(]+)",
+    }
+    for key, pattern in patterns.items():
+        match = re.search(pattern, result, re.IGNORECASE)
+        if not match:
+            continue
+        reset_at = _parse_usage_reset(match.group(2), now=now)
+        windows[key] = {
+            "used_percentage": float(match.group(1)),
+            "resets_at": reset_at.isoformat() if reset_at else None,
+        }
+    return {"raw": result, "windows": windows}
+
+
+def active_usage_limit(usage: dict, *, now: _dt.datetime | None = None) -> _dt.datetime | None:
+    current = now or _now()
+    resets: list[_dt.datetime] = []
+    for window in usage.get("windows", {}).values():
+        try:
+            used = float(window.get("used_percentage", 0))
+        except (TypeError, ValueError):
+            continue
+        reset_raw = window.get("resets_at")
+        if not reset_raw:
+            continue
+        try:
+            reset_at = _dt.datetime.fromisoformat(reset_raw)
+        except ValueError:
+            continue
+        if used >= 99.5 and reset_at > current:
+            resets.append(reset_at)
+    return min(resets) if resets else None
+
+
+def clear_limit_cooldown(channel: str) -> None:
+    data = _load_limit_state()
+    channels = data.get("channels", {})
+    if channel in channels:
+        channels.pop(channel, None)
+        _save_limit_state(data)
+
+
+def record_cli_usage_limit(channel: str, reset_at: _dt.datetime, *, now: _dt.datetime | None = None) -> None:
+    current = now or _now()
+    data = _load_limit_state()
+    data.setdefault("channels", {})[channel] = {
+        "reset_at": reset_at.isoformat(),
+        "updated_at": current.isoformat(),
+        "message_sha256_12": "from-cli-usage",
+        "source": "claude_cli_usage",
+    }
+    _save_limit_state(data)
 
 
 def _yaml_list(key: str, values: list[str]) -> str:
@@ -485,6 +590,91 @@ def run_api_test_check(workspace: str, *, runner=subprocess.run) -> dict:
     }
 
 
+def query_official_usage_status(
+    *,
+    claude_exe: pathlib.Path,
+    workdir: pathlib.Path,
+    env: dict[str, str],
+    runner=subprocess.run,
+    now: _dt.datetime | None = None,
+) -> dict:
+    cmd = [
+        str(claude_exe),
+        "-p",
+        "/usage",
+        "--no-session-persistence",
+        "--permission-mode",
+        "plan",
+        "--model",
+        "sonnet",
+        "--effort",
+        "low",
+        "--output-format",
+        "json",
+    ]
+    completed = runner(
+        cmd,
+        cwd=str(workdir),
+        env=env,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        check=False,
+        timeout=120,
+    )
+    output = (completed.stdout or "").strip()
+    if completed.returncode != 0:
+        details = (completed.stderr or output).strip()
+        raise RuntimeError(f"official usage query failed: {details[:500]}")
+    usage = parse_usage_status(output, now=now)
+    if not usage.get("windows"):
+        raise RuntimeError("official usage query returned no rate-limit windows")
+    return usage
+
+
+def verify_cached_cooldown(
+    channel: str,
+    *,
+    reset_at: _dt.datetime,
+    claude_exe: pathlib.Path,
+    workdir: pathlib.Path,
+    env: dict[str, str],
+    runner=subprocess.run,
+    now: _dt.datetime | None = None,
+) -> _dt.datetime | None:
+    current = now or _now()
+    try:
+        usage = query_official_usage_status(
+            claude_exe=claude_exe,
+            workdir=workdir,
+            env=env,
+            runner=runner,
+            now=current,
+        )
+    except RuntimeError as exc:
+        clear_limit_cooldown(channel)
+        print(
+            f"warning: local cooldown until {reset_at.isoformat()} could not be verified by Claude CLI /usage; "
+            f"cleared cached cooldown and will let the real Claude call decide. {exc}",
+            file=sys.stderr,
+        )
+        return None
+
+    usage_reset = active_usage_limit(usage, now=current)
+    if usage_reset is None:
+        clear_limit_cooldown(channel)
+        print(
+            f"warning: cleared stale local cooldown until {reset_at.isoformat()}; "
+            "Claude CLI /usage says the subscription window is not exhausted.",
+            file=sys.stderr,
+        )
+        return None
+
+    record_cli_usage_limit(channel, usage_reset, now=current)
+    return usage_reset
+
+
 def official_env(base: dict[str, str] | None = None) -> dict[str, str]:
     env = dict(os.environ if base is None else base)
     for key in PROVIDER_ENV_KEYS:
@@ -647,16 +837,25 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
     prompt_hash = _sha12(prompt)
     if args.channel == "official_review":
         channel_name = OFFICIAL_CHANNEL
-        if not args.ignore_limit_cooldown:
-            reset_at = active_limit_cooldown(channel_name)
-            if reset_at is not None:
-                raise RuntimeError(
-                    f"{channel_name} is in session-limit cooldown until {reset_at.isoformat()}; "
-                    "retry after reset or pass --ignore-limit-cooldown to force a call."
-                )
         check = run_official_check(args.workspace, runner=runner)
         claude_exe = pathlib.Path(check["ClaudeExe"])
         run_env = official_env()
+        if not args.ignore_limit_cooldown:
+            reset_at = active_limit_cooldown(channel_name)
+            if reset_at is not None:
+                verified_reset = verify_cached_cooldown(
+                    channel_name,
+                    reset_at=reset_at,
+                    claude_exe=claude_exe,
+                    workdir=pathlib.Path(check["Workdir"]),
+                    env=run_env,
+                    runner=runner,
+                )
+                if verified_reset is not None:
+                    raise RuntimeError(
+                        f"{channel_name} session-limit cooldown was confirmed by Claude CLI /usage until "
+                        f"{verified_reset.isoformat()}; retry after reset or pass --ignore-limit-cooldown to force a call."
+                    )
     elif args.channel == "api_test":
         channel_name = API_TEST_CHANNEL
         check = run_api_test_check(args.workspace, runner=runner)
@@ -896,12 +1095,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="Force a Claude call even when a recent session-limit reset time says the channel is cooling down.",
     )
     parser.add_argument("--check-only", action="store_true", help="Only run official channel CheckOnly")
+    parser.add_argument(
+        "--usage-status",
+        action="store_true",
+        help="Query Claude Code /usage through the selected channel and print parsed rate-limit status.",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.usage_status:
+        if args.channel != "official_review":
+            print("ERROR: --usage-status currently supports official_review only", file=sys.stderr)
+            return 1
+        try:
+            payload = run_official_check(args.workspace)
+            usage = query_official_usage_status(
+                claude_exe=pathlib.Path(payload["ClaudeExe"]),
+                workdir=pathlib.Path(payload["Workdir"]),
+                env=official_env(),
+            )
+        except RuntimeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps(usage, ensure_ascii=False, indent=2))
+        return 0
     if args.check_only:
         if args.channel == "official_review":
             payload = run_official_check(args.workspace)
