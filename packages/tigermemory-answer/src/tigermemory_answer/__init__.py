@@ -479,6 +479,17 @@ MAP_EVIDENCE_SIGNAL_TOP_RANK = 30
 MAP_EVIDENCE_SIGNAL_SCAN_LIMIT = 80
 MAP_EVIDENCE_SIGNAL_RELEVANCE_BOOST = 0.85
 MAP_EVIDENCE_SIGNAL_SELECTION_RESERVE = 4
+LLM_TRANSIENT_RETRY_ATTEMPTS = 2
+LLM_TRANSIENT_RETRY_DELAY_SECONDS = 0.75
+LLM_TRANSIENT_ERROR_MARKERS = (
+    "unreachable",
+    "connection refused",
+    "winerror 10061",
+    "timed out",
+    "timeout",
+    "temporarily unavailable",
+    "connection reset",
+)
 HYBRID_MAP_ARM_ENV = "TM_HYBRID_MAP_ARM"
 HYBRID_MAP_ARM_WIDEN_MAX_CANDIDATES = 8
 
@@ -1178,7 +1189,7 @@ def _call_memory_query_planner_llm(query: str, base_plan: dict[str, Any]) -> tup
         ensure_ascii=False,
         sort_keys=True,
     )
-    return tm_core._call_deepseek_json(
+    return _call_deepseek_json_with_transient_retry(
         QUERY_PLANNER_PROMPT,
         user_msg,
         timeout=20,
@@ -1186,6 +1197,25 @@ def _call_memory_query_planner_llm(query: str, base_plan: dict[str, Any]) -> tup
         max_tokens=1200,
         purpose="memory_query_plan",
     )
+
+
+def _is_transient_llm_error(error: Any) -> bool:
+    text = str(error or "").lower()
+    return any(marker in text for marker in LLM_TRANSIENT_ERROR_MARKERS)
+
+
+def _call_deepseek_json_with_transient_retry(*args: Any, **kwargs: Any) -> tuple[bool, Any]:
+    attempts = max(1, int(kwargs.pop("_retry_attempts", LLM_TRANSIENT_RETRY_ATTEMPTS)))
+    delay_seconds = max(0.0, float(kwargs.pop("_retry_delay_seconds", LLM_TRANSIENT_RETRY_DELAY_SECONDS)))
+    last: tuple[bool, Any] = (False, "not called")
+    for attempt in range(attempts):
+        ok, parsed = tm_core._call_deepseek_json(*args, **kwargs)
+        last = (ok, parsed)
+        if ok or attempt >= attempts - 1 or not _is_transient_llm_error(parsed):
+            return ok, parsed
+        if delay_seconds > 0:
+            time.sleep(delay_seconds)
+    return last
 
 
 def _merge_llm_query_plan(base_plan: dict[str, Any], parsed: Any) -> tuple[dict[str, Any], list[str]]:
@@ -1956,15 +1986,23 @@ def _map_signal_priority(evidence: dict[str, Any]) -> float:
     if not (1 <= map_rank <= MAP_EVIDENCE_SIGNAL_TOP_RANK):
         return 0.0
     path = _normalize_related_path(evidence.get("path")).lower()
+    matched_terms = breakdown.get("map_matched_terms")
+    if not isinstance(matched_terms, list):
+        matched_terms = []
+    has_code_term = any("_" in str(term) for term in matched_terms)
     if map_score < MAP_EVIDENCE_SIGNAL_MIN_SCORE:
-        if (
-            path in {entry.lower() for entry in ROOT_WIKI_PATHS}
-            and map_rank <= 5
-            and map_score >= 16.0
-        ):
-            return map_score + max(6 - map_rank, 1) / 5
+        if path in {entry.lower() for entry in ROOT_WIKI_PATHS} and map_rank <= 10 and map_score >= 16.0:
+            return map_score + max(11 - map_rank, 1) / 10
         if path.startswith("wiki/systems/") and map_rank <= 2 and map_score >= 17.0:
             return map_score + max(3 - map_rank, 1) / 2
+        if path.startswith("wiki/systems/") and map_rank <= 5 and map_score >= 20.0:
+            return map_score + max(6 - map_rank, 1) / 5
+        if path.startswith("wiki/systems/") and map_rank <= 5 and map_score >= 9.0 and has_code_term:
+            return map_score + max(6 - map_rank, 1) / 5
+        if path.startswith("wiki/brand/") and map_rank <= 2 and map_score >= 15.0:
+            return map_score + max(3 - map_rank, 1) / 2
+        if path.startswith("wiki/investment/") and map_rank <= 3 and map_score >= 17.0:
+            return map_score + max(4 - map_rank, 1) / 3
         return 0.0
     rank_weight = max(MAP_EVIDENCE_SIGNAL_TOP_RANK + 1 - map_rank, 1)
     return map_score + rank_weight / MAP_EVIDENCE_SIGNAL_TOP_RANK
@@ -2906,16 +2944,21 @@ def _bridge_hit_from_map_candidate(item: dict[str, Any]) -> dict[str, Any] | Non
         map_rank = int(item.get("map_rank") or item.get("rank") or 0)
     except (TypeError, ValueError):
         map_rank = 0
+    candidate_breakdown = item.get("score_breakdown") if isinstance(item.get("score_breakdown"), dict) else {}
+    matched_terms = candidate_breakdown.get("matched_terms")
+    score_breakdown: dict[str, Any] = {
+        "map_score": round(score, 3),
+        "map_rank": map_rank,
+    }
+    if isinstance(matched_terms, list):
+        score_breakdown["map_matched_terms"] = [str(term) for term in matched_terms[:8]]
     return {
         "source": source,
         "path": path,
         "title": title,
         "snippet": "",
         "score": min(max(score, 0.0), 20.0),
-        "score_breakdown": {
-            "map_score": round(score, 3),
-            "map_rank": map_rank,
-        },
+        "score_breakdown": score_breakdown,
         "bridge_source": "wiki_map",
     }
 
@@ -2939,9 +2982,39 @@ def _hybrid_map_arm_widen_hit_from_candidate(item: dict[str, Any]) -> dict[str, 
     return hit
 
 
-def _skip_hybrid_map_arm_candidate(path: str) -> bool:
+def _query_has_investment_decision_signal(query: str) -> bool:
+    text = str(query or "").lower()
+    if re.search(r"\b\d{6}\.(?:sh|sz)\b", text):
+        return True
+    return any(
+        marker in text
+        for marker in (
+            "买",
+            "卖",
+            "持有",
+            "加仓",
+            "减仓",
+            "清仓",
+            "调仓",
+            "交易",
+            "决策",
+            "decision",
+            "buy",
+            "sell",
+            "hold",
+            "reduce",
+            "add",
+        )
+    )
+
+
+def _skip_hybrid_map_arm_candidate(path: str, *, query: str = "") -> bool:
     rel = _normalize_related_path(path).lower()
-    return rel.startswith("sources/internal-analysis/development-reviews/")
+    if rel.startswith("sources/internal-analysis/development-reviews/"):
+        return True
+    if rel.startswith("wiki/investment/decision-log/") and not _query_has_investment_decision_signal(query):
+        return True
+    return False
 
 
 def _hybrid_map_arm_candidate_is_eligible(item: dict[str, Any], *, top_margin: float) -> tuple[bool, str]:
@@ -2951,18 +3024,28 @@ def _hybrid_map_arm_candidate_is_eligible(item: dict[str, Any], *, top_margin: f
     except (TypeError, ValueError):
         return False, "invalid_score"
     path = _normalize_related_path(item.get("path")).lower()
+    breakdown = item.get("score_breakdown") if isinstance(item.get("score_breakdown"), dict) else {}
+    matched_terms = breakdown.get("matched_terms") if isinstance(breakdown.get("matched_terms"), list) else []
+    normalized_terms = {str(term).lower() for term in matched_terms}
+    has_code_term = any("_" in term for term in normalized_terms)
     if score >= MAP_EVIDENCE_SIGNAL_MIN_SCORE:
         return True, "strong_score"
     if 1 <= map_rank <= 5 and score >= 19.0:
         return True, "rank5_mid_score"
     if map_rank == 1 and score >= 18.0 and top_margin >= 6.0:
         return True, "top1_margin"
-    if path in {entry.lower() for entry in ROOT_WIKI_PATHS} and 1 <= map_rank <= 5 and score >= 16.0:
-        return True, "root_policy_rank5"
+    if path in {entry.lower() for entry in ROOT_WIKI_PATHS} and 1 <= map_rank <= 10 and score >= 16.0:
+        return True, "root_policy_rank10"
     if path.startswith("wiki/systems/") and 1 <= map_rank <= 2 and score >= 17.0:
         return True, "systems_top2_mid_score"
     if path.startswith("wiki/systems/") and 1 <= map_rank <= 30 and score >= 20.0 and top_margin >= 4.0:
         return True, "systems_rank30_margin"
+    if path.startswith("wiki/systems/") and 1 <= map_rank <= 5 and score >= 9.0 and has_code_term:
+        return True, "systems_code_term"
+    if path.startswith("wiki/brand/") and 1 <= map_rank <= 2 and score >= 15.0:
+        return True, "brand_top2_mid_score"
+    if path.startswith("wiki/investment/") and 1 <= map_rank <= 3 and score >= 17.0:
+        return True, "investment_top3_mid_score"
     return False, "below_min_score"
 
 
@@ -3011,7 +3094,7 @@ def _apply_hybrid_map_arm_evidence_widening(
         if eligibility_reason != "strong_score":
             relaxed_score_count += 1
         path = _clean_planner_text(item.get("path"), max_chars=180, path_hint=True)
-        if _skip_hybrid_map_arm_candidate(path):
+        if _skip_hybrid_map_arm_candidate(path, query=query):
             skipped_low_priority_count += 1
             continue
         hit = _hybrid_map_arm_widen_hit_from_candidate(item)
@@ -3026,7 +3109,7 @@ def _apply_hybrid_map_arm_evidence_widening(
                     existing_breakdown = {}
                     existing_hit["score_breakdown"] = existing_breakdown
                 incoming_breakdown = hit.get("score_breakdown") if isinstance(hit.get("score_breakdown"), dict) else {}
-                for field in ("map_score", "map_rank"):
+                for field in ("map_score", "map_rank", "map_matched_terms"):
                     if field in incoming_breakdown:
                         existing_breakdown[field] = incoming_breakdown[field]
                 existing_hit["bridge_source"] = "hybrid_map_arm"
@@ -3120,7 +3203,7 @@ def _call_memory_answer_llm(query: str, evidence: list[dict[str, Any]]) -> tuple
         ensure_ascii=False,
         sort_keys=True,
     )
-    return tm_core._call_deepseek_json(
+    return _call_deepseek_json_with_transient_retry(
         ANSWER_PROMPT,
         user_msg,
         timeout=30,

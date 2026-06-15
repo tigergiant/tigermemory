@@ -887,6 +887,173 @@ def test_hybrid_map_arm_accepts_typed_mid_score_policy_candidates(monkeypatch):
     assert trace["relaxed_score_count"] == 3
 
 
+def test_hybrid_map_arm_accepts_brand_and_investment_top_mid_score_candidates(monkeypatch):
+    monkeypatch.setenv(tm_answer.HYBRID_MAP_ARM_ENV, "1")
+    candidates = [
+        {
+            "path": "wiki/brand/ipfb-copywriting-guide.md",
+            "title": "IPFB 文案撰写准则",
+            "partition": "brand",
+            "source_surface": "wiki",
+            "score": 15.7,
+            "map_rank": 1,
+        },
+        {
+            "path": "wiki/investment/miniqmt-integration-status.md",
+            "title": "MiniQMT Integration Status",
+            "partition": "investment",
+            "source_surface": "wiki",
+            "score": 18.0,
+            "map_rank": 2,
+        },
+    ]
+    monkeypatch.setattr(
+        tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: {
+            "degraded": False,
+            "error": None,
+            "candidate_count": len(candidates),
+            "top1_top2_margin": 1.0,
+            "candidates": candidates,
+        },
+    )
+
+    merged, trace = tm_answer._apply_hybrid_map_arm_evidence_widening(
+        "IPFB 文案和 MiniQMT 状态",
+        {"primary_results": [], "groups": {}, "warnings": []},
+    )
+
+    widened_paths = [item["path"] for item in merged["groups"]["wiki"]]
+    assert widened_paths == [
+        "wiki/brand/ipfb-copywriting-guide.md",
+        "wiki/investment/miniqmt-integration-status.md",
+    ]
+    assert trace["added_count"] == 2
+    assert trace["relaxed_score_count"] == 2
+
+
+def test_hybrid_map_arm_skips_investment_decision_logs_for_generic_queries(monkeypatch):
+    monkeypatch.setenv(tm_answer.HYBRID_MAP_ARM_ENV, "1")
+    candidates = [
+        {
+            "path": "wiki/investment/decision-log/688981.SH/2026-05-21/risk_debate.md",
+            "title": "688981.SH Risk Debate",
+            "partition": "investment",
+            "source_surface": "wiki",
+            "score": 28.5,
+            "map_rank": 1,
+        },
+        {
+            "path": "wiki/systems/memory-answer-evidence-policy.md",
+            "title": "Memory Answer 证据策略",
+            "partition": "systems",
+            "source_surface": "wiki",
+            "score": 17.5,
+            "map_rank": 2,
+        },
+    ]
+    monkeypatch.setattr(
+        tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: {
+            "degraded": False,
+            "error": None,
+            "candidate_count": len(candidates),
+            "top1_top2_margin": 11.0,
+            "candidates": candidates,
+        },
+    )
+
+    merged, trace = tm_answer._apply_hybrid_map_arm_evidence_widening(
+        "prompt_budget_truncated 代表什么风险",
+        {"primary_results": [], "groups": {}, "warnings": []},
+    )
+
+    widened_paths = [item["path"] for item in merged["groups"]["wiki"]]
+    assert widened_paths == ["wiki/systems/memory-answer-evidence-policy.md"]
+    assert trace["skipped_low_priority_count"] == 1
+    assert trace["added_count"] == 1
+
+
+def test_hybrid_map_arm_accepts_systems_exact_code_term_candidate(monkeypatch):
+    monkeypatch.setenv(tm_answer.HYBRID_MAP_ARM_ENV, "1")
+    candidates = [
+        {
+            "path": "wiki/systems/memory-answer-evidence-policy.md",
+            "title": "Memory Answer 证据策略",
+            "partition": "systems",
+            "source_surface": "wiki",
+            "score": 9.8,
+            "map_rank": 2,
+            "score_breakdown": {
+                "matched_terms": ["prompt_budget_truncated", "回答", "风险"],
+            },
+        }
+    ]
+    monkeypatch.setattr(
+        tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: {
+            "degraded": False,
+            "error": None,
+            "candidate_count": len(candidates),
+            "top1_top2_margin": 1.0,
+            "candidates": candidates,
+        },
+    )
+
+    merged, trace = tm_answer._apply_hybrid_map_arm_evidence_widening(
+        "prompt_budget_truncated 代表什么风险",
+        {"primary_results": [], "groups": {}, "warnings": []},
+    )
+
+    widened = merged["groups"]["wiki"]
+    assert widened[0]["path"] == "wiki/systems/memory-answer-evidence-policy.md"
+    assert widened[0]["score_breakdown"]["map_matched_terms"] == [
+        "prompt_budget_truncated",
+        "回答",
+        "风险",
+    ]
+    assert trace["added_count"] == 1
+    assert trace["relaxed_score_count"] == 1
+
+
+def test_hybrid_map_arm_allows_investment_decision_logs_for_decision_queries(monkeypatch):
+    monkeypatch.setenv(tm_answer.HYBRID_MAP_ARM_ENV, "1")
+    candidates = [
+        {
+            "path": "wiki/investment/decision-log/688981.SH/2026-05-21/risk_debate.md",
+            "title": "688981.SH Risk Debate",
+            "partition": "investment",
+            "source_surface": "wiki",
+            "score": 28.5,
+            "map_rank": 1,
+        },
+    ]
+    monkeypatch.setattr(
+        tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: {
+            "degraded": False,
+            "error": None,
+            "candidate_count": len(candidates),
+            "top1_top2_margin": 20.0,
+            "candidates": candidates,
+        },
+    )
+
+    merged, trace = tm_answer._apply_hybrid_map_arm_evidence_widening(
+        "688981.SH 的持有决策风险是什么",
+        {"primary_results": [], "groups": {}, "warnings": []},
+    )
+
+    widened_paths = [item["path"] for item in merged["groups"]["wiki"]]
+    assert widened_paths == ["wiki/investment/decision-log/688981.SH/2026-05-21/risk_debate.md"]
+    assert trace["skipped_low_priority_count"] == 0
+    assert trace["added_count"] == 1
+
+
 def test_hybrid_map_arm_enriches_existing_candidate_with_map_signal(monkeypatch):
     monkeypatch.setenv(tm_answer.HYBRID_MAP_ARM_ENV, "1")
     existing_hit = {
@@ -1631,6 +1798,96 @@ def test_hybrid_map_arm_reserves_selected_slot_for_high_confidence_map_signal(mo
     agents_gate = next(item for item in gate if item["path"] == "AGENTS.md")
     assert agents_gate["keep"] is True
     assert agents_gate["selected"] is True
+
+
+def test_hybrid_map_arm_reserves_systems_rank5_mid_score_map_signal(monkeypatch):
+    monkeypatch.setenv(tm_answer.HYBRID_MAP_ARM_ENV, "1")
+    bodies = {
+        "wiki/systems/current-peer-a.md": "# Peer A\n\n当前 alpha beta gamma.",
+        "wiki/systems/current-peer-b.md": "# Peer B\n\n当前 alpha beta delta.",
+        "wiki/systems/evidence-policy.md": "# Evidence Policy\n\n.tmp 和 wiki_map 不进入长期事实面。",
+    }
+    monkeypatch.setattr(tm_answer, "_read_hit_content", lambda path: bodies[path])
+
+    evidence, gate = tm_answer.expand_evidence(
+        ".tmp wiki_map alpha",
+        {
+            "primary_results": [
+                {
+                    "source": "wiki",
+                    "path": "wiki/systems/current-peer-a.md",
+                    "title": "Peer A",
+                    "snippet": "当前 alpha beta gamma.",
+                    "score": 20.0,
+                },
+                {
+                    "source": "wiki",
+                    "path": "wiki/systems/current-peer-b.md",
+                    "title": "Peer B",
+                    "snippet": "当前 alpha beta delta.",
+                    "score": 20.0,
+                },
+                {
+                    "source": "wiki",
+                    "path": "wiki/systems/evidence-policy.md",
+                    "title": "Evidence Policy",
+                    "snippet": "",
+                    "score": 20.0,
+                    "score_breakdown": {"map_score": 23.9, "map_rank": 1},
+                },
+            ],
+            "groups": {},
+        },
+        max_evidence=2,
+        query_class="recall",
+    )
+
+    paths = [item["path"] for item in evidence]
+    assert "wiki/systems/evidence-policy.md" in paths
+    policy_gate = next(item for item in gate if item["path"] == "wiki/systems/evidence-policy.md")
+    assert policy_gate["keep"] is True
+    assert policy_gate["selected"] is True
+
+
+def test_memory_answer_llm_retries_transient_connection_error(monkeypatch):
+    calls: list[dict] = []
+
+    def fake_deepseek(*_args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return False, "unreachable: [WinError 10061] target machine actively refused it"
+        return True, {
+            "status": "ok",
+            "answer": "retried",
+            "summary": "retried",
+            "claims": [],
+        }
+
+    monkeypatch.setattr(tm_answer.tm_core, "_call_deepseek_json", fake_deepseek)
+    monkeypatch.setattr(tm_answer.time, "sleep", lambda _seconds: None)
+
+    ok, parsed = tm_answer._call_memory_answer_llm("query", [])
+
+    assert ok is True
+    assert parsed["status"] == "ok"
+    assert len(calls) == 2
+
+
+def test_memory_answer_llm_does_not_retry_non_transient_error(monkeypatch):
+    calls: list[dict] = []
+
+    def fake_deepseek(*_args, **kwargs):
+        calls.append(kwargs)
+        return False, "HTTP 402 insufficient balance"
+
+    monkeypatch.setattr(tm_answer.tm_core, "_call_deepseek_json", fake_deepseek)
+    monkeypatch.setattr(tm_answer.time, "sleep", lambda _seconds: None)
+
+    ok, reason = tm_answer._call_memory_answer_llm("query", [])
+
+    assert ok is False
+    assert "402" in reason
+    assert len(calls) == 1
 
 
 def test_hybrid_map_arm_reserves_relaxed_root_policy_candidate(monkeypatch):
