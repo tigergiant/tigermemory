@@ -3,6 +3,14 @@
 
 set -e
 ROOT="$(git rev-parse --show-toplevel)"
+SMOKE_ROOT=""
+
+cleanup() {
+  if [ -n "$SMOKE_ROOT" ]; then
+    git -C "$ROOT" worktree remove --force "$SMOKE_ROOT" >/dev/null 2>&1 || rm -rf "$SMOKE_ROOT"
+  fi
+}
+trap cleanup EXIT
 
 PY=""
 for cand in "py -3" python3 python; do
@@ -16,7 +24,10 @@ if [ -z "$PY" ]; then
   exit 1
 fi
 
-export PYTHONPATH="$ROOT/packages/tigermemory-publish/src${PYTHONPATH:+:$PYTHONPATH}"
+SMOKE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/tigermemory-pre-push.XXXXXX")"
+git -C "$ROOT" worktree add --detach --quiet "$SMOKE_ROOT" HEAD
+
+export PYTHONPATH="$SMOKE_ROOT/packages/tigermemory-publish/src${PYTHONPATH:+:$PYTHONPATH}"
 
 if ! $PY -m tigermemory_publish --dry-run --json >/dev/null; then
   echo "[tigermemory pre-push] tigermemory_publish dry-run smoke failed" >&2
