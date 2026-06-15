@@ -117,6 +117,49 @@ rebase 过程中出现 conflict 时立即 abort，不要 continue。
     assert skipped == []
 
 
+def test_build_records_includes_only_trusted_external_allowlist(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    external = tmp_path / "codex" / "skills" / "delegated-dev-workflow" / "SKILL.md"
+    untrusted = tmp_path / "codex" / "README.md"
+    _write(repo / "wiki" / "systems" / "ok.md", "# OK\n\n## 摘要\n\n可索引。")
+    _write(
+        external,
+        """---
+name: delegated-dev-workflow
+---
+
+# Delegated Dev Workflow
+
+## Local Port Discipline
+
+Codex preview uses port 2000. Gemini-only preview uses port 1999.
+""",
+    )
+    _write(untrusted, "# README\n\n不应进入地图。")
+    external_key = external.resolve().as_posix()
+    monkeypatch.setattr(wiki_map, "TRUSTED_EXTERNAL_PATHS", {
+        external_key: {
+            "source_surface": "sources",
+            "partition": "systems",
+            "title": "Delegated Dev Workflow Skill",
+            "aliases": ["delegated-dev-workflow", "Codex 预览端口"],
+            "keywords": ["2000", "1999", "codex", "gemini"],
+        }
+    })
+
+    records, skipped = wiki_map.build_records(repo)
+    by_path = {record.path: record for record in records}
+
+    assert external_key in by_path
+    assert untrusted.resolve().as_posix() not in by_path
+    assert by_path[external_key].source_surface == "sources"
+    assert by_path[external_key].partition == "systems"
+    assert "Codex 预览端口" in by_path[external_key].aliases
+    hits = wiki_map.map_recall("Codex 预览端口应该用 2000 还是 1999", records=[record.to_dict() for record in records])
+    assert hits[0]["path"] == external_key
+    assert skipped == []
+
+
 def test_build_record_keeps_extended_alias_budget(tmp_path):
     aliases = [f"alias-{index:02d}" for index in range(1, 16)]
     page = _write(
@@ -197,9 +240,15 @@ title: 2026 年度回顾
     ]
 
     rule_hits = wiki_map.map_recall("变基出现冲突怎么办", records=records, limit=2)
+    live_hits = wiki_map.map_recall("回答前要确认本机真实状态和端口运行状态", records=records, limit=2)
+    notify_hits = wiki_map.map_recall("微信附件通知虎哥必须走 openclaw_notify.py 唯一入口", records=records, limit=2)
+    topic_hits = wiki_map.map_recall("self-evolution lessons 的 topic key 为什么是 selfevolution", records=records, limit=2)
     date_hits = wiki_map.map_recall("2026 年度回顾", records=records, limit=2)
 
     assert rule_hits[0]["path"] == "AGENTS.md"
+    assert live_hits[0]["path"] == "AGENTS.md"
+    assert notify_hits[0]["path"] == "AGENTS.md"
+    assert topic_hits[0]["path"] == "AGENTS.md"
     assert date_hits[0]["path"] == "wiki/systems/annual-review.md"
 
 

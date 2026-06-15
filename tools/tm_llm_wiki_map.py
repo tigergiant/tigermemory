@@ -32,6 +32,28 @@ FORBIDDEN_PATHS = ("tests/", ".tmp/", "runtime/", "sources/internal-analysis/dev
 PERSON_PATH_PREFIXES = ("wiki/person/", "sources/person/")
 SOURCE_SURFACES = {"wiki", "sources"}
 ROOT_WIKI_PATHS = {"AGENTS.md"}
+DEFAULT_TRUSTED_EXTERNAL_PATHS = {
+    "C:/Users/Giant/.codex/skills/delegated-dev-workflow/SKILL.md": {
+        "source_surface": "sources",
+        "partition": "systems",
+        "title": "Delegated Dev Workflow Skill",
+        "aliases": [
+            "delegated-dev-workflow",
+            "委托开发工作流",
+            "Codex 预览端口",
+            "Gemini 专用端口",
+        ],
+        "keywords": ["2000", "1999", "codex", "gemini", "port", "skill", "workflow"],
+    },
+    "C:/Users/Giant/.codex/hooks2/stop_tigermemory_guard.ps1": {
+        "source_surface": "sources",
+        "partition": "systems",
+        "title": "Codex hooks2 Stop Tigermemory Guard",
+        "aliases": ["hooks2 stop_tigermemory_guard", "Session Handoff hooks2", "handoff 覆盖"],
+        "keywords": ["hooks2", "stop_tigermemory_guard", "handoff", "session", "trace"],
+    },
+}
+TRUSTED_EXTERNAL_PATHS = dict(DEFAULT_TRUSTED_EXTERNAL_PATHS)
 ROOT_WIKI_KEYWORDS = {
     "AGENTS.md": [
         "agent",
@@ -49,14 +71,37 @@ ROOT_WIKI_KEYWORDS = {
         "systems",
         "investment",
         "cross",
+        "跨分区话题",
+        "什么时候用 cross",
+        "cross topic",
         "live",
         "live-state",
+        "live check",
+        "本机真实状态",
+        "服务是否运行",
+        "文档不能代替",
+        "不能代替",
+        "当前端口",
+        "端口运行",
+        "运行状态",
         "dashboard",
         "service",
         "服务",
         "端口",
         "1998",
         "8790",
+        "openclaw_notify.py",
+        "ClawBot",
+        "微信附件",
+        "唯一入口",
+        "selfevolution",
+        "topic key",
+        "sources",
+        "ingest",
+        "原始资料",
+        "资料不在 wiki",
+        "资料根本不在 wiki",
+        "写入 sources",
         "hooks",
         "hook",
         "MCP",
@@ -82,11 +127,30 @@ ROOT_RULE_SIGNAL_TOKENS = {
     "write_memory",
     "route",
     "topic",
+    "selfevolution",
+    "live-state",
+    "openclaw_notify.py",
     "1998",
     "8790",
     "hooks",
     "hook",
     "wsl",
+}
+ROOT_RULE_LIVE_STATE_TOKENS = {
+    "本机",
+    "真实",
+    "状态",
+    "运行",
+    "端口",
+    "当前",
+    "服务",
+    "文档",
+    "代替",
+    "live",
+    "check",
+    "当前端口",
+    "运行状态",
+    "端口运行",
 }
 ROOT_RULE_PORT_TOKENS = {"1998", "8790", "9766", "9776", "8765"}
 SENSITIVITY_VALUES = {"normal", "person_excluded", "sensitive_surface"}
@@ -199,8 +263,19 @@ def _clean_list(values: Any, *, max_items: int, max_chars: int = 80) -> list[str
     return result
 
 
+def _trusted_external_meta(rel: str) -> dict[str, Any] | None:
+    return TRUSTED_EXTERNAL_PATHS.get(normalize_rel_path(rel))
+
+
 def _repo_rel(path: Path, repo_root: Path = tm_core.REPO_ROOT) -> str:
-    return path.resolve().relative_to(repo_root.resolve()).as_posix()
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(repo_root.resolve()).as_posix()
+    except ValueError:
+        rel = resolved.as_posix()
+        if _trusted_external_meta(rel) is not None:
+            return rel
+        raise
 
 
 def normalize_rel_path(path: str) -> str:
@@ -371,6 +446,9 @@ def _keywords(rel: str, text: str, frontmatter: dict[str, Any]) -> list[str]:
     raw: list[str] = []
     raw.extend(_path_tokens(rel))
     raw.extend(ROOT_WIKI_KEYWORDS.get(rel, []))
+    external_meta = _trusted_external_meta(rel)
+    if external_meta:
+        raw.extend(external_meta.get("keywords") or [])
     for key in ("title", "summary", "description", "subtopic"):
         raw.extend(tm_core.signal_tokens(str(frontmatter.get(key) or "")))
     signal_text = text if rel in ROOT_WIKI_PATHS else text[:4000]
@@ -475,6 +553,9 @@ def _answer_facets(text: str, headings: list[str]) -> list[str]:
 def _partition(rel: str, surface: str) -> str:
     if rel in ROOT_WIKI_PATHS:
         return "systems"
+    external_meta = _trusted_external_meta(rel)
+    if external_meta:
+        return str(external_meta.get("partition") or "systems")
     parts = rel.split("/")
     if len(parts) >= 2 and surface == "wiki":
         return parts[1]
@@ -486,6 +567,9 @@ def _partition(rel: str, surface: str) -> str:
 def _source_surface(rel: str) -> str:
     if rel in ROOT_WIKI_PATHS:
         return "wiki"
+    external_meta = _trusted_external_meta(rel)
+    if external_meta:
+        return str(external_meta.get("source_surface") or "sources")
     first = rel.split("/", 1)[0]
     return first if first in SOURCE_SURFACES else ""
 
@@ -510,12 +594,20 @@ def build_record_for_file(path: Path, *, repo_root: Path = tm_core.REPO_ROOT) ->
     text = path.read_text(encoding="utf-8")
     body = _strip_frontmatter(text)
     frontmatter = parse_frontmatter(text)
+    external_meta = _trusted_external_meta(rel) or {}
     headings = _headings(body)
     title = _clean_text(
-        frontmatter.get("title") or _first_heading(body) or path.stem.replace("-", " "),
+        frontmatter.get("title") or external_meta.get("title") or _first_heading(body) or path.stem.replace("-", " "),
         max_chars=120,
     )
-    aliases = _clean_list(frontmatter.get("aliases"), max_items=20, max_chars=100)
+    raw_aliases: list[Any] = []
+    fm_aliases = frontmatter.get("aliases")
+    if isinstance(fm_aliases, list):
+        raw_aliases.extend(fm_aliases)
+    elif fm_aliases:
+        raw_aliases.append(fm_aliases)
+    raw_aliases.extend(external_meta.get("aliases") or [])
+    aliases = _clean_list(raw_aliases, max_items=20, max_chars=100)
     if title and title not in aliases:
         aliases.insert(0, title)
     summary = _clean_text(
@@ -573,6 +665,15 @@ def _iter_input_files(repo_root: Path = tm_core.REPO_ROOT) -> list[Path]:
         path = repo_root / rel
         if path.exists():
             paths.append(path)
+    include_external = (
+        repo_root.resolve() == tm_core.REPO_ROOT.resolve()
+        or TRUSTED_EXTERNAL_PATHS != DEFAULT_TRUSTED_EXTERNAL_PATHS
+    )
+    if include_external:
+        for rel in sorted(TRUSTED_EXTERNAL_PATHS):
+            path = Path(rel)
+            if path.exists() and path.is_file():
+                paths.append(path)
     return paths
 
 
@@ -708,6 +809,17 @@ def _is_short_cjk_token(token: str) -> bool:
     return len(token) == 2 and bool(re.fullmatch(r"[\u4e00-\u9fff]{2}", token))
 
 
+def _query_targets_daily_health(query: str, record_path: str) -> bool:
+    lower = str(query or "").lower()
+    original = str(query or "")
+    if any(marker in lower for marker in ("daily health", "daily-health", "health scan")):
+        return True
+    if any(marker in original for marker in ("每日健康", "健康巡检", "日检", "机器可读摘要")):
+        return True
+    normalized_path = str(record_path or "").lower()
+    return any(date in normalized_path for date in re.findall(r"\b\d{4}-\d{2}-\d{2}\b", lower))
+
+
 def _field_text(record: dict[str, Any], fields: list[str]) -> str:
     values: list[str] = []
     for field in fields:
@@ -760,15 +872,22 @@ def score_record(query: str, record: dict[str, Any]) -> tuple[float, dict[str, A
     if record.get("path") in ROOT_WIKI_PATHS and matched:
         root_matches = {term.lower() for term in matched}
         strong_matches = root_matches & ROOT_RULE_SIGNAL_TOKENS
+        live_state_matches = root_matches & ROOT_RULE_LIVE_STATE_TOKENS
         port_matches = root_matches & ROOT_RULE_PORT_TOKENS
         if strong_matches or port_matches:
             score += 10.0
+            matched_fields.add("root_rules")
+        if len(live_state_matches) >= 2:
+            score += 12.0
             matched_fields.add("root_rules")
         if len(root_matches) >= 2 and (strong_matches or port_matches):
             score += 8.0
             matched_fields.add("root_rules")
     if record.get("path", "").endswith("/index.md"):
         score -= 1.5
+    path = str(record.get("path") or "")
+    if path.startswith("wiki/operations/daily-health/") and not _query_targets_daily_health(query, path):
+        score -= 24.0
     return round(max(score, 0.0), 3), {"matched_terms": matched[:20], "matched_fields": sorted(matched_fields)}
 
 

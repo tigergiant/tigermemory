@@ -181,7 +181,7 @@ def failure_ids_from_report(path: str, *, kind: str = "failed") -> set[str]:
         raise ValueError(f"invalid failure filter kind {kind!r}")
     source_path = Path(path)
     try:
-        report = json.loads(source_path.read_text(encoding="utf-8"))
+        report = json.loads(source_path.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as exc:
         raise ValueError(f"{path}: invalid JSON report: {exc}") from exc
     if not isinstance(report, dict):

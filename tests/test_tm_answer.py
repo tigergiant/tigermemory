@@ -227,6 +227,29 @@ def test_trim_evidence_for_prompt_enforces_total_excerpt_budget():
     assert metrics["key_term_retention"]["retention_rate"] == 0.5
 
 
+def test_trim_evidence_for_prompt_keeps_floor_for_late_evidence():
+    evidence = [
+        {"id": "e1", "excerpt": "alpha " * 120},
+        {"id": "e2", "excerpt": "beta " * 120},
+        {"id": "e3", "excerpt": "gamma " * 120},
+        {"id": "e4", "excerpt": ("tail " * 40) + "needle " + ("tail " * 80)},
+    ]
+
+    trimmed, warnings, metrics = tm_answer.trim_evidence_for_prompt(
+        evidence,
+        max_chars=800,
+        query="needle",
+        return_metrics=True,
+    )
+
+    assert warnings == ["prompt_budget_truncated=true"]
+    assert sum(len(item["excerpt"]) for item in trimmed) <= 800
+    assert all(item["excerpt"] for item in trimmed)
+    assert "needle" in trimmed[-1]["excerpt"]
+    assert "e4" in metrics["retained_evidence_ids"]
+    assert "needle" in metrics["key_term_retention"]["retained_terms"]
+
+
 def test_memory_answer_core_can_disable_trace_write(monkeypatch, tmp_path):
     calls = []
     trace_path = tmp_path / "trace.jsonl"
@@ -375,6 +398,25 @@ def test_memory_answer_core_trims_evidence_before_llm(monkeypatch, tmp_path):
     assert "excerpt" not in trace_row["evidence"][0]
     assert "matched_term_hashes" in stored_payload
     assert "prompt_budget_truncated=true" in result["warnings"]
+
+
+def test_trusted_external_evidence_paths_are_precise(monkeypatch, tmp_path):
+    trusted = tmp_path / "codex" / "skills" / "delegated-dev-workflow" / "SKILL.md"
+    untrusted = tmp_path / "codex" / "README.md"
+    trusted.parent.mkdir(parents=True, exist_ok=True)
+    trusted.write_text("Codex preview port is 2000; Gemini-only port is 1999.", encoding="utf-8")
+    untrusted.write_text("Do not read me.", encoding="utf-8")
+    trusted_key = trusted.resolve().as_posix()
+    untrusted_key = untrusted.resolve().as_posix()
+    monkeypatch.setattr(tm_answer, "TRUSTED_EXTERNAL_EVIDENCE_PATHS", {trusted_key})
+
+    assert tm_answer._is_allowed_evidence_path(trusted_key)
+    assert not tm_answer._is_allowed_evidence_path(untrusted_key)
+    assert tm_answer._read_hit_content(trusted_key) == "Codex preview port is 2000; Gemini-only port is 1999."
+    assert tm_answer._read_hit_content(untrusted_key) is None
+    assert tm_answer._is_forbidden_related_path(trusted_key) is False
+    assert tm_answer._is_forbidden_related_path(untrusted_key) is True
+    assert tm_answer._effective_source("wiki", trusted_key) == "sources"
 
 
 def test_memory_answer_conflict_scan_uses_untrimmed_evidence(monkeypatch, tmp_path):
@@ -1845,6 +1887,67 @@ def test_hybrid_map_arm_reserves_selected_slot_for_high_confidence_map_signal(mo
     agents_gate = next(item for item in gate if item["path"] == "AGENTS.md")
     assert agents_gate["keep"] is True
     assert agents_gate["selected"] is True
+
+
+def test_hybrid_map_arm_reserves_current_policy_anchor_without_timestamp(monkeypatch):
+    monkeypatch.setenv(tm_answer.HYBRID_MAP_ARM_ENV, "1")
+    bodies = {
+        "wiki/systems/current-peer-a.md": "---\nupdated: 2026-06-15\n---\n# Peer A\n\n当前 agent 提交推送说明。",
+        "wiki/systems/current-peer-b.md": "---\nupdated: 2026-06-15\n---\n# Peer B\n\n当前 agent hook 说明。",
+        "wiki/systems/current-peer-c.md": "---\nupdated: 2026-06-15\n---\n# Peer C\n\n当前 agent 规则说明。",
+        "AGENTS.md": "# AGENTS\n\nagent 提交推送 hook 规则和当前工作区纪律。",
+    }
+    monkeypatch.setattr(tm_answer, "_read_hit_content", lambda path: bodies[path])
+
+    evidence, gate = tm_answer.expand_evidence(
+        "当前 agent 提交推送 hook 规则",
+        {
+            "primary_results": [
+                {
+                    "source": "wiki",
+                    "path": "wiki/systems/current-peer-a.md",
+                    "title": "Peer A",
+                    "snippet": "",
+                    "score": 20.0,
+                    "score_breakdown": {"map_score": 35.0, "map_rank": 1},
+                },
+                {
+                    "source": "wiki",
+                    "path": "wiki/systems/current-peer-b.md",
+                    "title": "Peer B",
+                    "snippet": "",
+                    "score": 20.0,
+                    "score_breakdown": {"map_score": 34.0, "map_rank": 2},
+                },
+                {
+                    "source": "wiki",
+                    "path": "wiki/systems/current-peer-c.md",
+                    "title": "Peer C",
+                    "snippet": "",
+                    "score": 20.0,
+                    "score_breakdown": {"map_score": 33.0, "map_rank": 3},
+                },
+                {
+                    "source": "wiki",
+                    "path": "AGENTS.md",
+                    "title": "AGENTS",
+                    "snippet": "",
+                    "score": 20.0,
+                    "score_breakdown": {"map_score": 26.0, "map_rank": 4},
+                },
+            ],
+            "groups": {},
+        },
+        max_evidence=2,
+        query_class="recall",
+    )
+
+    paths = [item["path"] for item in evidence]
+    agents_gate = next(item for item in gate if item["path"] == "AGENTS.md")
+    assert "AGENTS.md" in paths
+    assert agents_gate["selected"] is True
+    assert agents_gate["validity"] == "current"
+    assert agents_gate["validity_reason"] == "canonical policy anchor without timestamp"
 
 
 def test_hybrid_map_arm_reserves_systems_rank5_mid_score_map_signal(monkeypatch):
@@ -3513,6 +3616,75 @@ def test_answer_eval_can_run_only_previous_evidence_misses(tmp_path):
     assert [case["id"] for case in filtered] == ["case-evidence"]
 
 
+def test_answer_eval_failure_filter_accepts_utf8_bom_report(tmp_path):
+    cases = tmp_path / "cases.jsonl"
+    cases.write_text(
+        "\n".join([
+            json.dumps({"id": "case-evidence", "query": "evidence failed"}),
+            json.dumps({"id": "case-ok", "query": "passed"}),
+        ]),
+        encoding="utf-8",
+    )
+    previous = tmp_path / "previous.json"
+    previous.write_text(
+        json.dumps({
+            "failures": [
+                {
+                    "id": "case-evidence",
+                    "expected_evidence_paths": ["wiki/systems/example.md"],
+                    "answer_evidence_rank": None,
+                }
+            ]
+        }),
+        encoding="utf-8-sig",
+    )
+
+    filtered = tm_answer_eval.filter_cases_by_failure_report(
+        tm_answer_eval.load_cases(str(cases)),
+        str(previous),
+        kind="answer_evidence",
+    )
+
+    assert [case["id"] for case in filtered] == ["case-evidence"]
+
+
 def test_answer_eval_loads_wiki_map_from_tools_path():
     assert tm_answer_eval.tm_llm_wiki_map is not None
     assert hasattr(tm_answer_eval.tm_llm_wiki_map, "map_recall")
+
+
+def test_verbatim_identifier_summary_preserves_search_endpoint():
+    summary = "tigermemory 的记忆检索接口通过 HTTP 端点对外暴露。"
+    evidence = [{
+        "path": "wiki/systems/tm_http-endpoints.md",
+        "title": "tm_http 端点契约",
+        "excerpt": "POST /search_memories 在 Mem0 检索记忆；POST /memory/answer 生成证据回答。",
+    }]
+
+    result = tm_answer._ensure_verbatim_identifier_summary(
+        summary,
+        "怎么调用记忆检索接口",
+        evidence,
+    )
+
+    assert "/search_memories" in result
+
+
+def test_exact_date_path_match_sorts_before_newer_daily_reports():
+    exact = {
+        "path": "wiki/operations/daily-health/2026-05-17.md",
+        "validity": "current",
+        "authority": 86.0,
+        "relevance": 1.0,
+        "score": 10.0,
+        "exact_query_path_match": True,
+    }
+    newer = {
+        "path": "wiki/operations/daily-health/2026-05-21.md",
+        "validity": "current",
+        "authority": 98.0,
+        "relevance": 9.0,
+        "score": 20.0,
+    }
+
+    assert sorted([newer, exact], key=tm_answer._evidence_sort_key)[0]["path"] == exact["path"]
