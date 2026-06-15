@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import importlib
 import json
 import statistics
 import sys
@@ -19,10 +20,21 @@ from typing import Any
 import tigermemory_core as tm_core
 from tigermemory_answer import memory_answer_core, normalize_run_id
 
-try:
-    import tm_llm_wiki_map
-except Exception:  # pragma: no cover - optional runtime tool path
-    tm_llm_wiki_map = None  # type: ignore[assignment]
+
+def _load_tm_llm_wiki_map() -> Any | None:
+    try:
+        return importlib.import_module("tm_llm_wiki_map")
+    except Exception:
+        tools_dir = str(tm_core.REPO_ROOT / "tools")
+        if tools_dir not in sys.path:
+            sys.path.insert(0, tools_dir)
+        try:
+            return importlib.import_module("tm_llm_wiki_map")
+        except Exception:  # pragma: no cover - optional runtime tool path
+            return None
+
+
+tm_llm_wiki_map = _load_tm_llm_wiki_map()
 
 
 ALLOWED_CASE_SOURCES = {"real_failure", "patrol", "system_contract", "paper_seed_tmp"}
@@ -133,6 +145,74 @@ def load_cases(path: str, *, allow_paper_seed_tmp: bool = False) -> list[dict[st
                 )
             cases.append(item)
     return cases
+
+
+FAILURE_FILTER_KINDS = {"failed", "answer_evidence", "map_leak"}
+
+
+def _row_failed(row: dict[str, Any], *, kind: str = "failed") -> bool:
+    if kind == "answer_evidence":
+        expected_paths = row.get("expected_evidence_paths") or []
+        if not expected_paths:
+            return False
+        if row.get("answer_evidence_rank") is not None:
+            return False
+        if row.get("expected_evidence_hit") is True:
+            return False
+        return True
+    if kind == "map_leak":
+        return bool(row.get("map_hit_but_evidence_miss"))
+    if "passed" in row:
+        return not bool(row.get("passed"))
+    checks = [
+        row.get("status_ok"),
+        row.get("expected_evidence_hit"),
+        row.get("must_contain_hit"),
+        row.get("warning_hit"),
+        row.get("trace_flags_hit"),
+    ]
+    if any(value is not None for value in checks):
+        return not all(value is not False for value in checks)
+    return True
+
+
+def failure_ids_from_report(path: str, *, kind: str = "failed") -> set[str]:
+    if kind not in FAILURE_FILTER_KINDS:
+        raise ValueError(f"invalid failure filter kind {kind!r}")
+    source_path = Path(path)
+    try:
+        report = json.loads(source_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path}: invalid JSON report: {exc}") from exc
+    if not isinstance(report, dict):
+        raise ValueError(f"{path}: report must be a JSON object")
+
+    rows = report.get("failures")
+    if not isinstance(rows, list):
+        rows = report.get("results")
+    if not isinstance(rows, list):
+        raise ValueError(f"{path}: report must contain a failures or results list")
+
+    ids: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict) or not _row_failed(row, kind=kind):
+            continue
+        case_id = str(row.get("id") or "").strip()
+        if case_id:
+            ids.add(case_id)
+    return ids
+
+
+def filter_cases_by_failure_report(
+    cases: list[dict[str, Any]],
+    path: str | None,
+    *,
+    kind: str = "failed",
+) -> list[dict[str, Any]]:
+    if not path:
+        return cases
+    failed_ids = failure_ids_from_report(path, kind=kind)
+    return [case for case in cases if str(case.get("id") or "") in failed_ids]
 
 
 def _query_intent_bucket(case: dict[str, Any]) -> str:
@@ -1022,6 +1102,13 @@ def summarize_diagnosis(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 def cmd_eval(args: argparse.Namespace) -> int:
     cases = load_cases(args.cases, allow_paper_seed_tmp=args.allow_paper_seed_tmp)
+    original_case_count = len(cases)
+    failure_filter_kind = getattr(args, "only_failure_kind", "failed")
+    cases = filter_cases_by_failure_report(
+        cases,
+        getattr(args, "only_failures_from", None),
+        kind=failure_filter_kind,
+    )
     run_id = tm_answer.normalize_run_id(args.run_id) or default_run_id()
     results = [
         eval_case(case, run_id=run_id, write_trace=not getattr(args, "no_write_trace", False))
@@ -1041,6 +1128,9 @@ def cmd_eval(args: argparse.Namespace) -> int:
     report = {
         **summary,
         "run_id": run_id,
+        "source_case_count": original_case_count,
+        "only_failures_from": getattr(args, "only_failures_from", None),
+        "only_failure_kind": failure_filter_kind,
         "failures": failures,
     }
     if not args.compact:
@@ -1070,6 +1160,13 @@ def cmd_eval(args: argparse.Namespace) -> int:
 
 def cmd_diagnose(args: argparse.Namespace) -> int:
     cases = load_cases(args.cases, allow_paper_seed_tmp=args.allow_paper_seed_tmp)
+    original_case_count = len(cases)
+    failure_filter_kind = getattr(args, "only_failure_kind", "failed")
+    cases = filter_cases_by_failure_report(
+        cases,
+        getattr(args, "only_failures_from", None),
+        kind=failure_filter_kind,
+    )
     if args.limit is not None:
         cases = cases[: max(0, int(args.limit))]
     run_id = tm_answer.normalize_run_id(args.run_id) or default_run_id().replace("answer-eval", "answer-diagnosis")
@@ -1088,6 +1185,9 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
     report = {
         **summary,
         "run_id": run_id,
+        "source_case_count": original_case_count,
+        "only_failures_from": getattr(args, "only_failures_from", None),
+        "only_failure_kind": failure_filter_kind,
         "failures": [_compact_diagnosis_row(item) for item in failures] if args.compact else failures,
     }
     if not args.compact:
@@ -1122,6 +1222,17 @@ def main() -> None:
     eval_p.add_argument("--run-id", default=None, help="optional run id shared by all memory_answer trace rows")
     eval_p.add_argument("--no-write-trace", action="store_true", help="do not append eval rows to .tmp/memory-answer-trace.jsonl")
     eval_p.add_argument(
+        "--only-failures-from",
+        default=None,
+        help="run only case ids that failed in a previous eval/diagnose JSON report",
+    )
+    eval_p.add_argument(
+        "--only-failure-kind",
+        choices=sorted(FAILURE_FILTER_KINDS),
+        default="failed",
+        help="when using --only-failures-from, choose which failure ids to rerun",
+    )
+    eval_p.add_argument(
         "--allow-paper-seed-tmp",
         action="store_true",
         help="allow experimental paper_seed_tmp cases from .tmp fixtures",
@@ -1136,6 +1247,17 @@ def main() -> None:
     diag_p.add_argument("--top-k-probe", type=int, default=10, help="lexical/hybrid diagnostic probe depth")
     diag_p.add_argument("--map-probe-k", type=int, default=80, help="LLM Wiki map diagnostic probe depth")
     diag_p.add_argument("--limit", type=int, default=None, help="run only the first N cases")
+    diag_p.add_argument(
+        "--only-failures-from",
+        default=None,
+        help="run only case ids that failed in a previous eval/diagnose JSON report",
+    )
+    diag_p.add_argument(
+        "--only-failure-kind",
+        choices=sorted(FAILURE_FILTER_KINDS),
+        default="failed",
+        help="when using --only-failures-from, choose which failure ids to rerun",
+    )
     diag_p.add_argument(
         "--allow-paper-seed-tmp",
         action="store_true",

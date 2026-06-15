@@ -3407,3 +3407,112 @@ def test_answer_eval_compact_redacts_queries_and_emits_grouped_metrics(tmp_path,
     assert {item["id"] for item in report["failures"]} == {"case-2", "case-3"}
     assert any(item["trace_flags_hit"] is False for item in report["failures"])
     assert all("query" not in item for item in report["failures"])
+
+
+def test_answer_eval_can_run_only_previous_failures(tmp_path, monkeypatch, capsys):
+    cases = tmp_path / "cases.jsonl"
+    cases.write_text(
+        "\n".join([
+            json.dumps({"id": "case-ok", "query": "already passed", "expected_status": "ok"}),
+            json.dumps({"id": "case-fail", "query": "still missing", "expected_status": "ok"}),
+            json.dumps({"id": "case-skip", "query": "not in prior report", "expected_status": "ok"}),
+        ]),
+        encoding="utf-8",
+    )
+    previous = tmp_path / "previous.json"
+    previous.write_text(
+        json.dumps({
+            "results": [
+                {"id": "case-ok", "passed": True},
+                {"id": "case-fail", "passed": False},
+            ]
+        }),
+        encoding="utf-8",
+    )
+    calls: list[str] = []
+
+    def fake_memory_answer_core(query, **kwargs):
+        calls.append(query)
+        return {
+            "status": "ok",
+            "answer": "answer",
+            "summary": "summary",
+            "claims": [],
+            "evidence": [],
+            "warnings": [],
+            "trace_id": "trace-filter",
+            "trace": {"planner": {"intent": "recall"}},
+            "run_id": kwargs.get("run_id"),
+        }
+
+    monkeypatch.setattr(tm_answer_eval.tm_answer, "memory_answer_core", fake_memory_answer_core)
+    args = type("Args", (), {
+        "cases": str(cases),
+        "json": True,
+        "compact": True,
+        "run_id": "failure-filter",
+        "allow_paper_seed_tmp": False,
+        "only_failures_from": str(previous),
+        "only_failure_kind": "failed",
+    })()
+
+    exit_code = tm_answer_eval.cmd_eval(args)
+    report = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert calls == ["still missing"]
+    assert report["source_case_count"] == 3
+    assert report["case_count"] == 1
+    assert report["only_failures_from"] == str(previous)
+    assert report["only_failure_kind"] == "failed"
+
+
+def test_answer_eval_can_run_only_previous_evidence_misses(tmp_path):
+    cases = tmp_path / "cases.jsonl"
+    cases.write_text(
+        "\n".join([
+            json.dumps({"id": "case-status", "query": "status failed"}),
+            json.dumps({"id": "case-evidence", "query": "evidence failed"}),
+            json.dumps({"id": "case-ok", "query": "passed"}),
+        ]),
+        encoding="utf-8",
+    )
+    previous = tmp_path / "previous.json"
+    previous.write_text(
+        json.dumps({
+            "results": [
+                {
+                    "id": "case-status",
+                    "passed": False,
+                    "expected_evidence_paths": [],
+                    "status_ok": False,
+                },
+                {
+                    "id": "case-evidence",
+                    "passed": False,
+                    "expected_evidence_paths": ["wiki/systems/example.md"],
+                    "answer_evidence_rank": None,
+                },
+                {
+                    "id": "case-ok",
+                    "passed": True,
+                    "expected_evidence_paths": ["wiki/systems/example.md"],
+                    "answer_evidence_rank": 1,
+                },
+            ]
+        }),
+        encoding="utf-8",
+    )
+
+    filtered = tm_answer_eval.filter_cases_by_failure_report(
+        tm_answer_eval.load_cases(str(cases)),
+        str(previous),
+        kind="answer_evidence",
+    )
+
+    assert [case["id"] for case in filtered] == ["case-evidence"]
+
+
+def test_answer_eval_loads_wiki_map_from_tools_path():
+    assert tm_answer_eval.tm_llm_wiki_map is not None
+    assert hasattr(tm_answer_eval.tm_llm_wiki_map, "map_recall")
