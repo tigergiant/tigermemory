@@ -1114,6 +1114,95 @@ def test_dashboard_worktree_check_discloses_runtime_source(tmp_path, monkeypatch
     assert check["status"] == "ok"
 
 
+def test_ensure_write_ready_fast_forwards_when_only_behind(monkeypatch):
+    class Proc:
+        def __init__(self, stdout: str = "") -> None:
+            self.stdout = stdout
+
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run_checked(args, timeout=0.5):
+        cmd = tuple(args)
+        calls.append(cmd)
+        if cmd == ("git", "status", "--short"):
+            return Proc("")
+        if cmd == ("git", "fetch", "origin", "master"):
+            return Proc("")
+        if cmd == ("git", "rev-parse", "HEAD"):
+            return Proc("local\n")
+        if cmd == ("git", "rev-parse", "origin/master"):
+            return Proc("remote\n")
+        if cmd == ("git", "rev-list", "--left-right", "--count", "HEAD...origin/master"):
+            return Proc("0\t1\n")
+        if cmd == ("git", "pull", "--ff-only", "origin", "master"):
+            return Proc("updated\n")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(tm_review_ui, "_run_checked", fake_run_checked)
+
+    tm_review_ui.ensure_write_ready()
+
+    assert ("git", "pull", "--ff-only", "origin", "master") in calls
+
+
+def test_ensure_write_ready_blocks_unpushed_local_commits(monkeypatch):
+    class Proc:
+        def __init__(self, stdout: str = "") -> None:
+            self.stdout = stdout
+
+    def fake_run_checked(args, timeout=0.5):
+        cmd = tuple(args)
+        if cmd == ("git", "status", "--short"):
+            return Proc("")
+        if cmd == ("git", "fetch", "origin", "master"):
+            return Proc("")
+        if cmd == ("git", "rev-parse", "HEAD"):
+            return Proc("local\n")
+        if cmd == ("git", "rev-parse", "origin/master"):
+            return Proc("remote\n")
+        if cmd == ("git", "rev-list", "--left-right", "--count", "HEAD...origin/master"):
+            return Proc("1\t0\n")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(tm_review_ui, "_run_checked", fake_run_checked)
+
+    try:
+        tm_review_ui.ensure_write_ready()
+    except RuntimeError as exc:
+        assert "local commit(s) not pushed" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
+def test_ensure_write_ready_blocks_diverged_history(monkeypatch):
+    class Proc:
+        def __init__(self, stdout: str = "") -> None:
+            self.stdout = stdout
+
+    def fake_run_checked(args, timeout=0.5):
+        cmd = tuple(args)
+        if cmd == ("git", "status", "--short"):
+            return Proc("")
+        if cmd == ("git", "fetch", "origin", "master"):
+            return Proc("")
+        if cmd == ("git", "rev-parse", "HEAD"):
+            return Proc("local\n")
+        if cmd == ("git", "rev-parse", "origin/master"):
+            return Proc("remote\n")
+        if cmd == ("git", "rev-list", "--left-right", "--count", "HEAD...origin/master"):
+            return Proc("1\t1\n")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(tm_review_ui, "_run_checked", fake_run_checked)
+
+    try:
+        tm_review_ui.ensure_write_ready()
+    except RuntimeError as exc:
+        assert "diverged" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
 def test_health_worktree_renderer_discloses_source_path():
     pages_js = (REPO_ROOT / "tools" / "static" / "dashboard-pages.js").read_text(encoding="utf-8")
 
