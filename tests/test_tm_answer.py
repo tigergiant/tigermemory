@@ -559,6 +559,53 @@ def _map_plan_with_candidate(path: str, *, title: str = "Bridge Target", score: 
     }
 
 
+def test_attach_map_candidates_merges_map_terms_into_evidence_query(monkeypatch):
+    monkeypatch.setattr(
+        tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: _map_plan_with_candidate(
+            "wiki/systems/map-arm-target.md",
+            title="Map Arm Target",
+        ),
+    )
+
+    planner = {
+        "expanded_queries": ["alpha target"],
+        "evidence_terms": ["existing term"],
+        "path_hints": [],
+        "subquery_roles": [{"index": 0, "role": "primary"}],
+    }
+
+    merged = tm_answer._attach_map_candidates("alpha target", planner)
+
+    assert merged["map_candidate_term_count"] == 1
+    assert merged["evidence_terms"] == ["existing term", "Map Arm Target"]
+    evidence_query = tm_answer._planner_evidence_query("alpha target", merged)
+    assert "existing term" in evidence_query
+    assert "Map Arm Target" in evidence_query
+
+
+def test_merge_llm_query_plan_preserves_base_evidence_terms():
+    merged, warnings = tm_answer._merge_llm_query_plan(
+        {
+            "expanded_queries": ["alpha target"],
+            "evidence_terms": ["Map Arm Target"],
+            "path_hints": [],
+        },
+        {
+            "retrieval_queries": ["alpha natural question"],
+            "evidence_terms": ["LLM Stable Term"],
+        },
+    )
+
+    assert warnings == []
+    assert merged["planner_source"] == "llm"
+    assert merged["evidence_terms"] == ["Map Arm Target", "LLM Stable Term"]
+    evidence_query = tm_answer._planner_evidence_query("alpha target", merged)
+    assert "Map Arm Target" in evidence_query
+    assert "LLM Stable Term" in evidence_query
+
+
 def test_memory_answer_core_hybrid_map_arm_widening_is_off_by_default(monkeypatch, tmp_path):
     path = tmp_path / "wiki" / "systems" / "wrong-memory-answer.md"
     path.parent.mkdir(parents=True)

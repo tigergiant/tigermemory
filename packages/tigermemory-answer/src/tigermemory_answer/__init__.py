@@ -1016,7 +1016,7 @@ def _attach_map_candidates(query: str, planner: dict[str, Any]) -> dict[str, Any
     merged["expanded_queries"] = expanded
     merged["map_candidate_term_count"] = len(terms)
     merged["evidence_terms"] = _dedupe_planner_items(
-        list(merged.get("evidence_terms") or []),
+        list(merged.get("evidence_terms") or []) + terms,
         max_items=QUERY_PLANNER_MAX_EVIDENCE_TERMS,
         max_chars=100,
     )
@@ -1252,7 +1252,11 @@ def _merge_llm_query_plan(base_plan: dict[str, Any], parsed: Any) -> tuple[dict[
 
     planner = dict(base_plan)
     planner["expanded_queries"] = expanded_queries or list(base_plan.get("expanded_queries") or [])
-    planner["evidence_terms"] = evidence_terms
+    planner["evidence_terms"] = _dedupe_planner_items(
+        list(base_plan.get("evidence_terms") or []) + evidence_terms,
+        max_items=QUERY_PLANNER_MAX_EVIDENCE_TERMS,
+        max_chars=80,
+    )
     planner["path_hints"] = path_hints
     planner["planner_source"] = "llm"
     planner["planner_model"] = tm_core.deepseek_model()
