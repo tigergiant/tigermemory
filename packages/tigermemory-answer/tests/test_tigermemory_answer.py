@@ -194,6 +194,33 @@ def test_expand_evidence_scores_and_limits_candidates():
     assert evidence[0]["source_role"] == "canonical_wiki"
 
 
+def test_expand_evidence_normalizes_sources_path_even_when_source_is_wiki(monkeypatch):
+    monkeypatch.setattr(
+        answer,
+        "_read_hit_content",
+        lambda _path: "# Review Archive\n\nalpha review archive",
+    )
+    search_result = _search_result({
+        "source": "wiki",
+        "path": "sources/internal-analysis/development-reviews/2026-06-15/review.md",
+        "title": "Review Archive",
+        "snippet": "alpha review archive",
+        "score": 20.0,
+    })
+
+    evidence, gate = answer.expand_evidence("alpha", search_result, 1, "recall")
+
+    assert evidence[0]["source"] == "sources"
+    assert evidence[0]["source_role"] == "source_material"
+    assert evidence[0]["authority"] == 70.0
+    assert gate[0]["source"] == "sources"
+
+
+def test_read_hit_content_allows_exact_root_wiki_allowlist_only():
+    assert answer._read_hit_content("AGENTS.md") is not None
+    assert answer._read_hit_content("README.md") is None
+
+
 def test_expand_evidence_filters_weak_candidates():
     search_result = _search_result({
         "source": "wiki",

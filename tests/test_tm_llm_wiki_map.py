@@ -68,6 +68,10 @@ def test_build_records_skips_person_and_forbidden_paths(tmp_path):
     _write(tmp_path / ".tmp" / "leak.md", "# Leak\n\n不应进入地图。")
     _write(tmp_path / "runtime" / "llm_wiki" / "old-map.md", "# Runtime\n\n不应进入地图。")
     _write(tmp_path / "tests" / "fixtures" / "eval.md", "# Test Fixture\n\n不应进入地图。")
+    _write(
+        tmp_path / "sources" / "internal-analysis" / "development-reviews" / "review.md",
+        "# Review\n\n审核归档不应进入问答地图。",
+    )
 
     records, skipped = wiki_map.build_records(tmp_path)
 
@@ -75,10 +79,12 @@ def test_build_records_skips_person_and_forbidden_paths(tmp_path):
     assert {item["path"] for item in skipped} == {
         "wiki/person/secret.md",
         "sources/person/secret.md",
+        "sources/internal-analysis/development-reviews/review.md",
     }
     assert wiki_map.is_forbidden_input_path("tests/fixtures/memory_answer_diagnosis_100.jsonl")
     assert wiki_map.is_forbidden_input_path(".tmp/llm-wiki-map-quality-report.md")
     assert wiki_map.is_forbidden_input_path("runtime/llm_wiki/wiki_map.jsonl")
+    assert wiki_map.is_forbidden_input_path("sources/internal-analysis/development-reviews/2026-06-15/review.md")
 
 
 def test_build_records_includes_only_root_agents_allowlist(tmp_path):
@@ -109,6 +115,50 @@ rebase 过程中出现 conflict 时立即 abort，不要 continue。
     assert "变基出现冲突怎么办" in by_path["AGENTS.md"].aliases
     assert "基出" not in by_path["AGENTS.md"].cjk_bridge_terms
     assert skipped == []
+
+
+def test_build_record_keeps_extended_alias_budget(tmp_path):
+    aliases = [f"alias-{index:02d}" for index in range(1, 16)]
+    page = _write(
+        tmp_path / "wiki" / "systems" / "long-entry.md",
+        f"""---
+title: Long Entry
+aliases: [{", ".join(aliases)}]
+---
+
+# Long Entry
+
+## 摘要
+
+长规则页需要保留超过十个稳定别名。
+""",
+    )
+
+    record = wiki_map.build_record_for_file(page, repo_root=tmp_path).to_dict()
+
+    assert "alias-15" in record["aliases"]
+    assert len(record["aliases"]) == 16
+
+
+def test_build_record_parses_frontmatter_with_utf8_bom(tmp_path):
+    page = _write(
+        tmp_path / "wiki" / "operations" / "project-canvas.md",
+        "\ufeff---\n"
+        "title: Project Canvas\n"
+        "aliases: [项目星图, Dashboard 项目星图, canvas candidate shelf]\n"
+        "---\n\n"
+        "# Project Canvas\n\n"
+        "## 摘要\n\n"
+        "项目星图和候选区的数据源。\n",
+    )
+
+    record = wiki_map.build_record_for_file(page, repo_root=tmp_path).to_dict()
+
+    assert record["title"] == "Project Canvas"
+    assert "项目星图" in record["aliases"]
+    assert "Dashboard 项目星图" in record["aliases"]
+    assert "canvas candidate shelf" in record["aliases"]
+    assert "项目星图和候选区" in record["summary"]
 
 
 def test_root_agents_scoring_prefers_rule_queries_without_date_pollution(tmp_path):

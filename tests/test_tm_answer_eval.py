@@ -10,6 +10,7 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import tm_answer_eval  # type: ignore[import-not-found]
 import tm_answer_funnel_compare  # type: ignore[import-not-found]
+import tm_answer_miss_ledger  # type: ignore[import-not-found]
 
 
 class _DummyWikiMap:
@@ -674,6 +675,39 @@ def test_memory_answer_p310_holdout_fixture_is_independent():
     assert all(not str(case["id"]).startswith("p35-") for case in holdout)
 
 
+def test_memory_answer_p315_holdout_fixture_is_independent():
+    baseline = tm_answer_eval.load_cases(
+        str(REPO_ROOT / "tests" / "fixtures" / "memory_answer_diagnosis_100.jsonl")
+    )
+    p310_holdout = tm_answer_eval.load_cases(
+        str(REPO_ROOT / "tests" / "fixtures" / "memory_answer_holdout_p310.jsonl")
+    )
+    p315_holdout = tm_answer_eval.load_cases(
+        str(REPO_ROOT / "tests" / "fixtures" / "memory_answer_holdout_p315.jsonl")
+    )
+
+    p315_ids = {case["id"] for case in p315_holdout}
+    assert len(p315_holdout) == 29
+    assert len(p315_ids) == 29
+    assert not ({case["id"] for case in baseline} & p315_ids)
+    assert not ({case["id"] for case in p310_holdout} & p315_ids)
+    assert {case["holdout_domain"] for case in p315_holdout} == {
+        "new_agent_tigermemory",
+        "new_agent_tigerinvest",
+        "chatgpt_ipfb",
+        "production_dev",
+        "memory_answer",
+        "random_negative",
+    }
+    assert {case["query_intent_bucket"] for case in p315_holdout} >= {
+        "topic_locator",
+        "workflow_fact",
+        "tail_detail",
+        "negative",
+    }
+    assert all(not str(case["id"]).startswith(("p35-", "p310-")) for case in p315_holdout)
+
+
 def test_query_intent_bucket_field_is_present_and_valid_in_answer_fixtures():
     allowed = {
         "topic_locator",
@@ -685,6 +719,7 @@ def test_query_intent_bucket_field_is_present_and_valid_in_answer_fixtures():
     for fixture in [
         str(REPO_ROOT / "tests" / "fixtures" / "memory_answer_diagnosis_100.jsonl"),
         str(REPO_ROOT / "tests" / "fixtures" / "memory_answer_holdout_p310.jsonl"),
+        str(REPO_ROOT / "tests" / "fixtures" / "memory_answer_holdout_p315.jsonl"),
     ]:
         cases = tm_answer_eval.load_cases(fixture)
         assert all(case.get("query_intent_bucket") in allowed for case in cases)
@@ -768,3 +803,79 @@ def test_funnel_compare_matrix_env_is_explicit():
         "TM_ANSWER_WIKI_MAP": "0",
     }
     assert tm_answer_funnel_compare.MATRICES["bridge"]["TM_ANSWER_WIKI_MAP_BRIDGE"] == "1"
+
+
+def test_miss_ledger_omits_raw_query_and_groups_decision_bucket():
+    report = {
+        "run_id": "unit",
+        "case_count": 1,
+        "expected_path_case_count": 1,
+        "answer_evidence_hit": 0,
+        "results": [{
+            "id": "case-1",
+            "query": "do not leak this raw query",
+            "case_source": "real_failure",
+            "case_source_ref": "trace:1",
+            "expected_evidence_paths": ["wiki/systems/a.md"],
+            "checks": {"evidence_hit": False},
+            "map_bridge_bucket": "map_top10_not_in_gate",
+            "evidence_gate_reason_category": "not_in_gate",
+            "query_intent_bucket": "workflow_fact",
+            "freshness_mode": "current",
+            "prompt_budget_truncated": True,
+        }],
+    }
+
+    ledger = tm_answer_miss_ledger.build_ledger(report)
+    dumped = json.dumps(ledger, ensure_ascii=False)
+
+    assert ledger["miss_count"] == 1
+    assert ledger["decision_bucket_counts"] == {"candidate_handoff_not_in_gate": 1}
+    assert ledger["entries"][0]["query_hash"]
+    assert "do not leak this raw query" not in dumped
+
+
+def test_miss_ledger_supports_compact_eval_failures_without_raw_query():
+    report = {
+        "run_id": "compact",
+        "case_count": 2,
+        "expected_evidence_case_count": 2,
+        "expected_evidence_hit": 1,
+        "failures": [
+            {
+                "id": "miss-1",
+                "query": "also do not leak this compact query",
+                "expected_evidence_paths": ["C:/Users/Giant/.codex/skills/delegated-dev-workflow/SKILL.md"],
+                "expected_evidence_hit": False,
+                "status": "ok",
+            },
+            {
+                "id": "must-only",
+                "query": "not an evidence miss",
+                "expected_evidence_paths": ["wiki/systems/ok.md"],
+                "expected_evidence_hit": True,
+                "must_contain_hit": False,
+            },
+            {
+                "id": "wiki-miss",
+                "query": "wiki miss without diagnose fields",
+                "expected_evidence_paths": ["wiki/systems/missing.md"],
+                "expected_evidence_hit": False,
+                "status": "not_found",
+            },
+        ],
+    }
+
+    ledger = tm_answer_miss_ledger.build_ledger(report)
+    dumped = json.dumps(ledger, ensure_ascii=False)
+
+    assert ledger["miss_count"] == 2
+    assert ledger["expected_path_case_count"] == 2
+    assert ledger["answer_evidence_hit"] == 1
+    assert ledger["decision_bucket_counts"] == {
+        "compact_eval_needs_diagnose": 1,
+        "source_policy_or_surrogate_needed": 1,
+    }
+    assert ledger["entries"][0]["case_id"] == "miss-1"
+    assert "also do not leak this compact query" not in dumped
+    assert "wiki miss without diagnose fields" not in dumped

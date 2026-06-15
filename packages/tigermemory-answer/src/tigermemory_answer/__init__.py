@@ -470,14 +470,17 @@ HISTORICAL_QUERY_MARKERS = (
 )
 STALE_CONFLICT_WINDOW_DAYS = 7
 
+ROOT_WIKI_PATHS = {"AGENTS.md"}
 WEAK_EVIDENCE_MIN_RELEVANCE = 1.0
 WEAK_EVIDENCE_MIN_MATCHES = 1
 MUST_READ_THRESHOLD = 70.0
 MAP_EVIDENCE_SIGNAL_MIN_SCORE = 24.0
-MAP_EVIDENCE_SIGNAL_TOP_RANK = 10
+MAP_EVIDENCE_SIGNAL_TOP_RANK = 30
+MAP_EVIDENCE_SIGNAL_SCAN_LIMIT = 80
 MAP_EVIDENCE_SIGNAL_RELEVANCE_BOOST = 0.85
+MAP_EVIDENCE_SIGNAL_SELECTION_RESERVE = 4
 HYBRID_MAP_ARM_ENV = "TM_HYBRID_MAP_ARM"
-HYBRID_MAP_ARM_WIDEN_MAX_CANDIDATES = 4
+HYBRID_MAP_ARM_WIDEN_MAX_CANDIDATES = 8
 
 ANSWER_PROMPT = """You are tigermemory's evidence-first memory answerer.
 
@@ -622,7 +625,7 @@ def _clean_planner_text(value: Any, *, max_chars: int = 120, path_hint: bool = F
     text = re.sub(r"\s+", " ", text)
     if path_hint:
         text = text.replace("\\", "/")
-        if not re.match(r"^(wiki|sources|inbox)/", text):
+        if text not in ROOT_WIKI_PATHS and not re.match(r"^(wiki|sources|inbox)/", text):
             return ""
     elif "\n" in text:
         return ""
@@ -922,9 +925,14 @@ def _map_candidate_plan(query: str, *, limit: int = MAP_RECALL_LIMIT) -> dict[st
     paths: list[str] = []
     partitions: set[str] = set()
     source_surfaces: set[str] = set()
-    for index, item in enumerate(candidates[:MAP_PLAN_LIMIT]):
+    ranked_candidates: list[dict[str, Any]] = []
+    for index, item in enumerate(candidates):
         if not isinstance(item, dict):
             continue
+        ranked = dict(item)
+        ranked["map_rank"] = index + 1
+        ranked_candidates.append(ranked)
+    for index, item in enumerate(ranked_candidates[:MAP_PLAN_LIMIT]):
         path = _clean_planner_text(item.get("path"), max_chars=180, path_hint=True)
         title = _clean_planner_text(item.get("title"), max_chars=120)
         if path:
@@ -952,7 +960,7 @@ def _map_candidate_plan(query: str, *, limit: int = MAP_RECALL_LIMIT) -> dict[st
     return {
         "degraded": False,
         "error": None,
-        "candidates": candidates,
+        "candidates": ranked_candidates,
         "queries": _dedupe_planner_items(queries, max_items=MAP_PLAN_LIMIT * 2, max_chars=180),
         "terms": _dedupe_planner_items(terms, max_items=QUERY_PLANNER_MAX_EVIDENCE_TERMS, max_chars=100),
         "paths": _dedupe_planner_items(paths, max_items=MAP_PLAN_LIMIT, max_chars=180, path_hint=True),
@@ -1394,6 +1402,7 @@ def _read_hit_content(path: str) -> str | None:
         path.startswith("wiki/")
         or path.startswith("inbox/")
         or path.startswith("sources/")
+        or path in ROOT_WIKI_PATHS
     ):
         return None
     full_path = tm_core.REPO_ROOT / path
@@ -1823,11 +1832,20 @@ def _iter_hits(search_result: dict[str, Any]) -> list[dict[str, Any]]:
     return ordered
 
 
+def _effective_source(source: str, path: str) -> str:
+    if path.startswith("sources/"):
+        return "sources"
+    if path.startswith("wiki/") or path == "AGENTS.md":
+        return "wiki"
+    return source
+
+
 def _source_role(source: str, path: str) -> str:
+    source = _effective_source(source, path)
     if source == "wiki":
         if path.endswith("/index.md"):
             return "wiki_index"
-        if path.startswith("wiki/operations/daily-health/"):
+        if path.startswith("wiki/operations/daily-health/") or path.startswith("wiki/operations/inbox-archive/"):
             return "operational_report"
         if path.startswith("wiki/self-evolution/lessons/"):
             return "lesson_page"
@@ -1844,6 +1862,7 @@ def _source_role(source: str, path: str) -> str:
 
 
 def _authority_score(source: str, path: str, query_class: str) -> float:
+    source = _effective_source(source, path)
     base = AUTHORITY_BASE.get(source, 40.0)
     role = _source_role(source, path)
     if role == "canonical_wiki":
@@ -1923,6 +1942,129 @@ def _passes_evidence_gate(evidence: dict[str, Any], query_class: str) -> tuple[b
     if authority >= 96.0 and relevance >= 0.8:
         return True, "high authority fallback"
     return False, "weak evidence: no specific query signal"
+
+
+def _map_signal_priority(evidence: dict[str, Any]) -> float:
+    breakdown = evidence.get("score_breakdown")
+    if not isinstance(breakdown, dict):
+        return 0.0
+    try:
+        map_score = float(breakdown.get("map_score") or 0.0)
+        map_rank = int(breakdown.get("map_rank") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if not (1 <= map_rank <= MAP_EVIDENCE_SIGNAL_TOP_RANK):
+        return 0.0
+    path = _normalize_related_path(evidence.get("path")).lower()
+    if map_score < MAP_EVIDENCE_SIGNAL_MIN_SCORE:
+        if (
+            path in {entry.lower() for entry in ROOT_WIKI_PATHS}
+            and map_rank <= 5
+            and map_score >= 16.0
+        ):
+            return map_score + max(6 - map_rank, 1) / 5
+        if path.startswith("wiki/systems/") and map_rank <= 2 and map_score >= 17.0:
+            return map_score + max(3 - map_rank, 1) / 2
+        return 0.0
+    rank_weight = max(MAP_EVIDENCE_SIGNAL_TOP_RANK + 1 - map_rank, 1)
+    return map_score + rank_weight / MAP_EVIDENCE_SIGNAL_TOP_RANK
+
+
+def _evidence_sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
+    validity_order = {
+        "current": 0,
+        "unresolved_conflict": 1,
+        "unknown_date": 2,
+        "historical": 3,
+    }
+    return (
+        validity_order.get(str(item.get("validity") or "current"), 4),
+        -float(item.get("authority") or 0.0),
+        -float(item.get("relevance") or 0.0),
+        -_map_signal_priority(item),
+        -float(item.get("score") or 0.0),
+        str(item.get("path") or ""),
+    )
+
+
+def _map_signal_reserve_sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
+    validity_order = {
+        "current": 0,
+        "unresolved_conflict": 1,
+        "unknown_date": 2,
+        "historical": 3,
+    }
+    return (
+        _map_signal_source_priority(item),
+        validity_order.get(str(item.get("validity") or "current"), 4),
+        -_map_signal_priority(item),
+        -float(item.get("authority") or 0.0),
+        -float(item.get("relevance") or 0.0),
+        -float(item.get("score") or 0.0),
+        str(item.get("path") or ""),
+    )
+
+
+def _map_signal_source_priority(item: dict[str, Any]) -> int:
+    path = _normalize_related_path(item.get("path")).lower()
+    source = _effective_source(str(item.get("source") or ""), path)
+    relevance = float(item.get("relevance") or 0.0)
+    breakdown = item.get("score_breakdown") if isinstance(item.get("score_breakdown"), dict) else {}
+    try:
+        map_rank = int(breakdown.get("map_rank") or 0)
+    except (TypeError, ValueError):
+        map_rank = 0
+    if path in {entry.lower() for entry in ROOT_WIKI_PATHS}:
+        return 0 if relevance >= 2.0 else 5
+    if path == "wiki/operations/project-canvas.md":
+        return 1 if relevance >= 2.0 else 5
+    if source == "wiki" and path.startswith("wiki/systems/"):
+        return 2 if relevance >= 2.5 or (1 <= map_rank <= 2 and relevance >= 0.8) else 5
+    if source == "wiki" and path.startswith("wiki/self-evolution/lessons/"):
+        return 3
+    if source == "wiki" and path.startswith("wiki/operations/") and not path.startswith("wiki/operations/inbox-archive/"):
+        if relevance >= 7.0 or (1 <= map_rank <= 5 and relevance >= 3.0):
+            return 2
+        return 4 if relevance >= 3.0 else 6
+    if source == "wiki" and path.startswith("wiki/brand/"):
+        return 4
+    if source == "wiki" and path.startswith("wiki/investment/"):
+        return 4
+    if source == "wiki" and path.startswith("wiki/production/"):
+        return 4
+    if source == "sources":
+        return 7
+    return 5
+
+
+def _select_evidence_candidates(
+    candidates: list[dict[str, Any]],
+    *,
+    max_evidence: int,
+) -> list[dict[str, Any]]:
+    sorted_candidates = sorted(candidates, key=_evidence_sort_key)
+    if max_evidence <= 0:
+        return []
+    if not _hybrid_map_arm_enabled_for_answer():
+        return sorted_candidates[:max_evidence]
+
+    reserve_limit = min(MAP_EVIDENCE_SIGNAL_SELECTION_RESERVE, max_evidence)
+    reserved = sorted(
+        [item for item in sorted_candidates if _map_signal_priority(item) > 0],
+        key=_map_signal_reserve_sort_key,
+    )[:reserve_limit]
+    selected: list[dict[str, Any]] = []
+    selected_ids: set[str] = set()
+    for item in reserved + sorted_candidates:
+        candidate_id = str(item.get("candidate_id") or "")
+        if candidate_id and candidate_id in selected_ids:
+            continue
+        selected.append(item)
+        if candidate_id:
+            selected_ids.add(candidate_id)
+        if len(selected) >= max_evidence:
+            break
+    return selected
 
 
 def _parse_datetime(value: Any) -> datetime.datetime | None:
@@ -2121,6 +2263,7 @@ def expand_evidence(
     for hit in _iter_hits(search_result):
         source = str(hit.get("source") or "")
         path = str(hit.get("path") or "")
+        source = _effective_source(source, path)
         title = str(hit.get("title") or "")
         snippet = str(hit.get("snippet") or "")
         content = _read_hit_content(path)
@@ -2168,6 +2311,11 @@ def expand_evidence(
             "freshness_key": item["freshness_key"],
             "freshness_timestamp": item["freshness_timestamp"],
         }
+        breakdown = item.get("score_breakdown")
+        if isinstance(breakdown, dict):
+            for key in ("map_rank", "map_score"):
+                if key in breakdown:
+                    gate_entry[key] = breakdown[key]
         if hit.get("bridge_source"):
             gate_entry["bridge_source"] = str(hit.get("bridge_source"))
         if not keep:
@@ -2184,20 +2332,7 @@ def expand_evidence(
         search_result.setdefault("warnings", []).extend(guard_warnings)
 
     selected_candidates = [item for item in candidates if item.get("validity") != "obsolete_ignored"]
-    validity_order = {
-        "current": 0,
-        "unresolved_conflict": 1,
-        "unknown_date": 2,
-        "historical": 3,
-    }
-    selected_candidates.sort(key=lambda item: (
-        validity_order.get(str(item.get("validity") or "current"), 4),
-        -float(item.get("authority") or 0.0),
-        -float(item.get("relevance") or 0.0),
-        -float(item.get("score") or 0.0),
-        str(item.get("path") or ""),
-    ))
-    selected = selected_candidates[:max_evidence]
+    selected = _select_evidence_candidates(selected_candidates, max_evidence=max_evidence)
     for index, item in enumerate(selected, 1):
         item["id"] = f"e{index}"
         item.pop("_freshness_timestamp", None)
@@ -2767,12 +2902,20 @@ def _bridge_hit_from_map_candidate(item: dict[str, Any]) -> dict[str, Any] | Non
     source = _path_source_for_bridge(path, item.get("source_surface"))
     title = _clean_planner_text(item.get("title"), max_chars=120) or path
     score = float(item.get("score") or 0.0)
+    try:
+        map_rank = int(item.get("map_rank") or item.get("rank") or 0)
+    except (TypeError, ValueError):
+        map_rank = 0
     return {
         "source": source,
         "path": path,
         "title": title,
         "snippet": "",
         "score": min(max(score, 0.0), 20.0),
+        "score_breakdown": {
+            "map_score": round(score, 3),
+            "map_rank": map_rank,
+        },
         "bridge_source": "wiki_map",
     }
 
@@ -2796,6 +2939,33 @@ def _hybrid_map_arm_widen_hit_from_candidate(item: dict[str, Any]) -> dict[str, 
     return hit
 
 
+def _skip_hybrid_map_arm_candidate(path: str) -> bool:
+    rel = _normalize_related_path(path).lower()
+    return rel.startswith("sources/internal-analysis/development-reviews/")
+
+
+def _hybrid_map_arm_candidate_is_eligible(item: dict[str, Any], *, top_margin: float) -> tuple[bool, str]:
+    try:
+        score = float(item.get("score") or 0.0)
+        map_rank = int(item.get("map_rank") or item.get("rank") or 0)
+    except (TypeError, ValueError):
+        return False, "invalid_score"
+    path = _normalize_related_path(item.get("path")).lower()
+    if score >= MAP_EVIDENCE_SIGNAL_MIN_SCORE:
+        return True, "strong_score"
+    if 1 <= map_rank <= 5 and score >= 19.0:
+        return True, "rank5_mid_score"
+    if map_rank == 1 and score >= 18.0 and top_margin >= 6.0:
+        return True, "top1_margin"
+    if path in {entry.lower() for entry in ROOT_WIKI_PATHS} and 1 <= map_rank <= 5 and score >= 16.0:
+        return True, "root_policy_rank5"
+    if path.startswith("wiki/systems/") and 1 <= map_rank <= 2 and score >= 17.0:
+        return True, "systems_top2_mid_score"
+    if path.startswith("wiki/systems/") and 1 <= map_rank <= 30 and score >= 20.0 and top_margin >= 4.0:
+        return True, "systems_rank30_margin"
+    return False, "below_min_score"
+
+
 def _apply_hybrid_map_arm_evidence_widening(
     query: str,
     search_result: dict[str, Any],
@@ -2806,13 +2976,14 @@ def _apply_hybrid_map_arm_evidence_widening(
         "candidate_count": 0,
         "added_count": 0,
         "min_score": MAP_EVIDENCE_SIGNAL_MIN_SCORE,
+        "scan_limit": MAP_EVIDENCE_SIGNAL_SCAN_LIMIT,
     }
     if not _hybrid_map_arm_enabled_for_answer():
         return search_result, trace
 
     trace["enabled"] = True
     trace["status"] = "ok"
-    plan = _map_candidate_plan(query, limit=MAP_EVIDENCE_SIGNAL_TOP_RANK)
+    plan = _map_candidate_plan(query, limit=MAP_EVIDENCE_SIGNAL_SCAN_LIMIT)
     if plan.get("degraded"):
         trace["status"] = "degraded"
         trace["error"] = str(plan.get("error") or "unknown")
@@ -2820,28 +2991,56 @@ def _apply_hybrid_map_arm_evidence_widening(
 
     candidates = [item for item in plan.get("candidates") or [] if isinstance(item, dict)]
     trace["candidate_count"] = len(candidates)
-    existing = {
-        (str(hit.get("source") or ""), str(hit.get("path") or ""))
+    top_margin = float(plan.get("top1_top2_margin") or 0.0)
+    trace["top1_top2_margin"] = round(top_margin, 3)
+    existing_hits = {
+        (str(hit.get("source") or ""), str(hit.get("path") or "")): hit
         for hit in _iter_hits(search_result)
     }
+    existing = set(existing_hits)
     widened_hits: list[dict[str, Any]] = []
     below_min_score_count = 0
-    for item in candidates[:MAP_EVIDENCE_SIGNAL_TOP_RANK]:
-        score = float(item.get("score") or 0.0)
-        if score < MAP_EVIDENCE_SIGNAL_MIN_SCORE:
+    skipped_low_priority_count = 0
+    relaxed_score_count = 0
+    enriched_existing_count = 0
+    for item in candidates[:MAP_EVIDENCE_SIGNAL_SCAN_LIMIT]:
+        eligible, eligibility_reason = _hybrid_map_arm_candidate_is_eligible(item, top_margin=top_margin)
+        if not eligible:
             below_min_score_count += 1
+            continue
+        if eligibility_reason != "strong_score":
+            relaxed_score_count += 1
+        path = _clean_planner_text(item.get("path"), max_chars=180, path_hint=True)
+        if _skip_hybrid_map_arm_candidate(path):
+            skipped_low_priority_count += 1
             continue
         hit = _hybrid_map_arm_widen_hit_from_candidate(item)
         if not hit:
             continue
         key = (str(hit.get("source") or ""), str(hit.get("path") or ""))
         if key in existing:
+            existing_hit = existing_hits.get(key)
+            if isinstance(existing_hit, dict):
+                existing_breakdown = existing_hit.get("score_breakdown")
+                if not isinstance(existing_breakdown, dict):
+                    existing_breakdown = {}
+                    existing_hit["score_breakdown"] = existing_breakdown
+                incoming_breakdown = hit.get("score_breakdown") if isinstance(hit.get("score_breakdown"), dict) else {}
+                for field in ("map_score", "map_rank"):
+                    if field in incoming_breakdown:
+                        existing_breakdown[field] = incoming_breakdown[field]
+                existing_hit["bridge_source"] = "hybrid_map_arm"
+                enriched_existing_count += 1
             continue
         existing.add(key)
+        existing_hits[key] = hit
         widened_hits.append(hit)
         if len(widened_hits) >= HYBRID_MAP_ARM_WIDEN_MAX_CANDIDATES:
             break
     trace["below_min_score_count"] = below_min_score_count
+    trace["skipped_low_priority_count"] = skipped_low_priority_count
+    trace["relaxed_score_count"] = relaxed_score_count
+    trace["enriched_existing_count"] = enriched_existing_count
     if not widened_hits:
         trace["status"] = "no_new_candidates"
         return search_result, trace

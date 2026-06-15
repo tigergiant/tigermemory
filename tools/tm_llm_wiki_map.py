@@ -28,7 +28,7 @@ MAP_PATH = RUNTIME_DIR / "wiki_map.jsonl"
 META_PATH = RUNTIME_DIR / "wiki_map.meta.json"
 QUALITY_REPORT_PATH = tm_core.REPO_ROOT / ".tmp" / "llm-wiki-map-quality-report.md"
 
-FORBIDDEN_PATHS = ("tests/", ".tmp/", "runtime/")
+FORBIDDEN_PATHS = ("tests/", ".tmp/", "runtime/", "sources/internal-analysis/development-reviews/")
 PERSON_PATH_PREFIXES = ("wiki/person/", "sources/person/")
 SOURCE_SURFACES = {"wiki", "sources"}
 ROOT_WIKI_PATHS = {"AGENTS.md"}
@@ -221,7 +221,7 @@ def is_person_path(path: str) -> bool:
 
 
 def _strip_frontmatter(text: str) -> str:
-    normalized = text.replace("\r\n", "\n")
+    normalized = text.lstrip("\ufeff").replace("\r\n", "\n")
     if normalized.startswith("---\n"):
         end = normalized.find("\n---\n", 4)
         if end >= 0:
@@ -230,7 +230,7 @@ def _strip_frontmatter(text: str) -> str:
 
 
 def parse_frontmatter(text: str) -> dict[str, Any]:
-    normalized = text.replace("\r\n", "\n")
+    normalized = text.lstrip("\ufeff").replace("\r\n", "\n")
     if not normalized.startswith("---\n"):
         return {}
     end = normalized.find("\n---\n", 4)
@@ -515,7 +515,7 @@ def build_record_for_file(path: Path, *, repo_root: Path = tm_core.REPO_ROOT) ->
         frontmatter.get("title") or _first_heading(body) or path.stem.replace("-", " "),
         max_chars=120,
     )
-    aliases = _clean_list(frontmatter.get("aliases"), max_items=10, max_chars=100)
+    aliases = _clean_list(frontmatter.get("aliases"), max_items=20, max_chars=100)
     if title and title not in aliases:
         aliases.insert(0, title)
     summary = _clean_text(
@@ -540,7 +540,7 @@ def build_record_for_file(path: Path, *, repo_root: Path = tm_core.REPO_ROOT) ->
         partition=_partition(rel, surface),
         subtopic=_clean_list(frontmatter.get("subtopic") or frontmatter.get("tags"), max_items=8, max_chars=80),
         title=title,
-        aliases=aliases[:10],
+        aliases=aliases[:20],
         summary=summary,
         headings=headings[:8],
         lead=lead,

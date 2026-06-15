@@ -554,6 +554,7 @@ def _map_plan_with_candidate(path: str, *, title: str = "Bridge Target", score: 
             "partition": "systems",
             "source_surface": "wiki",
             "score": score,
+            "map_rank": 1,
         }],
     }
 
@@ -665,9 +666,267 @@ def test_memory_answer_core_hybrid_map_arm_widens_evidence_candidates(monkeypatc
     assert any(
         item["path"] == "wiki/systems/map-arm-target.md"
         and item.get("bridge_source") == "hybrid_map_arm"
+        and item.get("map_rank") == 1
+        and item.get("map_score") == 30.0
         and item.get("keep") is True
         for item in gate
     )
+
+
+def test_hybrid_map_arm_widens_more_than_first_four_candidates(monkeypatch):
+    monkeypatch.setenv(tm_answer.HYBRID_MAP_ARM_ENV, "1")
+    candidates = [
+        {
+            "path": f"wiki/systems/map-target-{index}.md",
+            "title": f"Map Target {index}",
+            "partition": "systems",
+            "source_surface": "wiki",
+            "score": 30.0,
+            "map_rank": index,
+        }
+        for index in range(1, 7)
+    ]
+    monkeypatch.setattr(
+        tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: {
+            "degraded": False,
+            "error": None,
+            "candidate_count": len(candidates),
+            "candidates": candidates,
+        },
+    )
+
+    merged, trace = tm_answer._apply_hybrid_map_arm_evidence_widening(
+        "map target",
+        {"primary_results": [], "groups": {}, "warnings": []},
+    )
+
+    widened = merged["groups"]["wiki"]
+    assert trace["added_count"] == 6
+    assert len(widened) == 6
+    assert widened[-1]["path"] == "wiki/systems/map-target-6.md"
+    assert widened[-1]["score_breakdown"] == {"map_score": 30.0, "map_rank": 6}
+
+
+def test_hybrid_map_arm_skips_development_review_archives(monkeypatch):
+    monkeypatch.setenv(tm_answer.HYBRID_MAP_ARM_ENV, "1")
+    candidates = [
+        {
+            "path": "sources/internal-analysis/development-reviews/2026-06-15/review.md",
+            "title": "Review Archive",
+            "partition": "internal-analysis",
+            "source_surface": "sources",
+            "score": 40.0,
+            "map_rank": 1,
+        },
+        {
+            "path": "wiki/systems/canonical-policy.md",
+            "title": "Canonical Policy",
+            "partition": "systems",
+            "source_surface": "wiki",
+            "score": 32.0,
+            "map_rank": 2,
+        },
+    ]
+    monkeypatch.setattr(
+        tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: {
+            "degraded": False,
+            "error": None,
+            "candidate_count": len(candidates),
+            "candidates": candidates,
+        },
+    )
+
+    merged, trace = tm_answer._apply_hybrid_map_arm_evidence_widening(
+        "canonical policy",
+        {"primary_results": [], "groups": {}, "warnings": []},
+    )
+
+    widened = merged["groups"]["wiki"]
+    assert trace["skipped_low_priority_count"] == 1
+    assert trace["added_count"] == 1
+    assert widened[0]["path"] == "wiki/systems/canonical-policy.md"
+
+
+def test_hybrid_map_arm_accepts_top_rank_margin_candidate_below_strict_score(monkeypatch):
+    monkeypatch.setenv(tm_answer.HYBRID_MAP_ARM_ENV, "1")
+    candidates = [
+        {
+            "path": "wiki/systems/memory-answer-development-plan.md",
+            "title": "Memory Answer Development Plan",
+            "partition": "systems",
+            "source_surface": "wiki",
+            "score": 23.1,
+            "map_rank": 1,
+        },
+        {
+            "path": "wiki/systems/weak-peer.md",
+            "title": "Weak Peer",
+            "partition": "systems",
+            "source_surface": "wiki",
+            "score": 12.45,
+            "map_rank": 2,
+        },
+    ]
+    monkeypatch.setattr(
+        tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: {
+            "degraded": False,
+            "error": None,
+            "candidate_count": len(candidates),
+            "top1_top2_margin": 10.65,
+            "candidates": candidates,
+        },
+    )
+
+    merged, trace = tm_answer._apply_hybrid_map_arm_evidence_widening(
+        "memory answer diagnosis",
+        {"primary_results": [], "groups": {}, "warnings": []},
+    )
+
+    widened = merged["groups"]["wiki"]
+    assert trace["added_count"] == 1
+    assert trace["relaxed_score_count"] == 1
+    assert trace["below_min_score_count"] == 1
+    assert widened[0]["path"] == "wiki/systems/memory-answer-development-plan.md"
+    assert widened[0]["score_breakdown"] == {"map_score": 23.1, "map_rank": 1}
+
+
+def test_hybrid_map_arm_rejects_deep_low_score_candidate(monkeypatch):
+    monkeypatch.setenv(tm_answer.HYBRID_MAP_ARM_ENV, "1")
+    candidates = [
+        {
+            "path": "wiki/systems/local-memory-adapter-contract.md",
+            "title": "Local Memory Adapter Contract",
+            "partition": "systems",
+            "source_surface": "wiki",
+            "score": 10.65,
+            "map_rank": 20,
+        }
+    ]
+    monkeypatch.setattr(
+        tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: {
+            "degraded": False,
+            "error": None,
+            "candidate_count": len(candidates),
+            "top1_top2_margin": 20.0,
+            "candidates": candidates,
+        },
+    )
+
+    merged, trace = tm_answer._apply_hybrid_map_arm_evidence_widening(
+        "adapter contract",
+        {"primary_results": [], "groups": {}, "warnings": []},
+    )
+
+    assert "wiki" not in merged.get("groups", {})
+    assert trace["status"] == "no_new_candidates"
+    assert trace["added_count"] == 0
+    assert trace["below_min_score_count"] == 1
+    assert trace["relaxed_score_count"] == 0
+
+
+def test_hybrid_map_arm_accepts_typed_mid_score_policy_candidates(monkeypatch):
+    monkeypatch.setenv(tm_answer.HYBRID_MAP_ARM_ENV, "1")
+    candidates = [
+        {
+            "path": "AGENTS.md",
+            "title": "AGENTS",
+            "partition": "systems",
+            "source_surface": "wiki",
+            "score": 16.5,
+            "map_rank": 5,
+        },
+        {
+            "path": "wiki/systems/multi-endpoint-mem0.md",
+            "title": "Multi Endpoint Mem0",
+            "partition": "systems",
+            "source_surface": "wiki",
+            "score": 17.1,
+            "map_rank": 2,
+        },
+        {
+            "path": "wiki/systems/openclaw-investment-routing.md",
+            "title": "OpenClaw Investment Routing",
+            "partition": "systems",
+            "source_surface": "wiki",
+            "score": 21.8,
+            "map_rank": 29,
+        },
+    ]
+    monkeypatch.setattr(
+        tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: {
+            "degraded": False,
+            "error": None,
+            "candidate_count": len(candidates),
+            "top1_top2_margin": 6.5,
+            "candidates": candidates,
+        },
+    )
+
+    merged, trace = tm_answer._apply_hybrid_map_arm_evidence_widening(
+        "policy candidates",
+        {"primary_results": [], "groups": {}, "warnings": []},
+    )
+
+    widened_paths = [item["path"] for item in merged["groups"]["wiki"]]
+    assert widened_paths == [
+        "AGENTS.md",
+        "wiki/systems/multi-endpoint-mem0.md",
+        "wiki/systems/openclaw-investment-routing.md",
+    ]
+    assert trace["added_count"] == 3
+    assert trace["relaxed_score_count"] == 3
+
+
+def test_hybrid_map_arm_enriches_existing_candidate_with_map_signal(monkeypatch):
+    monkeypatch.setenv(tm_answer.HYBRID_MAP_ARM_ENV, "1")
+    existing_hit = {
+        "source": "wiki",
+        "path": "AGENTS.md",
+        "title": "AGENTS",
+        "snippet": "开工规则。",
+        "score": 12.0,
+    }
+    candidates = [
+        {
+            "path": "AGENTS.md",
+            "title": "AGENTS",
+            "partition": "systems",
+            "source_surface": "wiki",
+            "score": 52.0,
+            "map_rank": 1,
+        }
+    ]
+    monkeypatch.setattr(
+        tm_answer,
+        "_map_candidate_plan",
+        lambda *_args, **_kwargs: {
+            "degraded": False,
+            "error": None,
+            "candidate_count": len(candidates),
+            "top1_top2_margin": 20.0,
+            "candidates": candidates,
+        },
+    )
+
+    merged, trace = tm_answer._apply_hybrid_map_arm_evidence_widening(
+        "AGENTS 开工规则",
+        {"primary_results": [existing_hit], "groups": {}, "warnings": []},
+    )
+
+    assert trace["added_count"] == 0
+    assert trace["enriched_existing_count"] == 1
+    assert merged["primary_results"][0]["bridge_source"] == "hybrid_map_arm"
+    assert merged["primary_results"][0]["score_breakdown"] == {"map_score": 52.0, "map_rank": 1}
 
 
 def test_memory_answer_core_does_not_use_wiki_map_bridge_by_default(monkeypatch, tmp_path):
@@ -1285,6 +1544,339 @@ def test_high_confidence_map_hit_can_pass_weak_evidence_gate(monkeypatch):
     assert evidence[0]["match_count"] == 0
     assert gate[0]["reason"] == "high authority fallback"
     assert gate[0]["selected"] is True
+
+
+def test_high_confidence_map_signal_breaks_same_authority_and_relevance_tie(monkeypatch):
+    bodies = {
+        "wiki/systems/lexical-peer.md": "# Lexical Peer\n\nalpha surface match.",
+        "wiki/systems/map-target.md": "# Map Target\n\nalpha canonical routed answer.",
+    }
+    monkeypatch.setattr(tm_answer, "_read_hit_content", lambda path: bodies[path])
+
+    evidence, gate = tm_answer.expand_evidence(
+        "alpha",
+        {
+            "primary_results": [
+                {
+                    "source": "wiki",
+                    "path": "wiki/systems/lexical-peer.md",
+                    "title": "Lexical Peer",
+                    "snippet": "alpha surface match.",
+                    "score": 20.0,
+                },
+                {
+                    "source": "wiki",
+                    "path": "wiki/systems/map-target.md",
+                    "title": "Map Target",
+                    "snippet": "",
+                    "score": 20.0,
+                    "score_breakdown": {"map_score": 42.0, "map_rank": 1},
+                },
+            ],
+            "groups": {},
+        },
+        max_evidence=1,
+        query_class="recall",
+    )
+
+    assert evidence[0]["path"] == "wiki/systems/map-target.md"
+    assert gate[1]["keep"] is True
+    assert gate[1]["selected"] is True
+
+
+def test_hybrid_map_arm_reserves_selected_slot_for_high_confidence_map_signal(monkeypatch):
+    monkeypatch.setenv(tm_answer.HYBRID_MAP_ARM_ENV, "1")
+    bodies = {
+        "wiki/systems/current-peer-a.md": "---\nupdated: 2026-06-15\n---\n# Peer A\n\n当前 alpha beta gamma.",
+        "wiki/systems/current-peer-b.md": "---\nupdated: 2026-06-15\n---\n# Peer B\n\n当前 alpha beta delta.",
+        "AGENTS.md": "# AGENTS\n\n端口纪律和开工规则。",
+    }
+    monkeypatch.setattr(tm_answer, "_read_hit_content", lambda path: bodies[path])
+
+    evidence, gate = tm_answer.expand_evidence(
+        "当前 alpha 端口纪律",
+        {
+            "primary_results": [
+                {
+                    "source": "wiki",
+                    "path": "wiki/systems/current-peer-a.md",
+                    "title": "Peer A",
+                    "snippet": "当前 alpha beta gamma.",
+                    "score": 20.0,
+                },
+                {
+                    "source": "wiki",
+                    "path": "wiki/systems/current-peer-b.md",
+                    "title": "Peer B",
+                    "snippet": "当前 alpha beta delta.",
+                    "score": 20.0,
+                },
+                {
+                    "source": "wiki",
+                    "path": "AGENTS.md",
+                    "title": "AGENTS",
+                    "snippet": "",
+                    "score": 20.0,
+                    "score_breakdown": {"map_score": 38.0, "map_rank": 1},
+                },
+            ],
+            "groups": {},
+        },
+        max_evidence=2,
+        query_class="recall",
+    )
+
+    paths = [item["path"] for item in evidence]
+    assert "AGENTS.md" in paths
+    agents_gate = next(item for item in gate if item["path"] == "AGENTS.md")
+    assert agents_gate["keep"] is True
+    assert agents_gate["selected"] is True
+
+
+def test_hybrid_map_arm_reserves_relaxed_root_policy_candidate(monkeypatch):
+    monkeypatch.setenv(tm_answer.HYBRID_MAP_ARM_ENV, "1")
+    bodies = {
+        "wiki/systems/topic-peer-a.md": "# Peer A\n\ninvestment report dashboard topic.",
+        "wiki/systems/topic-peer-b.md": "# Peer B\n\nportfolio report topic archive.",
+        "AGENTS.md": "# AGENTS\n\n投资组合和研报内容归到 investment topic。",
+    }
+    monkeypatch.setattr(tm_answer, "_read_hit_content", lambda path: bodies[path])
+
+    evidence, gate = tm_answer.expand_evidence(
+        "投资组合和研报内容应该归到哪个 topic",
+        {
+            "primary_results": [
+                {
+                    "source": "wiki",
+                    "path": "wiki/systems/topic-peer-a.md",
+                    "title": "Peer A",
+                    "snippet": "investment report dashboard topic.",
+                    "score": 20.0,
+                },
+                {
+                    "source": "wiki",
+                    "path": "wiki/systems/topic-peer-b.md",
+                    "title": "Peer B",
+                    "snippet": "portfolio report topic archive.",
+                    "score": 20.0,
+                },
+                {
+                    "source": "wiki",
+                    "path": "AGENTS.md",
+                    "title": "AGENTS",
+                    "snippet": "",
+                    "score": 20.0,
+                    "score_breakdown": {"map_score": 16.5, "map_rank": 5},
+                    "bridge_source": "hybrid_map_arm",
+                },
+            ],
+            "groups": {},
+        },
+        max_evidence=2,
+        query_class="recall",
+    )
+
+    paths = [item["path"] for item in evidence]
+    assert "AGENTS.md" in paths
+    agents_gate = next(item for item in gate if item["path"] == "AGENTS.md")
+    assert agents_gate["keep"] is True
+    assert agents_gate["selected"] is True
+
+
+def test_hybrid_map_arm_reserve_prefers_root_policy_over_higher_scored_lessons(monkeypatch):
+    monkeypatch.setenv(tm_answer.HYBRID_MAP_ARM_ENV, "1")
+    bodies = {
+        "AGENTS.md": "# AGENTS\n\n端口纪律和开工规则。",
+        "wiki/self-evolution/lessons/noisy.md": "# Lesson\n\n端口纪律和开工规则历史事故。",
+    }
+    monkeypatch.setattr(tm_answer, "_read_hit_content", lambda path: bodies[path])
+
+    evidence, gate = tm_answer.expand_evidence(
+        "当前 端口纪律 开工规则",
+        {
+            "primary_results": [
+                {
+                    "source": "wiki",
+                    "path": "wiki/self-evolution/lessons/noisy.md",
+                    "title": "Noisy Lesson",
+                    "snippet": "端口纪律和开工规则历史事故。",
+                    "score": 20.0,
+                    "score_breakdown": {"map_score": 120.0, "map_rank": 1},
+                },
+                {
+                    "source": "wiki",
+                    "path": "AGENTS.md",
+                    "title": "AGENTS",
+                    "snippet": "端口纪律和开工规则。",
+                    "score": 20.0,
+                    "score_breakdown": {"map_score": 52.0, "map_rank": 2},
+                },
+            ],
+            "groups": {},
+        },
+        max_evidence=1,
+        query_class="recall",
+    )
+
+    assert evidence[0]["path"] == "AGENTS.md"
+    agents_gate = next(item for item in gate if item["path"] == "AGENTS.md")
+    assert agents_gate["selected"] is True
+
+
+def test_hybrid_map_arm_reserve_keeps_more_relevant_lesson_over_weak_root_policy(monkeypatch):
+    monkeypatch.setenv(tm_answer.HYBRID_MAP_ARM_ENV, "1")
+    bodies = {
+        "AGENTS.md": "# AGENTS\n\n开工入口。",
+        "wiki/self-evolution/lessons/llm-gate.md": "# Lesson\n\ninbox LLM route gate 低质量写入直接文件绕过。",
+    }
+    monkeypatch.setattr(tm_answer, "_read_hit_content", lambda path: bodies[path])
+
+    evidence, gate = tm_answer.expand_evidence(
+        "inbox LLM route gate 低质量写入",
+        {
+            "primary_results": [
+                {
+                    "source": "wiki",
+                    "path": "AGENTS.md",
+                    "title": "AGENTS",
+                    "snippet": "开工入口。",
+                    "score": 20.0,
+                    "score_breakdown": {"map_score": 35.0, "map_rank": 1},
+                },
+                {
+                    "source": "wiki",
+                    "path": "wiki/self-evolution/lessons/llm-gate.md",
+                    "title": "LLM Gate Lesson",
+                    "snippet": "inbox LLM route gate 低质量写入直接文件绕过。",
+                    "score": 20.0,
+                    "score_breakdown": {"map_score": 27.0, "map_rank": 3},
+                },
+            ],
+            "groups": {},
+        },
+        max_evidence=1,
+        query_class="recall",
+    )
+
+    assert evidence[0]["path"] == "wiki/self-evolution/lessons/llm-gate.md"
+    lesson_gate = next(item for item in gate if item["path"] == "wiki/self-evolution/lessons/llm-gate.md")
+    assert lesson_gate["selected"] is True
+
+
+def test_hybrid_map_arm_reserve_keeps_specific_lesson_over_generic_system_page(monkeypatch):
+    monkeypatch.setenv(tm_answer.HYBRID_MAP_ARM_ENV, "1")
+    bodies = {
+        "AGENTS.md": "# AGENTS\n\ninbox routed_by tigermemory LLM 路由 禁止直接写。",
+        "wiki/systems/generic-route.md": "# Generic Route\n\ninbox routed_by tigermemory LLM 路由 endpoint。",
+        "wiki/self-evolution/lessons/llm-gate.md": "# Lesson\n\ninbox routed_by tigermemory LLM 路由 禁止直接写事故。",
+        "wiki/systems/peer-a.md": "# Peer A\n\ninbox routed_by endpoint。",
+        "wiki/systems/peer-b.md": "# Peer B\n\nLLM 路由 endpoint。",
+        "wiki/systems/peer-c.md": "# Peer C\n\ntigermemory endpoint。",
+        "wiki/operations/daily-health/noisy.md": "# Daily\n\ninbox routed_by LLM route.",
+    }
+    monkeypatch.setattr(tm_answer, "_read_hit_content", lambda path: bodies[path])
+
+    evidence, gate = tm_answer.expand_evidence(
+        "inbox routed_by tigermemory LLM 路由 禁止直接写",
+        {
+            "primary_results": [
+                {
+                    "source": "wiki",
+                    "path": "AGENTS.md",
+                    "title": "AGENTS",
+                    "snippet": "",
+                    "score": 20.0,
+                    "score_breakdown": {"map_score": 35.5, "map_rank": 1},
+                },
+                {
+                    "source": "wiki",
+                    "path": "wiki/systems/generic-route.md",
+                    "title": "Generic Route",
+                    "snippet": "",
+                    "score": 20.0,
+                    "score_breakdown": {"map_score": 20.7, "map_rank": 14},
+                },
+                {
+                    "source": "wiki",
+                    "path": "wiki/self-evolution/lessons/llm-gate.md",
+                    "title": "LLM Gate Lesson",
+                    "snippet": "",
+                    "score": 20.0,
+                    "score_breakdown": {"map_score": 27.0, "map_rank": 3},
+                },
+                {
+                    "source": "wiki",
+                    "path": "wiki/systems/peer-a.md",
+                    "title": "Peer A",
+                    "snippet": "inbox routed_by endpoint。",
+                    "score": 20.0,
+                },
+                {
+                    "source": "wiki",
+                    "path": "wiki/systems/peer-b.md",
+                    "title": "Peer B",
+                    "snippet": "LLM 路由 endpoint。",
+                    "score": 20.0,
+                },
+                {
+                    "source": "wiki",
+                    "path": "wiki/systems/peer-c.md",
+                    "title": "Peer C",
+                    "snippet": "tigermemory endpoint。",
+                    "score": 20.0,
+                },
+                {
+                    "source": "wiki",
+                    "path": "wiki/operations/daily-health/noisy.md",
+                    "title": "Daily",
+                    "snippet": "inbox routed_by LLM route.",
+                    "score": 20.0,
+                    "score_breakdown": {"map_score": 26.0, "map_rank": 4},
+                },
+            ],
+            "groups": {},
+        },
+        max_evidence=6,
+        query_class="recall",
+    )
+
+    paths = [item["path"] for item in evidence]
+    assert "wiki/self-evolution/lessons/llm-gate.md" in paths
+    lesson_gate = next(item for item in gate if item["path"] == "wiki/self-evolution/lessons/llm-gate.md")
+    assert lesson_gate["keep"] is True
+    assert lesson_gate["selected"] is True
+
+
+def test_hybrid_map_arm_selection_reserve_does_not_bypass_gate(monkeypatch):
+    monkeypatch.setenv(tm_answer.HYBRID_MAP_ARM_ENV, "1")
+    monkeypatch.setattr(
+        tm_answer,
+        "_read_hit_content",
+        lambda _path: "# Source Archive\n\nunrelated archive text.",
+    )
+
+    evidence, gate = tm_answer.expand_evidence(
+        "当前 alpha",
+        {
+            "primary_results": [
+                {
+                    "source": "sources",
+                    "path": "sources/reviews/noisy.md",
+                    "title": "Noisy Archive",
+                    "snippet": "",
+                    "score": 20.0,
+                    "score_breakdown": {"map_score": 45.0, "map_rank": 1},
+                },
+            ],
+            "groups": {},
+        },
+        max_evidence=1,
+        query_class="recall",
+    )
+
+    assert evidence == []
+    assert gate[0]["keep"] is False
+    assert "selected" not in gate[0]
 
 
 def test_low_confidence_map_hit_still_fails_weak_evidence_gate(monkeypatch):
