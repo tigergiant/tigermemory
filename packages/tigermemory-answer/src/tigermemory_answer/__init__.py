@@ -1366,6 +1366,49 @@ def _signal_terms(query: str) -> list[str]:
     return unique
 
 
+def _excerpt_anchor_terms(query: str) -> list[str]:
+    """Add stable answer anchors that users ask for but tokenization may miss."""
+    text = str(query or "")
+    lower = text.lower()
+    anchors: list[str] = []
+
+    def add(*items: str) -> None:
+        for item in items:
+            clean = item.strip().lower()
+            if clean and clean not in anchors:
+                anchors.append(clean)
+
+    if "端口" in text or "port" in lower:
+        add("端口", "localhost", "127.0.0.1", "http://", "listening")
+    if any(marker in text for marker in ("本地", "本机", "直连")):
+        add("本地直连", "本机直连", "localhost", "http://localhost")
+    if "跨设备" in text or "网关" in text or "gateway" in lower:
+        add("跨设备", "tiger-mainmachine", "9765")
+    if "session handoff" in lower or "handoff card" in lower or "交接" in text:
+        add("evidence refs", "memory_type", "session-handoff", "task", "decisions", "blockers", "handoff")
+    if "字段" in text or "frontmatter" in lower:
+        add("字段", "frontmatter", "metadata", "metadata_json", "updated")
+    if "项目画布" in text or "项目星图" in text or "project canvas" in lower:
+        add("project canvas", "updated", "canvas", "active modules", "活跃模块")
+    if any(marker in text for marker in ("当前", "现在", "正在", "运行", "服务", "可用")):
+        add("本机真实状态", "先查服务", "health", "live", "runtime", "status")
+    if any(marker in text for marker in ("诊断", "验收", "回答质量", "命中率", "自然语言")):
+        add("failure_layer", "eval", "retrieval", "answer_evidence_hit", "pass_rate")
+    if "分流" in text or "路由" in text or "routing" in lower:
+        add("分流", "路由", "route", "router")
+    if "topic" in lower or "partition" in lower or "分区" in text or "归到" in text or "归类" in text:
+        add("topic", "partition", "systems", "investment", "operations", "production", "brand", "person", "selfevolution")
+    if "openclaw" in lower and ("微信" in text or "附件" in text or "notify" in lower):
+        add("openclaw_notify.py", "唯一入口", "helper", "附件", "微信")
+    if "超时" in text or "后台" in text or "按钮" in text:
+        add("timeout", "超时", "后台", "队列")
+    if "person" in lower or "敏感" in text or "黑名单" in text:
+        add("身份证", "银行卡", "密码", "私钥", "家庭住址", "敏感字段黑名单")
+    if "最新" in text or "updated" in lower:
+        add("updated", "最近更新", "latest")
+    return anchors
+
+
 def _excerpt_window(text: str, terms: list[str], max_chars: int) -> str:
     clean = redact_secrets(text.replace("\r\n", "\n").strip())
     if max_chars <= 0:
@@ -1413,6 +1456,9 @@ def _trim_excerpt_to_budget(excerpt: str, terms: list[str], max_chars: int) -> s
 def _best_excerpt(text: str, query: str, fallback: str, max_chars: int = 900) -> str:
     paras = _paragraphs(text)
     terms = _signal_terms(query)
+    for anchor in _excerpt_anchor_terms(query):
+        if anchor not in terms:
+            terms.append(anchor)
     if not terms:
         return redact_secrets((paras[0] if paras else fallback)[:max_chars])
     scored: list[tuple[int, int, str]] = []
@@ -1449,7 +1495,7 @@ def _best_excerpt(text: str, query: str, fallback: str, max_chars: int = 900) ->
                 continue
             if any(clean in part or part in clean for part in parts):
                 continue
-            parts.append(clean[:per_part].rstrip())
+            parts.append(_trim_excerpt_to_budget(clean, terms, per_part).rstrip())
             seen_parts.add(key)
             if len(parts) >= 2:
                 break
@@ -1952,6 +1998,8 @@ def _authority_score(source: str, path: str, query_class: str) -> float:
         base -= 4.0
     elif role in ("lesson", "lesson_page"):
         base -= 5.0
+    if _is_trusted_external_evidence_path(path):
+        base = max(base, 98.0)
     if source == "mem0" and query_class in ("temporal_current", "recent_memory"):
         base += 24.0
     return max(0.0, min(base, 100.0))
@@ -1982,7 +2030,10 @@ def _extract_hit_metadata(
 
 
 def _relevance_score(query: str, evidence: dict[str, Any]) -> tuple[float, int, list[str]]:
-    tokens = tm_core.signal_tokens(query)
+    tokens = list(tm_core.signal_tokens(query))
+    for anchor in _excerpt_anchor_terms(query):
+        if anchor and anchor not in tokens:
+            tokens.append(anchor)
     text = " ".join([
         str(evidence.get("path") or ""),
         str(evidence.get("title") or ""),
@@ -2201,6 +2252,8 @@ def _map_signal_source_priority(item: dict[str, Any]) -> int:
         matched_terms = []
     has_precise_term = _has_precise_map_signal_terms(matched_terms)
     has_phase_version = _has_phase_version_signal(matched_terms)
+    if _is_trusted_external_evidence_path(item.get("path")) and map_rank <= 5 and relevance >= 2.0:
+        return -2
     if (
         source == "wiki"
         and path.startswith("wiki/self-evolution/lessons/")
@@ -2500,6 +2553,8 @@ def expand_evidence(
     search_result: dict[str, Any],
     max_evidence: int,
     query_class: str = "recall",
+    *,
+    excerpt_query: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     candidates: list[dict[str, Any]] = []
     gate: list[dict[str, Any]] = []
@@ -2512,7 +2567,7 @@ def expand_evidence(
         title = str(hit.get("title") or "")
         snippet = str(hit.get("snippet") or "")
         content = _read_hit_content(path)
-        excerpt = _best_excerpt(content, query, snippet) if content else redact_secrets(snippet[:900])
+        excerpt = _best_excerpt(content, excerpt_query or query, snippet) if content else redact_secrets(snippet[:900])
         if not excerpt.strip():
             continue
         candidate_id = f"cand{len(gate) + 1}"
@@ -3491,6 +3546,7 @@ def _query_requests_verbatim_identifier(query: str) -> bool:
             "命令",
             "脚本",
             "文件",
+            "字段",
             "端口",
             "比例",
             "上限",
@@ -3501,6 +3557,10 @@ def _query_requests_verbatim_identifier(query: str) -> bool:
             "避免",
             "哪些",
             "哪个",
+            "哪",
+            "什么",
+            "应该",
+            "还是",
         )
     )
 
@@ -3509,7 +3569,33 @@ def _identifier_sort_key(token: str, query: str) -> tuple[int, int, str]:
     lower = token.lower()
     q = query.lower()
     priority = 5
-    if lower.startswith("/") and ("写" in query or "write" in q) and "write" in lower:
+    if lower in {"metadata", "metadata_json"} and ("元数据" in query or "metadata" in q or "api" in q):
+        priority = -3
+    elif lower == "updated" and ("更新时间" in query or "最新" in query or "updated" in q):
+        priority = -3
+    elif lower == "obsolete_ignored" and ("旧" in query or "新证据" in query or "当前态" in query):
+        priority = -3
+    elif lower == "trend" and ("趋势" in query or "trend" in q):
+        priority = -3
+    elif lower == "timeout" and ("超时" in query or "timeout" in q):
+        priority = -3
+    elif lower == "failure_layer" and ("验收" in query or "失败" in query or "failure" in q):
+        priority = -3
+    elif lower in {"先查服务", "本机真实状态"} and any(marker in query for marker in ("当前", "现在", "运行", "端口", "服务")):
+        priority = -3
+    elif lower == "selfevolution" and ("self-evolution" in q or "selfevolution" in q or "自我进化" in query):
+        priority = -3
+    elif lower in {"身份证", "银行卡", "家庭住址"} and ("person" in q or "敏感" in query or "黑名单" in query):
+        priority = -3
+    elif lower.startswith("http://localhost") and any(marker in query for marker in ("本地", "本机", "直连", "端口")):
+        priority = -2
+    elif lower.startswith("http://127.0.0.1") and any(marker in query for marker in ("本地", "本机", "直连", "端口")):
+        priority = -2
+    elif lower.startswith("http://tiger-mainmachine") and ("跨设备" in query or "网关" in query):
+        priority = -2
+    elif lower.startswith("http://") or lower.startswith("https://"):
+        priority = 0 if any(marker in query for marker in ("接口", "端点", "url", "端口", "地址")) else 2
+    elif lower.startswith("/") and ("写" in query or "write" in q) and "write" in lower:
         priority = 0
     elif lower.startswith("/") and ("检索" in query or "search" in q) and "search" in lower:
         priority = 0
@@ -3587,6 +3673,7 @@ def _evidence_identifier_tokens(evidence: Iterable[dict[str, Any]], query: str =
     tokens: list[str] = []
     seen: set[str] = set()
     patterns = [
+        re.compile(r"https?://[^\s`<>)\"'，。；]+", re.IGNORECASE),
         re.compile(r"(?<!\w)/(?:[A-Za-z0-9_{}.-]+/)*[A-Za-z0-9_{}.-]+"),
         re.compile(r"\b[A-Za-z0-9_.-]+\.(?:py|ps1|md|json|toml|yaml|yml|service)\b", re.IGNORECASE),
         re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*_[A-Za-z0-9_]+\b"),
@@ -3610,7 +3697,7 @@ def _evidence_identifier_tokens(evidence: Iterable[dict[str, Any]], query: str =
         )
         path = str(item.get("path") or "")
         if path:
-            haystack = f"{haystack} {_read_hit_content(path)[:20000]}"
+            haystack = f"{haystack} {(_read_hit_content(path) or '')[:20000]}"
         for pattern in patterns:
             for match in pattern.findall(haystack):
                 add_token(str(match))
@@ -3632,8 +3719,21 @@ def _evidence_identifier_tokens(evidence: Iterable[dict[str, Any]], query: str =
             "本机真实状态",
             "先查服务",
             "Evidence Refs",
+            "metadata_json",
+            "metadata",
+            "obsolete_ignored",
             "failure_layer",
+            "retrieval",
+            "answer_evidence_hit",
+            "pass_rate",
+            "openclaw_notify.py",
+            "selfevolution",
+            "身份证",
+            "银行卡",
+            "家庭住址",
             "eval",
+            "trend",
+            "timeout",
             "canvas",
             "分流",
             "updated",
@@ -3644,6 +3744,14 @@ def _evidence_identifier_tokens(evidence: Iterable[dict[str, Any]], query: str =
 
 
 def _ensure_verbatim_identifier_summary(summary: str, query: str, evidence: list[dict[str, Any]]) -> str:
+    if _query_requests_runtime_check_policy(query) and (
+        "先查服务" not in summary or "本机真实状态" not in summary
+    ):
+        summary = (
+            f"{summary.rstrip('。；; ')}；当前运行态问题应先查服务，并以本机真实状态为准。"
+            if summary.strip()
+            else "当前运行态问题应先查服务，并以本机真实状态为准。"
+        )
     if not _query_requests_verbatim_identifier(query):
         return summary
     tokens = _evidence_identifier_tokens(evidence, query)
@@ -3663,6 +3771,15 @@ def _ensure_verbatim_identifier_summary(summary: str, query: str, evidence: list
     if not prefix:
         return f"关键原文包括 {'、'.join(selected)}。"
     return f"{prefix}；关键原文包括 {'、'.join(selected)}。"
+
+
+def _query_requests_runtime_check_policy(query: str) -> bool:
+    text = str(query or "").lower()
+    runtime_markers = ("运行", "当前", "现在", "端口", "服务", "页面", "加载", "live", "runtime", "port", "service")
+    question_markers = ("吗", "是否", "是不是", "应该", "怎么", "什么", "能不能")
+    return any(marker in text or marker in query for marker in runtime_markers) and any(
+        marker in text or marker in query for marker in question_markers
+    )
 
 
 def _needs_not_live_checked_warning(query: str, query_class: str, planner: dict[str, Any]) -> bool:
@@ -3709,7 +3826,7 @@ def _evidence_explicitly_allows_high_risk_permission(evidence: Iterable[dict[str
         ]
         path = str(item.get("path") or "")
         if path:
-            chunks.append(_read_hit_content(path)[:20000])
+            chunks.append((_read_hit_content(path) or "")[:20000])
         haystack = "\n".join(chunks).lower()
         if any(re.search(pattern, haystack, flags=re.IGNORECASE | re.DOTALL) for pattern in positive_patterns):
             return True
@@ -3730,6 +3847,9 @@ def _query_allows_deterministic_evidence_fallback(query: str, query_class: str) 
             "哪些",
             "字段",
             "入口",
+            "应该",
+            "怎么",
+            "还是",
         )
     )
 
@@ -3776,6 +3896,98 @@ def _deterministic_evidence_fallback_result(
         "run_id": normalized_run_id,
         "trace_id": trace_id,
         "trace": trace if include_trace else None,
+    }
+
+
+def _wiki_partition_from_evidence_path(path: str) -> str | None:
+    norm = _normalize_related_path(path).replace("\\", "/").lower()
+    if not norm.startswith("wiki/"):
+        return None
+    parts = norm.split("/")
+    if len(parts) < 2 or not parts[1]:
+        return None
+    return parts[1]
+
+
+def _query_requests_partition_judgement(query: str) -> bool:
+    lower = str(query or "").lower()
+    return any(
+        marker in lower or marker in query
+        for marker in (
+            "分区",
+            "topic",
+            "partition",
+            "归到",
+            "归入",
+            "归类",
+            "应该放",
+            "写到",
+            "混在",
+            "属于哪个",
+            "不应该被当成",
+            "不是投资",
+            "不是 investment",
+            "不是 systems",
+            "边界",
+        )
+    )
+
+
+def _infer_partition_answer_target(query: str) -> str | None:
+    if not _query_requests_partition_judgement(query):
+        return None
+    lower = str(query or "").lower()
+    text = str(query or "")
+    if "self-evolution" in lower or "selfevolution" in lower or "自我进化" in text:
+        return "self-evolution"
+    if "person" in lower or "个人" in text or "人物" in text:
+        return "person"
+    if "production" in lower or "生产" in text or "erp" in lower or "供应链" in text:
+        return "production"
+    if "brand" in lower or "品牌" in text or "文案" in text or "ipfb" in lower:
+        return "brand"
+    if "operations" in lower or "运营" in text or "日检" in text or "日报" in text:
+        return "operations"
+    if "不是 investment" in lower or "不归 investment" in lower or "不是投资" in text:
+        return "systems"
+    if "systems" in lower or "系统" in text or "mcp" in lower or "hook" in lower or "openclaw" in lower:
+        return "systems"
+    if "investment" in lower or "投资" in text or "组合" in text or "研报" in text:
+        return "investment"
+    return None
+
+
+def _filter_evidence_for_partition_question(
+    evidence: list[dict[str, Any]],
+    query: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    target = _infer_partition_answer_target(query)
+    if not target or not evidence:
+        return evidence, None
+    target_norm = target.lower()
+    has_target_wiki = any(
+        _wiki_partition_from_evidence_path(str(item.get("path") or "")) == target_norm
+        for item in evidence
+    )
+    if not has_target_wiki:
+        return evidence, None
+
+    filtered: list[dict[str, Any]] = []
+    dropped: list[str] = []
+    for item in evidence:
+        path = str(item.get("path") or "")
+        partition = _wiki_partition_from_evidence_path(path)
+        if partition is None or partition == target_norm:
+            filtered.append(item)
+        else:
+            dropped.append(path)
+    if not filtered or not dropped:
+        return evidence, None
+    return filtered, {
+        "target_partition": target,
+        "before": len(evidence),
+        "after": len(filtered),
+        "dropped_paths": dropped[:8],
     }
 
 
@@ -4239,7 +4451,13 @@ def memory_answer_core(
     trace["planner"]["evidence_query_hash"] = query_hash(evidence_query)
     search_result, map_arm_widening_trace = _apply_hybrid_map_arm_evidence_widening(q, search_result)
     trace["hybrid_map_arm_evidence_widening"] = map_arm_widening_trace
-    evidence, evidence_gate = expand_evidence(evidence_query, search_result, evidence_limit, query_class)
+    evidence, evidence_gate = expand_evidence(
+        evidence_query,
+        search_result,
+        evidence_limit,
+        query_class,
+        excerpt_query=q,
+    )
     map_bridge_trace: dict[str, Any] = {
         "enabled": _wiki_map_bridge_enabled(),
         "status": "disabled" if not _wiki_map_bridge_enabled() else "skipped_by_policy",
@@ -4256,7 +4474,13 @@ def memory_answer_core(
         bridged_result, map_bridge_trace = _apply_wiki_map_bridge(evidence_query, search_result)
         if int(map_bridge_trace.get("added_count") or 0) > 0:
             search_result = bridged_result
-            evidence, evidence_gate = expand_evidence(evidence_query, search_result, evidence_limit, query_class)
+            evidence, evidence_gate = expand_evidence(
+                evidence_query,
+                search_result,
+                evidence_limit,
+                query_class,
+                excerpt_query=q,
+            )
     trace["map_to_evidence_bridge"] = map_bridge_trace
     warnings = list(planner_warnings) + list(search_result.get("warnings") or [])
     if _needs_not_live_checked_warning(q, query_class, planner):
@@ -4290,6 +4514,7 @@ def memory_answer_core(
                     boost_search,
                     boost_limit,
                     query_class,
+                    excerpt_query=q,
                 )
                 if boosted_evidence:
                     next_id = len(evidence)
@@ -4347,6 +4572,9 @@ def memory_answer_core(
         warning_text = str(warning)
         if warning_text and warning_text not in warnings:
             warnings.append(warning_text)
+    evidence, partition_filter_trace = _filter_evidence_for_partition_question(evidence, q)
+    if partition_filter_trace:
+        trace["partition_evidence_filter"] = partition_filter_trace
     llm_evidence, budget_warnings, trim_metrics = trim_evidence_for_prompt(
         evidence,
         max_chars=evidence_char_budget,

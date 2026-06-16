@@ -3670,6 +3670,91 @@ def test_verbatim_identifier_summary_preserves_search_endpoint():
     assert "/search_memories" in result
 
 
+def test_verbatim_identifier_summary_tolerates_missing_evidence_file():
+    summary = "外部 skill 记录了端口纪律。"
+    evidence = [{
+        "path": "C:/Users/Giant/.codex/skills/delegated-dev-workflow/SKILL.md",
+        "title": "delegated-dev-workflow",
+        "excerpt": "Codex 临时预览/开发服务固定用 2000。",
+    }]
+
+    result = tm_answer._ensure_verbatim_identifier_summary(
+        summary,
+        "delegated-dev-workflow 这个 Codex skill 的端口纪律是什么？",
+        evidence,
+    )
+
+    assert "2000" in result
+
+
+def test_best_excerpt_prefers_local_port_anchor():
+    text = """---
+title: Multi Endpoint Mem0
+---
+
+# Multi Endpoint Mem0
+
+本页说明 Mem0 和其他本地服务的多入口差异。
+
+## 其他服务
+
+Ollama 默认端口是 11434，不是 OpenMemory 的本地直连入口。
+
+## API
+
+- 本地直连：http://localhost:8765，无鉴权，仅本机使用。
+- 跨设备鉴权网关：http://tiger-mainmachine:9765。
+"""
+
+    excerpt = tm_answer._best_excerpt(
+        text,
+        "multi-endpoint-mem0 里本地直连端口是多少？",
+        "",
+        max_chars=260,
+    )
+
+    assert "http://localhost:8765" in excerpt
+
+
+def test_best_excerpt_keeps_anchor_inside_long_scored_paragraph():
+    lead = "\n".join(f"{idx}. routine coordination rule." for idx in range(1, 20))
+    text = f"""# Delegated Dev Workflow
+
+## Start Contract
+
+{lead}
+- `1998` is the live TigerMemory dashboard.
+- `1999` is Gemini-only.
+- `2000` is the default Codex preview/development port.
+"""
+
+    excerpt = tm_answer._best_excerpt(
+        text,
+        "delegated-dev-workflow 这个 Codex skill 的端口纪律是什么？",
+        "",
+        max_chars=360,
+    )
+
+    assert "2000" in excerpt
+
+
+def test_verbatim_identifier_summary_prefers_local_url_over_other_ports():
+    summary = "multi-endpoint-mem0 记录了本地直连入口。"
+    evidence = [{
+        "path": "wiki/systems/multi-endpoint-mem0.md",
+        "title": "Multi Endpoint Mem0",
+        "excerpt": "Ollama 默认端口是 11434。本地直连：http://localhost:8765，无鉴权，仅本机使用。",
+    }]
+
+    result = tm_answer._ensure_verbatim_identifier_summary(
+        summary,
+        "multi-endpoint-mem0 里本地直连端口是多少？",
+        evidence,
+    )
+
+    assert "http://localhost:8765" in result
+
+
 def test_verbatim_identifier_summary_preserves_write_endpoint_when_summary_has_other_endpoint():
     summary = "tm-http 提供 /search_memories 等记忆接口。"
     evidence = [{
@@ -3729,6 +3814,17 @@ def test_current_runtime_query_needs_not_live_checked_warning():
     )
 
 
+def test_runtime_query_summary_mentions_live_service_check_policy():
+    result = tm_answer._ensure_verbatim_identifier_summary(
+        "文档只记录稳定端口。",
+        "如果问 1998 页面当前是否加载，memory_answer 应该怎么回答？",
+        [],
+    )
+
+    assert "先查服务" in result
+    assert "本机真实状态" in result
+
+
 def test_high_risk_permission_query_requires_explicit_positive_evidence():
     query = "MiniQMT 是否已经允许 agent 不经审批自动满仓买入任意股票？"
     evidence = [{
@@ -3761,6 +3857,22 @@ def test_deterministic_evidence_fallback_only_for_safe_locator_queries():
         "recall",
         safe_evidence,
     )
+
+
+def test_partition_question_filters_wrong_wiki_partitions_only():
+    evidence = [
+        {"id": "e1", "path": "wiki/brand/ipfb-copywriting-guide.md", "excerpt": "品牌文案规则。"},
+        {"id": "e2", "path": "wiki/systems/openclaw-investment-routing.md", "excerpt": "系统边界说明。"},
+        {"id": "e3", "path": "AGENTS.md", "excerpt": "topic 枚举说明。"},
+    ]
+
+    filtered, trace = tm_answer._filter_evidence_for_partition_question(
+        evidence,
+        "OpenClaw investment routing 为什么不是 investment topic，应该归哪个分区？",
+    )
+
+    assert trace["target_partition"] == "systems"
+    assert [item["id"] for item in filtered] == ["e2", "e3"]
 
 
 def test_exact_date_path_match_sorts_before_newer_daily_reports():
