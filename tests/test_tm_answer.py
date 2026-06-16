@@ -3825,6 +3825,43 @@ def test_runtime_query_summary_mentions_live_service_check_policy():
     assert "本机真实状态" in result
 
 
+def test_runtime_entry_query_needs_not_live_checked_warning():
+    assert tm_answer._needs_not_live_checked_warning(
+        "tm-http 8790 是什么入口？",
+        "recall",
+        {"freshness_mode": "current"},
+    )
+
+
+def test_answer_contract_terms_preserve_stale_and_eval_language():
+    stale = tm_answer._ensure_verbatim_identifier_summary(
+        "资料是历史证据，应说明不代表当前状态。",
+        "如果资料是旧状态但用户问当前状态，回答要怎么标记？",
+        [{"path": "wiki/systems/memory-answer-development-plan.md", "validity": "historical", "excerpt": "旧状态"}],
+    )
+    assert "stale" in stale
+
+    eval_text = tm_answer._ensure_verbatim_identifier_summary(
+        "问答失败时应先修召回。",
+        "问答失败时应该先修召回还是直接做行动建议？",
+        [{"path": "wiki/systems/memory-answer-development-plan.md", "excerpt": "retrieval eval failure_layer"}],
+    )
+    assert "retrieval" in eval_text
+    assert "eval" in eval_text
+
+
+def test_session_summary_contract_terms_avoid_obsolete_topic_literal():
+    result = tm_answer._ensure_verbatim_identifier_summary(
+        "旧协议不再作为独立 topic 使用。",
+        "旧的 session summary 协议是不是还用 topic=session-summary？",
+        [{"path": "wiki/systems/session-handoff-protocol.md", "excerpt": "topic=\"systems\" memory_type: session-handoff"}],
+    )
+
+    assert "systems" in result
+    assert "memory_type: session-handoff" in result
+    assert "topic=session-summary" not in result
+
+
 def test_high_risk_permission_query_requires_explicit_positive_evidence():
     query = "MiniQMT 是否已经允许 agent 不经审批自动满仓买入任意股票？"
     evidence = [{
@@ -3857,6 +3894,11 @@ def test_deterministic_evidence_fallback_only_for_safe_locator_queries():
         "recall",
         safe_evidence,
     )
+    assert tm_answer._can_use_deterministic_evidence_fallback(
+        "旧的 session summary 协议是不是还用旧 topic？",
+        "recall",
+        safe_evidence,
+    )
 
 
 def test_partition_question_filters_wrong_wiki_partitions_only():
@@ -3873,6 +3915,22 @@ def test_partition_question_filters_wrong_wiki_partitions_only():
 
     assert trace["target_partition"] == "systems"
     assert [item["id"] for item in filtered] == ["e2", "e3"]
+
+
+def test_partition_question_keeps_root_policy_when_target_wiki_is_absent():
+    evidence = [
+        {"id": "e1", "path": "wiki/brand/ipfb-copywriting-guide.md", "excerpt": "品牌文案规则。"},
+        {"id": "e2", "path": "AGENTS.md", "excerpt": "wiki/person 敏感字段黑名单：身份证、银行卡。"},
+        {"id": "e3", "path": "wiki/self-evolution/personas/collector.md", "excerpt": "collector 规则。"},
+    ]
+
+    filtered, trace = tm_answer._filter_evidence_for_partition_question(
+        evidence,
+        "person 分区有什么敏感字段黑名单？",
+    )
+
+    assert trace["target_partition"] == "person"
+    assert [item["id"] for item in filtered] == ["e2"]
 
 
 def test_exact_date_path_match_sorts_before_newer_daily_reports():

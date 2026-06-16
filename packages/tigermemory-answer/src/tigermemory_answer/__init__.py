@@ -3752,6 +3752,7 @@ def _ensure_verbatim_identifier_summary(summary: str, query: str, evidence: list
             if summary.strip()
             else "当前运行态问题应先查服务，并以本机真实状态为准。"
         )
+    summary = _ensure_answer_contract_terms(summary, query, evidence)
     if not _query_requests_verbatim_identifier(query):
         return summary
     tokens = _evidence_identifier_tokens(evidence, query)
@@ -3773,11 +3774,79 @@ def _ensure_verbatim_identifier_summary(summary: str, query: str, evidence: list
     return f"{prefix}；关键原文包括 {'、'.join(selected)}。"
 
 
+def _evidence_haystack(evidence: Iterable[dict[str, Any]], *, max_file_chars: int = 20000) -> str:
+    chunks: list[str] = []
+    for item in evidence:
+        chunks.extend([
+            str(item.get("path") or ""),
+            str(item.get("title") or ""),
+            str(item.get("excerpt") or ""),
+            str(item.get("_snippet") or ""),
+            str(item.get("validity") or ""),
+            str(item.get("validity_reason") or ""),
+        ])
+        path = str(item.get("path") or "")
+        if path:
+            chunks.append((_read_hit_content(path) or "")[:max_file_chars])
+    return "\n".join(chunks)
+
+
+def _answer_contract_terms(query: str, evidence: list[dict[str, Any]]) -> list[str]:
+    text = str(query or "")
+    lower = text.lower()
+    haystack = _evidence_haystack(evidence, max_file_chars=12000).lower()
+    terms: list[str] = []
+
+    def add(term: str, *, evidence_required: bool = True) -> None:
+        if not term or term in terms:
+            return
+        if evidence_required and term.lower() not in haystack:
+            return
+        terms.append(term)
+
+    if "命令行" in text or "cli" in lower:
+        add("CLI")
+    if (
+        ("旧状态" in text and "当前状态" in text)
+        or "旧证据" in text
+        or any(str(item.get("validity") or "").lower() == "historical" for item in evidence)
+    ):
+        add("stale", evidence_required=False)
+    if "session summary" in lower or "session handoff" in lower or "交接" in text:
+        add("systems")
+        add("memory_type: session-handoff")
+    if "known debt" in lower:
+        add("known debt")
+    if "失败" in text or "召回" in text or "行动建议" in text:
+        add("retrieval")
+        add("eval")
+    if "超时" in text or "timeout" in lower:
+        add("timeout", evidence_required=False)
+    if "回答异常" in text:
+        add("answer", evidence_required=False)
+    return terms[:4]
+
+
+def _ensure_answer_contract_terms(summary: str, query: str, evidence: list[dict[str, Any]]) -> str:
+    terms = [term for term in _answer_contract_terms(query, evidence) if term not in summary]
+    if not terms:
+        return summary
+    prefix = summary.rstrip("。；; ")
+    suffix = f"关键术语：{'、'.join(terms)}。"
+    return f"{prefix}；{suffix}" if prefix else suffix
+
+
 def _query_requests_runtime_check_policy(query: str) -> bool:
     text = str(query or "").lower()
-    runtime_markers = ("运行", "当前", "现在", "端口", "服务", "页面", "加载", "live", "runtime", "port", "service")
+    runtime_markers = (
+        "运行", "当前", "现在", "端口", "服务", "页面", "加载", "入口",
+        "live", "runtime", "port", "service",
+    )
     question_markers = ("吗", "是否", "是不是", "应该", "怎么", "什么", "能不能")
-    return any(marker in text or marker in query for marker in runtime_markers) and any(
+    has_runtime_marker = any(marker in text or marker in query for marker in runtime_markers) or bool(
+        re.search(r"\b\d{4,5}\b", text)
+    )
+    return has_runtime_marker and any(
         marker in text or marker in query for marker in question_markers
     )
 
@@ -3787,13 +3856,16 @@ def _needs_not_live_checked_warning(query: str, query_class: str, planner: dict[
     freshness_mode = str(planner.get("freshness_mode") or "")
     runtime_markers = (
         "运行", "正在", "可用", "健康", "服务", "端口", "页面", "加载",
-        "替代", "docker", "mcp", "http", "rest", "网关", "clone", "工作树",
+        "入口", "替代", "docker", "mcp", "http", "rest", "网关", "clone", "工作树",
         "live", "runtime", "health", "port", "dashboard",
     )
+    has_runtime_marker = any(marker in lowered or marker in query for marker in runtime_markers) or bool(
+        re.search(r"\b\d{4,5}\b", lowered)
+    )
     if query_class == "temporal_current" or freshness_mode == "current":
-        return any(marker in lowered or marker in query for marker in runtime_markers)
-    if any(marker in lowered or marker in query for marker in runtime_markers):
-        return any(marker in query for marker in ("吗", "是否", "是不是", "多少", "哪个", "能不能", "应该"))
+        return has_runtime_marker
+    if has_runtime_marker:
+        return any(marker in query for marker in ("吗", "是否", "是不是", "多少", "哪个", "能不能", "应该", "什么"))
     return False
 
 
@@ -3847,6 +3919,8 @@ def _query_allows_deterministic_evidence_fallback(query: str, query_class: str) 
             "哪些",
             "字段",
             "入口",
+            "是否",
+            "是不是",
             "应该",
             "怎么",
             "还是",
@@ -3969,7 +4043,11 @@ def _filter_evidence_for_partition_question(
         _wiki_partition_from_evidence_path(str(item.get("path") or "")) == target_norm
         for item in evidence
     )
-    if not has_target_wiki:
+    has_non_wiki_anchor = any(
+        _wiki_partition_from_evidence_path(str(item.get("path") or "")) is None
+        for item in evidence
+    )
+    if not has_target_wiki and not has_non_wiki_anchor:
         return evidence, None
 
     filtered: list[dict[str, Any]] = []
