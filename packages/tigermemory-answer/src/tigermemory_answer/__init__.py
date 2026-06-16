@@ -22,6 +22,7 @@ from __future__ import annotations
 import datetime
 import importlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -485,6 +486,7 @@ MAP_EVIDENCE_SIGNAL_SCAN_LIMIT = 80
 MAP_EVIDENCE_SIGNAL_RELEVANCE_BOOST = 0.85
 MAP_EVIDENCE_SIGNAL_SELECTION_RESERVE = 4
 EVIDENCE_MIN_RETAINED_CHARS = 160
+EVIDENCE_PACK_MIN_RETAINED_CHARS = 140
 LLM_TRANSIENT_RETRY_ATTEMPTS = 2
 LLM_TRANSIENT_RETRY_DELAY_SECONDS = 0.75
 LLM_TRANSIENT_ERROR_MARKERS = (
@@ -2313,6 +2315,41 @@ def _map_signal_source_priority(item: dict[str, Any]) -> int:
     return 5
 
 
+def _is_high_relevance_direct_evidence(item: dict[str, Any]) -> bool:
+    path = _normalize_related_path(item.get("path")).lower()
+    source = _effective_source(str(item.get("source") or ""), path)
+    if source != "wiki":
+        return False
+    if path in {entry.lower() for entry in ROOT_WIKI_PATHS}:
+        return False
+    try:
+        authority = float(item.get("authority") or 0.0)
+        relevance = float(item.get("relevance") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    return authority >= 90.0 and relevance >= 8.0
+
+
+def _direct_evidence_sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
+    breakdown = item.get("score_breakdown") if isinstance(item.get("score_breakdown"), dict) else {}
+    try:
+        map_rank = int(breakdown.get("map_rank") or 9999)
+    except (TypeError, ValueError):
+        map_rank = 9999
+    try:
+        map_score = float(breakdown.get("map_score") or 0.0)
+    except (TypeError, ValueError):
+        map_score = 0.0
+    return (
+        0 if item.get("exact_query_path_match") else 1,
+        map_rank,
+        -map_score,
+        -float(item.get("authority") or 0.0),
+        -float(item.get("relevance") or 0.0),
+        str(item.get("path") or ""),
+    )
+
+
 def _select_evidence_candidates(
     candidates: list[dict[str, Any]],
     *,
@@ -2324,20 +2361,35 @@ def _select_evidence_candidates(
     if not _hybrid_map_arm_enabled_for_answer():
         return sorted_candidates[:max_evidence]
 
-    reserve_limit = min(MAP_EVIDENCE_SIGNAL_SELECTION_RESERVE, max_evidence)
+    direct_hits = sorted(
+        [item for item in sorted_candidates if _is_high_relevance_direct_evidence(item)],
+        key=_direct_evidence_sort_key,
+    )[: min(2, max_evidence)]
+    if max_evidence <= 2:
+        reserve_limit = min(MAP_EVIDENCE_SIGNAL_SELECTION_RESERVE, max_evidence)
+    else:
+        reserve_limit = min(
+            MAP_EVIDENCE_SIGNAL_SELECTION_RESERVE,
+            max(0, max_evidence - len(direct_hits) - 2),
+        )
     reserved = sorted(
-        [item for item in sorted_candidates if _map_signal_priority(item) > 0],
+        [item for item in sorted_candidates if _map_signal_priority(item) > 0 and item not in direct_hits],
         key=_map_signal_reserve_sort_key,
     )[:reserve_limit]
     selected: list[dict[str, Any]] = []
     selected_ids: set[str] = set()
-    for item in reserved + sorted_candidates:
+    selected_keys: set[tuple[str, str]] = set()
+    for item in direct_hits + reserved + sorted_candidates:
         candidate_id = str(item.get("candidate_id") or "")
         if candidate_id and candidate_id in selected_ids:
+            continue
+        key = (str(item.get("source") or ""), str(item.get("path") or ""))
+        if not candidate_id and key in selected_keys:
             continue
         selected.append(item)
         if candidate_id:
             selected_ids.add(candidate_id)
+        selected_keys.add(key)
         if len(selected) >= max_evidence:
             break
     return selected
@@ -2439,6 +2491,427 @@ def _evidence_excerpt_budgets(excerpts: list[str], max_chars: int) -> list[int]:
         budgets[index] += extra
         remaining -= extra
     return budgets
+
+
+def _truthy_env(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "on", "yes", "enabled"}
+
+
+def _evidence_pack_v2_enabled() -> bool:
+    return _truthy_env("TM_ANSWER_EVIDENCE_PACK_V2")
+
+
+def _identifier_terms(text: str) -> list[str]:
+    patterns = (
+        r"https?://[^\s)\]}>\"']+",
+        r"/[A-Za-z0-9_./-]+",
+        r"\b[A-Z][A-Z0-9_]{2,}\b",
+        r"\b[A-Za-z_][A-Za-z0-9_]*(?:_[A-Za-z0-9]+)+\b",
+        r"\b[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+\b",
+        r"\b[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z0-9_.-]+\b",
+        r"(?<![\w.])\d+(?:\.\d+)?%?",
+    )
+    found: list[str] = []
+    seen: set[str] = set()
+    for pattern in patterns:
+        for match in re.finditer(pattern, text):
+            term = match.group(0).strip().strip(".,;:，。；：")
+            if not term:
+                continue
+            lowered = term.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            found.append(term)
+    return found[:40]
+
+
+def _evidence_pack_terms(
+    query: str | None,
+    evidence_query: str | None,
+    planner: dict[str, Any] | None,
+    evidence: list[dict[str, Any]],
+) -> list[str]:
+    terms: list[str] = []
+
+    def add(raw: Any) -> None:
+        text = str(raw or "").strip()
+        if not text:
+            return
+        lowered = text.lower()
+        if lowered not in {term.lower() for term in terms}:
+            terms.append(text)
+
+    for source_text in (query or "", evidence_query or ""):
+        for term in _signal_terms(source_text):
+            add(term)
+        for term in _excerpt_anchor_terms(source_text):
+            add(term)
+        for term in _identifier_terms(source_text):
+            add(term)
+    if isinstance(planner, dict):
+        for key in ("evidence_terms", "path_hints", "entities"):
+            raw_items = planner.get(key) or []
+            if isinstance(raw_items, list):
+                for item in raw_items:
+                    add(item)
+    for item in evidence:
+        for key in ("matched_terms", "map_matched_terms"):
+            raw_items = item.get(key) or []
+            if isinstance(raw_items, list):
+                for term in raw_items:
+                    add(term)
+        breakdown = item.get("score_breakdown") if isinstance(item.get("score_breakdown"), dict) else {}
+        for key in ("matched_terms", "map_matched_terms"):
+            raw_items = breakdown.get(key) or []
+            if isinstance(raw_items, list):
+                for term in raw_items:
+                    add(term)
+    return terms[:80]
+
+
+def _sentence_units(text: str) -> list[str]:
+    units: list[str] = []
+    for raw in re.split(r"(?<=[。！？!?；;])\s*|\n+", text):
+        clean = raw.strip()
+        if clean:
+            units.append(clean)
+    return units or [text.strip()] if text.strip() else []
+
+
+def _markdown_evidence_spans(text: str) -> list[dict[str, Any]]:
+    clean = redact_secrets(_strip_frontmatter(text).replace("\r\n", "\n").strip())
+    if not clean:
+        return []
+    spans: list[dict[str, Any]] = []
+    lines = clean.splitlines()
+    current_heading = ""
+    section_lines: list[str] = []
+    section_start = 0
+
+    def flush_section(position: int) -> None:
+        nonlocal section_lines, section_start
+        body = "\n".join(section_lines).strip()
+        if not body:
+            section_lines = []
+            return
+        section_text = f"{current_heading}\n\n{body}".strip() if current_heading else body
+        spans.append({"text": section_text, "kind": "section", "position": section_start})
+        for unit in _sentence_units(body):
+            if unit:
+                text = f"{current_heading}\n\n{unit}".strip() if current_heading else unit
+                spans.append({"text": text, "kind": "sentence", "position": position})
+        section_lines = []
+
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            flush_section(index)
+            current_heading = stripped
+            section_start = index
+            spans.append({"text": stripped, "kind": "heading", "position": index})
+            continue
+        if stripped.startswith(("- ", "* ", "+ ")) or re.match(r"^\d+[.)]\s+", stripped):
+            text = f"{current_heading}\n\n{stripped}".strip() if current_heading else stripped
+            spans.append({"text": text, "kind": "bullet", "position": index})
+        elif stripped.startswith("|") and stripped.endswith("|"):
+            text = f"{current_heading}\n\n{stripped}".strip() if current_heading else stripped
+            spans.append({"text": text, "kind": "table_row", "position": index})
+        section_lines.append(stripped)
+    flush_section(len(lines))
+
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for span in spans:
+        text = str(span.get("text") or "").strip()
+        key = text[:240]
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(span)
+    return deduped
+
+
+def _score_evidence_span(span: dict[str, Any], terms: list[str], identifiers: list[str]) -> tuple[int, int, int]:
+    text = str(span.get("text") or "")
+    lowered = text.lower()
+    lowered_terms = [term.lower() for term in terms if str(term).strip()]
+    lowered_ids = [term.lower() for term in identifiers if str(term).strip()]
+    term_hits = {term for term in lowered_terms if term and term in lowered}
+    id_hits = {term for term in lowered_ids if term and term in lowered}
+    signal_bonus = 0
+    if re.search(r"https?://|/[A-Za-z0-9_./-]+|[A-Z][A-Z0-9_]{2,}|_[A-Za-z0-9]+|\d", text):
+        signal_bonus += 4
+    if str(span.get("kind") or "") in {"heading", "table_row", "bullet"}:
+        signal_bonus += 2
+    if any(marker in lowered for marker in ("not ", "不要", "不得", "禁止", "不能", "human", "人工", "approval", "审批")):
+        signal_bonus += 3
+    position = int(span.get("position") or 0)
+    score = len(id_hits) * 1000 + len(term_hits) * 100 + signal_bonus * 10
+    score += min(sum(lowered.count(term) for term in term_hits), 8)
+    return score, len(id_hits), -position
+
+
+def _compact_llm_evidence_item(item: dict[str, Any], excerpt: str) -> dict[str, Any]:
+    keep = (
+        "id",
+        "source",
+        "path",
+        "title",
+        "score",
+        "authority",
+        "relevance",
+        "topic",
+        "source_role",
+        "created_at",
+        "validity",
+        "validity_reason",
+        "match_count",
+        "matched_terms",
+        "bridge_source",
+        "injection_eligible",
+        "injection_reason",
+    )
+    compact = {key: item[key] for key in keep if key in item}
+    breakdown = item.get("score_breakdown")
+    if isinstance(breakdown, dict):
+        compact["score_breakdown"] = {
+            key: breakdown[key]
+            for key in ("map_rank", "map_score", "map_matched_terms", "matched_terms")
+            if key in breakdown
+        }
+    compact["excerpt"] = excerpt
+    return compact
+
+
+def _compress_evidence_item(
+    item: dict[str, Any],
+    *,
+    source_text: str,
+    budget: int,
+    terms: list[str],
+) -> tuple[str, dict[str, Any]]:
+    clean_source = redact_secrets(source_text.replace("\r\n", "\n").strip())
+    original_excerpt = redact_secrets(str(item.get("excerpt") or ""))
+    if budget <= 0:
+        return "", {"high_salience_loss_count": 0, "identifier_count": 0, "identifier_retained_count": 0}
+    if not clean_source:
+        identifiers = _identifier_terms(original_excerpt)
+        mandatory_excerpt = _trim_excerpt_to_budget(original_excerpt, terms, budget)
+        retained_ids = [term for term in identifiers if term.lower() in mandatory_excerpt.lower()]
+        return mandatory_excerpt, {
+            "high_salience_loss_count": max(0, len(identifiers) - len(retained_ids)),
+            "identifier_count": len(identifiers),
+            "identifier_retained_count": len(retained_ids),
+        }
+    spans = _markdown_evidence_spans(clean_source)
+    identifiers = _identifier_terms(original_excerpt)
+    if not spans:
+        excerpt = _trim_excerpt_to_budget(original_excerpt, terms, budget)
+        retained_ids = [term for term in identifiers if term.lower() in excerpt.lower()]
+        return excerpt, {
+            "high_salience_loss_count": max(0, len(identifiers) - len(retained_ids)),
+            "identifier_count": len(identifiers),
+            "identifier_retained_count": len(retained_ids),
+        }
+
+    selected: list[dict[str, Any]] = []
+    remaining = budget
+    original_lower = original_excerpt.lower()
+    original_has_signal = any(term.lower() in original_lower for term in terms) or any(
+        term.lower() in original_lower for term in identifiers
+    )
+    mandatory_excerpt = _trim_excerpt_to_budget(original_excerpt, terms, budget) if original_has_signal else ""
+    if mandatory_excerpt:
+        selected.append({"text": mandatory_excerpt, "kind": "original_excerpt", "position": -1})
+        remaining -= len(mandatory_excerpt) + 2
+    if remaining <= 40:
+        lowered = mandatory_excerpt.lower()
+        retained_ids = [term for term in identifiers if term.lower() in lowered]
+        return mandatory_excerpt, {
+            "high_salience_loss_count": max(0, len(identifiers) - len(retained_ids)),
+            "identifier_count": len(identifiers),
+            "identifier_retained_count": len(retained_ids),
+        }
+
+    scored = [
+        (_score_evidence_span(span, terms, identifiers), span)
+        for span in spans
+    ]
+    scored.sort(key=lambda row: row[0], reverse=True)
+    for (_score, _id_hits, _pos), span in scored:
+        if _score <= 0 and selected:
+            continue
+        text = str(span.get("text") or "").strip()
+        if not text:
+            continue
+        if any(text in str(existing.get("text") or "") or str(existing.get("text") or "") in text for existing in selected):
+            continue
+        clipped = _trim_excerpt_to_budget(text, terms, max(0, remaining))
+        if not clipped:
+            continue
+        span = dict(span)
+        span["text"] = clipped
+        selected.append(span)
+        remaining -= len(clipped) + 2
+        if remaining <= 40:
+            break
+    if not selected:
+        selected = [{"text": _trim_excerpt_to_budget(clean_source or original_excerpt, terms, budget), "position": 0}]
+    selected.sort(key=lambda span: int(span.get("position") or 0))
+    excerpt = "\n\n".join(str(span.get("text") or "").strip() for span in selected if str(span.get("text") or "").strip())
+    excerpt = _trim_excerpt_to_budget(excerpt, terms, budget)
+    lowered = excerpt.lower()
+    retained_ids = [term for term in identifiers if term.lower() in lowered]
+    high_salience_loss = max(0, len(identifiers) - len(retained_ids))
+    return excerpt, {
+        "high_salience_loss_count": high_salience_loss,
+        "identifier_count": len(identifiers),
+        "identifier_retained_count": len(retained_ids),
+    }
+
+
+def _evidence_pack_budgets(
+    evidence: list[dict[str, Any]],
+    *,
+    max_chars: int,
+    terms: list[str],
+    source_texts: list[str],
+) -> list[int]:
+    if max_chars <= 0:
+        return [0 for _ in evidence]
+    if not evidence:
+        return []
+    if len(evidence) <= 1 or max_chars < len(evidence) * EVIDENCE_PACK_MIN_RETAINED_CHARS:
+        return _evidence_excerpt_budgets([str(item.get("excerpt") or "") for item in evidence], max_chars)
+    floor = min(EVIDENCE_PACK_MIN_RETAINED_CHARS, max_chars // len(evidence))
+    budgets = [min(len(redact_secrets(str(item.get("excerpt") or ""))) or floor, floor) for item in evidence]
+    remaining = max_chars - sum(budgets)
+    if remaining <= 0:
+        return budgets
+    weights: list[int] = []
+    for item, source_text in zip(evidence, source_texts, strict=False):
+        spans = _markdown_evidence_spans(source_text or str(item.get("excerpt") or ""))
+        identifiers = _identifier_terms(" ".join([" ".join(terms), str(item.get("excerpt") or "")]))
+        best = max((_score_evidence_span(span, terms, identifiers)[0] for span in spans), default=0)
+        authority = item.get("authority")
+        relevance = item.get("relevance")
+        weight = 1 + min(best // 100, 20)
+        if isinstance(authority, (int, float)):
+            weight += min(int(authority // 20), 5)
+        if isinstance(relevance, (int, float)):
+            weight += min(int(relevance), 5)
+        weights.append(max(weight, 1))
+    total_weight = sum(weights) or len(weights)
+    for index, weight in enumerate(weights):
+        if remaining <= 0:
+            break
+        extra = max(0, min(remaining, round(remaining * weight / total_weight)))
+        budgets[index] += extra
+        remaining -= extra
+    index = 0
+    while remaining > 0 and budgets:
+        budgets[index % len(budgets)] += 1
+        remaining -= 1
+        index += 1
+    return budgets
+
+
+def build_evidence_prompt_pack(
+    evidence: list[dict[str, Any]],
+    *,
+    query: str | None = None,
+    evidence_query: str | None = None,
+    planner: dict[str, Any] | None = None,
+    max_chars: int = 2000,
+) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
+    terms = _evidence_pack_terms(query, evidence_query, planner, evidence)
+    source_texts: list[str] = []
+    for item in evidence:
+        source_text = _read_hit_content(str(item.get("path") or "")) or str(item.get("excerpt") or "")
+        source_texts.append(redact_secrets(source_text))
+    budgets = _evidence_pack_budgets(evidence, max_chars=max_chars, terms=terms, source_texts=source_texts)
+    packed: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    chars_before = 0
+    chars_after = 0
+    compressed_ids: list[str] = []
+    identifier_count = 0
+    identifier_retained_count = 0
+    high_salience_loss_count = 0
+    original_term_hits: set[str] = set()
+    retained_term_hits: set[str] = set()
+    for item, source_text, budget in zip(evidence, source_texts, budgets, strict=False):
+        original_excerpt = redact_secrets(str(item.get("excerpt") or ""))
+        chars_before += len(original_excerpt)
+        lower_original = original_excerpt.lower()
+        for term in terms:
+            if term.lower() in lower_original:
+                original_term_hits.add(term.lower())
+        excerpt, item_metrics = _compress_evidence_item(item, source_text=source_text or original_excerpt, budget=budget, terms=terms)
+        chars_after += len(excerpt)
+        if len(original_excerpt) > len(excerpt):
+            item_id = str(item.get("id") or item.get("candidate_id") or item.get("path") or "")
+            if item_id:
+                compressed_ids.append(item_id)
+        identifier_count += int(item_metrics.get("identifier_count") or 0)
+        identifier_retained_count += int(item_metrics.get("identifier_retained_count") or 0)
+        high_salience_loss_count += int(item_metrics.get("high_salience_loss_count") or 0)
+        lower_excerpt = excerpt.lower()
+        for term in terms:
+            if term.lower() in lower_excerpt:
+                retained_term_hits.add(term.lower())
+        packed.append(_compact_llm_evidence_item(item, excerpt))
+    if chars_before > chars_after:
+        warnings.append("prompt_budget_truncated=true")
+    metrics = {
+        "strategy": "deterministic-section-sentence-v1",
+        "chars_before": chars_before,
+        "chars_after": chars_after,
+        "llm_payload_json_chars_after": len(json.dumps(packed, ensure_ascii=False, sort_keys=True)),
+        "compressed_evidence_ids": compressed_ids,
+        "identifier_count": identifier_count,
+        "identifier_retained_count": identifier_retained_count,
+        "identifier_retention_rate": round(identifier_retained_count / identifier_count, 3) if identifier_count else 1.0,
+        "high_salience_loss_count": high_salience_loss_count,
+        "budget_risk": high_salience_loss_count > 0,
+        "key_term_retention": {
+            "terms": terms,
+            "retained_terms": [term for term in terms if term.lower() in retained_term_hits],
+            "missing_terms": [term for term in terms if term.lower() in original_term_hits and term.lower() not in retained_term_hits],
+            "retention_rate": round(len(retained_term_hits & original_term_hits) / len(original_term_hits), 3) if original_term_hits else 1.0,
+        },
+    }
+    retention_rate = float(metrics["key_term_retention"]["retention_rate"])
+    identifier_retention_rate = float(metrics["identifier_retention_rate"])
+    if high_salience_loss_count > 0:
+        warnings.append("evidence_pack_identifier_loss=true")
+    if retention_rate < 0.98 or identifier_retention_rate < 0.5:
+        legacy_pack, legacy_warnings, legacy_metrics = trim_evidence_for_prompt(
+            evidence,
+            max_chars=max_chars,
+            query=evidence_query or query,
+            return_metrics=True,
+        )
+        legacy_metrics = dict(legacy_metrics)
+        legacy_metrics["strategy"] = "deterministic-section-sentence-v1:fallback-legacy-trim"
+        legacy_metrics["fallback_reason"] = (
+            "identifier_retention_below_threshold"
+            if identifier_retention_rate < 0.5
+            else "key_term_retention_below_threshold"
+        )
+        legacy_metrics["candidate_pack_metrics"] = {
+            key: value
+            for key, value in metrics.items()
+            if key not in {"key_term_retention"}
+        }
+        legacy_metrics["candidate_key_term_retention"] = metrics["key_term_retention"]
+        if "evidence_pack_fallback=legacy_trim" not in legacy_warnings:
+            legacy_warnings.append("evidence_pack_fallback=legacy_trim")
+        return legacy_pack, legacy_warnings, legacy_metrics
+    return packed, warnings, metrics
 
 
 def trim_evidence_for_prompt(
@@ -3538,6 +4011,7 @@ def _query_requests_verbatim_identifier(query: str) -> bool:
             "接口",
             "端点",
             "调用",
+            "检索",
             "api",
             "endpoint",
             "path",
@@ -3569,7 +4043,9 @@ def _identifier_sort_key(token: str, query: str) -> tuple[int, int, str]:
     lower = token.lower()
     q = query.lower()
     priority = 5
-    if lower in {"metadata", "metadata_json"} and ("元数据" in query or "metadata" in q or "api" in q):
+    if lower == "/search_memories" and ("检索" in query or "接口" in query or "search" in q):
+        priority = -4
+    elif lower in {"metadata", "metadata_json"} and ("元数据" in query or "metadata" in q or "api" in q):
         priority = -3
     elif lower == "updated" and ("更新时间" in query or "最新" in query or "updated" in q):
         priority = -3
@@ -3597,8 +4073,8 @@ def _identifier_sort_key(token: str, query: str) -> tuple[int, int, str]:
         priority = 0 if any(marker in query for marker in ("接口", "端点", "url", "端口", "地址")) else 2
     elif lower.startswith("/") and ("写" in query or "write" in q) and "write" in lower:
         priority = 0
-    elif lower.startswith("/") and ("检索" in query or "search" in q) and "search" in lower:
-        priority = 0
+    elif lower.startswith("/") and ("检索" in query or "接口" in query or "search" in q) and "search" in lower:
+        priority = -3
     elif lower.startswith("/"):
         priority = 1
     elif re.fullmatch(r"[1-9]\d{3,4}", token) and ("端口" in query or "port" in q):
@@ -4653,13 +5129,24 @@ def memory_answer_core(
     evidence, partition_filter_trace = _filter_evidence_for_partition_question(evidence, q)
     if partition_filter_trace:
         trace["partition_evidence_filter"] = partition_filter_trace
-    llm_evidence, budget_warnings, trim_metrics = trim_evidence_for_prompt(
-        evidence,
-        max_chars=evidence_char_budget,
-        query=evidence_query,
-        return_metrics=True,
-    )
+    if _evidence_pack_v2_enabled():
+        llm_evidence, budget_warnings, trim_metrics = build_evidence_prompt_pack(
+            evidence,
+            query=q,
+            evidence_query=evidence_query,
+            planner=planner,
+            max_chars=evidence_char_budget,
+        )
+    else:
+        llm_evidence, budget_warnings, trim_metrics = trim_evidence_for_prompt(
+            evidence,
+            max_chars=evidence_char_budget,
+            query=evidence_query,
+            return_metrics=True,
+        )
     trace["trim_metrics"] = _sanitize_trim_metrics_for_trace(trim_metrics)
+    if _evidence_pack_v2_enabled():
+        trace["evidence_pack"] = trace["trim_metrics"]
     if budget_warnings:
         warnings.extend(budget_warnings)
         trace["prompt_budget_truncated"] = True

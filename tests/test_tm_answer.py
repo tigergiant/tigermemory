@@ -250,6 +250,186 @@ def test_trim_evidence_for_prompt_keeps_floor_for_late_evidence():
     assert "needle" in metrics["key_term_retention"]["retained_terms"]
 
 
+def test_evidence_prompt_pack_preserves_exact_identifiers_from_tail(monkeypatch):
+    source = (
+        "# Memory Answer API\n\n"
+        + ("普通背景说明。\n" * 120)
+        + "\n## 关键端点\n\n"
+        + "POST /search_memories 使用 http://localhost:8765，本轮 TM_HYBRID_MAP_ARM 不改变证据闸门；"
+        + "组合规则仍保留 15% 风险边界。"
+    )
+    evidence = [{
+        "id": "e1",
+        "path": "wiki/systems/tm_http-endpoints.md",
+        "title": "tm_http 端点契约",
+        "excerpt": "普通背景说明。" * 30,
+        "source_role": "canonical_wiki",
+        "authority": 90.0,
+        "relevance": 2.0,
+    }]
+    monkeypatch.setattr(tm_answer, "_read_hit_content", lambda _path: source)
+
+    packed, warnings, metrics = tm_answer.build_evidence_prompt_pack(
+        evidence,
+        query="怎么调用 /search_memories，TM_HYBRID_MAP_ARM 和 15% 是什么？",
+        evidence_query="memory answer endpoint /search_memories TM_HYBRID_MAP_ARM 15%",
+        planner={"evidence_terms": ["/search_memories", "TM_HYBRID_MAP_ARM", "15%"]},
+        max_chars=520,
+    )
+
+    excerpt = packed[0]["excerpt"]
+    assert "/search_memories" in excerpt
+    assert "http://localhost:8765" in excerpt
+    assert "TM_HYBRID_MAP_ARM" in excerpt
+    assert "15%" in excerpt
+    assert sum(len(item["excerpt"]) for item in packed) <= 520
+    assert metrics["identifier_retention_rate"] == 1.0
+    assert metrics["high_salience_loss_count"] == 0
+    assert warnings == ["prompt_budget_truncated=true"]
+
+
+def test_evidence_prompt_pack_keeps_original_excerpt_before_full_page_noise(monkeypatch):
+    source = (
+        "# Project Canvas\n\n"
+        + ("噪声段落。" * 300)
+        + "\n\n## 其他计划\n\n"
+        + "这段只是在讲临时调研，不是星图入口。"
+    )
+    evidence = [{
+        "id": "e1",
+        "path": "wiki/operations/project-canvas.md",
+        "title": "Project Canvas",
+        "excerpt": "项目星图主要读取 wiki/operations/project-canvas.md，供 dashboard 展示长期项目状态。",
+        "authority": 95.0,
+        "relevance": 5.0,
+    }]
+    monkeypatch.setattr(tm_answer, "_read_hit_content", lambda _path: source)
+
+    packed, _warnings, metrics = tm_answer.build_evidence_prompt_pack(
+        evidence,
+        query="TigerMemory 项目星图主要从哪个长期页面读取？",
+        evidence_query="项目星图 project-canvas 长期页面",
+        planner={"evidence_terms": ["项目星图", "project-canvas"]},
+        max_chars=180,
+    )
+
+    assert "wiki/operations/project-canvas.md" in packed[0]["excerpt"]
+    assert "项目星图" in packed[0]["excerpt"]
+    assert metrics["strategy"].startswith("deterministic-section-sentence-v1")
+
+
+def test_evidence_prompt_pack_falls_back_to_legacy_when_identifier_is_lost(monkeypatch):
+    evidence = [{
+        "id": "e1",
+        "path": "wiki/systems/example.md",
+        "title": "Example",
+        "excerpt": ("普通背景。" * 80) + "关键工单 ABC-123-XYZ 必须保留。",
+        "authority": 90.0,
+        "relevance": 2.0,
+    }]
+    monkeypatch.setattr(tm_answer, "_read_hit_content", lambda _path: "")
+
+    packed, warnings, metrics = tm_answer.build_evidence_prompt_pack(
+        evidence,
+        query="关键工单是什么？",
+        evidence_query="关键工单",
+        planner={},
+        max_chars=24,
+    )
+
+    assert metrics["strategy"] == "deterministic-section-sentence-v1:fallback-legacy-trim"
+    assert metrics["fallback_reason"] == "identifier_retention_below_threshold"
+    assert "evidence_pack_fallback=legacy_trim" in warnings
+    assert packed[0]["id"] == "e1"
+
+
+def test_evidence_prompt_pack_keeps_late_relevant_evidence():
+    evidence = []
+    for idx in range(1, 7):
+        excerpt = ("常规背景。" * 120)
+        if idx == 6:
+            excerpt = ("常规背景。" * 80) + "真实账户保持 advisory-only，人类审批和执行是边界。"
+        evidence.append({
+            "id": f"e{idx}",
+            "path": f"wiki/systems/page-{idx}.md",
+            "title": f"Page {idx}",
+            "excerpt": excerpt,
+            "authority": 80.0,
+            "relevance": 1.0 if idx != 6 else 5.0,
+        })
+
+    packed, _warnings, metrics = tm_answer.build_evidence_prompt_pack(
+        evidence,
+        query="真实账户是否 advisory-only，谁审批执行？",
+        evidence_query="真实账户 advisory-only 人类审批 执行边界",
+        planner={"evidence_terms": ["advisory-only", "人类审批", "执行边界"]},
+        max_chars=900,
+    )
+
+    by_id = {item["id"]: item["excerpt"] for item in packed}
+    assert "advisory-only" in by_id["e6"]
+    assert "人类审批" in by_id["e6"]
+    assert sum(len(item["excerpt"]) for item in packed) <= 900
+    assert metrics["key_term_retention"]["retention_rate"] >= 0.75
+
+
+def test_memory_answer_core_uses_evidence_pack_v2_when_enabled(monkeypatch):
+    captured = {}
+
+    def fake_pack(evidence, **kwargs):
+        captured["evidence"] = evidence
+        captured["kwargs"] = kwargs
+        return [
+            {
+                "id": "e1",
+                "path": "wiki/systems/answer-contract.md",
+                "title": "Answer Contract",
+                "source_role": "canonical_wiki",
+                "excerpt": "compact /search_memories evidence",
+            }
+        ], ["prompt_budget_truncated=true"], {
+            "strategy": "deterministic-section-sentence-v1",
+            "chars_before": 1000,
+            "chars_after": 100,
+            "key_term_retention": {"terms": ["/search_memories"], "retained_terms": ["/search_memories"], "missing_terms": [], "retention_rate": 1.0},
+            "identifier_count": 1,
+            "identifier_retained_count": 1,
+            "identifier_retention_rate": 1.0,
+            "high_salience_loss_count": 0,
+        }
+
+    def fake_llm(_query, evidence):
+        captured["llm_evidence"] = evidence
+        return True, {
+            "status": "ok",
+            "answer": "Use /search_memories.",
+            "claims": [{"id": "c1", "text": "Use /search_memories.", "support": ["e1"], "confidence": 0.9}],
+            "warnings": [],
+        }
+
+    hit = {
+        "source": "wiki",
+        "path": "wiki/systems/answer-contract.md",
+        "title": "Answer Contract",
+        "snippet": "/search_memories endpoint",
+        "score": 10.0,
+        "score_breakdown": {"matched_terms": ["/search_memories"]},
+    }
+    monkeypatch.setenv("TM_ANSWER_EVIDENCE_PACK_V2", "1")
+    monkeypatch.setattr(tm_answer.tm_search, "search_tigermemory", lambda *_args, **_kwargs: _search_result(hit))
+    monkeypatch.setattr(tm_answer, "build_evidence_prompt_pack", fake_pack)
+    monkeypatch.setattr(tm_answer, "_call_memory_answer_llm", fake_llm)
+
+    result = tm_answer.memory_answer_core("怎么调用 /search_memories？", scope="wiki", write_trace=False)
+
+    assert captured["kwargs"]["max_chars"] == 2000
+    assert captured["llm_evidence"][0]["excerpt"] == "compact /search_memories evidence"
+    assert result["trace"]["prompt_budget_truncated"] is True
+    assert result["trace"]["evidence_pack"]["strategy"] == "deterministic-section-sentence-v1"
+    assert "terms" not in result["trace"]["evidence_pack"]["key_term_retention"]
+    assert result["evidence"][0]["excerpt"] != "compact /search_memories evidence"
+
+
 def test_memory_answer_core_can_disable_trace_write(monkeypatch, tmp_path):
     calls = []
     trace_path = tmp_path / "trace.jsonl"
@@ -3806,6 +3986,20 @@ def test_verbatim_identifier_summary_preserves_avoid_word_list():
     assert "热卖" in result
 
 
+def test_verbatim_identifier_summary_prioritizes_search_endpoint():
+    result = tm_answer._ensure_verbatim_identifier_summary(
+        "可以通过记忆检索接口查询。",
+        "怎么调用记忆检索接口",
+        [{
+            "path": "wiki/systems/tm_http-endpoints.md",
+            "title": "tm_http endpoints",
+            "excerpt": "HTTP endpoint: POST /search_memories；另有 /memory/answer 和 /read_wiki。",
+        }],
+    )
+
+    assert "/search_memories" in result
+
+
 def test_current_runtime_query_needs_not_live_checked_warning():
     assert tm_answer._needs_not_live_checked_warning(
         "现在 dashboard 1998 正在运行吗？",
@@ -3931,6 +4125,65 @@ def test_partition_question_keeps_root_policy_when_target_wiki_is_absent():
 
     assert trace["target_partition"] == "person"
     assert [item["id"] for item in filtered] == ["e2"]
+
+
+def test_map_arm_selection_keeps_high_relevance_direct_pages(monkeypatch):
+    monkeypatch.setenv("TM_HYBRID_MAP_ARM", "1")
+    candidates = [
+        {
+            "candidate_id": "root",
+            "source": "wiki",
+            "path": "AGENTS.md",
+            "validity": "current",
+            "authority": 98.0,
+            "relevance": 4.0,
+            "score": 20.0,
+            "score_breakdown": {"map_rank": 1, "map_score": 35.0},
+        },
+        {
+            "candidate_id": "protocol",
+            "source": "wiki",
+            "path": "wiki/systems/session-protocol.md",
+            "validity": "current",
+            "authority": 98.0,
+            "relevance": 5.0,
+            "score": 20.0,
+            "score_breakdown": {"map_rank": 2, "map_score": 25.0},
+        },
+        {
+            "candidate_id": "toolkit",
+            "source": "wiki",
+            "path": "wiki/systems/agent-write-toolkit.md",
+            "validity": "current",
+            "authority": 98.0,
+            "relevance": 9.0,
+            "score": 1.0,
+        },
+        {
+            "candidate_id": "openmemory",
+            "source": "wiki",
+            "path": "wiki/systems/openmemory-ce-limits.md",
+            "validity": "current",
+            "authority": 98.0,
+            "relevance": 8.5,
+            "score": 1.0,
+        },
+        {
+            "candidate_id": "other",
+            "source": "wiki",
+            "path": "wiki/systems/other.md",
+            "validity": "current",
+            "authority": 98.0,
+            "relevance": 4.0,
+            "score": 1.0,
+        },
+    ]
+
+    selected = tm_answer._select_evidence_candidates(candidates, max_evidence=3)
+
+    paths = [item["path"] for item in selected]
+    assert "wiki/systems/agent-write-toolkit.md" in paths
+    assert "wiki/systems/openmemory-ce-limits.md" in paths
 
 
 def test_exact_date_path_match_sorts_before_newer_daily_reports():
