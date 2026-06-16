@@ -828,6 +828,96 @@ def append_ledger(
     LEDGER_PATH.write_text(new_text, encoding="utf-8")
 
 
+def _git_run(args: list[str], *, runner=subprocess.run) -> subprocess.CompletedProcess:
+    return runner(
+        ["git", *args],
+        cwd=str(REPO_ROOT),
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        check=False,
+    )
+
+
+def _git_checked(args: list[str], *, runner=subprocess.run) -> str:
+    completed = _git_run(args, runner=runner)
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise RuntimeError(f"git {' '.join(args)} failed: {detail}")
+    return (completed.stdout or "").strip()
+
+
+def _repo_relative(path: pathlib.Path) -> str:
+    try:
+        return path.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
+    except ValueError as exc:
+        raise RuntimeError(f"review artifact path outside repo: {path}") from exc
+
+
+def _scoped_stage_lines(output: str) -> list[str]:
+    return [line.strip().replace("\\", "/") for line in output.splitlines() if line.strip()]
+
+
+def auto_commit_review_artifacts(
+    paths: list[pathlib.Path],
+    *,
+    stage: str,
+    runner=subprocess.run,
+) -> str | None:
+    """Commit only the review archive and ledger produced by this wrapper."""
+    if not (REPO_ROOT / ".git").exists():
+        raise RuntimeError(f"not a git worktree: {REPO_ROOT}")
+    rel_paths = sorted({_repo_relative(path) for path in paths if path.exists()})
+    if not rel_paths:
+        return None
+
+    already_staged = _scoped_stage_lines(_git_checked(["diff", "--cached", "--name-only"], runner=runner))
+    if already_staged:
+        raise RuntimeError(
+            "staged changes already exist; refusing to auto-commit supervisor artifacts: "
+            + ", ".join(already_staged[:8])
+        )
+
+    _git_checked(["fetch", "origin", "master"], runner=runner)
+    head = _git_checked(["rev-parse", "HEAD"], runner=runner)
+    origin = _git_checked(["rev-parse", "origin/master"], runner=runner)
+    if head != origin:
+        base = _git_checked(["merge-base", "HEAD", "origin/master"], runner=runner)
+        if head == base:
+            _git_checked(["pull", "--ff-only", "origin", "master"], runner=runner)
+        elif origin == base:
+            raise RuntimeError("local HEAD is ahead of origin/master; push existing commits before auto-commit")
+        else:
+            raise RuntimeError("local HEAD diverged from origin/master; human rebase/merge required")
+
+    _git_checked(["add", "--", *rel_paths], runner=runner)
+    staged = _scoped_stage_lines(_git_checked(["diff", "--cached", "--name-only"], runner=runner))
+    unexpected = [path for path in staged if path not in rel_paths]
+    if unexpected:
+        raise RuntimeError("unexpected staged paths during supervisor auto-commit: " + ", ".join(unexpected[:8]))
+    if not staged:
+        return None
+
+    safe_stage = re.sub(r"[^A-Za-z0-9_.-]+", "-", stage).strip("-")[:48] or "review"
+    msg = f"[codex] update: archive development supervisor review {safe_stage}"
+    _git_checked(["commit", "-m", msg, "--", *rel_paths], runner=runner)
+    _git_checked(["push", "origin", "master"], runner=runner)
+    return _git_checked(["rev-parse", "--short", "HEAD"], runner=runner)
+
+
+def maybe_auto_commit_review_artifacts(args: argparse.Namespace, paths: list[pathlib.Path], *, runner=subprocess.run) -> None:
+    if getattr(args, "no_auto_commit_artifacts", False):
+        return
+    try:
+        sha = auto_commit_review_artifacts(paths, stage=args.stage, runner=runner)
+    except RuntimeError as exc:
+        print(f"WARNING: supervisor artifact auto-commit failed: {exc}", file=sys.stderr)
+        return
+    if sha:
+        print(f"auto-committed supervisor artifacts: {sha}", file=sys.stderr)
+
+
 def classify_failure(output: str) -> str:
     lowered = output.lower()
     if "already in use" in lowered and "session id" in lowered:
@@ -972,6 +1062,8 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
             failure_kind="timeout",
             output_path=out_path,
         )
+        if runner is subprocess.run:
+            maybe_auto_commit_review_artifacts(args, [out_path, LEDGER_PATH])
         raise RuntimeError(f"official review timed out and was archived: {out_path}") from exc
     output = (completed.stdout or "").strip()
     if completed.returncode != 0:
@@ -1021,6 +1113,8 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
             failure_kind=failure_kind,
             output_path=out_path,
         )
+        if runner is subprocess.run:
+            maybe_auto_commit_review_artifacts(args, [out_path, LEDGER_PATH])
         raise RuntimeError(f"review failed ({channel_name}), archived at {out_path}: {output[:500]}")
     out_path = archive_review(
         channel=channel_name,
@@ -1062,6 +1156,8 @@ def run_review(args: argparse.Namespace, *, runner=subprocess.run) -> pathlib.Pa
         failure_kind=None,
         output_path=out_path,
     )
+    if runner is subprocess.run:
+        maybe_auto_commit_review_artifacts(args, [out_path, LEDGER_PATH])
     return out_path
 
 
@@ -1109,6 +1205,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Force a Claude call even when a recent session-limit reset time says the channel is cooling down.",
     )
     parser.add_argument("--check-only", action="store_true", help="Only run official channel CheckOnly")
+    parser.add_argument(
+        "--no-auto-commit-artifacts",
+        action="store_true",
+        help="Archive the review and append the ledger without scoped commit/push of those artifacts.",
+    )
     parser.add_argument(
         "--usage-status",
         action="store_true",

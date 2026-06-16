@@ -220,6 +220,7 @@ def test_run_review_respects_session_limit_cooldown(monkeypatch, tmp_path):
         "AnthropicBaseUrl": None,
     }
     review_called = False
+    future_reset_day = (supervisor._dt.datetime.now(supervisor.TZ_CN) + supervisor._dt.timedelta(days=1)).strftime("%b %d")
 
     def fake_runner(cmd, **_kwargs):
         nonlocal review_called
@@ -229,8 +230,8 @@ def test_run_review_respects_session_limit_cooldown(monkeypatch, tmp_path):
             usage = json.dumps(
                 {
                     "result": (
-                        "Current session: 100% used · resets Jun 14, 9:10pm (Asia/Shanghai)\n"
-                        "Current week (all models): 23% used · resets Jun 14, 10pm (Asia/Shanghai)"
+                        f"Current session: 100% used · resets {future_reset_day}, 9:10pm (Asia/Shanghai)\n"
+                        f"Current week (all models): 23% used · resets {future_reset_day}, 10pm (Asia/Shanghai)"
                     )
                 }
             )
@@ -336,6 +337,77 @@ def test_append_ledger_inserts_under_review_section(monkeypatch, tmp_path):
     text = ledger.read_text(encoding="utf-8")
     assert text.index("stage=p") < text.index("## 来源")
     assert text.rstrip().endswith("- source")
+
+
+def test_auto_commit_review_artifacts_is_path_limited(monkeypatch, tmp_path):
+    monkeypatch.setattr(supervisor, "REPO_ROOT", tmp_path)
+    (tmp_path / ".git").mkdir()
+    archive = tmp_path / "sources" / "internal-analysis" / "development-reviews" / "2026-06-17" / "review.md"
+    archive.parent.mkdir(parents=True)
+    archive.write_text("review", encoding="utf-8")
+    ledger = tmp_path / "wiki" / "operations" / "development-supervisor-ledger.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("ledger", encoding="utf-8")
+    rel_archive = "sources/internal-analysis/development-reviews/2026-06-17/review.md"
+    rel_ledger = "wiki/operations/development-supervisor-ledger.md"
+    calls = []
+    diff_cached_calls = 0
+
+    def fake_runner(cmd, **kwargs):
+        nonlocal diff_cached_calls
+        calls.append(cmd)
+        assert kwargs["cwd"] == str(tmp_path)
+        if cmd == ["git", "diff", "--cached", "--name-only"]:
+            diff_cached_calls += 1
+            output = "" if diff_cached_calls == 1 else f"{rel_archive}\n{rel_ledger}\n"
+            return subprocess.CompletedProcess(cmd, 0, stdout=output, stderr="")
+        if cmd in (["git", "rev-parse", "HEAD"], ["git", "rev-parse", "origin/master"]):
+            return subprocess.CompletedProcess(cmd, 0, stdout="abc\n", stderr="")
+        if cmd == ["git", "rev-parse", "--short", "HEAD"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="abc123\n", stderr="")
+        if cmd in (
+            ["git", "fetch", "origin", "master"],
+            ["git", "add", "--", rel_archive, rel_ledger],
+            [
+                "git",
+                "commit",
+                "-m",
+                "[codex] update: archive development supervisor review review-stage",
+                "--",
+                rel_archive,
+                rel_ledger,
+            ],
+            ["git", "push", "origin", "master"],
+        ):
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        raise AssertionError(f"unexpected git command: {cmd}")
+
+    sha = supervisor.auto_commit_review_artifacts([archive, ledger], stage="review stage", runner=fake_runner)
+
+    assert sha == "abc123"
+    assert ["git", "add", "--", rel_archive, rel_ledger] in calls
+    commit_cmd = next(cmd for cmd in calls if cmd[:2] == ["git", "commit"])
+    assert "." not in commit_cmd
+
+
+def test_auto_commit_review_artifacts_refuses_existing_staged_changes(monkeypatch, tmp_path):
+    monkeypatch.setattr(supervisor, "REPO_ROOT", tmp_path)
+    (tmp_path / ".git").mkdir()
+    archive = tmp_path / "sources" / "internal-analysis" / "development-reviews" / "2026-06-17" / "review.md"
+    archive.parent.mkdir(parents=True)
+    archive.write_text("review", encoding="utf-8")
+
+    def fake_runner(cmd, **kwargs):
+        if cmd == ["git", "diff", "--cached", "--name-only"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="other.md\n", stderr="")
+        raise AssertionError(f"unexpected git command after staged blocker: {cmd}")
+
+    try:
+        supervisor.auto_commit_review_artifacts([archive], stage="review", runner=fake_runner)
+    except RuntimeError as exc:
+        assert "staged changes already exist" in str(exc)
+    else:
+        raise AssertionError("expected staged changes to block supervisor auto-commit")
 
 
 def test_session_id_is_stable_per_channel_workspace_role_stage(monkeypatch, tmp_path):
