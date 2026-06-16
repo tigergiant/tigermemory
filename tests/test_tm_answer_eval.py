@@ -592,6 +592,52 @@ def test_summarize_diagnosis_reports_query_intent_bucket_answer_evidence_metrics
     }
 
 
+def test_diagnose_surrogate_paths_do_not_change_ground_truth_score(monkeypatch):
+    surrogate = "wiki/operations/tmp-artifact-tombstones.md"
+    monkeypatch.setattr(tm_answer_eval.tm_core, "search_wiki", lambda *a, **k: [{"path": surrogate}])
+    monkeypatch.setattr(tm_answer_eval.tm_core, "search_wiki_hybrid", lambda *a, **k: [{"path": surrogate}])
+    monkeypatch.setattr(tm_answer_eval, "tm_llm_wiki_map", _DummyWikiMap([{"path": surrogate}]))
+
+    def fake_memory_answer_core(query: str, **kwargs):
+        return {
+            "status": "ok",
+            "answer": "The temporary research pack has a tombstone summary.",
+            "summary": "surrogate summary",
+            "claims": [],
+            "evidence": [{"id": "e1", "path": surrogate, "excerpt": "P4 and P5 are deferred."}],
+            "warnings": [],
+            "run_id": kwargs.get("run_id"),
+            "trace_id": "trace-surrogate",
+            "trace": {
+                "calls": [{"primary_scope": "wiki"}],
+                "evidence_gate": [{"path": surrogate, "keep": True, "selected": True}],
+            },
+        }
+
+    monkeypatch.setattr(tm_answer_eval.tm_answer, "memory_answer_core", fake_memory_answer_core)
+
+    result = tm_answer_eval.diagnose_case(
+        {
+            "id": "tmp-locator",
+            "query": "temporary plan location",
+            "expected_status": "ok",
+            "expected_evidence_paths": [".tmp/private-research-plan.md"],
+            "acceptable_surrogate_paths": [surrogate],
+            "query_intent_bucket": "topic_locator",
+        },
+        run_id="diag-surrogate",
+    )
+    summary = tm_answer_eval.summarize_diagnosis([result])
+
+    assert result["passed"] is False
+    assert result["answer_evidence_rank"] is None
+    assert result["surrogate_evidence_rank"] == 1
+    assert result["surrogate_evidence_hit"] is True
+    assert summary["answer_evidence_hit"] == 0
+    assert summary["surrogate_path_case_count"] == 1
+    assert summary["surrogate_evidence_hit"] == 1
+
+
 def test_diagnose_compact_redacts_query(tmp_path, monkeypatch, capsys):
     cases = tmp_path / "cases.jsonl"
     cases.write_text(
@@ -653,6 +699,11 @@ def test_memory_answer_diagnosis_fixture_has_100_unique_cases():
         "runtime_service_grounding",
         "actionability_gap",
     }
+    tmp_locator = next(case for case in cases if case["id"] == "p35-01-07")
+    assert tmp_locator["expected_evidence_paths"] == [
+        ".tmp/ai-radar-memory-research-20260609/notes/memory-answer-optimization-plan-v2.md"
+    ]
+    assert "wiki/operations/tmp-artifact-tombstones.md" in tmp_locator["acceptable_surrogate_paths"]
 
 
 def test_memory_answer_p310_holdout_fixture_is_independent():

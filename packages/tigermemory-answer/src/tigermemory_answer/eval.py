@@ -700,6 +700,7 @@ def _compact_diagnosis_row(row: dict[str, Any]) -> dict[str, Any]:
         "runtime_dependency",
         "actionability_expectation",
         "expected_evidence_paths",
+        "acceptable_surrogate_paths",
         "missing_expected_paths",
         "outside_partition_paths",
         "lexical_rank",
@@ -716,6 +717,11 @@ def _compact_diagnosis_row(row: dict[str, Any]) -> dict[str, Any]:
         "evidence_gate_authority",
         "evidence_gate_relevance",
         "answer_evidence_rank",
+        "surrogate_lexical_rank",
+        "surrogate_hybrid_rank",
+        "surrogate_map_rank",
+        "surrogate_evidence_rank",
+        "surrogate_evidence_hit",
         "raw_retrieval_hit",
         "map_candidate_hit",
         "map_hit@10",
@@ -753,6 +759,7 @@ def diagnose_case(
 ) -> dict[str, Any]:
     """Run one answer case and attribute failures to the first likely layer."""
     expected_paths = [_normalize_case_path(path) for path in case.get("expected_evidence_paths", [])]
+    surrogate_paths = [_normalize_case_path(path) for path in case.get("acceptable_surrogate_paths", [])]
     forbidden_paths = [_normalize_case_path(path) for path in case.get("forbidden_evidence_paths", [])]
     query_intent_bucket = _query_intent_bucket(case)
     top_k = min(max(int(case.get("top_k", 5)), 1), 10)
@@ -797,6 +804,9 @@ def diagnose_case(
     lexical_rank = _rank_for_expected(lexical_paths, expected_paths)
     hybrid_rank = _rank_for_expected(hybrid_paths, expected_paths)
     map_rank = _rank_for_expected(map_paths, expected_paths)
+    surrogate_lexical_rank = _rank_for_expected(lexical_paths, surrogate_paths)
+    surrogate_hybrid_rank = _rank_for_expected(hybrid_paths, surrogate_paths)
+    surrogate_map_rank = _rank_for_expected(map_paths, surrogate_paths)
     anchor_rank = _anchor_rank_for_expected(expected_paths, probe_k) if expected_paths else None
     gate_rank = _rank_for_expected(gate_paths, expected_paths)
     gate_selected_rank = _rank_for_expected(gate_selected_paths, expected_paths)
@@ -808,6 +818,7 @@ def diagnose_case(
         missing_expected_paths=missing_expected_paths,
     )
     evidence_rank = _rank_for_expected(evidence_paths, expected_paths)
+    surrogate_evidence_rank = _rank_for_expected(evidence_paths, surrogate_paths)
     recommendation_candidate_rank = _rank_for_expected(recommendation_paths, expected_paths)
     recommendation_evidence_rank = _rank_for_expected(recommendation_evidence_paths, expected_paths)
     expected_rank_raw = case.get("expected_rank")
@@ -939,6 +950,7 @@ def diagnose_case(
         "actionability_expectation": case.get("actionability_expectation"),
         "query_intent_bucket": query_intent_bucket,
         "expected_evidence_paths": expected_paths,
+        "acceptable_surrogate_paths": surrogate_paths,
         "forbidden_evidence_paths": forbidden_paths,
         "missing_expected_paths": missing_expected_paths,
         "outside_partition_paths": outside_partition_paths,
@@ -956,6 +968,11 @@ def diagnose_case(
         "evidence_gate_authority": expected_gate_entry.get("authority") if expected_gate_entry else None,
         "evidence_gate_relevance": expected_gate_entry.get("relevance") if expected_gate_entry else None,
         "answer_evidence_rank": evidence_rank,
+        "surrogate_lexical_rank": surrogate_lexical_rank,
+        "surrogate_hybrid_rank": surrogate_hybrid_rank,
+        "surrogate_map_rank": surrogate_map_rank,
+        "surrogate_evidence_rank": surrogate_evidence_rank,
+        "surrogate_evidence_hit": bool(surrogate_paths and surrogate_evidence_rank is not None),
         "raw_retrieval_hit": raw_retrieval_hit,
         "map_candidate_hit": map_candidate_hit,
         "map_hit@10": map_hit_10,
@@ -1023,6 +1040,8 @@ def summarize_diagnosis(results: list[dict[str, Any]]) -> dict[str, Any]:
     map_compensated_hits = sum(1 for item in expected_path_cases if item.get("map_compensated_hit"))
     map_hit_but_evidence_miss = sum(1 for item in expected_path_cases if item.get("map_hit_but_evidence_miss"))
     map_leak_cases = [item for item in expected_path_cases if item.get("map_hit_but_evidence_miss")]
+    surrogate_cases = [item for item in expected_path_cases if item.get("acceptable_surrogate_paths")]
+    surrogate_evidence_hits = sum(1 for item in surrogate_cases if item.get("surrogate_evidence_rank") is not None)
     recommendation_candidate_hits_5 = sum(1 for item in expected_path_cases if item.get("recommendation_candidate_hit@5"))
     recommendation_evidence_hits = sum(1 for item in expected_path_cases if item.get("recommendation_evidence_hit"))
     not_in_map = sum(1 for item in expected_path_cases if item.get("not_in_map"))
@@ -1066,6 +1085,11 @@ def summarize_diagnosis(results: list[dict[str, Any]]) -> dict[str, Any]:
         "map_hit_but_evidence_miss": map_hit_but_evidence_miss,
         "map_hit_but_evidence_miss_rate": (
             map_hit_but_evidence_miss / len(expected_path_cases) if expected_path_cases else 0.0
+        ),
+        "surrogate_path_case_count": len(surrogate_cases),
+        "surrogate_evidence_hit": surrogate_evidence_hits,
+        "surrogate_evidence_hit_rate": (
+            surrogate_evidence_hits / len(surrogate_cases) if surrogate_cases else 1.0
         ),
         "map_bridge_bucket_counts": _count_by_field(results, "map_bridge_bucket"),
         "map_leak_bucket_counts": _count_by_field(map_leak_cases, "map_bridge_bucket"),
