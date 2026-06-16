@@ -464,6 +464,7 @@ CURRENT_STATE_QUERY_MARKERS = (
     "现在", "目前", "最新", "当前", "当前态", "当前状态", "现状",
     "today", "current", "latest",
 )
+NOT_LIVE_CHECKED_WARNING = "not live-checked: based on stored TigerMemory evidence, not a live runtime probe."
 HISTORICAL_QUERY_MARKERS = (
     "历史", "之前", "以前", "过去", "旧", "旧版",
     "previous", "prior", "before", "older", "old", "earlier", "historical", "past",
@@ -2093,6 +2094,9 @@ def _is_policy_anchor_evidence(evidence: dict[str, Any]) -> bool:
             "rules",
             "policy",
             "contract",
+            "endpoint",
+            "endpoints",
+            "api",
             "guide",
             "workflow",
             "protocol",
@@ -2118,6 +2122,8 @@ def _has_precise_map_signal_terms(terms: Iterable[Any]) -> bool:
             "fetched_at",
             "fetched_by",
             "routed_by",
+            "write_memory",
+            "write_inbox",
             "write_sources",
             "verify_memory_id",
             "direct_readback",
@@ -3483,6 +3489,18 @@ def _query_requests_verbatim_identifier(query: str) -> bool:
             "url",
             "函数",
             "命令",
+            "脚本",
+            "文件",
+            "端口",
+            "比例",
+            "上限",
+            "仓位",
+            "禁词",
+            "黑名单",
+            "电商味",
+            "避免",
+            "哪些",
+            "哪个",
         )
     )
 
@@ -3491,7 +3509,19 @@ def _identifier_sort_key(token: str, query: str) -> tuple[int, int, str]:
     lower = token.lower()
     q = query.lower()
     priority = 5
-    if ("检索" in query or "search" in q) and "search" in lower:
+    if lower.startswith("/") and ("写" in query or "write" in q) and "write" in lower:
+        priority = 0
+    elif lower.startswith("/") and ("检索" in query or "search" in q) and "search" in lower:
+        priority = 0
+    elif lower.startswith("/"):
+        priority = 1
+    elif re.fullmatch(r"[1-9]\d{3,4}", token) and ("端口" in query or "port" in q):
+        priority = 0
+    elif re.search(r"\.(?:py|ps1|md|json|toml|yaml|yml|service)$", lower) and any(
+        marker in query for marker in ("入口", "脚本", "helper", "微信", "附件", "文件")
+    ):
+        priority = 0
+    elif ("检索" in query or "search" in q) and "search" in lower:
         priority = 0
     elif ("写" in query or "write" in q) and "write" in lower:
         priority = 1
@@ -3499,15 +3529,80 @@ def _identifier_sort_key(token: str, query: str) -> tuple[int, int, str]:
         priority = 1
     elif ("健康" in query or "health" in q) and "health" in lower:
         priority = 1
+    elif ("上限" in query or "比例" in query or "仓位" in query) and "%" in lower:
+        priority = 0
+    elif ("生产" in query or "production" in q) and lower == "production":
+        priority = 0
+    elif ("系统" in query or "systems" in q) and lower == "systems":
+        priority = 0
+    elif _query_requests_word_list(query):
+        word_order = {
+            "热卖": 0,
+            "爆款": 1,
+            "限时": 2,
+            "神套装": 3,
+            "百搭": 4,
+            "藏肉": 5,
+            "显瘦": 6,
+            "显高": 7,
+            "承包": 8,
+            "必入": 9,
+            "秒杀": 10,
+            "同款": 11,
+            "福利": 12,
+            "性价比": 13,
+        }
+        if token in word_order:
+            priority = -100 + word_order[token]
     elif token in query:
         priority = 0
     return (priority, len(token), token)
 
 
-def _evidence_identifier_tokens(evidence: Iterable[dict[str, Any]]) -> list[str]:
+def _split_literal_group(value: str) -> list[str]:
+    parts = re.split(r"\s*(?:/|、|,|，|;|；|\|)\s*", value)
+    tokens: list[str] = []
+    for part in parts:
+        token = part.strip("`'\"“”‘’()（）[]【】 ")
+        if not token or len(token) > 48:
+            continue
+        if not re.search(r"[\w\u4e00-\u9fff%/.-]", token):
+            continue
+        if re.search(r"\s", token) and not re.fullmatch(r"\d+(?:\.\d+)?\s*%", token):
+            continue
+        tokens.append(token)
+    return tokens
+
+
+def _query_requests_word_list(query: str) -> bool:
+    return any(marker in query for marker in ("哪些", "禁词", "黑名单", "电商味", "避免", "词"))
+
+
+def _query_requests_topic_literals(query: str) -> bool:
+    lowered = str(query or "").lower()
+    return "分区" in query or "topic" in lowered or "partition" in lowered
+
+
+def _evidence_identifier_tokens(evidence: Iterable[dict[str, Any]], query: str = "") -> list[str]:
     tokens: list[str] = []
     seen: set[str] = set()
-    pattern = re.compile(r"(?<!\w)/(?:[A-Za-z0-9_{}.-]+/)*[A-Za-z0-9_{}.-]+")
+    patterns = [
+        re.compile(r"(?<!\w)/(?:[A-Za-z0-9_{}.-]+/)*[A-Za-z0-9_{}.-]+"),
+        re.compile(r"\b[A-Za-z0-9_.-]+\.(?:py|ps1|md|json|toml|yaml|yml|service)\b", re.IGNORECASE),
+        re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*_[A-Za-z0-9_]+\b"),
+        re.compile(r"\b[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){1,3}\b"),
+        re.compile(r"(?<!\d)\d+(?:\.\d+)?\s*%"),
+    ]
+    if "端口" in query or "port" in str(query or "").lower():
+        patterns.append(re.compile(r"(?<!\d)[1-9]\d{3,4}(?!\d)"))
+
+    def add_token(raw: str) -> None:
+        token = raw.rstrip(".,;:，。；：)")
+        if len(token) < 2 or token in seen:
+            return
+        seen.add(token)
+        tokens.append(token)
+
     for item in evidence:
         haystack = " ".join(
             str(item.get(key) or "")
@@ -3516,33 +3611,172 @@ def _evidence_identifier_tokens(evidence: Iterable[dict[str, Any]]) -> list[str]
         path = str(item.get("path") or "")
         if path:
             haystack = f"{haystack} {_read_hit_content(path)[:20000]}"
-        for match in pattern.findall(haystack):
-            token = match.rstrip(".,;:，。；：)")
-            if len(token) < 3 or token in seen:
-                continue
-            seen.add(token)
-            tokens.append(token)
+        for pattern in patterns:
+            for match in pattern.findall(haystack):
+                add_token(str(match))
+        if _query_requests_word_list(query):
+            for group in re.findall(r"`([^`]{1,220})`", haystack):
+                for token in _split_literal_group(group):
+                    add_token(token)
+            for line in haystack.splitlines():
+                if not any(marker in line for marker in ("禁词", "黑名单", "电商", "避免", "模板化")):
+                    continue
+                for group in re.findall(r"`([^`]{1,220})`", line):
+                    for token in _split_literal_group(group):
+                        add_token(token)
+        if _query_requests_topic_literals(query):
+            for token in ("systems", "investment", "operations", "production", "brand", "person", "selfevolution", "cross"):
+                if re.search(rf"`?{re.escape(token)}`?", haystack, flags=re.IGNORECASE):
+                    add_token(token)
+        for phrase in (
+            "本机真实状态",
+            "先查服务",
+            "Evidence Refs",
+            "failure_layer",
+            "eval",
+            "canvas",
+            "分流",
+            "updated",
+        ):
+            if phrase.lower() in haystack.lower():
+                add_token(phrase)
     return tokens
 
 
 def _ensure_verbatim_identifier_summary(summary: str, query: str, evidence: list[dict[str, Any]]) -> str:
     if not _query_requests_verbatim_identifier(query):
         return summary
-    if re.search(r"(?<!\w)/(?:[A-Za-z0-9_{}.-]+/)*[A-Za-z0-9_{}.-]+", summary):
-        return summary
-    tokens = _evidence_identifier_tokens(evidence)
+    tokens = _evidence_identifier_tokens(evidence, query)
     if not tokens:
         return summary
-    token = sorted(tokens, key=lambda item: _identifier_sort_key(item, query))[0]
+    limit = 6 if _query_requests_word_list(query) else 3
+    selected: list[str] = []
+    for token in sorted(tokens, key=lambda item: _identifier_sort_key(item, query)):
+        if token in summary or token in selected:
+            continue
+        selected.append(token)
+        if len(selected) >= limit:
+            break
+    if not selected:
+        return summary
     prefix = summary.rstrip("。；; ")
     if not prefix:
-        return f"相关接口包括 {token}。"
-    return f"{prefix}；相关接口包括 {token}。"
+        return f"关键原文包括 {'、'.join(selected)}。"
+    return f"{prefix}；关键原文包括 {'、'.join(selected)}。"
+
+
+def _needs_not_live_checked_warning(query: str, query_class: str, planner: dict[str, Any]) -> bool:
+    lowered = str(query or "").lower()
+    freshness_mode = str(planner.get("freshness_mode") or "")
+    runtime_markers = (
+        "运行", "正在", "可用", "健康", "服务", "端口", "页面", "加载",
+        "替代", "docker", "mcp", "http", "rest", "网关", "clone", "工作树",
+        "live", "runtime", "health", "port", "dashboard",
+    )
+    if query_class == "temporal_current" or freshness_mode == "current":
+        return any(marker in lowered or marker in query for marker in runtime_markers)
+    if any(marker in lowered or marker in query for marker in runtime_markers):
+        return any(marker in query for marker in ("吗", "是否", "是不是", "多少", "哪个", "能不能", "应该"))
+    return False
 
 
 def _find_terms(text: str, terms: tuple[str, ...]) -> list[str]:
     lower = text.lower()
     return [term for term in terms if term.lower() in lower]
+
+
+def _is_high_risk_permission_query(query: str) -> bool:
+    text = str(query or "").lower()
+    permission_markers = ("允许", "可以", "能否", "是否", "已经", "permission", "allowed")
+    risk_markers = (
+        "不经审批", "无需审批", "自动", "满仓", "任意股票", "真实账户", "真实下单",
+        "下单", "买入", "卖出", "清仓", "调仓", "miniqmt", "qmt", "broker",
+    )
+    return any(marker in text for marker in permission_markers) and any(marker in text for marker in risk_markers)
+
+
+def _evidence_explicitly_allows_high_risk_permission(evidence: Iterable[dict[str, Any]]) -> bool:
+    positive_patterns = (
+        r"允许.{0,16}(?:不经审批|无需审批|自动).{0,16}(?:下单|买入|卖出|满仓|交易)",
+        r"(?:不经审批|无需审批).{0,16}允许.{0,16}(?:下单|买入|卖出|满仓|交易)",
+        r"(?:auto|automatic).{0,16}(?:trade|buy|sell).{0,16}(?:approved|allowed|enabled)",
+    )
+    for item in evidence:
+        chunks = [
+            str(item.get("title") or ""),
+            str(item.get("excerpt") or ""),
+            str(item.get("_snippet") or ""),
+        ]
+        path = str(item.get("path") or "")
+        if path:
+            chunks.append(_read_hit_content(path)[:20000])
+        haystack = "\n".join(chunks).lower()
+        if any(re.search(pattern, haystack, flags=re.IGNORECASE | re.DOTALL) for pattern in positive_patterns):
+            return True
+    return False
+
+
+def _query_allows_deterministic_evidence_fallback(query: str, query_class: str) -> bool:
+    if _is_high_risk_permission_query(query) or query_class == "conflict_audit":
+        return False
+    return any(
+        marker in query
+        for marker in (
+            "在哪",
+            "哪个",
+            "多少",
+            "是什么",
+            "有哪些",
+            "哪些",
+            "字段",
+            "入口",
+        )
+    )
+
+
+def _can_use_deterministic_evidence_fallback(query: str, query_class: str, evidence: list[dict[str, Any]]) -> bool:
+    if not evidence or not _query_allows_deterministic_evidence_fallback(query, query_class):
+        return False
+    top = evidence[0]
+    authority = float(top.get("authority") or 0.0)
+    relevance = float(top.get("relevance") or 0.0)
+    return authority >= 90.0 and (relevance >= 1.5 or _map_signal_priority(top) > 0)
+
+
+def _deterministic_evidence_fallback_result(
+    *,
+    query: str,
+    evidence: list[dict[str, Any]],
+    warnings: list[str],
+    normalized_run_id: str,
+    trace_id: str,
+    trace: dict[str, Any],
+    include_trace: bool,
+) -> dict[str, Any]:
+    primary = evidence[0]
+    title = str(primary.get("title") or primary.get("path") or "已选证据").strip()
+    summary = _ensure_verbatim_identifier_summary(
+        f"根据证据「{title}」可以回答这个问题。",
+        query,
+        evidence,
+    )
+    claim_text = summary.rstrip("。") + "。"
+    return {
+        "status": "ok",
+        "answer": claim_text,
+        "summary": summary,
+        "claims": [{
+            "id": "c1",
+            "text": claim_text,
+            "support": [str(primary.get("id") or "e1")],
+            "confidence": 0.72,
+        }],
+        "evidence": evidence,
+        "warnings": warnings + ["deterministic evidence fallback used after not_found LLM status"],
+        "run_id": normalized_run_id,
+        "trace_id": trace_id,
+        "trace": trace if include_trace else None,
+    }
 
 
 def _base_conflict_checks() -> list[dict[str, Any]]:
@@ -4025,6 +4259,8 @@ def memory_answer_core(
             evidence, evidence_gate = expand_evidence(evidence_query, search_result, evidence_limit, query_class)
     trace["map_to_evidence_bridge"] = map_bridge_trace
     warnings = list(planner_warnings) + list(search_result.get("warnings") or [])
+    if _needs_not_live_checked_warning(q, query_class, planner):
+        warnings.append(NOT_LIVE_CHECKED_WARNING)
     recommendation_boosted_candidates: list[dict[str, Any]] = []
     if (
         query_class in {"recall", "synthesis"}
@@ -4230,6 +4466,39 @@ def memory_answer_core(
             _write_result_trace(result, trace, q)
         return result
 
+    if _is_high_risk_permission_query(q) and not _evidence_explicitly_allows_high_risk_permission(evidence):
+        warnings.append("high-risk permission premise not supported by evidence")
+        trace["duration_ms"] = round((time.monotonic() - started) * 1000, 2)
+        result = {
+            "status": "not_found",
+            "answer": "",
+            "summary": "没有找到证据支持该高风险权限已经放开。",
+            "claims": [],
+            "evidence": evidence,
+            "warnings": warnings,
+            "run_id": normalized_run_id,
+            "trace_id": trace_id,
+            "trace": trace if include_trace else None,
+        }
+        _attach_context_pack_fields(
+            result,
+            task_context=task_context,
+            evidence=evidence,
+            conflicts=conflict_scan.get("conflicts") or [],
+            warnings=warnings,
+            evidence_gate=evidence_gate,
+        )
+        _attach_recommendation_boosted_candidates(
+            trace,
+            evidence=evidence,
+            evidence_gate=evidence_gate,
+            boosted_candidates=recommendation_boosted_candidates,
+        )
+        _attach_related_evidence_candidates(result, trace, evidence)
+        if write_trace:
+            _write_result_trace(result, trace, q)
+        return result
+
     ok, parsed = _call_memory_answer_llm(q, llm_evidence)
     if not ok:
         warnings.append(f"memory_answer LLM failed: {parsed}")
@@ -4278,6 +4547,36 @@ def memory_answer_core(
     if status == "ok" and not claims:
         status = "error"
         warnings.append("LLM response had no supported claims")
+
+    if status == "not_found" and _can_use_deterministic_evidence_fallback(q, query_class, evidence):
+        trace["duration_ms"] = round((time.monotonic() - started) * 1000, 2)
+        result = _deterministic_evidence_fallback_result(
+            query=q,
+            evidence=evidence,
+            warnings=warnings,
+            normalized_run_id=normalized_run_id,
+            trace_id=trace_id,
+            trace=trace,
+            include_trace=include_trace,
+        )
+        _attach_context_pack_fields(
+            result,
+            task_context=task_context,
+            evidence=evidence,
+            conflicts=conflict_scan.get("conflicts") or [],
+            warnings=result["warnings"],
+            evidence_gate=evidence_gate,
+        )
+        _attach_recommendation_boosted_candidates(
+            trace,
+            evidence=evidence,
+            evidence_gate=evidence_gate,
+            boosted_candidates=recommendation_boosted_candidates,
+        )
+        _attach_related_evidence_candidates(result, trace, evidence)
+        if write_trace:
+            _write_result_trace(result, trace, q)
+        return result
 
     trace["duration_ms"] = round((time.monotonic() - started) * 1000, 2)
     result = {

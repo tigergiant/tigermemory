@@ -3670,6 +3670,99 @@ def test_verbatim_identifier_summary_preserves_search_endpoint():
     assert "/search_memories" in result
 
 
+def test_verbatim_identifier_summary_preserves_write_endpoint_when_summary_has_other_endpoint():
+    summary = "tm-http 提供 /search_memories 等记忆接口。"
+    evidence = [{
+        "path": "wiki/systems/tm_http-endpoints.md",
+        "title": "tm_http 端点契约",
+        "excerpt": "POST /write_memory 写入记忆；POST /search_memories 检索记忆。",
+    }]
+
+    result = tm_answer._ensure_verbatim_identifier_summary(
+        summary,
+        "tm-http 的主要记忆写入或检索端点是什么？",
+        evidence,
+    )
+
+    assert "/write_memory" in result
+
+
+def test_verbatim_identifier_summary_preserves_percent_limit():
+    summary = "投资组合规则页记录单只仓位上限。"
+    evidence = [{
+        "path": "wiki/investment/portfolio-rules.md",
+        "title": "投资组合规则",
+        "excerpt": "单只标的原则上不超过总资产 15%，特殊情况需要人工审批。",
+    }]
+
+    result = tm_answer._ensure_verbatim_identifier_summary(
+        summary,
+        "投资组合的单只仓位上限应该查哪个长期规则页？",
+        evidence,
+    )
+
+    assert "15%" in result
+
+
+def test_verbatim_identifier_summary_preserves_avoid_word_list():
+    summary = "IPFB 文案准则要求避免电商味词。"
+    evidence = [{
+        "path": "wiki/brand/ipfb-copywriting-guide.md",
+        "title": "IPFB 文案撰写准则",
+        "excerpt": "电商味词黑名单：`热卖 / 爆款 / 限时 / 神套装 / 百搭`。",
+    }]
+
+    result = tm_answer._ensure_verbatim_identifier_summary(
+        summary,
+        "IPFB 文案写作时，哪些电商味词应该避免？",
+        evidence,
+    )
+
+    assert "热卖" in result
+
+
+def test_current_runtime_query_needs_not_live_checked_warning():
+    assert tm_answer._needs_not_live_checked_warning(
+        "现在 dashboard 1998 正在运行吗？",
+        "temporal_current",
+        {"freshness_mode": "current"},
+    )
+
+
+def test_high_risk_permission_query_requires_explicit_positive_evidence():
+    query = "MiniQMT 是否已经允许 agent 不经审批自动满仓买入任意股票？"
+    evidence = [{
+        "path": "wiki/investment/agent-assisted-qmt-trading-operating-model.md",
+        "title": "Agent-assisted QMT Trading Operating Model",
+        "excerpt": "真实账户保持 advisory-only，人类审批和执行是边界。",
+    }]
+
+    assert tm_answer._is_high_risk_permission_query(query)
+    assert not tm_answer._evidence_explicitly_allows_high_risk_permission(evidence)
+
+
+def test_deterministic_evidence_fallback_only_for_safe_locator_queries():
+    safe_evidence = [{
+        "id": "e1",
+        "path": "wiki/systems/multi-endpoint-mem0.md",
+        "title": "Multi Endpoint Mem0",
+        "authority": 98.0,
+        "relevance": 2.0,
+        "excerpt": "本地直连端口是 8765。",
+    }]
+
+    assert tm_answer._can_use_deterministic_evidence_fallback(
+        "multi-endpoint-mem0 里本地直连端口是多少？",
+        "recall",
+        safe_evidence,
+    )
+    assert not tm_answer._can_use_deterministic_evidence_fallback(
+        "MiniQMT 是否已经允许 agent 不经审批自动满仓买入任意股票？",
+        "recall",
+        safe_evidence,
+    )
+
+
 def test_exact_date_path_match_sorts_before_newer_daily_reports():
     exact = {
         "path": "wiki/operations/daily-health/2026-05-17.md",
