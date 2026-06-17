@@ -1692,6 +1692,10 @@ def test_development_supervisor_status_api_is_read_only(tmp_path, monkeypatch):
     data = response.json()
     assert data["ok"] is True
     assert data["channels"]["formal_default"] == "claude-official-review"
+    assert data["runtime"]["windows_launcher_check"] in {
+        "checked_in_current_process",
+        "dashboard_runs_outside_windows; launcher paths are checked by the Windows wrapper",
+    }
     assert data["exists"]["ledger"] is True
     assert data["archive_count"] == 1
     assert data["latest_archives"][0].endswith("review.md")
