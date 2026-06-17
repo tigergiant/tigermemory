@@ -452,3 +452,142 @@ def test_default_intake_date_uses_yesterday_for_memory_digest(monkeypatch):
     assert reflection.default_intake_date("memory-digest") == "2026-06-08"
     assert reflection.default_intake_date("system-health") == "2026-06-09"
     assert reflection.default_intake_date("ai-radar") == "2026-06-09"
+
+
+def test_build_compact_report_ai_radar_preserves_actions_and_ledger(tmp_path):
+    codex_home = tmp_path / ".codex"
+    reports = codex_home / "reports"
+    reports.mkdir(parents=True)
+    (reports / "daily-ai-agent-radar-2026-06-16.md").write_text(
+        "\n".join([
+            "## 今日结论",
+            "- 已验证事实：agentcsp 值得评估。",
+            "",
+            "## AI 雷达学习台账候选",
+            "- 项目: agentcsp | 分类: 立即评估 | 学习点: context policy | 证据: https://example.test/agentcsp",
+            "",
+            "## 建议动作",
+            "1. 立即评估 `agentcsp` 的上下文边界。",
+            "",
+            "## 记忆友好收尾摘要",
+            "2026-06-16 的重点是 context policy 和报告压缩。",
+            "",
+            "## 来源与验证",
+            "- `wiki/systems/ai-radar-learning-ledger.md`",
+        ]),
+        encoding="utf-8",
+    )
+
+    result = reflection.build_compact_report(
+        kind="ai-radar",
+        date="2026-06-16",
+        codex_home=codex_home,
+    )
+
+    assert result["status"] == "ok"
+    assert any("agentcsp" in item for item in result["learning_items"])
+    assert any("立即评估" in item for item in result["action_required"])
+    assert "wiki/systems/ai-radar-learning-ledger.md" in result["source_paths"]
+
+
+def test_build_compact_report_daily_health_surfaces_yellow_status(tmp_path):
+    operations = tmp_path / "wiki" / "operations"
+    (operations / "daily-health").mkdir(parents=True)
+    (operations / "daily-health" / "2026-06-17.md").write_text(
+        "\n".join([
+            "# Daily Health",
+            "",
+            "## 摘要",
+            "- 主链路可用，但 prompt audit 有缺口。",
+            "",
+            "## 中文总览",
+            "- 健康色：`yellow`",
+            "",
+            "## 问题",
+            "- prompt-audit root-agent-rules missing。",
+            "",
+            "## 建议",
+            "- 修复 root agent rules 标记。",
+            "",
+            '{"commit_sha":"0123456789abcdef0123456789abcdef01234567","push_result":"pushed"}',
+        ]),
+        encoding="utf-8",
+    )
+
+    result = reflection.build_compact_report(
+        kind="daily-health",
+        date="2026-06-17",
+        operations_dir=operations,
+    )
+
+    assert result["status"] == "warn"
+    assert result["health_color"] == "yellow"
+    assert any("prompt-audit" in item for item in result["issues"])
+    assert result["evidence"]["commit_sha"] == "0123456789abcdef0123456789abcdef01234567"
+    assert result["evidence"]["push_result"] == "pushed"
+
+
+def test_build_compact_report_answer_trace_preserves_counts(tmp_path):
+    trace = tmp_path / "answer-trace-summary.json"
+    trace.write_text(
+        json.dumps(
+            {
+                "row_count": 25,
+                "selected_run_id": "daily-health-2026-06-17",
+                "failure_count": 1,
+                "invalid_row_count": 0,
+                "duration_ms": {"p95": 14081.4},
+                "status_counts": {"ok": 21, "conflict": 2, "not_found": 2},
+                "llm_counts": {"ok": 22, "skipped": 3},
+                "recommendation_quality": {
+                    "recommendation_shown_count": 24,
+                    "recommendation_used_as_evidence_count": 0,
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = reflection.build_compact_report(kind="answer-trace", path=trace)
+
+    assert result["status"] == "warn"
+    assert result["summary"]["row_count"] == 25
+    assert result["summary"]["duration_p95_ms"] == 14081.4
+    assert result["summary"]["recommendation_shown_count"] == 24
+    assert any("1 failure" in item for item in result["issues"])
+
+
+def test_build_compact_report_memory_digest_promotes_count_issues_to_actions(tmp_path):
+    operations = tmp_path / "wiki" / "operations"
+    operations.mkdir(parents=True)
+    (operations / "daily-memory-digest-2026-06-16.md").write_text(
+        "\n".join([
+            "---",
+            "proposal_count: 0",
+            "stale_archive_count: 2",
+            "wiki_proposal_inbox_count: 4",
+            "---",
+            "",
+            "## ⚡ 今日要决策",
+            "- 14 天兜底 archive 候选：2 条",
+            "",
+            "## 🧠 Proposed Changes",
+            "- none",
+            "",
+            "## 🧭 今日沉淀卡",
+            "- 结论：需要处理 inbox 积压。",
+        ]),
+        encoding="utf-8",
+    )
+
+    result = reflection.build_compact_report(
+        kind="memory-digest",
+        date="2026-06-16",
+        operations_dir=operations,
+    )
+
+    assert result["status"] == "warn"
+    assert "- none" not in result["action_required"]
+    assert any("stale inbox archive" in item for item in result["action_required"])
+    assert any("wiki proposal inbox" in item for item in result["action_required"])

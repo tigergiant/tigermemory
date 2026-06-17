@@ -2008,6 +2008,16 @@ def _compact_section_lines(section: str, *, limit: int = 8) -> list[str]:
     return out
 
 
+def _drop_none_lines(lines: Iterable[str]) -> list[str]:
+    out: list[str] = []
+    for raw in lines:
+        marker = str(raw).strip().lstrip("- ").strip().lower()
+        if marker in {"none", "n/a", "na"}:
+            continue
+        out.append(str(raw))
+    return out
+
+
 def _report_path(rel_or_abs: pathlib.Path) -> str:
     try:
         return str(rel_or_abs.resolve().relative_to(REPO_ROOT.resolve())).replace("\\", "/")
@@ -2215,6 +2225,7 @@ def _is_investment_radar_action(text: str) -> bool:
 
 
 INTAKE_WINDOWS = {"all", "memory-digest", "system-health", "ai-radar"}
+COMPACT_REPORT_KINDS = {"ai-radar", "answer-trace", "daily-health", "memory-digest"}
 
 
 def _normalize_intake_window(window: str | None) -> str:
@@ -2234,6 +2245,325 @@ def _normalize_intake_window(window: str | None) -> str:
     if value not in INTAKE_WINDOWS:
         raise ValueError(f"unknown cron intake window: {window}")
     return value
+
+
+def _normalize_compact_report_kind(kind: str | None) -> str:
+    value = (kind or "").strip().lower().replace("_", "-")
+    aliases = {
+        "ai": "ai-radar",
+        "radar": "ai-radar",
+        "trace": "answer-trace",
+        "answer": "answer-trace",
+        "health": "daily-health",
+        "daily": "daily-health",
+        "digest": "memory-digest",
+        "memory": "memory-digest",
+    }
+    value = aliases.get(value, value)
+    if value not in COMPACT_REPORT_KINDS:
+        raise ValueError(f"unknown compact report kind: {kind}")
+    return value
+
+
+def _compact_source_paths(text: str, *, limit: int = 12) -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+    for match in re.finditer(
+        r"(?:[A-Za-z]:\\[^\s)`\]]+|(?:wiki|\.tmp|tools|packages)/[^\s)`\]]+)",
+        text,
+    ):
+        value = match.group(0).rstrip(".,;:>\"'")
+        if not re.search(r"\.(?:csv|html|json|jsonl|md|py|toml|txt|xml|ya?ml)\b", value, flags=re.I):
+            continue
+        if value in seen:
+            continue
+        seen.add(value)
+        paths.append(value)
+        if len(paths) >= limit:
+            break
+    return paths
+
+
+def _compact_evidence_ids(text: str) -> dict[str, Any]:
+    commit_matches = re.findall(r"\b[0-9a-f]{40}\b", text, flags=re.I)
+    push_match = re.search(r'"push_result"\s*:\s*"([^"]+)"', text)
+    if not push_match:
+        push_match = re.search(r"push_result[=:]\s*`?([A-Za-z0-9_-]+)`?", text)
+    proposal_ids = sorted(set(re.findall(r"\bproposal-[A-Za-z0-9_.-]+\b", text)))
+    return {
+        "commit_sha": commit_matches[0] if commit_matches else None,
+        "push_result": push_match.group(1) if push_match else None,
+        "proposal_ids": proposal_ids[:12],
+    }
+
+
+def _compact_required_section_issues(text: str, markers: Iterable[str]) -> list[str]:
+    issues: list[str] = []
+    for marker in markers:
+        if not _section_body(text, marker):
+            issues.append(f"missing section: {marker}")
+    return issues
+
+
+def _compact_report_from_ai_radar(date: str, *, codex_home: pathlib.Path | None = None) -> dict[str, Any]:
+    codex_home = codex_home or (pathlib.Path.home() / ".codex")
+    candidates = _ai_radar_candidates(date, codex_home=codex_home)
+    path = next((candidate for candidate in candidates if candidate.exists()), None)
+    result: dict[str, Any] = {
+        "kind": "ai-radar",
+        "date": date,
+        "path": str(path or candidates[0]),
+        "exists": path is not None,
+        "status": "missing",
+        "conclusion": [],
+        "issues": [],
+        "action_required": [],
+        "learning_items": [],
+        "friendly_closeout": [],
+        "source_paths": [],
+        "evidence": {},
+    }
+    if path is None:
+        result["issues"].append("AI radar report is not persisted to a known local file")
+        return result
+    text = path.read_text(encoding="utf-8")
+    required_issues = _compact_required_section_issues(
+        text,
+        ("AI 雷达学习台账候选", "建议动作", "记忆友好收尾摘要"),
+    )
+    result.update({
+        "status": "warn" if required_issues else "ok",
+        "conclusion": _compact_section_lines(_section_body(text, "今日结论"), limit=6),
+        "issues": required_issues,
+        "action_required": _compact_section_lines(_section_body(text, "建议动作"), limit=8),
+        "learning_items": _compact_section_lines(_section_body(text, "AI 雷达学习台账候选"), limit=8),
+        "friendly_closeout": _compact_section_lines(_section_body(text, "记忆友好收尾摘要"), limit=4),
+        "source_paths": _compact_source_paths(text),
+        "evidence": _compact_evidence_ids(text),
+    })
+    return result
+
+
+def _compact_report_from_daily_health(date: str, *, operations_dir: pathlib.Path = OPERATIONS_DIR) -> dict[str, Any]:
+    path = operations_dir / "daily-health" / f"{date}.md"
+    result: dict[str, Any] = {
+        "kind": "daily-health",
+        "date": date,
+        "path": _report_path(path),
+        "exists": path.exists(),
+        "status": "missing",
+        "health_color": None,
+        "conclusion": [],
+        "issues": [],
+        "action_required": [],
+        "source_paths": [],
+        "evidence": {},
+    }
+    if not path.exists():
+        result["issues"].append("daily-health file missing")
+        return result
+    text = path.read_text(encoding="utf-8")
+    color = _daily_health_color(text)
+    issues = _compact_section_lines(_section_body(text, "问题"), limit=8)
+    if not issues and color in {"red", "yellow"}:
+        issues = [f"daily-health color is {color}"]
+    action_required = _compact_section_lines(_section_body(text, "建议"), limit=8)
+    if not action_required:
+        action_required = _compact_section_lines(_section_body(text, "下一步"), limit=8)
+    action_required = _drop_none_lines(action_required)
+    if not action_required and color in {"red", "yellow"} and issues:
+        action_required = issues[:]
+    result.update({
+        "status": "warn" if color in {"red", "yellow"} or issues else "ok",
+        "health_color": color,
+        "conclusion": _compact_section_lines(_section_body(text, "摘要"), limit=6),
+        "issues": issues,
+        "action_required": action_required,
+        "source_paths": _compact_source_paths(text),
+        "evidence": _compact_evidence_ids(text),
+    })
+    return result
+
+
+def _compact_report_from_memory_digest(date: str, *, operations_dir: pathlib.Path = OPERATIONS_DIR) -> dict[str, Any]:
+    path = operations_dir / f"daily-memory-digest-{date}.md"
+    result: dict[str, Any] = {
+        "kind": "memory-digest",
+        "date": date,
+        "path": _report_path(path),
+        "exists": path.exists(),
+        "status": "missing",
+        "counts": {},
+        "decision_items": [],
+        "issues": [],
+        "action_required": [],
+        "learning_items": [],
+        "source_paths": [],
+        "evidence": {},
+    }
+    if not path.exists():
+        result["issues"].append("daily-memory-digest file missing")
+        return result
+    text = path.read_text(encoding="utf-8")
+    fm, _ = _frontmatter(text)
+    counts = {
+        key: _int(fm.get(key)) or 0
+        for key in (
+            "mem0_count",
+            "inbox_count",
+            "discard_count",
+            "proposal_count",
+            "applied_count",
+            "stale_archive_count",
+            "promote_candidate_count",
+            "wiki_proposal_inbox_count",
+            "mem0_audit_candidate_count",
+            "self_evolution_count",
+        )
+    }
+    issues: list[str] = []
+    if counts.get("proposal_count"):
+        issues.append(f"{counts['proposal_count']} pending proposal(s)")
+    if counts.get("stale_archive_count"):
+        issues.append(f"{counts['stale_archive_count']} stale inbox archive candidate(s)")
+    if counts.get("wiki_proposal_inbox_count"):
+        issues.append(f"{counts['wiki_proposal_inbox_count']} wiki proposal inbox candidate(s)")
+    action_required = _drop_none_lines(_compact_section_lines(_section_body(text, "Proposed Changes"), limit=8))
+    if not action_required and issues:
+        action_required = issues[:]
+    result.update({
+        "status": "warn" if issues else "ok",
+        "counts": counts,
+        "decision_items": _compact_section_lines(_section_body(text, "今日要决策"), limit=8),
+        "issues": issues,
+        "action_required": action_required,
+        "learning_items": _compact_section_lines(_section_body(text, "今日沉淀卡"), limit=8),
+        "source_paths": _compact_source_paths(text),
+        "evidence": _compact_evidence_ids(text),
+    })
+    return result
+
+
+def _compact_report_from_answer_trace(path: pathlib.Path) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "kind": "answer-trace",
+        "path": str(path),
+        "exists": path.exists(),
+        "status": "missing",
+        "summary": {},
+        "issues": [],
+        "action_required": [],
+        "source_paths": [],
+        "evidence": {},
+    }
+    if not path.exists():
+        result["issues"].append("answer trace json missing")
+        return result
+    data = json.loads(path.read_text(encoding="utf-8"))
+    failure_count = _int(data.get("failure_count")) or 0
+    invalid_row_count = _int(data.get("invalid_row_count")) or 0
+    duration = data.get("duration_ms") if isinstance(data.get("duration_ms"), dict) else {}
+    recommendation = data.get("recommendation_quality")
+    if not isinstance(recommendation, dict):
+        recommendation = {}
+    summary = {
+        "row_count": _int(data.get("row_count")) or 0,
+        "selected_run_id": data.get("selected_run_id"),
+        "failure_count": failure_count,
+        "invalid_row_count": invalid_row_count,
+        "duration_p95_ms": duration.get("p95"),
+        "status_counts": data.get("status_counts") if isinstance(data.get("status_counts"), dict) else {},
+        "llm_counts": data.get("llm_counts") if isinstance(data.get("llm_counts"), dict) else {},
+        "recommendation_shown_count": recommendation.get("recommendation_shown_count"),
+        "recommendation_used_as_evidence_count": recommendation.get("recommendation_used_as_evidence_count"),
+    }
+    issues: list[str] = []
+    if failure_count:
+        issues.append(f"answer trace has {failure_count} failure(s)")
+    if invalid_row_count:
+        issues.append(f"answer trace has {invalid_row_count} invalid row(s)")
+    result.update({
+        "status": "warn" if issues else "ok",
+        "summary": summary,
+        "issues": issues,
+        "action_required": ["inspect answer-trace failures"] if issues else [],
+        "source_paths": [str(path)],
+        "evidence": _compact_evidence_ids(path.read_text(encoding="utf-8")),
+    })
+    return result
+
+
+def build_compact_report(
+    *,
+    kind: str,
+    date: str | None = None,
+    path: pathlib.Path | None = None,
+    operations_dir: pathlib.Path = OPERATIONS_DIR,
+    codex_home: pathlib.Path | None = None,
+) -> dict[str, Any]:
+    """Build a deterministic read-only summary for one persisted report."""
+    normalized = _normalize_compact_report_kind(kind)
+    if normalized == "answer-trace":
+        if path is None:
+            raise ValueError("--path is required for --kind answer-trace")
+        return _compact_report_from_answer_trace(path)
+    report_date = date or today_local()
+    if normalized == "ai-radar":
+        return _compact_report_from_ai_radar(report_date, codex_home=codex_home)
+    if normalized == "daily-health":
+        return _compact_report_from_daily_health(report_date, operations_dir=operations_dir)
+    if normalized == "memory-digest":
+        return _compact_report_from_memory_digest(report_date, operations_dir=operations_dir)
+    raise ValueError(f"unknown compact report kind: {kind}")
+
+
+def render_compact_report(result: dict[str, Any]) -> str:
+    lines = [
+        f"# Compact Report: {result.get('kind')}",
+        "",
+        f"- 状态：{result.get('status')}",
+        f"- 路径：`{result.get('path')}`",
+    ]
+    if result.get("date"):
+        lines.append(f"- 日期：{result.get('date')}")
+    if result.get("health_color"):
+        lines.append(f"- 健康色：{result.get('health_color')}")
+    counts = result.get("counts")
+    if isinstance(counts, dict) and counts:
+        compact_counts = ", ".join(f"{key}={value}" for key, value in counts.items())
+        lines.append(f"- 计数：{compact_counts}")
+    summary = result.get("summary")
+    if isinstance(summary, dict) and summary:
+        lines.extend(["", "## Trace 摘要", ""])
+        for key, value in summary.items():
+            lines.append(f"- {key}: {value}")
+    for label, key in (
+        ("结论", "conclusion"),
+        ("问题", "issues"),
+        ("需处理", "action_required"),
+        ("学习项", "learning_items"),
+        ("友好收尾", "friendly_closeout"),
+        ("决策项", "decision_items"),
+    ):
+        values = result.get(key)
+        if not values:
+            continue
+        lines.extend(["", f"## {label}", ""])
+        for item in values:
+            lines.append(f"- {item}")
+    evidence = result.get("evidence")
+    if isinstance(evidence, dict) and any(evidence.values()):
+        lines.extend(["", "## 证据 ID", ""])
+        for key, value in evidence.items():
+            if value:
+                lines.append(f"- {key}: {value}")
+    source_paths = result.get("source_paths") or []
+    if source_paths:
+        lines.extend(["", "## 来源路径", ""])
+        for item in source_paths:
+            lines.append(f"- `{item}`")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def default_intake_date(window: str | None = None) -> str:
@@ -2748,6 +3078,20 @@ def cmd_intake(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_compact_report(args: argparse.Namespace) -> int:
+    result = build_compact_report(
+        kind=args.kind,
+        date=args.date,
+        path=pathlib.Path(args.path) if args.path else None,
+        codex_home=pathlib.Path(args.codex_home) if args.codex_home else None,
+    )
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(render_compact_report(result), end="")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Render memory route reflection reports")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -2775,6 +3119,14 @@ def build_parser() -> argparse.ArgumentParser:
     intake.add_argument("--codex-home", help="Override Codex home for AI radar report lookup")
     intake.add_argument("--write-card", action="store_true", help="Write the intake card to wiki/operations/cron-intake/")
     intake.set_defaults(func=cmd_intake)
+
+    compact = sub.add_parser("compact-report", help="Deterministically summarize one persisted report or trace")
+    compact.add_argument("--kind", required=True, choices=sorted(COMPACT_REPORT_KINDS))
+    compact.add_argument("--date")
+    compact.add_argument("--path", help="Required for --kind answer-trace")
+    compact.add_argument("--json", action="store_true")
+    compact.add_argument("--codex-home", help="Override Codex home for AI radar report lookup")
+    compact.set_defaults(func=cmd_compact_report)
     return parser
 
 

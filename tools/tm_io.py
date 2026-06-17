@@ -22,6 +22,7 @@ Usage:
   tm_io.py cron-daily-report [--date YYYY-MM-DD]
   tm_io.py cron-weekly-report [--date YYYY-MM-DD]
   tm_io.py cron-intake [--date YYYY-MM-DD] [--window memory-digest|system-health|ai-radar] [--json] [--write-card]
+  tm_io.py compact-report --kind ai-radar|daily-health|memory-digest|answer-trace [--date YYYY-MM-DD] [--path trace.json] [--json]
   tm_io.py agent-doctor    [--json]
   tm_io.py lint-page    <path>
   tm_io.py status       [--json]
@@ -420,6 +421,14 @@ def cmd_cron_intake(args: argparse.Namespace) -> None:
         sys.exit(code)
 
 
+def cmd_compact_report(args: argparse.Namespace) -> None:
+    import tm_memory_reflection
+
+    code = tm_memory_reflection.cmd_compact_report(args)
+    if code:
+        sys.exit(code)
+
+
 def _run_cron_apply(tm_cron_apply, func, args: argparse.Namespace) -> int:
     try:
         return int(func(args))
@@ -621,6 +630,14 @@ def main() -> None:
     ci.add_argument("--codex-home", help="override Codex home for AI radar report lookup")
     ci.add_argument("--write-card", action="store_true", help="write the intake card to wiki/operations/cron-intake/")
     ci.set_defaults(func=cmd_cron_intake)
+
+    compact = sub.add_parser("compact-report", help="deterministically summarize one persisted report or trace")
+    compact.add_argument("--kind", required=True, choices=["ai-radar", "answer-trace", "daily-health", "memory-digest"])
+    compact.add_argument("--date")
+    compact.add_argument("--path", help="required for --kind answer-trace")
+    compact.add_argument("--json", action="store_true")
+    compact.add_argument("--codex-home", help="override Codex home for AI radar report lookup")
+    compact.set_defaults(func=cmd_compact_report)
 
     pb = sub.add_parser(
         "publish",
