@@ -248,6 +248,22 @@ def test_retrieval_release_status_reads_latest_p310_holdout(tmp_path, monkeypatc
     assert payload["latest"]["map_arm"]["answer_evidence_hit"] == 21
 
 
+def test_retrieval_release_status_labels_live_service_default(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setenv("TM_HYBRID_MAP_ARM", "1")
+    monkeypatch.setenv("TM_EMBED_SUMMARY_WEIGHT", "0")
+    monkeypatch.setenv("TM_ANSWER_WIKI_MAP_BRIDGE", "0")
+    monkeypatch.setenv("TM_ANSWER_WIKI_MAP", "0")
+    _write_p310_report(tmp_path, "p310-funnel-old", "production", evidence=17, leak=8)
+    _write_p310_report(tmp_path, "p310-funnel-new", "map_arm", evidence=21, leak=4)
+
+    payload = tm_review_ui._dashboard_retrieval_release_status()
+
+    assert payload["decision"] == "service_default_enabled"
+    assert payload["default_enabled"] is True
+    assert "已默认开启" in payload["summary"]
+
+
 def test_retrieval_release_status_reports_missing_map_arm_evidence(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
 
