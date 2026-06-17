@@ -28,6 +28,7 @@ MAP_PATH = RUNTIME_DIR / "wiki_map.jsonl"
 META_PATH = RUNTIME_DIR / "wiki_map.meta.json"
 QUALITY_REPORT_PATH = tm_core.REPO_ROOT / ".tmp" / "llm-wiki-map-quality-report.md"
 
+ALIAS_MAX_ITEMS = 40
 FORBIDDEN_PATHS = ("tests/", ".tmp/", "runtime/", "sources/internal-analysis/development-reviews/")
 PERSON_PATH_PREFIXES = ("wiki/person/", "sources/person/")
 SOURCE_SURFACES = {"wiki", "sources"}
@@ -356,7 +357,7 @@ def parse_frontmatter(text: str) -> dict[str, Any]:
             continue
         if value.startswith("[") and value.endswith("]"):
             inner = value[1:-1].strip()
-            result[key] = _clean_list(inner.split(",") if inner else [], max_items=20, max_chars=160)
+            result[key] = _clean_list(inner.split(",") if inner else [], max_items=ALIAS_MAX_ITEMS, max_chars=160)
         else:
             result[key] = _clean_text(value, max_chars=300)
     if current_key and current_list:
@@ -623,7 +624,7 @@ def build_record_for_file(path: Path, *, repo_root: Path = tm_core.REPO_ROOT) ->
     elif fm_aliases:
         raw_aliases.append(fm_aliases)
     raw_aliases.extend(external_meta.get("aliases") or [])
-    aliases = _clean_list(raw_aliases, max_items=20, max_chars=100)
+    aliases = _clean_list(raw_aliases, max_items=ALIAS_MAX_ITEMS, max_chars=100)
     if title and title not in aliases:
         aliases.insert(0, title)
     summary = _clean_text(
@@ -648,7 +649,7 @@ def build_record_for_file(path: Path, *, repo_root: Path = tm_core.REPO_ROOT) ->
         partition=_partition(rel, surface),
         subtopic=_clean_list(frontmatter.get("subtopic") or frontmatter.get("tags"), max_items=8, max_chars=80),
         title=title,
-        aliases=aliases[:20],
+        aliases=aliases[:ALIAS_MAX_ITEMS],
         summary=summary,
         headings=headings[:8],
         lead=lead,

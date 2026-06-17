@@ -183,6 +183,37 @@ aliases: [{", ".join(aliases)}]
     assert len(record["aliases"]) == 16
 
 
+def test_build_record_keeps_late_precise_chinese_aliases_for_map_recall(tmp_path):
+    aliases = [f"普通别名{index:02d}" for index in range(1, 31)]
+    aliases[-1] = "hybrid 召回没命中不要直接行动建议"
+    aliases_yaml = json.dumps(aliases, ensure_ascii=False)
+    page = _write(
+        tmp_path / "wiki" / "systems" / "memory-answer-development-plan.md",
+        f"""---
+title: Memory Answer 开发计划
+aliases: {aliases_yaml}
+---
+
+# Memory Answer 开发计划
+
+## 摘要
+
+这个页面记录 memory_answer 自然语言召回、检索评测和证据门控计划。
+""",
+    )
+
+    record = wiki_map.build_record_for_file(page, repo_root=tmp_path).to_dict()
+
+    assert "hybrid 召回没命中不要直接行动建议" in record["aliases"]
+    hits = wiki_map.map_recall(
+        "hybrid 召回失败时是否应该马上写行动建议？",
+        records=[record],
+        limit=1,
+    )
+    assert hits[0]["path"] == "wiki/systems/memory-answer-development-plan.md"
+    assert "行动建议" in hits[0]["score_breakdown"]["matched_terms"]
+
+
 def test_build_record_parses_frontmatter_with_utf8_bom(tmp_path):
     page = _write(
         tmp_path / "wiki" / "operations" / "project-canvas.md",

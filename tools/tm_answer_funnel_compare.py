@@ -95,6 +95,8 @@ SUMMARY_KEYS = [
     "pass_rate",
     "expected_path_case_count",
     "answer_evidence_hit",
+    "surrogate_path_case_count",
+    "surrogate_evidence_hit",
     "evidence_gate_hit",
     "map_hit@10",
     "map_hit@30",
@@ -144,6 +146,7 @@ def _case_outcomes(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "failure_layer": row.get("failure_layer"),
             "failure_reasons": row.get("failure_reasons") if isinstance(row.get("failure_reasons"), list) else [],
             "answer_evidence_hit": bool(evidence_hit),
+            "surrogate_evidence_hit": bool(row.get("surrogate_evidence_hit")),
             "map_bridge_bucket": row.get("map_bridge_bucket"),
             "prompt_budget_truncated": bool(row.get("prompt_budget_truncated")),
         }
