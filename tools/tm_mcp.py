@@ -112,6 +112,7 @@ _allowed_hosts = (
 # 'reader' is blocked by _require_writer() on write tools.
 _ROLE: str = "writer"
 _TOOL_PROFILE: str = "memory"
+_TOOL_PROFILE_STATUS: dict[str, Any] = {}
 _SEARCH_DOGFOOD_LOG = tm_core.REPO_ROOT / ".tmp" / "search-tigermemory.jsonl"
 
 _MEMORY_TOOL_PROFILE = {
@@ -204,7 +205,54 @@ def _registered_tool_names() -> set[str]:
     return set(tools.keys())
 
 
+def _summarize_tool_profile(
+    profile: str,
+    role: str,
+    registered: set[str],
+    *,
+    visible: set[str] | None = None,
+    removed: list[str] | None = None,
+) -> dict[str, Any]:
+    normalized = _normalize_tool_profile(profile)
+    visible_set = visible if visible is not None else _visible_tool_names_for_profile(normalized, role, registered)
+    hidden = sorted(set(removed) if removed is not None else set(registered) - set(visible_set))
+    return {
+        "profile": normalized,
+        "role": role,
+        "visible_count": len(visible_set),
+        "hidden_count": len(hidden),
+        "primary_entry": "memory_answer",
+        "fallback_search_tools": ["search_tigermemory", "search_memories", "search_wiki"],
+        "restore_hint": "设置 TM_MCP_TOOL_PROFILE=ops 或 full，然后重启 tm-mcp。",
+        "visible_tools": sorted(visible_set),
+        "hidden_tools_sample": hidden[:12],
+    }
+
+
+def _current_tool_profile_status() -> dict[str, Any]:
+    if _TOOL_PROFILE_STATUS:
+        return dict(_TOOL_PROFILE_STATUS)
+    registered = _registered_tool_names()
+    return _summarize_tool_profile(_TOOL_PROFILE, _ROLE, registered)
+
+
+def _tool_profile_onboarding_text(status: dict[str, Any]) -> str:
+    fallback = " / ".join(status.get("fallback_search_tools") or [])
+    return "\n".join(
+        [
+            "## 当前 MCP 工具面",
+            "",
+            f"- 当前 profile：`{status.get('profile')}`，role：`{status.get('role')}`。",
+            f"- 当前可见工具：{status.get('visible_count')} 个；已折叠/隐藏工具：{status.get('hidden_count')} 个。",
+            f"- 普通自然语言记忆问答优先用：`{status.get('primary_entry')}`。",
+            f"- 备用原始搜索工具：`{fallback}`。",
+            f"- 需要恢复更多工具：{status.get('restore_hint')}",
+        ]
+    )
+
+
 def _apply_tool_profile(profile: str, role: str) -> dict[str, Any]:
+    global _TOOL_PROFILE_STATUS
     registered = _registered_tool_names()
     visible = _visible_tool_names_for_profile(profile, role, registered)
     removed = sorted(registered - visible)
@@ -213,12 +261,11 @@ def _apply_tool_profile(profile: str, role: str) -> dict[str, Any]:
             mcp.remove_tool(name)
         except Exception:
             pass
-    return {
-        "profile": _normalize_tool_profile(profile),
-        "role": role,
-        "kept": sorted(visible),
-        "removed": removed,
-    }
+    result = _summarize_tool_profile(profile, role, registered, visible=visible, removed=removed)
+    result["kept"] = sorted(visible)
+    result["removed"] = removed
+    _TOOL_PROFILE_STATUS = dict(result)
+    return result
 
 
 def _require_writer() -> None:
@@ -370,7 +417,10 @@ def agent_doctor(
     Combines worktree/preflight state, tm-http health, Mem0 reachability, L2
     review reachability, and lessons-hit evidence into one diagnostic response.
     """
-    return tm_agent_doctor.run_agent_doctor(query=query, include_l2=include_l2, http_url=http_url)
+    report = tm_agent_doctor.run_agent_doctor(query=query, include_l2=include_l2, http_url=http_url)
+    if isinstance(report, dict):
+        report.setdefault("tool_profile", _current_tool_profile_status())
+    return report
 
 
 @mcp.tool()
@@ -1143,10 +1193,13 @@ def get_agent_onboarding(depth: str = "5min") -> dict[str, Any]:
         {"depth": "...", "content": "...", "sources": [...]}.
     """
     content = tm_persona.compile_snapshot(depth)
+    tool_profile = _current_tool_profile_status()
+    content = f"{content}\n\n{_tool_profile_onboarding_text(tool_profile)}"
     return {
         "depth": depth,
         "content": content,
         "sources": list(tm_persona.SOURCE_PATHS),
+        "tool_profile": tool_profile,
     }
 
 

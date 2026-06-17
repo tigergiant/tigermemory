@@ -70,3 +70,31 @@ def test_tool_docstrings_push_memory_answer_as_primary_entry() -> None:
     assert "主要入口" in answer_doc
     assert "普通自然语言记忆问答请先用 `memory_answer`" in grouped_doc
     assert "普通自然语言记忆问答请先用 `memory_answer`" in mem0_doc
+
+
+def test_onboarding_reports_visible_and_hidden_tool_counts() -> None:
+    old_status = dict(tm_mcp._TOOL_PROFILE_STATUS)
+    try:
+        tm_mcp._TOOL_PROFILE_STATUS = {}
+        result = tm_mcp.get_agent_onboarding("30s")
+    finally:
+        tm_mcp._TOOL_PROFILE_STATUS = old_status
+
+    profile = result["tool_profile"]
+    assert profile["profile"] == "memory"
+    assert profile["primary_entry"] == "memory_answer"
+    assert profile["visible_count"] >= len(tm_mcp._MEMORY_TOOL_PROFILE)
+    assert profile["hidden_count"] > 0
+    assert "当前可见工具" in result["content"]
+    assert "已折叠/隐藏工具" in result["content"]
+    assert "`memory_answer`" in result["content"]
+
+
+def test_agent_doctor_includes_tool_profile_summary(monkeypatch) -> None:
+    monkeypatch.setattr(tm_mcp.tm_agent_doctor, "run_agent_doctor", lambda **_kwargs: {"status": "ok"})
+
+    result = tm_mcp.agent_doctor(include_l2=False)
+
+    assert result["status"] == "ok"
+    assert result["tool_profile"]["profile"] == "memory"
+    assert result["tool_profile"]["primary_entry"] == "memory_answer"
