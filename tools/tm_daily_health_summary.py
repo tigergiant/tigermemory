@@ -187,10 +187,10 @@ PROMPT_AUDIT_TARGETS = (
         "path": "AGENTS.md",
         "description": "repo-wide agent contract and ChatGPT delayed MCP discovery",
         "markers": (
-            "Codex / ChatGPT 延迟加载 MCP 规则",
+            "Codex / ChatGPT 工具可能延迟加载",
             "tool_search",
-            "write_memory(agent=\"chatgpt\"",
-            "topic 归属（内容决定 topic，不是 agent 固定）",
+            "write_memory(agent, topic, text)",
+            "topic 按内容决定，不按 agent 身份决定",
         ),
     },
     {
