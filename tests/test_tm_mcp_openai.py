@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pathlib
 import sys
+import inspect
 from types import SimpleNamespace
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -18,11 +19,20 @@ pytest.importorskip(
 import anyio
 import tm_core  # type: ignore[import-not-found]
 import tm_mcp_openai  # type: ignore[import-not-found]
+import tm_openai_mcp_smoke  # type: ignore[import-not-found]
 
 
 def test_page_id_roundtrip():
     path = "wiki/systems/chatgpt-mcp-access.md"
     assert tm_mcp_openai._decode_page_id(tm_mcp_openai._page_id(path)) == path
+
+
+def test_openai_facade_descriptions_make_memory_answer_primary():
+    source = inspect.getsource(tm_mcp_openai.register_tools)
+
+    assert "Primary read-only tool for natural-language questions" in source
+    assert "Fallback raw search over tigermemory" in source
+    assert "memory_answer" in tm_openai_mcp_smoke.EXPECTED_TOOLS
 
 
 def test_slice_fetch_text_reports_chunk_metadata():
@@ -87,9 +97,9 @@ def test_search_extra_docs_finds_agents_rebase_rule():
 
 
 def test_extra_docs_do_not_fast_path_domain_queries():
-    results = tm_mcp_openai._search_extra_doc_results("IPFB", 3)
+    results = tm_mcp_openai._search_extra_doc_results("TigerMemory", 3)
     assert results
-    assert not tm_mcp_openai._should_fast_path_extra_docs("IPFB", results)
+    assert not tm_mcp_openai._should_fast_path_extra_docs("TigerMemory", results)
 
 
 def test_chatgpt_is_regular_agent_without_person_partition_access():

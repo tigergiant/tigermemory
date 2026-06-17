@@ -941,8 +941,10 @@ def register_tools(server: FastMCP, *, max_fetch_chars: int) -> None:
         name="search",
         title="Search tigermemory",
         description=(
-            "Search tigermemory wiki/sources plus recent Mem0 memories. "
-            "Use fetch with a returned id before citing or relying on a result."
+            "Fallback raw search over tigermemory wiki/sources plus recent Mem0 memories. "
+            "For normal natural-language questions, use memory_answer first because it reads and gates evidence. "
+            "Use search plus fetch when memory_answer is weak/not_found, when you need to browse candidate documents, "
+            "or when you need to verify a returned path before citing it."
         ),
         annotations=READ_ONLY_TOOL,
         meta=_tool_meta(),
@@ -1031,9 +1033,10 @@ def register_tools(server: FastMCP, *, max_fetch_chars: int) -> None:
         name="memory_answer",
         title="Answer from tigermemory evidence",
         description=(
-            "Read-only evidence-first answer over tigermemory search surfaces. "
-            "Use this when the user asks a question that should be answered from tigermemory; "
+            "Primary read-only tool for natural-language questions about tigermemory. "
+            "Use this first when the user asks who/what/why/status/history questions that should be answered from tigermemory; "
             "it returns answer, claims, compact evidence excerpts, warnings, and trace_id. "
+            "Switch to search/fetch only when you need raw candidate browsing or this answer is weak/not_found. "
             "By default include_trace=false, so the full trace payload is omitted."
         ),
         annotations=READ_ONLY_TOOL,

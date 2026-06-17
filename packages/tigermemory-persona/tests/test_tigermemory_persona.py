@@ -47,7 +47,7 @@ def test_compile_snapshot_5min():
     assert "## 6. Live-state 优先原则" in out
     assert "## 7. 必须避免的 lesson" in out
     # Agent ecosystem must mention the major systems by name
-    for token in ("OpenClaw", "Hermes", "DeerFlow", "Mem0", "OpenSpace", "search_tigermemory"):
+    for token in ("OpenClaw", "Hermes", "DeerFlow", "Mem0", "OpenSpace", "memory_answer"):
         assert token in out, f"agent ecosystem section missing {token!r}"
     # Live runtime services section must surface the systemd-tracked services
     # so a fresh agent reading the 5min snapshot sees dashboard / tm-http /

@@ -2,7 +2,9 @@
 """
 tools/tm_mcp.py — tigermemory MCP server (thin adapter over tm_core).
 
-Exposes 28 tools for remote agents (laptop MCP clients):
+Default `memory` profile exposes the core memory tools for remote agents. Set
+`TM_MCP_TOOL_PROFILE=full` or pass `--tool-profile full` to restore the legacy
+wide tool surface for specialist operators.
 
 Read tools (callable in both writer and reader roles):
 - check_worktree            — git/worktree preflight snapshot
@@ -10,47 +12,37 @@ Read tools (callable in both writer and reader roles):
 - get_user_preferences      — dashboard/user communication preferences
 - retention_audit           — read-only Mem0 retention dry-run audit
 - close_session             — session-close blocker check
-- search_memories           — Mem0 atomic event memory search
-- search_wiki               — wiki/sources file-based search
-- search_tigermemory        — grouped search across wiki/lessons/onboarding/Mem0
-- memory_answer             — evidence-first answer with citations and trace
+- memory_answer             — primary natural-language memory answer with citations and trace
+- search_tigermemory        — fallback grouped raw search across wiki/lessons/onboarding/Mem0
+- search_memories           — fallback Mem0 atomic event memory search
+- search_wiki               — low-level wiki/sources lexical search
 - read_page                 — read wiki/inbox file content
 - list_partition            — list slugs in a wiki partition
 - get_agent_onboarding      — onboarding snapshot
-- ipfb_copywriting          — IPFB copywriting capability bundle (read-mostly)
 - lint_repo                 — repo-wide or single-page lint
-- review_digest             — daily digest review (list/read/mark-reviewed)
-- minimax_quota             — MiniMax token-plan quota query
-- minimax_vision            — image VLM understanding (external)
-- minimax_search            — web search (external)
-- expense_record            — record expense/income entry (private SQLite) [v1 alias]
-- expense_query             — query/aggregate expense entries (private SQLite) [v1 alias]
-- expense_write             — unified write: record/update/delete/batch_record (private SQLite)
-- expense_read              — unified read: list/aggregate/trend/sql (private SQLite)
-- start_deep_dive           — start TradingAgents single-stock deep-dive job
-- get_deep_dive_status      — poll TradingAgents deep-dive job state
-- fetch_deep_dive_result    — fetch completed TradingAgents deep-dive JSON
-- start_stability_eval      — run N TradingAgents deep dives and write a consensus label
 
 Write tools (writer role only):
 - propose_wiki_page         — wiki page draft with L2 review + inbox fallback
 - write_sources             — sources/<subdir>/<slug>.md ingest with provenance frontmatter
 - write_memory              — single canonical memory write (LLM-routed)
 - update_user_preference    — update dashboard preference SQLite + person-page proposal
-- approve_fact              — daily-digest fact approval
-- minimax_image / video / speech / music — generative media (external, writer-gated)
+- Optional `ops` profile adds digest review, preferences, IPFB, and retention tools.
+- Optional `full` profile also exposes legacy/specialist investment, MiniMax, and expense tools.
 
 All rule enforcement and side effects live in tm_core.py. This module only
 handles MCP tool decoration, HTTP transport (Bearer auth + DNS rebinding
 protection), and exception→JSON mapping.
 
 Usage:
-  python tools/tm_mcp.py --stdio                    # default for local clients
+  python tools/tm_mcp.py --stdio                    # default memory profile
+  python tools/tm_mcp.py --stdio --tool-profile full # legacy wide tool surface
   python tools/tm_mcp.py --stdio --role=reader      # read-only (DeerFlow / untrusted)
   python tools/tm_mcp.py --http --host 0.0.0.0 --port 9766
 
 HTTP mode requires TM_MCP_API_KEY in runtime/openmemory/.env.
-Role controls write tools: 'writer' (default) can call all tools; 'reader' can call read-only tools.
+Role controls write tools: 'writer' (default) can call profile-visible write tools;
+'reader' hides write tools. Tool profile controls breadth: 'memory' (default),
+'ops', or 'full'.
 
 Note: OpenClaw 5.2's `tigermemory-ce` plugin uses HTTP endpoints in
 `tools/tm_http.py` (port 8790), NOT this MCP server. See
@@ -119,7 +111,61 @@ _allowed_hosts = (
 # Role-based access control (P2-11). Default 'writer' can call all tools;
 # 'reader' is blocked by _require_writer() on write tools.
 _ROLE: str = "writer"
+_TOOL_PROFILE: str = "memory"
 _SEARCH_DOGFOOD_LOG = tm_core.REPO_ROOT / ".tmp" / "search-tigermemory.jsonl"
+
+_MEMORY_TOOL_PROFILE = {
+    "check_worktree",
+    "agent_doctor",
+    "close_session",
+    "memory_answer",
+    "search_tigermemory",
+    "search_memories",
+    "search_wiki",
+    "read_page",
+    "list_partition",
+    "get_agent_onboarding",
+    "write_memory",
+    "write_sources",
+    "propose_wiki_page",
+    "verify_memory_id",
+    "lint_repo",
+}
+_OPS_EXTRA_TOOLS = {
+    "get_user_preferences",
+    "update_user_preference",
+    "retention_audit",
+    "review_digest",
+    "approve_fact",
+    "ipfb_copywriting",
+}
+_WRITER_ONLY_TOOLS = {
+    "propose_wiki_page",
+    "update_user_preference",
+    "write_sources",
+    "write_memory",
+    "approve_fact",
+    "single_stock_deep_dive",
+    "start_deep_dive",
+    "start_stability_eval",
+    "minimax_video",
+    "minimax_speech",
+    "minimax_music",
+    "minimax_image",
+    "expense_record",
+    "expense_write",
+}
+_TOOL_PROFILE_ALIASES = {
+    "": "memory",
+    "default": "memory",
+    "core": "memory",
+    "memory": "memory",
+    "ops": "ops",
+    "operations": "ops",
+    "full": "full",
+    "legacy": "full",
+    "all": "full",
+}
 
 mcp = FastMCP(
     "tigermemory",
@@ -129,6 +175,50 @@ mcp = FastMCP(
         # allowed_origins empty = allow any Origin (no browser-side CORS lock)
     ),
 )
+
+
+def _normalize_tool_profile(value: str | None) -> str:
+    profile = _TOOL_PROFILE_ALIASES.get(str(value or "").strip().lower())
+    if not profile:
+        allowed = ", ".join(sorted({v for v in _TOOL_PROFILE_ALIASES.values()}))
+        raise ValueError(f"invalid tool profile {value!r}; expected one of: {allowed}")
+    return profile
+
+
+def _visible_tool_names_for_profile(profile: str, role: str, registered: set[str]) -> set[str]:
+    profile = _normalize_tool_profile(profile)
+    if profile == "full":
+        visible = set(registered)
+    elif profile == "ops":
+        visible = (_MEMORY_TOOL_PROFILE | _OPS_EXTRA_TOOLS) & set(registered)
+    else:
+        visible = _MEMORY_TOOL_PROFILE & set(registered)
+    if role != "writer":
+        visible -= _WRITER_ONLY_TOOLS
+    return visible
+
+
+def _registered_tool_names() -> set[str]:
+    manager = getattr(mcp, "_tool_manager", None)
+    tools = getattr(manager, "_tools", {}) if manager is not None else {}
+    return set(tools.keys())
+
+
+def _apply_tool_profile(profile: str, role: str) -> dict[str, Any]:
+    registered = _registered_tool_names()
+    visible = _visible_tool_names_for_profile(profile, role, registered)
+    removed = sorted(registered - visible)
+    for name in removed:
+        try:
+            mcp.remove_tool(name)
+        except Exception:
+            pass
+    return {
+        "profile": _normalize_tool_profile(profile),
+        "role": role,
+        "kept": sorted(visible),
+        "removed": removed,
+    }
 
 
 def _require_writer() -> None:
@@ -818,10 +908,15 @@ def write_sources(
 
 @mcp.tool()
 def search_memories(query: str, size: int = 5) -> dict[str, Any]:
-    """[检索 Mem0 事件记忆] Search Mem0 (atomic event-style memories: "X 部署了" "Y 工具不适合审稿").
+    """[备用检索：Mem0 事件记忆] Search only Mem0 atomic event memories.
 
-    Mem0 只存事件型原子记忆，**不存长文**（品牌指南 / IPFB 文案历史 / 系统架构文档 / 个人档案在 wiki/sources 里）。
-    **"过去写过什么 / 之前的决策 / 历史文案" 类问题必须同时调 `search_wiki`**，否则只看到一半。
+    普通自然语言记忆问答请先用 `memory_answer`。只有在你明确需要
+    Mem0 原子事件列表、或 `memory_answer` 结果弱/未命中后做二次排查时，
+    再调用本工具。
+
+    Mem0 只存事件型原子记忆（例如 "X 部署了"、"Y 工具不适合审稿"），
+    不存长文（品牌指南 / IPFB 文案历史 / 系统架构文档 / 个人档案在
+    wiki/sources 里）。
     Web 搜索用 `minimax_search`。
 
     Args:
@@ -862,10 +957,12 @@ def search_wiki(
     include_sources: bool = True,
     include_inbox: bool = False,
 ) -> list[dict[str, Any]]:
-    """[低层/兼容词法入口] File-based lexical AND search over wiki/ and sources/ markdown/text.
+    """[低层备用：词法 Wiki 搜索] File-based lexical AND search over wiki/sources.
 
-    ⚠️ 大场景不推荐直接调用本工具。它是低层兼容词法检索，仅支持 AND 词法子串匹配，不支持 Hybrid 混合检索。
-    若需要支持 Hybrid RRF 融合召回（向量 + 词法）、优雅退化以及多知识源聚合，请【必须优先使用推荐的默认入口 `search_tigermemory(scope="wiki")`】。
+    普通自然语言记忆问答请先用 `memory_answer`。本工具是低层兼容
+    词法检索，仅支持 AND 子串匹配，不支持 Hybrid 混合检索；适合调试、
+    精确 token 查找、或 `memory_answer` / `search_tigermemory` 没给出
+    足够证据后的最后排查。
 
     与 `search_memories` 互补：Mem0 仅存事件原子记忆，wiki/sources 存长文知识
     （品牌指南、IPFB 历史文案、系统架构、个人档案、研究报告）。
@@ -892,10 +989,16 @@ def search_tigermemory(
     follow_backlinks: bool = False,
     expand_partition: bool = False,
 ) -> dict[str, Any]:
-    """[推荐默认搜索入口] Grouped search across tigermemory knowledge surfaces.
+    """[备用检索：原始分组结果] Grouped raw search across tigermemory surfaces.
 
-    🌟 它是推荐的默认搜索入口，并且在 `scope="wiki"`（或自动判断为 wiki 意图）的分支下支持 Hybrid RRF 混合检索
-    （融合了词法 AND 检索与向量 Embedding 检索），能够在向量索引不存在或服务离线时自动优雅降级 (degraded) 为纯词法检索。
+    普通自然语言记忆问答请先用 `memory_answer`，因为它会自动扩展查询、
+    读取证据、做 evidence gate，并返回可引用的答案/claims/evidence。
+    本工具保留为备用：当你需要自己看 raw 分组结果、调试召回、做二次
+    核对，或 `memory_answer` 结果 weak/not_found 时再用。
+
+    在 `scope="wiki"`（或自动判断为 wiki 意图）的分支下，本工具支持
+    Hybrid RRF 混合检索（词法 + 向量），能够在向量索引不存在或服务
+    离线时自动降级为纯词法检索。
 
     One call fans out to existing read paths and returns grouped results. It
     deliberately does not fuse all sources into one normalized ranking because
@@ -923,7 +1026,15 @@ def memory_answer(
     evidence_char_budget: int = 2000,
     task_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Evidence-first answer over tigermemory search surfaces.
+    """[主要入口：自然语言记忆问答] Evidence-first answer over tigermemory.
+
+    对 TigerMemory 的普通问题优先调用本工具，例如“虎哥是谁”“项目进展
+    到哪了”“某个规则现在是什么”“之前为什么这样决定”。它会自己调用
+    检索、展开页面、筛证据，再返回 answer / claims / evidence / warnings /
+    trace_id。
+
+    只有在你需要原始候选列表、调试召回、或本工具返回 weak/not_found 时，
+    再切换到 `search_tigermemory` / `search_memories` / `search_wiki`。
 
     Args:
         query: User question to answer from tigermemory evidence.
@@ -1880,10 +1991,23 @@ if __name__ == "__main__":
     ap.add_argument("--port", type=int, default=9766, help="HTTP port (default: 9766)")
     ap.add_argument("--role", choices=["writer", "reader"], default="writer",
                     help="Access role: writer (default, all tools) or reader (read-only tools)")
+    ap.add_argument(
+        "--tool-profile",
+        default=os.environ.get("TM_MCP_TOOL_PROFILE", "memory"),
+        help="Visible tool set: memory/core (default), ops, or full/legacy/all",
+    )
     args = ap.parse_args()
 
     # Set global role before MCP starts.
     _ROLE = args.role
+    _TOOL_PROFILE = _normalize_tool_profile(args.tool_profile)
+    profile_result = _apply_tool_profile(_TOOL_PROFILE, _ROLE)
+    print(
+        "tm_mcp tool profile "
+        f"profile={profile_result['profile']} role={profile_result['role']} "
+        f"kept={len(profile_result['kept'])} removed={len(profile_result['removed'])}",
+        file=sys.stderr,
+    )
 
     if args.http:
         # HTTP mode: load API key and wrap FastMCP's Starlette app with a

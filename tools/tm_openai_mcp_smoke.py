@@ -24,7 +24,7 @@ from typing import Any
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_PUBLIC_BASE = "https://tm-openai.doodiu.cloud"
 DEFAULT_STORE_PATH = REPO_ROOT / "runtime" / "openmemory" / "openai-mcp-oauth.json"
-EXPECTED_TOOLS = ["search", "fetch", "get_agent_onboarding", "write_memory"]
+EXPECTED_TOOLS = ["search", "fetch", "get_agent_onboarding", "memory_answer", "write_memory"]
 
 
 def _json_get(url: str, *, timeout: float) -> dict[str, Any]:

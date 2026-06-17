@@ -210,7 +210,7 @@ def render_5min(lessons: list[Lesson]) -> str:
             "**Mem0 / OpenMemory**：对话级实时记忆层（atomic event-style，例如“X 部署了”“Y 工具不适合 Z”），HTTP `:8765` `user_id=tiger`；长文 / 规则 / 历史文案在 Wiki，不在 Mem0。`write_memory` 返回的 id 用 `verify_memory_id` direct readback 审计，不靠文件 grep 0 命中判幻觉。详见 `wiki/systems/multi-endpoint-mem0.md`、`wiki/systems/openmemory-ce-limits.md`。",
             "**Cascade / Codex / Claude Code / Kimi**：常驻 agent。写入主入口：本机仓库 `<repo>`（人工 + Cascade / Codex / Obsidian）↔ 运行时 worktree（Claude Code / MCP / Hermes / DeerFlow），通过 GitHub origin 同步；开工先 `git pull --ff-only`。元规则修改权限只在 `claude-code` + `human`。完整 agent 枚举：`AGENTS.md §3`。",
             "**OpenSpace**：登录态网页 / 浏览器自动化 / 桌面采集；目前主要通过技能 / 上游 agent 间接接入。",
-            "**search_tigermemory**（MCP）：检索的统一入口，分组返回 wiki / lessons / onboarding / mem0；wiki 召回已是 lexical + embedding 的 RRF 混合 (`tm_core.search_wiki_hybrid`)。详见 `wiki/systems/memory-retrieval-eval.md`。",
+            "**memory_answer**（MCP）：普通自然语言记忆问答的主要入口，自动检索、展开证据并返回 answer / claims / evidence / trace_id；`search_tigermemory`、`search_memories`、`search_wiki` 是 raw 候选浏览、二次核对和召回调试备用。详见 `wiki/systems/agent-write-toolkit.md`。",
         ]
     )
     lesson_entries = _bullet_lines(lesson_lines)
