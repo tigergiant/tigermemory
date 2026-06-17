@@ -27,36 +27,56 @@ MATRICES: dict[str, dict[str, str]] = {
         "TM_HYBRID_MAP_ARM": "0",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
         "TM_ANSWER_WIKI_MAP": "0",
+        "TM_ANSWER_EVIDENCE_PACK_V2": "0",
     },
     "summary_on": {
         "TM_EMBED_SUMMARY_WEIGHT": "0.98",
         "TM_HYBRID_MAP_ARM": "0",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
         "TM_ANSWER_WIKI_MAP": "0",
+        "TM_ANSWER_EVIDENCE_PACK_V2": "0",
     },
     "summary_on_map_arm": {
         "TM_EMBED_SUMMARY_WEIGHT": "0.98",
         "TM_HYBRID_MAP_ARM": "1",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
         "TM_ANSWER_WIKI_MAP": "0",
+        "TM_ANSWER_EVIDENCE_PACK_V2": "0",
     },
     "production": {
         "TM_EMBED_SUMMARY_WEIGHT": "0",
         "TM_HYBRID_MAP_ARM": "0",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
         "TM_ANSWER_WIKI_MAP": "0",
+        "TM_ANSWER_EVIDENCE_PACK_V2": "0",
+    },
+    "production_packer": {
+        "TM_EMBED_SUMMARY_WEIGHT": "0",
+        "TM_HYBRID_MAP_ARM": "0",
+        "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
+        "TM_ANSWER_WIKI_MAP": "0",
+        "TM_ANSWER_EVIDENCE_PACK_V2": "1",
     },
     "map_arm": {
         "TM_EMBED_SUMMARY_WEIGHT": "0",
         "TM_HYBRID_MAP_ARM": "1",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
         "TM_ANSWER_WIKI_MAP": "0",
+        "TM_ANSWER_EVIDENCE_PACK_V2": "0",
+    },
+    "map_arm_packer": {
+        "TM_EMBED_SUMMARY_WEIGHT": "0",
+        "TM_HYBRID_MAP_ARM": "1",
+        "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
+        "TM_ANSWER_WIKI_MAP": "0",
+        "TM_ANSWER_EVIDENCE_PACK_V2": "1",
     },
     "bridge": {
         "TM_EMBED_SUMMARY_WEIGHT": "0",
         "TM_HYBRID_MAP_ARM": "0",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "1",
         "TM_ANSWER_WIKI_MAP": "0",
+        "TM_ANSWER_EVIDENCE_PACK_V2": "0",
     },
     # Safe combined experiment: legacy planner wiki-map stays off because it
     # previously regressed the 25-case answer gate.
@@ -65,12 +85,14 @@ MATRICES: dict[str, dict[str, str]] = {
         "TM_HYBRID_MAP_ARM": "1",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "1",
         "TM_ANSWER_WIKI_MAP": "0",
+        "TM_ANSWER_EVIDENCE_PACK_V2": "0",
     },
 }
 
 SUMMARY_KEYS = [
     "case_count",
     "passed",
+    "pass_rate",
     "expected_path_case_count",
     "answer_evidence_hit",
     "evidence_gate_hit",
@@ -101,6 +123,31 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 def _compact_summary(report: dict[str, Any]) -> dict[str, Any]:
     return {key: report.get(key) for key in SUMMARY_KEYS if key in report}
+
+
+def _case_outcomes(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    rows = report.get("results")
+    if not isinstance(rows, list):
+        rows = report.get("failures")
+    if not isinstance(rows, list):
+        return {}
+    outcomes: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("id"):
+            continue
+        checks = row.get("checks") if isinstance(row.get("checks"), dict) else {}
+        evidence_hit = checks.get("evidence_hit")
+        if evidence_hit is None:
+            evidence_hit = row.get("expected_evidence_hit")
+        outcomes[str(row["id"])] = {
+            "passed": bool(row.get("passed")),
+            "failure_layer": row.get("failure_layer"),
+            "failure_reasons": row.get("failure_reasons") if isinstance(row.get("failure_reasons"), list) else [],
+            "answer_evidence_hit": bool(evidence_hit),
+            "map_bridge_bucket": row.get("map_bridge_bucket"),
+            "prompt_budget_truncated": bool(row.get("prompt_budget_truncated")),
+        }
+    return outcomes
 
 
 def _run_matrix(
@@ -158,6 +205,7 @@ def _run_matrix(
         "run_id": run_id,
         "artifact": str(report_path),
         "env": MATRICES[matrix],
+        "case_outcomes": _case_outcomes(report),
         **_compact_summary(report),
     }
 
@@ -165,9 +213,11 @@ def _run_matrix(
 def _delta(base: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
     fields = [
         "passed",
+        "pass_rate",
         "answer_evidence_hit",
         "evidence_gate_hit",
         "map_hit_but_evidence_miss",
+        "prompt_budget_truncated_count",
         "map_hit@10",
         "map_hit@30",
         "map_hit@80",
@@ -178,6 +228,33 @@ def _delta(base: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
         value = item.get(field)
         if isinstance(base_value, (int, float)) and isinstance(value, (int, float)):
             out[field] = value - base_value
+    base_cases = base.get("case_outcomes") if isinstance(base.get("case_outcomes"), dict) else {}
+    item_cases = item.get("case_outcomes") if isinstance(item.get("case_outcomes"), dict) else {}
+    improved: list[str] = []
+    regressed: list[str] = []
+    changed_layers: dict[str, dict[str, str | None]] = {}
+    regressed_layers: dict[str, int] = {}
+    for case_id in sorted(set(base_cases) & set(item_cases)):
+        base_row = base_cases[case_id]
+        item_row = item_cases[case_id]
+        base_passed = bool(base_row.get("passed"))
+        item_passed = bool(item_row.get("passed"))
+        if not base_passed and item_passed:
+            improved.append(case_id)
+        elif base_passed and not item_passed:
+            regressed.append(case_id)
+            layer = str(item_row.get("failure_layer") or "unknown")
+            regressed_layers[layer] = regressed_layers.get(layer, 0) + 1
+        if base_row.get("failure_layer") != item_row.get("failure_layer"):
+            changed_layers[case_id] = {
+                "from": base_row.get("failure_layer"),
+                "to": item_row.get("failure_layer"),
+            }
+    out["improved_case_ids"] = improved
+    out["regressed_case_ids"] = regressed
+    out["changed_failure_layer_count"] = len(changed_layers)
+    out["changed_failure_layers"] = changed_layers
+    out["regressed_failure_layer_counts"] = dict(sorted(regressed_layers.items()))
     return out
 
 

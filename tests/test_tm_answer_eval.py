@@ -819,6 +819,7 @@ def test_funnel_compare_matrix_env_is_explicit():
         "TM_HYBRID_MAP_ARM",
         "TM_ANSWER_WIKI_MAP_BRIDGE",
         "TM_ANSWER_WIKI_MAP",
+        "TM_ANSWER_EVIDENCE_PACK_V2",
     }
     for name, env in tm_answer_funnel_compare.MATRICES.items():
         assert set(env) == experimental_envs, name
@@ -828,32 +829,83 @@ def test_funnel_compare_matrix_env_is_explicit():
         "TM_HYBRID_MAP_ARM": "0",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
         "TM_ANSWER_WIKI_MAP": "0",
+        "TM_ANSWER_EVIDENCE_PACK_V2": "0",
     }
     assert tm_answer_funnel_compare.MATRICES["summary_on"] == {
         "TM_EMBED_SUMMARY_WEIGHT": "0.98",
         "TM_HYBRID_MAP_ARM": "0",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
         "TM_ANSWER_WIKI_MAP": "0",
+        "TM_ANSWER_EVIDENCE_PACK_V2": "0",
     }
     assert tm_answer_funnel_compare.MATRICES["summary_on_map_arm"] == {
         "TM_EMBED_SUMMARY_WEIGHT": "0.98",
         "TM_HYBRID_MAP_ARM": "1",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
         "TM_ANSWER_WIKI_MAP": "0",
+        "TM_ANSWER_EVIDENCE_PACK_V2": "0",
     }
     assert tm_answer_funnel_compare.MATRICES["production"] == {
         "TM_EMBED_SUMMARY_WEIGHT": "0",
         "TM_HYBRID_MAP_ARM": "0",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
         "TM_ANSWER_WIKI_MAP": "0",
+        "TM_ANSWER_EVIDENCE_PACK_V2": "0",
+    }
+    assert tm_answer_funnel_compare.MATRICES["production_packer"] == {
+        "TM_EMBED_SUMMARY_WEIGHT": "0",
+        "TM_HYBRID_MAP_ARM": "0",
+        "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
+        "TM_ANSWER_WIKI_MAP": "0",
+        "TM_ANSWER_EVIDENCE_PACK_V2": "1",
     }
     assert tm_answer_funnel_compare.MATRICES["map_arm"] == {
         "TM_EMBED_SUMMARY_WEIGHT": "0",
         "TM_HYBRID_MAP_ARM": "1",
         "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
         "TM_ANSWER_WIKI_MAP": "0",
+        "TM_ANSWER_EVIDENCE_PACK_V2": "0",
+    }
+    assert tm_answer_funnel_compare.MATRICES["map_arm_packer"] == {
+        "TM_EMBED_SUMMARY_WEIGHT": "0",
+        "TM_HYBRID_MAP_ARM": "1",
+        "TM_ANSWER_WIKI_MAP_BRIDGE": "0",
+        "TM_ANSWER_WIKI_MAP": "0",
+        "TM_ANSWER_EVIDENCE_PACK_V2": "1",
     }
     assert tm_answer_funnel_compare.MATRICES["bridge"]["TM_ANSWER_WIKI_MAP_BRIDGE"] == "1"
+    assert tm_answer_funnel_compare.MATRICES["bridge"]["TM_ANSWER_EVIDENCE_PACK_V2"] == "0"
+
+
+def test_funnel_compare_delta_tracks_case_changes_without_raw_query():
+    base = {
+        "matrix": "map_arm",
+        "passed": 1,
+        "case_outcomes": {
+            "case-a": {"passed": False, "failure_layer": "answer_synthesis_miss"},
+            "case-b": {"passed": True, "failure_layer": "ok"},
+            "case-c": {"passed": False, "failure_layer": "natural_query_recall_miss"},
+        },
+    }
+    item = {
+        "matrix": "map_arm_packer",
+        "passed": 1,
+        "case_outcomes": {
+            "case-a": {"passed": True, "failure_layer": "ok"},
+            "case-b": {"passed": False, "failure_layer": "actionability_gap"},
+            "case-c": {"passed": False, "failure_layer": "answer_synthesis_miss"},
+        },
+    }
+
+    delta = tm_answer_funnel_compare._delta(base, item)
+    dumped = json.dumps(delta, ensure_ascii=False)
+
+    assert delta["passed"] == 0
+    assert delta["improved_case_ids"] == ["case-a"]
+    assert delta["regressed_case_ids"] == ["case-b"]
+    assert delta["changed_failure_layer_count"] == 3
+    assert delta["regressed_failure_layer_counts"] == {"actionability_gap": 1}
+    assert "raw query" not in dumped
 
 
 def test_miss_ledger_omits_raw_query_and_groups_decision_bucket():

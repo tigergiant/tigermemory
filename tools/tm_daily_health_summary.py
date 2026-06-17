@@ -474,9 +474,16 @@ def compact_answer_eval(report: dict[str, Any] | None) -> dict[str, Any] | None:
     ]
     keys = (
         "case_count",
+        "passed",
+        "pass_rate",
         "status_correct",
         "expected_evidence_case_count",
         "expected_evidence_hit",
+        "expected_path_case_count",
+        "answer_evidence_hit",
+        "evidence_gate_hit",
+        "map_hit_but_evidence_miss",
+        "prompt_budget_truncated_count",
         "claim_support_rate",
         "not_found_precision",
         "expected_conflict_case_count",
@@ -811,6 +818,14 @@ def _compact_daily_summary(row: dict[str, Any]) -> dict[str, Any]:
     prompt_audit = summary.get("prompt_audit") if isinstance(summary.get("prompt_audit"), dict) else {}
     known_debt_changes = summary.get("known_debt_changes") if isinstance(summary.get("known_debt_changes"), dict) else {}
     answer_status_rate = _ratio(answer_eval.get("status_correct"), answer_eval.get("case_count"))
+    answer_pass_rate = _number(answer_eval.get("pass_rate"))
+    if answer_pass_rate is None:
+        answer_pass_rate = _ratio(answer_eval.get("passed"), answer_eval.get("case_count"))
+    answer_evidence_denominator = answer_eval.get("expected_path_case_count") or answer_eval.get("expected_evidence_case_count")
+    answer_evidence_numerator = answer_eval.get("answer_evidence_hit")
+    if answer_evidence_numerator is None:
+        answer_evidence_numerator = answer_eval.get("expected_evidence_hit")
+    answer_evidence_rate = _ratio(answer_evidence_numerator, answer_evidence_denominator)
     return {
         "date": row.get("date"),
         "path": row.get("path"),
@@ -830,9 +845,15 @@ def _compact_daily_summary(row: dict[str, Any]) -> dict[str, Any]:
         "runtime_config_manager_bad_target_count": _int(runtime_config.get("bad_target_count")) or 0,
         "runtime_config_manager_error_count": _int(runtime_config.get("error_count")) or 0,
         "answer_status_rate": answer_status_rate,
+        "answer_pass_rate": answer_pass_rate,
+        "answer_evidence_rate": answer_evidence_rate,
         "answer_status_correct": _int(answer_eval.get("status_correct")),
+        "answer_passed": _int(answer_eval.get("passed")),
+        "answer_evidence_hit": _int(answer_evidence_numerator),
+        "answer_evidence_case_count": _int(answer_evidence_denominator),
         "answer_case_count": _int(answer_eval.get("case_count")),
         "answer_failure_count": _int(answer_eval.get("failure_count")) or 0,
+        "answer_prompt_budget_truncated_count": _int(answer_eval.get("prompt_budget_truncated_count")) or 0,
         "answer_trace_failure_count": _int(answer_trace.get("failure_count")) or 0,
         "answer_trace_p95_ms": _number(_nested(answer_trace, "duration_ms", "p95")),
         "prompt_audit_status": prompt_audit.get("status"),
@@ -907,6 +928,12 @@ def build_daily_health_trend(
         "answer_eval": {
             "latest_status_rate": _latest_number(days_compact, "answer_status_rate"),
             "min_status_rate": _min_number(days_compact, "answer_status_rate"),
+            "latest_pass_rate": _latest_number(days_compact, "answer_pass_rate"),
+            "min_pass_rate": _min_number(days_compact, "answer_pass_rate"),
+            "latest_evidence_rate": _latest_number(days_compact, "answer_evidence_rate"),
+            "min_evidence_rate": _min_number(days_compact, "answer_evidence_rate"),
+            "latest_prompt_budget_truncated_count": _latest_number(days_compact, "answer_prompt_budget_truncated_count"),
+            "max_prompt_budget_truncated_count": _max_number(days_compact, "answer_prompt_budget_truncated_count"),
             "failure_days": [
                 row["date"] for row in days_compact if (row.get("answer_failure_count") or 0) > 0
             ],

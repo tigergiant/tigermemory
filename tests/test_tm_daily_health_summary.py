@@ -376,9 +376,16 @@ def test_compact_runtime_config_manager_summarizes_targets():
 def test_compact_answer_eval_omits_success_rows():
     report = {
         "case_count": 2,
+        "passed": 1,
+        "pass_rate": 0.5,
         "status_correct": 1,
         "expected_evidence_case_count": 2,
         "expected_evidence_hit": 1,
+        "expected_path_case_count": 2,
+        "answer_evidence_hit": 1,
+        "evidence_gate_hit": 1,
+        "map_hit_but_evidence_miss": 0,
+        "prompt_budget_truncated_count": 1,
         "claim_support_rate": 1.0,
         "not_found_precision": 1.0,
         "expected_conflict_case_count": 1,
@@ -392,9 +399,16 @@ def test_compact_answer_eval_omits_success_rows():
 
     assert compact == {
         "case_count": 2,
+        "passed": 1,
+        "pass_rate": 0.5,
         "status_correct": 1,
         "expected_evidence_case_count": 2,
         "expected_evidence_hit": 1,
+        "expected_path_case_count": 2,
+        "answer_evidence_hit": 1,
+        "evidence_gate_hit": 1,
+        "map_hit_but_evidence_miss": 0,
+        "prompt_budget_truncated_count": 1,
         "claim_support_rate": 1.0,
         "not_found_precision": 1.0,
         "expected_conflict_case_count": 1,
@@ -551,7 +565,16 @@ def test_daily_health_trend_summarizes_historical_machine_summaries(tmp_path, mo
         "known_debt_count": 2,
         "known_debt_changes": {"new": 1, "known": 0, "resolved": 0, "worsened": 1},
         "health_probe": {**base["health_probe"], "mem0_api_reachable": False, "mem0_api_latency_ms": 250.0},
-        "answer_eval": {"case_count": 25, "status_correct": 24, "failure_count": 1},
+        "answer_eval": {
+            "case_count": 25,
+            "passed": 20,
+            "pass_rate": 0.8,
+            "status_correct": 24,
+            "expected_path_case_count": 20,
+            "answer_evidence_hit": 18,
+            "prompt_budget_truncated_count": 3,
+            "failure_count": 1,
+        },
         "answer_trace": {"row_count": 25, "failure_count": 1, "duration_ms": {"p95": 900.0}},
         "retrieval_eval_lexical": {"case_count": 80, "hit3": 79},
         "retrieval_eval_hybrid": {"case_count": 80, "hit3": 80},
@@ -569,6 +592,9 @@ def test_daily_health_trend_summarizes_historical_machine_summaries(tmp_path, mo
     assert trend["totals"]["blocking_count"] == 2
     assert trend["totals"]["known_debt_new"] == 1
     assert trend["answer_eval"]["min_status_rate"] == 0.96
+    assert trend["answer_eval"]["latest_pass_rate"] == 0.8
+    assert trend["answer_eval"]["min_evidence_rate"] == 0.9
+    assert trend["answer_eval"]["max_prompt_budget_truncated_count"] == 3
     assert trend["answer_trace"]["max_p95_ms"] == 900.0
     assert trend["health_probe"]["unreachable_days"] == ["2026-05-19"]
     assert trend["runtime_config_manager"]["latest_status"] == "ok"
