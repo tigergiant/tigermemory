@@ -11,6 +11,8 @@ import argparse
 import datetime as dt
 import importlib
 import json
+import operator
+import re
 import statistics
 import sys
 import uuid
@@ -237,7 +239,31 @@ def _as_string_list(value: Any) -> list[str]:
     return [str(value)]
 
 
+_TRACE_EXPECTATION_RE = re.compile(
+    r"^\s*(?P<path>[A-Za-z0-9_.\-\[\]]+)\s*"
+    r"(?P<op>>=|<=|==|!=|>|<)\s*"
+    r"(?P<expected>.+?)\s*$"
+)
+_TRACE_COMPARATORS = {
+    ">": operator.gt,
+    ">=": operator.ge,
+    "<": operator.lt,
+    "<=": operator.le,
+    "==": operator.eq,
+    "!=": operator.ne,
+}
+_TRACE_MISSING = object()
+
+
 def _trace_has_flag(trace: Any, flag: str) -> bool:
+    expression = _TRACE_EXPECTATION_RE.match(flag)
+    if expression:
+        return _trace_matches_expression(
+            trace,
+            expression.group("path"),
+            expression.group("op"),
+            expression.group("expected"),
+        )
     if isinstance(trace, dict):
         if flag in trace:
             return True
@@ -245,6 +271,77 @@ def _trace_has_flag(trace: Any, flag: str) -> bool:
     if isinstance(trace, list):
         return any(_trace_has_flag(value, flag) for value in trace)
     return False
+
+
+def _trace_matches_expression(trace: Any, path: str, op_text: str, expected_text: str) -> bool:
+    actual = _trace_get_path(trace, path, _TRACE_MISSING)
+    if actual is _TRACE_MISSING:
+        return False
+    expected = _parse_trace_scalar(expected_text)
+    actual_value = _coerce_trace_comparable(actual, expected)
+    if actual_value is _TRACE_MISSING:
+        return False
+    try:
+        return bool(_TRACE_COMPARATORS[op_text](actual_value, expected))
+    except TypeError:
+        return False
+
+
+def _trace_get_path(trace: Any, path: str, default: Any) -> Any:
+    current = trace
+    for part in path.split("."):
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+            continue
+        if isinstance(current, list) and part.isdigit():
+            index = int(part)
+            if 0 <= index < len(current):
+                current = current[index]
+                continue
+        return default
+    return current
+
+
+def _parse_trace_scalar(text: str) -> Any:
+    stripped = text.strip().strip('"').strip("'")
+    lowered = stripped.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if lowered in {"none", "null"}:
+        return None
+    try:
+        return int(stripped)
+    except ValueError:
+        pass
+    try:
+        return float(stripped)
+    except ValueError:
+        return stripped
+
+
+def _coerce_trace_comparable(actual: Any, expected: Any) -> Any:
+    if isinstance(expected, bool):
+        if isinstance(actual, bool):
+            return actual
+        if isinstance(actual, str) and actual.lower() in {"true", "false"}:
+            return actual.lower() == "true"
+        return _TRACE_MISSING
+    if expected is None:
+        return actual
+    if isinstance(expected, (int, float)) and not isinstance(expected, bool):
+        if isinstance(actual, bool):
+            return _TRACE_MISSING
+        if isinstance(actual, (int, float)):
+            return actual
+        if isinstance(actual, str):
+            try:
+                return float(actual) if "." in actual else int(actual)
+            except ValueError:
+                return _TRACE_MISSING
+        return _TRACE_MISSING
+    return str(actual)
 
 
 def eval_case(
@@ -370,7 +467,7 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
             evidence_hit_by_dimension[dimension] = evidence_hit_by_dimension.get(dimension, 0) + 1
             evidence_hit_by_source[source] = evidence_hit_by_source.get(source, 0) + 1
             evidence_hit_by_freshness[freshness] = evidence_hit_by_freshness.get(freshness, 0) + 1
-        if item["expected_warning"] and item["warning_hit"]:
+        if item.get("expected_warning") and item.get("warning_hit"):
             warning_hit_by_dimension[dimension] = warning_hit_by_dimension.get(dimension, 0) + 1
             warning_hit_by_source[source] = warning_hit_by_source.get(source, 0) + 1
             warning_hit_by_freshness[freshness] = warning_hit_by_freshness.get(freshness, 0) + 1

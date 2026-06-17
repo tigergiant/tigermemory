@@ -50,6 +50,95 @@ def test_eval_case_scores_retrieval_expected_evidence(monkeypatch):
     assert result["supported_claim_count"] == 1
 
 
+def test_eval_case_scores_trace_numeric_expressions(monkeypatch):
+    def fake_memory_answer_core(_query: str, **kwargs):
+        assert kwargs["include_trace"] is True
+        return {
+            "status": "ok",
+            "summary": "freshness guard fired",
+            "answer": "freshness guard fired",
+            "claims": [],
+            "evidence": [],
+            "warnings": [],
+            "run_id": kwargs["run_id"],
+            "trace_id": "trace-freshness",
+            "trace": {
+                "validity": {
+                    "state_counts": {
+                        "obsolete_ignored": 2,
+                        "unresolved_conflict": 0,
+                    },
+                    "guard_active": "true",
+                },
+            },
+        }
+
+    monkeypatch.setattr(answer_eval.tm_answer, "memory_answer_core", fake_memory_answer_core)
+
+    result = answer_eval.eval_case({
+        "id": "freshness-trace",
+        "query": "current state?",
+        "expected_trace_flags": [
+            "validity.state_counts.obsolete_ignored >= 1",
+            "validity.state_counts.unresolved_conflict == 0",
+            "validity.guard_active == true",
+        ],
+    }, run_id="run-trace")
+
+    assert result["trace_flags_hit"] is True
+
+
+def test_eval_case_fails_trace_numeric_expression_when_value_missing(monkeypatch):
+    def fake_memory_answer_core(_query: str, **kwargs):
+        return {
+            "status": "ok",
+            "summary": "no guard",
+            "answer": "no guard",
+            "claims": [],
+            "evidence": [],
+            "warnings": [],
+            "run_id": kwargs["run_id"],
+            "trace_id": "trace-missing",
+            "trace": {"validity": {"state_counts": {}}},
+        }
+
+    monkeypatch.setattr(answer_eval.tm_answer, "memory_answer_core", fake_memory_answer_core)
+
+    result = answer_eval.eval_case({
+        "id": "freshness-trace-missing",
+        "query": "current state?",
+        "expected_trace_flags": ["validity.state_counts.obsolete_ignored >= 1"],
+    }, run_id="run-trace")
+
+    assert result["trace_flags_hit"] is False
+
+
+def test_eval_case_preserves_legacy_trace_key_presence(monkeypatch):
+    def fake_memory_answer_core(_query: str, **kwargs):
+        assert kwargs["include_trace"] is True
+        return {
+            "status": "ok",
+            "summary": "legacy flag",
+            "answer": "legacy flag",
+            "claims": [],
+            "evidence": [],
+            "warnings": [],
+            "run_id": kwargs["run_id"],
+            "trace_id": "trace-legacy",
+            "trace": {"outer": {"stale_guard": {"active": True}}},
+        }
+
+    monkeypatch.setattr(answer_eval.tm_answer, "memory_answer_core", fake_memory_answer_core)
+
+    result = answer_eval.eval_case({
+        "id": "legacy-trace-flag",
+        "query": "current state?",
+        "expected_trace_flags": ["stale_guard"],
+    }, run_id="run-trace")
+
+    assert result["trace_flags_hit"] is True
+
+
 def test_eval_case_scores_quality_status_and_claims(monkeypatch):
     def fake_memory_answer_core(_query: str, **kwargs):
         return {
