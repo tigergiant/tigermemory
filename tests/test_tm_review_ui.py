@@ -12,6 +12,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import tm_cron_apply  # type: ignore[import-not-found]
+import tm_dev_supervisor_review  # type: ignore[import-not-found]
 import tm_route  # type: ignore[import-not-found]
 import tm_route_events  # type: ignore[import-not-found]
 import tm_review_tools  # type: ignore[import-not-found]
@@ -1662,6 +1663,39 @@ def test_quality_memory_endpoint_accepts_range_param(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert response.json()["range"]["key"] == "30d"
     assert calls == [("2026-06-10", "30d")]
+
+
+def test_development_supervisor_status_api_is_read_only(tmp_path, monkeypatch):
+    ledger = tmp_path / "wiki" / "operations" / "development-supervisor-ledger.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Ledger\n\n- 2026-06-18 status=success channel=claude-official-review\n", encoding="utf-8")
+    archive = tmp_path / "sources" / "internal-analysis" / "development-reviews"
+    today_dir = archive / tm_review_ui.today()
+    today_dir.mkdir(parents=True)
+    (today_dir / "review.md").write_text("---\nchannel: claude-official-review\n---\nVerdict: pass\n", encoding="utf-8")
+    launcher = tmp_path / "official.ps1"
+    launcher.write_text("# ok\n", encoding="utf-8")
+    api_exe = tmp_path / "claude.exe"
+    api_exe.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(tm_dev_supervisor_review, "ARCHIVE_ROOT", archive)
+    monkeypatch.setattr(tm_dev_supervisor_review, "LEDGER_PATH", ledger)
+    monkeypatch.setattr(tm_dev_supervisor_review, "OFFICIAL_LAUNCHER", launcher)
+    monkeypatch.setattr(tm_dev_supervisor_review, "API_TEST_EXE", api_exe)
+    monkeypatch.setattr(tm_dev_supervisor_review, "SUPERVISOR_STATE_DIR", tmp_path / ".supervisor")
+
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+    response = client.get("/api/development-supervisor/status", headers=HOST)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["channels"]["formal_default"] == "claude-official-review"
+    assert data["exists"]["ledger"] is True
+    assert data["archive_count"] == 1
+    assert data["latest_archives"][0].endswith("review.md")
+    assert any("tm_stage_accept.py" in step for step in data["next_steps"])
 
 
 def test_settings_preferences_round_trip_uses_sqlite(tmp_path, monkeypatch):

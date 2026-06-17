@@ -273,6 +273,84 @@ def test_failures_include_non_ok_without_query_text_by_default(tmp_path):
     assert failures[0]["query_hash"]
 
 
+def test_real_failure_intake_summarizes_p5_candidates_without_raw_query(tmp_path):
+    log = tmp_path / "trace.jsonl"
+    _write_jsonl(log, [
+        _row("t-ok", "ok", query="raw ok query"),
+        _row("t-not-found", "not_found", query="raw missing query", run_id="real-run"),
+        _row("t-conflict", "conflict", query="raw conflict query", run_id="real-run"),
+        _row("t-error", "error", query="raw error query", run_id="real-run"),
+    ])
+
+    rows, invalid = tm_answer_trace.load_trace_rows(log, run_id="real-run")
+    report = tm_answer_trace.summarize_rows(rows, invalid, latest=5)
+    intake = report["real_failure_intake"]
+    encoded = json.dumps(intake, ensure_ascii=False)
+
+    assert intake["schema_version"] == "memory-answer-real-failure-intake-v1"
+    assert intake["candidate_count"] == 3
+    assert intake["status_counts"] == {"conflict": 1, "error": 1, "not_found": 1}
+    assert intake["run_id_counts"] == {"real-run": 3}
+    assert intake["source_kind_counts"] == {"named_run": 3}
+    assert len(intake["latest"]) == 3
+    assert "query_hash" in intake["latest"][0]
+    assert intake["latest"][0]["source_kind"] == "named_run"
+    assert "raw missing query" not in encoded
+    assert "raw conflict query" not in encoded
+    assert "raw error query" not in encoded
+    assert any("not_found" in action for action in intake["next_actions"])
+
+
+def test_real_failure_intake_marks_diagnostic_runs_separately(tmp_path):
+    log = tmp_path / "trace.jsonl"
+    _write_jsonl(log, [
+        _row("t-daily", "not_found", run_id="daily-health-2026-06-18"),
+        _row("t-holdout", "not_found", run_id="p315-holdout-check"),
+        _row("t-diagnosis", "error", run_id="p322-quality-packer"),
+        _row("t-live", "conflict"),
+    ])
+
+    rows, invalid = tm_answer_trace.load_trace_rows(log)
+    report = tm_answer_trace.summarize_rows(rows, invalid)
+    intake = report["real_failure_intake"]
+
+    assert intake["source_kind_counts"] == {
+        "daily_health": 1,
+        "diagnostic_or_eval": 1,
+        "holdout": 1,
+        "live_or_manual": 1,
+    }
+    assert any("diagnostic/eval" in action for action in intake["next_actions"])
+
+
+def test_intake_cli_outputs_json_for_real_failures(tmp_path):
+    log = tmp_path / "trace.jsonl"
+    _write_jsonl(log, [_row("t-ok", "ok", run_id="cli-run"), _row("t-error", "error", query="secret cli query", run_id="cli-run")])
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "tools" / "tm_answer_trace.py"),
+            "--log",
+            str(log),
+            "intake",
+            "--json",
+            "--run-id",
+            "cli-run",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    report = json.loads(result.stdout)
+    assert report["candidate_count"] == 1
+    assert report["status_counts"] == {"error": 1}
+    assert report["selected_run_id"] == "cli-run"
+    assert "secret cli query" not in result.stdout
+
+
 def test_compact_row_uses_stored_query_hash_without_raw_query(tmp_path):
     log = tmp_path / "trace.jsonl"
     row = _row("t-not-found", "not_found")

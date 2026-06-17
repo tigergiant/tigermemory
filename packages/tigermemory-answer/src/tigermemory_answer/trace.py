@@ -24,6 +24,8 @@ from tigermemory_answer import TRACE_LOG, redact_secrets
 
 
 DEFAULT_FAILURE_STATUSES = ("error", "conflict", "not_found")
+REAL_FAILURE_INTAKE_SCHEMA_VERSION = "memory-answer-real-failure-intake-v1"
+REAL_FAILURE_STATUSES = ("not_found", "conflict", "error", "fail")
 FEEDBACK_SCHEMA_VERSION = "memory-answer-feedback-v1"
 FEEDBACK_SUMMARY_SCHEMA_VERSION = "memory-answer-feedback-summary-v1"
 FEEDBACK_LOG = tm_core.REPO_ROOT / "runtime" / "memory_answer_feedback" / "events.jsonl"
@@ -488,6 +490,19 @@ def _llm_state(row: dict[str, Any]) -> str:
     return "ok"
 
 
+def _trace_source_kind(row: dict[str, Any]) -> str:
+    run_id = (_row_run_id(row) or "").lower()
+    if not run_id:
+        return "live_or_manual"
+    if run_id.startswith("daily-health"):
+        return "daily_health"
+    if "holdout" in run_id:
+        return "holdout"
+    if run_id.startswith(("answer-eval", "release-gate")) or re.match(r"^p\d", run_id):
+        return "diagnostic_or_eval"
+    return "named_run"
+
+
 def compact_row(row: dict[str, Any], *, include_query: bool = False) -> dict[str, Any]:
     trace = row.get("trace") if isinstance(row.get("trace"), dict) else {}
     warnings = row.get("warnings") if isinstance(row.get("warnings"), list) else []
@@ -504,6 +519,7 @@ def compact_row(row: dict[str, Any], *, include_query: bool = False) -> dict[str
         "claim_count": len(row.get("claims") or []),
         "warning_count": len(warnings),
         "llm": _llm_state(row),
+        "source_kind": _trace_source_kind(row),
         "selected_evidence": trace.get("selected_evidence") or [],
     }
     if run_id:
@@ -658,6 +674,11 @@ def summarize_rows(
             "dropped": gate_dropped,
         },
         "recommendation_quality": recommendation_quality,
+        "real_failure_intake": summarize_real_failure_intake(
+            rows,
+            limit=latest,
+            include_query=include_query,
+        ),
         "latest": [
             compact_row(row, include_query=include_query)
             for row in (rows[-latest:] if latest > 0 else [])
@@ -678,6 +699,52 @@ def failure_rows(
 ) -> list[dict[str, Any]]:
     wanted = {status.strip() for status in statuses if status.strip()}
     return [row for row in rows if str(row.get("status") or "unknown") in wanted]
+
+
+def summarize_real_failure_intake(
+    rows: list[dict[str, Any]],
+    *,
+    statuses: tuple[str, ...] = REAL_FAILURE_STATUSES,
+    limit: int = 10,
+    include_query: bool = False,
+) -> dict[str, Any]:
+    """Return P5 real-failure candidates without raw query text by default."""
+    failures = failure_rows(rows, statuses=statuses)
+    status_counts = Counter(str(row.get("status") or "unknown") for row in failures)
+    query_class_counts = Counter(_query_class(row) for row in failures)
+    run_id_counts = Counter(run_id for row in failures if (run_id := _row_run_id(row)))
+    source_kind_counts = Counter(_trace_source_kind(row) for row in failures)
+    selected = failures[-max(limit, 0):] if limit > 0 else []
+
+    next_actions: list[str] = []
+    if not failures:
+        next_actions.append("继续等待真实 memory_answer trace；不要用旧诊断集冒充真实失败。")
+    if status_counts.get("not_found"):
+        next_actions.append("抽查 not_found：区分真实缺资料、召回漏、证据被 gate 拦截。")
+    if status_counts.get("conflict"):
+        next_actions.append("复核 conflict：确认是事实冲突、旧状态覆盖，还是 stale 判定过严。")
+    if status_counts.get("error") or status_counts.get("fail"):
+        next_actions.append("优先排查 error/fail：确认模型、API、prompt packing 或工具调用是否异常。")
+    if failures:
+        next_actions.append("只把脱敏、可复现、非旧 100 问污染的样本转成 holdout/eval case。")
+    if source_kind_counts.get("diagnostic_or_eval"):
+        next_actions.append("先区分 diagnostic/eval 失败和真实 live/manual 失败，避免把旧测试集当生产问题。")
+
+    return {
+        "schema_version": REAL_FAILURE_INTAKE_SCHEMA_VERSION,
+        "candidate_count": len(failures),
+        "statuses": list(statuses),
+        "status_counts": dict(sorted(status_counts.items())),
+        "query_class_counts": dict(sorted(query_class_counts.items())),
+        "source_kind_counts": dict(sorted(source_kind_counts.items())),
+        "run_id_counts": dict(sorted(run_id_counts.items())),
+        "latest": [compact_row(row, include_query=include_query) for row in selected],
+        "next_actions": next_actions,
+        "privacy": {
+            "raw_query_included": bool(include_query),
+            "default_output": "query_hash_only",
+        },
+    }
 
 
 def replay_row(row: dict[str, Any], *, include_query: bool = True) -> dict[str, Any]:
@@ -804,6 +871,37 @@ def cmd_failures(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_intake(args: argparse.Namespace) -> int:
+    if args.run_id and args.latest_run:
+        raise SystemExit("--run-id and --latest-run are mutually exclusive")
+    statuses = tuple(args.status.split(",")) if args.status else REAL_FAILURE_STATUSES
+    rows, invalid = load_trace_rows(args.log, since_hours=args.since_hours)
+    rows, selected_run_id = select_rows(rows, run_id=args.run_id, latest_run=args.latest_run)
+    report = summarize_real_failure_intake(
+        rows,
+        statuses=statuses,
+        limit=args.limit,
+        include_query=args.include_query,
+    )
+    report["row_count"] = len(rows)
+    report["invalid_row_count"] = len(invalid)
+    report["selected_run_id"] = selected_run_id
+    report["run_id_missing_count"] = sum(1 for row in rows if not _row_run_id(row))
+    if args.json:
+        _print_json(report)
+    else:
+        selection = f" run_id={selected_run_id}" if selected_run_id else ""
+        print(f"real_failures={report['candidate_count']} statuses={','.join(statuses)}{selection}")
+        for item in report["latest"]:
+            print(
+                f"- {item['trace_id']} {item['status']} {item['query_class']} "
+                f"query_hash={item['query_hash']} evidence={item['evidence_count']}"
+            )
+        for action in report["next_actions"]:
+            print(f"* {action}")
+    return 0
+
+
 def cmd_feedback_record(args: argparse.Namespace) -> int:
     event = build_feedback_event(
         surface=args.surface,
@@ -880,6 +978,16 @@ def main() -> None:
     failures.add_argument("--include-query", action="store_true")
     failures.add_argument("--json", action="store_true")
     failures.set_defaults(func=cmd_failures)
+
+    intake = sub.add_parser("intake", help="summarize P5 real-failure candidates")
+    intake.add_argument("--since-hours", type=float, default=None)
+    intake.add_argument("--run-id", default=None, help="summarize one eval/run id")
+    intake.add_argument("--latest-run", action="store_true", help="summarize the latest non-empty run id")
+    intake.add_argument("--limit", type=int, default=20)
+    intake.add_argument("--status", default=",".join(REAL_FAILURE_STATUSES))
+    intake.add_argument("--include-query", action="store_true")
+    intake.add_argument("--json", action="store_true")
+    intake.set_defaults(func=cmd_intake)
 
     feedback = sub.add_parser("feedback", help="record or summarize explicit feedback events")
     feedback_sub = feedback.add_subparsers(dest="feedback_cmd", required=True)
