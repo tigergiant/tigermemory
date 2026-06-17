@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import json
 
 import pytest
@@ -140,6 +141,39 @@ def test_audit_dedup_failure_writes_status_warning(tmp_path, monkeypatch):
     assert status["ok"] is False
     assert status["status"] == "warning"
     assert "candidates" not in status
+
+
+def test_audit_dedup_local_profile_reads_sqlite(tmp_path, monkeypatch):
+    core = tm_mem0_audit.tm_memory_ops.tm_core
+    monkeypatch.setattr(core, "tigermemory_profile", lambda: core.TIGERMEMORY_PROFILE_LOCAL)
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(tmp_path / "local.sqlite"))
+    monkeypatch.setattr(
+        core,
+        "mem0_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("HTTP must not be used")),
+    )
+
+    core.mem0_write(
+        "cascade",
+        "systems",
+        _closeout("same local profile closeout persisted for audit"),
+        metadata_extra={"source": "cascade", "topic": "systems"},
+    )
+    core.mem0_write(
+        "cascade",
+        "systems",
+        _closeout("same local profile closeout persisted for audit"),
+        metadata_extra={"source": "cascade", "topic": "systems"},
+    )
+
+    today = datetime.datetime.now(core.TZ_CN).strftime("%Y-%m-%d")
+    report = tm_mem0_audit.audit_dedup(today, audit_root=tmp_path / "audit")
+
+    assert report["ok"] is True
+    assert report["status"] == "ok"
+    assert report["warnings"] == []
+    assert report["candidate_count"] == 1
+    assert report["candidates"][0]["canonical_id"]
 
 
 def test_load_audit_status_missing_is_explicit_warning(tmp_path):

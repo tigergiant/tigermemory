@@ -184,8 +184,36 @@ def fetch_mem0_page(page: int = 1, page_size: int = 100) -> dict[str, Any]:
     return data
 
 
+def _fetch_local_mem0_items(max_items: int = 500) -> list[dict[str, Any]]:
+    """Read local-profile Mem0-compatible rows from the canonical sqlite store."""
+    limit = max(1, int(max_items))
+    conn = tm_core._local_db_conn()
+    try:
+        tm_core._ensure_local_memory_schema(conn)
+        rows = conn.execute(
+            """
+            SELECT id, content, topic, source_agent, route_decision, route_score,
+                   metadata_json, created_at, updated_at, state, backend_origin, vector_status
+            FROM memories
+            WHERE state = 'active'
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [
+            tm_core._local_memory_row_to_item(row, include_route_info=True)
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
+
 def fetch_mem0_items(max_items: int = 500, page_size: int = 100) -> list[dict[str, Any]]:
     """Read Mem0 entries without mutating them."""
+    if tm_core.tigermemory_profile() == tm_core.TIGERMEMORY_PROFILE_LOCAL:
+        return _fetch_local_mem0_items(max_items=max_items)
+
     out: list[dict[str, Any]] = []
     page = 1
     while len(out) < max_items:

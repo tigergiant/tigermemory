@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import json
 import pathlib
 import sys
@@ -87,6 +88,39 @@ def test_write_memory_with_review_local_profile_persists_sqlite(monkeypatch, tmp
     assert payload["count"] == 1
     assert payload["results"][0]["metadata"]["source"] == "codex"
     assert payload["results"][0]["metadata"]["topic"] == "systems"
+
+
+def test_fetch_mem0_items_by_date_range_local_profile_reads_sqlite_without_http(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        tm_memory_ops.tm_core,
+        "tigermemory_profile",
+        lambda: tm_memory_ops.tm_core.TIGERMEMORY_PROFILE_LOCAL,
+    )
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(tmp_path / "local.sqlite"))
+    monkeypatch.setattr(
+        tm_memory_ops.tm_core,
+        "mem0_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("HTTP must not be used")),
+    )
+
+    tm_memory_ops.tm_core.mem0_write(
+        "codex",
+        "systems",
+        "local profile audit read path should be visible to cron",
+        metadata_extra={"source": "codex", "topic": "systems"},
+    )
+
+    now = datetime.datetime.now(tm_memory_ops.tm_core.TZ_CN)
+    rows = tm_memory_ops.fetch_mem0_items_by_date_range(
+        now - datetime.timedelta(days=1),
+        now + datetime.timedelta(days=1),
+        max_items=20,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["content"] == "local profile audit read path should be visible to cron"
+    assert rows[0]["metadata"]["source"] == "codex"
+    assert rows[0]["backend_origin"] == tm_memory_ops.tm_core.TIGERMEMORY_PROFILE_LOCAL
 
 
 def test_session_handoff_skips_route_llm_and_targets_verified_mem0(monkeypatch):
