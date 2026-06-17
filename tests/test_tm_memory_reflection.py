@@ -163,6 +163,45 @@ def test_daily_digest_renders_mem0_audit_candidates(tmp_path):
     assert "虎哥裁决：[ ] confirm  [ ] reject" in report
 
 
+def test_daily_digest_surfaces_mem0_audit_warning(tmp_path):
+    audit_dir = tmp_path / "mem0-audit" / "2026-05-15"
+    audit_dir.mkdir(parents=True)
+    (audit_dir / "dedup_candidates.json").write_text("[]", encoding="utf-8")
+    (audit_dir / "status.json").write_text(
+        json.dumps(
+            {
+                "ok": False,
+                "status": "warning",
+                "date": "2026-05-15",
+                "pass": "dedup",
+                "candidate_count": 0,
+                "path": str(audit_dir / "dedup_candidates.json"),
+                "status_path": str(audit_dir / "status.json"),
+                "warnings": ["tm_mem0_audit dedup failed: RuntimeError: local profile: mem0_request blocked"],
+                "error": "RuntimeError: local profile: mem0_request blocked",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = tm_memory_reflection.render_daily_report(
+        date="2026-05-15",
+        now_iso="2026-05-15T23:55:00+08:00",
+        mem0_items=[],
+        inbox_dir=tmp_path / "inbox",
+        audit_root=tmp_path / "discard-root",
+        mem0_audit_root=tmp_path / "mem0-audit",
+        proposal_root=tmp_path / "cron-proposals",
+    )
+
+    assert "mem0_audit_candidate_count: 0" in report
+    assert "mem0_audit_status: warning" in report
+    assert "mem0_audit_warning_count: 1" in report
+    assert "🟠 Mem0 audit 警告：1 条" in report
+    assert "local profile: mem0_request blocked" in report
+
+
 def test_daily_digest_groups_inbox_actions_and_wraps_keep_rows(tmp_path):
     inbox = tmp_path / "inbox"
     inbox.mkdir()

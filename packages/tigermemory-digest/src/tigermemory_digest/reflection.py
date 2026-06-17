@@ -1521,6 +1521,46 @@ def _load_mem0_dedup_candidates(date: str, *, audit_root: pathlib.Path = MEM0_AU
     return data if isinstance(data, list) else []
 
 
+def _load_mem0_audit_status(date: str, *, audit_root: pathlib.Path = MEM0_AUDIT_ROOT) -> dict[str, Any]:
+    if tm_mem0_audit is not None:
+        return tm_mem0_audit.load_audit_status(date, audit_root=audit_root)
+    path = audit_root / date / "status.json"
+    candidates_path = audit_root / date / "dedup_candidates.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {
+            "ok": None,
+            "status": "missing",
+            "date": date,
+            "pass": "dedup",
+            "candidate_count": None,
+            "path": str(candidates_path),
+            "status_path": str(path),
+            "warnings": ["tm_mem0_audit status.json missing; candidate count may mean audit did not run"],
+        }
+    return data if isinstance(data, dict) else {
+        "ok": None,
+        "status": "invalid",
+        "date": date,
+        "pass": "dedup",
+        "candidate_count": None,
+        "path": str(candidates_path),
+        "status_path": str(path),
+        "warnings": ["tm_mem0_audit status.json is not an object"],
+    }
+
+
+def _mem0_audit_warnings(status: dict[str, Any]) -> list[str]:
+    warnings = status.get("warnings")
+    if not isinstance(warnings, list):
+        warnings = []
+    out = [str(item) for item in warnings if str(item).strip()]
+    if status.get("status") not in {"ok", None} and not out:
+        out.append(f"tm_mem0_audit status={status.get('status')}")
+    return out
+
+
 def _empty_self_evolution_summary(date: str) -> dict[str, Any]:
     return {
         "date": date,
@@ -1687,6 +1727,8 @@ def render_daily_report(
     discard_events = discard_events_for_dates([date], audit_root=audit_root)
     candidates = discard_review_candidates(discard_events)
     mem0_dedup_candidates = _load_mem0_dedup_candidates(date, audit_root=mem0_audit_root)
+    mem0_audit_status = _load_mem0_audit_status(date, audit_root=mem0_audit_root)
+    mem0_audit_warnings = _mem0_audit_warnings(mem0_audit_status)
     proposals = load_proposals(date, proposal_root=proposal_root)
     applied = [row for row in _applied_rows(proposal_root=proposal_root) if str(row.get("applied_at") or "").startswith(date)]
     self_evolution_summary = _collect_self_evolution_summary_for_date(date, repo_root=REPO_ROOT)
@@ -1719,6 +1761,8 @@ def render_daily_report(
         f"low_priority_inbox_count: {len(low_priority_rows)}",
         f"wiki_proposal_inbox_count: {len(wiki_proposal_rows)}",
         f"mem0_audit_candidate_count: {len(mem0_dedup_candidates)}",
+        f"mem0_audit_status: {mem0_audit_status.get('status') or 'unknown'}",
+        f"mem0_audit_warning_count: {len(mem0_audit_warnings)}",
         f"self_evolution_count: {self_evolution_count}",
         "---",
         "",
@@ -1731,6 +1775,7 @@ def render_daily_report(
         f"- 🔵 Proposed Changes：{len(proposals)} 条 → 见下方 §Proposed Changes",
         f"- 🧾 Inbox Wiki Proposal 台账：{len(wiki_proposal_rows)} 条 / {len(wiki_proposal_ledger)} 组 → 见下方 §Inbox Wiki Proposal 台账",
         f"- 🟢 Mem0 重复 / 误判候选：{len(mem0_dedup_candidates)} 条 → 见下方 §Mem0 重复 / 误判候选",
+        f"- 🟠 Mem0 audit 警告：{len(mem0_audit_warnings)} 条 → 见下方 §Mem0 重复 / 误判候选",
         f"- ⚪ discard 误判候选：{len(candidates)} 条 → 见下方 §discard 误判候选",
         "",
         "## 摘要",
@@ -1810,6 +1855,21 @@ def render_daily_report(
     lines.extend([
         "",
         "## 🟢 Mem0 重复 / 误判候选",
+        "",
+        "### 🟠 审计状态",
+        "",
+    ])
+    if mem0_audit_warnings:
+        lines.append(f"- 状态：{mem0_audit_status.get('status') or 'unknown'}")
+        for warning in mem0_audit_warnings:
+            lines.append(f"- 警告：{warning}")
+        if mem0_audit_status.get("status_path"):
+            lines.append(f"- 状态文件：`{mem0_audit_status.get('status_path')}`")
+        if mem0_audit_status.get("error"):
+            lines.append(f"- 错误摘要：`{mem0_audit_status.get('error')}`")
+    else:
+        lines.append("- ok")
+    lines.extend([
         "",
         "### 🟢 重复候选 (dedup)",
         "",
@@ -2418,6 +2478,7 @@ def _compact_report_from_memory_digest(date: str, *, operations_dir: pathlib.Pat
             "promote_candidate_count",
             "wiki_proposal_inbox_count",
             "mem0_audit_candidate_count",
+            "mem0_audit_warning_count",
             "self_evolution_count",
         )
     }
@@ -2428,6 +2489,8 @@ def _compact_report_from_memory_digest(date: str, *, operations_dir: pathlib.Pat
         issues.append(f"{counts['stale_archive_count']} stale inbox archive candidate(s)")
     if counts.get("wiki_proposal_inbox_count"):
         issues.append(f"{counts['wiki_proposal_inbox_count']} wiki proposal inbox candidate(s)")
+    if counts.get("mem0_audit_warning_count"):
+        issues.append(f"{counts['mem0_audit_warning_count']} mem0 audit warning(s)")
     action_required = _drop_none_lines(_compact_section_lines(_section_body(text, "Proposed Changes"), limit=8))
     if not action_required and issues:
         action_required = issues[:]

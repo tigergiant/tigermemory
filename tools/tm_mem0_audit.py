@@ -193,13 +193,51 @@ def fetch_items_for_date(date: str, *, max_items: int = 1000) -> List[Dict[str, 
     return tm_memory_ops.fetch_mem0_items_by_date_range(start, end, max_items=max_items)
 
 
-def audit_dedup(date: str, *, items: Optional[List[Dict[str, Any]]] = None, audit_root: pathlib.Path = DEFAULT_AUDIT_ROOT) -> Dict[str, Any]:
-    rows = dedup_candidates(items if items is not None else fetch_items_for_date(date))
+def _audit_paths(date: str, audit_root: pathlib.Path) -> Tuple[pathlib.Path, pathlib.Path, pathlib.Path]:
     out_dir = audit_root / date
+    return out_dir, out_dir / "dedup_candidates.json", out_dir / "status.json"
+
+
+def _write_json(path: pathlib.Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def audit_dedup(date: str, *, items: Optional[List[Dict[str, Any]]] = None, audit_root: pathlib.Path = DEFAULT_AUDIT_ROOT) -> Dict[str, Any]:
+    out_dir, out_path, status_path = _audit_paths(date, audit_root)
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "dedup_candidates.json"
-    out_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"date": date, "pass": "dedup", "candidate_count": len(rows), "path": str(out_path), "candidates": rows}
+    try:
+        rows = dedup_candidates(items if items is not None else fetch_items_for_date(date))
+        _write_json(out_path, rows)
+        report: Dict[str, Any] = {
+            "ok": True,
+            "status": "ok",
+            "date": date,
+            "pass": "dedup",
+            "candidate_count": len(rows),
+            "path": str(out_path),
+            "status_path": str(status_path),
+            "warnings": [],
+            "candidates": rows,
+        }
+    except Exception as exc:
+        rows = []
+        error = f"{type(exc).__name__}: {str(exc)[:500]}"
+        _write_json(out_path, rows)
+        report = {
+            "ok": False,
+            "status": "warning",
+            "date": date,
+            "pass": "dedup",
+            "candidate_count": 0,
+            "path": str(out_path),
+            "status_path": str(status_path),
+            "warnings": [f"tm_mem0_audit dedup failed: {error}"],
+            "error": error,
+            "candidates": rows,
+        }
+    _write_json(status_path, {key: value for key, value in report.items() if key != "candidates"})
+    return report
 
 
 def load_dedup_candidates(date: str, *, audit_root: pathlib.Path = DEFAULT_AUDIT_ROOT) -> List[Dict[str, Any]]:
@@ -209,6 +247,38 @@ def load_dedup_candidates(date: str, *, audit_root: pathlib.Path = DEFAULT_AUDIT
     except (OSError, json.JSONDecodeError):
         return []
     return data if isinstance(data, list) else []
+
+
+def load_audit_status(date: str, *, audit_root: pathlib.Path = DEFAULT_AUDIT_ROOT) -> Dict[str, Any]:
+    _out_dir, candidates_path, status_path = _audit_paths(date, audit_root)
+    try:
+        data = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {
+            "ok": None,
+            "status": "missing",
+            "date": date,
+            "pass": "dedup",
+            "candidate_count": None,
+            "path": str(candidates_path),
+            "status_path": str(status_path),
+            "warnings": ["tm_mem0_audit status.json missing; candidate count may mean audit did not run"],
+        }
+    if not isinstance(data, dict):
+        return {
+            "ok": None,
+            "status": "invalid",
+            "date": date,
+            "pass": "dedup",
+            "candidate_count": None,
+            "path": str(candidates_path),
+            "status_path": str(status_path),
+            "warnings": ["tm_mem0_audit status.json is not an object"],
+        }
+    warnings = data.get("warnings")
+    if not isinstance(warnings, list):
+        data["warnings"] = []
+    return data
 
 
 def main() -> int:

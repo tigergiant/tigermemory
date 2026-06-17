@@ -114,6 +114,40 @@ def test_audit_dedup_writes_json(tmp_path):
     assert path.exists()
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data[0]["candidate_id"] == "old"
+    status = tm_mem0_audit.load_audit_status("2026-05-21", audit_root=tmp_path)
+    assert status["ok"] is True
+    assert status["status"] == "ok"
+    assert status["candidate_count"] == 1
+
+
+def test_audit_dedup_failure_writes_status_warning(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        tm_mem0_audit,
+        "fetch_items_for_date",
+        lambda _date: (_ for _ in ()).throw(RuntimeError("local profile: mem0_request blocked")),
+    )
+
+    report = tm_mem0_audit.audit_dedup("2026-05-21", audit_root=tmp_path)
+
+    assert report["ok"] is False
+    assert report["status"] == "warning"
+    assert report["candidate_count"] == 0
+    assert "local profile" in report["warnings"][0]
+    candidates_path = tmp_path / "2026-05-21" / "dedup_candidates.json"
+    status_path = tmp_path / "2026-05-21" / "status.json"
+    assert json.loads(candidates_path.read_text(encoding="utf-8")) == []
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["ok"] is False
+    assert status["status"] == "warning"
+    assert "candidates" not in status
+
+
+def test_load_audit_status_missing_is_explicit_warning(tmp_path):
+    status = tm_mem0_audit.load_audit_status("2026-05-21", audit_root=tmp_path)
+
+    assert status["status"] == "missing"
+    assert status["warnings"]
+    assert "status.json missing" in status["warnings"][0]
 
 
 def test_audit_window_covers_date_and_previous_day():

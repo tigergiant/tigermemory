@@ -567,6 +567,7 @@ def test_build_compact_report_memory_digest_promotes_count_issues_to_actions(tmp
             "proposal_count: 0",
             "stale_archive_count: 2",
             "wiki_proposal_inbox_count: 4",
+            "mem0_audit_warning_count: 1",
             "---",
             "",
             "## ⚡ 今日要决策",
@@ -591,3 +592,4 @@ def test_build_compact_report_memory_digest_promotes_count_issues_to_actions(tmp
     assert "- none" not in result["action_required"]
     assert any("stale inbox archive" in item for item in result["action_required"])
     assert any("wiki proposal inbox" in item for item in result["action_required"])
+    assert any("mem0 audit warning" in item for item in result["action_required"])
