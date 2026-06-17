@@ -217,6 +217,28 @@ def filter_cases_by_failure_report(
     return [case for case in cases if str(case.get("id") or "") in failed_ids]
 
 
+def shard_cases(
+    cases: list[dict[str, Any]],
+    *,
+    shard_count: int | None = None,
+    shard_index: int | None = None,
+) -> list[dict[str, Any]]:
+    """Return a deterministic shard for long eval runs."""
+    if shard_count is None:
+        shard_count = 1
+    if shard_index is None:
+        shard_index = 0
+    shard_count = int(shard_count)
+    shard_index = int(shard_index)
+    if shard_count < 1:
+        raise ValueError("shard_count must be >= 1")
+    if shard_index < 0 or shard_index >= shard_count:
+        raise ValueError("shard_index must satisfy 0 <= shard_index < shard_count")
+    if shard_count == 1:
+        return list(cases)
+    return [case for idx, case in enumerate(cases) if idx % shard_count == shard_index]
+
+
 def _query_intent_bucket(case: dict[str, Any]) -> str:
     bucket = str(case.get("query_intent_bucket") or "unspecified")
     if bucket not in ALLOWED_QUERY_INTENT_BUCKETS:
@@ -1230,6 +1252,14 @@ def cmd_eval(args: argparse.Namespace) -> int:
         getattr(args, "only_failures_from", None),
         kind=failure_filter_kind,
     )
+    filtered_case_count = len(cases)
+    cases = shard_cases(
+        cases,
+        shard_count=getattr(args, "shard_count", 1),
+        shard_index=getattr(args, "shard_index", 0),
+    )
+    if getattr(args, "limit", None) is not None:
+        cases = cases[: max(0, int(args.limit))]
     run_id = tm_answer.normalize_run_id(args.run_id) or default_run_id()
     results = [
         eval_case(case, run_id=run_id, write_trace=not getattr(args, "no_write_trace", False))
@@ -1250,6 +1280,9 @@ def cmd_eval(args: argparse.Namespace) -> int:
         **summary,
         "run_id": run_id,
         "source_case_count": original_case_count,
+        "filtered_case_count": filtered_case_count,
+        "shard_count": int(getattr(args, "shard_count", 1) or 1),
+        "shard_index": int(getattr(args, "shard_index", 0) or 0),
         "only_failures_from": getattr(args, "only_failures_from", None),
         "only_failure_kind": failure_filter_kind,
         "failures": failures,
@@ -1288,6 +1321,12 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
         getattr(args, "only_failures_from", None),
         kind=failure_filter_kind,
     )
+    filtered_case_count = len(cases)
+    cases = shard_cases(
+        cases,
+        shard_count=getattr(args, "shard_count", 1),
+        shard_index=getattr(args, "shard_index", 0),
+    )
     if args.limit is not None:
         cases = cases[: max(0, int(args.limit))]
     run_id = tm_answer.normalize_run_id(args.run_id) or default_run_id().replace("answer-eval", "answer-diagnosis")
@@ -1307,6 +1346,9 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
         **summary,
         "run_id": run_id,
         "source_case_count": original_case_count,
+        "filtered_case_count": filtered_case_count,
+        "shard_count": int(getattr(args, "shard_count", 1) or 1),
+        "shard_index": int(getattr(args, "shard_index", 0) or 0),
         "only_failures_from": getattr(args, "only_failures_from", None),
         "only_failure_kind": failure_filter_kind,
         "failures": [_compact_diagnosis_row(item) for item in failures] if args.compact else failures,
@@ -1342,6 +1384,9 @@ def main() -> None:
     eval_p.add_argument("--compact", action="store_true", help="omit per-case successes; keep summary and failures")
     eval_p.add_argument("--run-id", default=None, help="optional run id shared by all memory_answer trace rows")
     eval_p.add_argument("--no-write-trace", action="store_true", help="do not append eval rows to .tmp/memory-answer-trace.jsonl")
+    eval_p.add_argument("--limit", type=int, default=None, help="run only the first N cases after filters/sharding")
+    eval_p.add_argument("--shard-count", type=int, default=1, help="split cases into N deterministic shards")
+    eval_p.add_argument("--shard-index", type=int, default=0, help="zero-based shard index to run")
     eval_p.add_argument(
         "--only-failures-from",
         default=None,
@@ -1368,6 +1413,8 @@ def main() -> None:
     diag_p.add_argument("--top-k-probe", type=int, default=10, help="lexical/hybrid diagnostic probe depth")
     diag_p.add_argument("--map-probe-k", type=int, default=80, help="LLM Wiki map diagnostic probe depth")
     diag_p.add_argument("--limit", type=int, default=None, help="run only the first N cases")
+    diag_p.add_argument("--shard-count", type=int, default=1, help="split cases into N deterministic shards")
+    diag_p.add_argument("--shard-index", type=int, default=0, help="zero-based shard index to run")
     diag_p.add_argument(
         "--only-failures-from",
         default=None,

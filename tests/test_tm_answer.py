@@ -3750,6 +3750,59 @@ def test_answer_eval_can_run_only_previous_failures(tmp_path, monkeypatch, capsy
     assert report["only_failure_kind"] == "failed"
 
 
+def test_answer_eval_cmd_eval_runs_requested_shard(tmp_path, monkeypatch, capsys):
+    cases = tmp_path / "cases.jsonl"
+    cases.write_text(
+        "\n".join([
+            json.dumps({"id": "case-0", "query": "zero", "expected_status": "ok"}),
+            json.dumps({"id": "case-1", "query": "one", "expected_status": "ok"}),
+            json.dumps({"id": "case-2", "query": "two", "expected_status": "ok"}),
+            json.dumps({"id": "case-3", "query": "three", "expected_status": "ok"}),
+        ]),
+        encoding="utf-8",
+    )
+    calls: list[str] = []
+
+    def fake_memory_answer_core(query, **kwargs):
+        calls.append(query)
+        return {
+            "status": "ok",
+            "answer": "answer",
+            "summary": "summary",
+            "claims": [],
+            "evidence": [],
+            "warnings": [],
+            "trace_id": "trace-shard",
+            "trace": {"planner": {"intent": "recall"}},
+            "run_id": kwargs.get("run_id"),
+        }
+
+    monkeypatch.setattr(tm_answer_eval.tm_answer, "memory_answer_core", fake_memory_answer_core)
+    args = type("Args", (), {
+        "cases": str(cases),
+        "json": True,
+        "compact": True,
+        "run_id": "shard-filter",
+        "allow_paper_seed_tmp": False,
+        "only_failures_from": None,
+        "only_failure_kind": "failed",
+        "limit": None,
+        "shard_count": 2,
+        "shard_index": 1,
+    })()
+
+    exit_code = tm_answer_eval.cmd_eval(args)
+    report = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert calls == ["one", "three"]
+    assert report["source_case_count"] == 4
+    assert report["filtered_case_count"] == 4
+    assert report["case_count"] == 2
+    assert report["shard_count"] == 2
+    assert report["shard_index"] == 1
+
+
 def test_answer_eval_can_run_only_previous_evidence_misses(tmp_path):
     cases = tmp_path / "cases.jsonl"
     cases.write_text(
@@ -3826,6 +3879,14 @@ def test_answer_eval_failure_filter_accepts_utf8_bom_report(tmp_path):
     )
 
     assert [case["id"] for case in filtered] == ["case-evidence"]
+
+
+def test_answer_eval_shard_cases_uses_deterministic_round_robin():
+    cases = [{"id": f"case-{index}"} for index in range(6)]
+
+    shard = tm_answer_eval.shard_cases(cases, shard_count=3, shard_index=1)
+
+    assert [case["id"] for case in shard] == ["case-1", "case-4"]
 
 
 def test_answer_eval_loads_wiki_map_from_tools_path():

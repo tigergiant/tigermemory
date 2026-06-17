@@ -94,6 +94,9 @@ SUMMARY_KEYS = [
     "passed",
     "pass_rate",
     "expected_path_case_count",
+    "filtered_case_count",
+    "shard_count",
+    "shard_index",
     "answer_evidence_hit",
     "surrogate_path_case_count",
     "surrogate_evidence_hit",
@@ -160,6 +163,8 @@ def _run_matrix(
     output_dir: Path,
     run_id_prefix: str,
     limit: int | None,
+    shard_count: int,
+    shard_index: int,
     top_k_probe: int,
     map_probe_k: int,
 ) -> dict[str, Any]:
@@ -183,6 +188,10 @@ def _run_matrix(
         str(top_k_probe),
         "--map-probe-k",
         str(map_probe_k),
+        "--shard-count",
+        str(shard_count),
+        "--shard-index",
+        str(shard_index),
     ]
     if limit is not None:
         cmd.extend(["--limit", str(max(0, int(limit)))])
@@ -268,6 +277,8 @@ def main() -> None:
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--run-id-prefix", default=None)
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--shard-count", type=int, default=1)
+    parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--top-k-probe", type=int, default=10)
     parser.add_argument("--map-probe-k", type=int, default=80)
     args = parser.parse_args()
@@ -284,6 +295,8 @@ def main() -> None:
             output_dir=output_dir,
             run_id_prefix=run_id_prefix,
             limit=args.limit,
+            shard_count=args.shard_count,
+            shard_index=args.shard_index,
             top_k_probe=args.top_k_probe,
             map_probe_k=args.map_probe_k,
         )
