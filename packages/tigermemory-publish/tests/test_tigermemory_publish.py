@@ -218,6 +218,11 @@ def _build_fake_repo(root: pathlib.Path) -> None:
         PUBLIC_TRUE_PAGE.replace('title: "public page"', 'title: "person page"'),
         encoding="utf-8",
     )
+    (wiki / "investment").mkdir()
+    (wiki / "investment" / "portfolio-rules.md").write_text(
+        PUBLIC_TRUE_PAGE.replace('title: "public page"', 'title: "investment page"'),
+        encoding="utf-8",
+    )
 
     # runtime config template (commit-safe).
     openmemory = root / "runtime" / "openmemory"
@@ -292,6 +297,10 @@ def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
         "wiki/systems/private-flagged.md",
         "wiki/systems/untagged.md",
     ]
+    assert plan["excluded_by_private_partition"] == [
+        "wiki/investment/portfolio-rules.md",
+        "wiki/person/tiger-preferences.md",
+    ]
     assert plan["excluded_by_person_partition"] == ["wiki/person/tiger-preferences.md"]
     expected_template = "runtime/openmemory/." + "env.example"
     assert plan["config_files"] == [expected_template]
@@ -305,6 +314,14 @@ def test_collect_publish_plan_excludes_person_partition(tmp_path: pathlib.Path) 
 
     person_pages = [p for p in plan["wiki_public_pages"] if "/person/" in p]
     assert person_pages == [], "wiki/person/ must never appear in the plan"
+
+
+def test_collect_publish_plan_excludes_investment_partition_even_if_public(tmp_path: pathlib.Path) -> None:
+    _build_fake_repo(tmp_path)
+    plan = tigermemory_publish.collect_publish_plan(tmp_path)
+
+    assert "wiki/investment/portfolio-rules.md" not in plan["wiki_public_pages"]
+    assert "wiki/investment/portfolio-rules.md" in plan["excluded_by_private_partition"]
 
 
 def test_collect_publish_plan_forces_person_excluded_even_if_partition_list_includes_it(tmp_path: pathlib.Path, monkeypatch) -> None:
@@ -386,6 +403,7 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     assert not (dest / "wiki" / "systems" / "private-flagged.md").exists()
     assert not (dest / "wiki" / "systems" / "untagged.md").exists()
     assert not (dest / "wiki" / "person").exists()
+    assert not (dest / "wiki" / "investment").exists()
     template_name = "." + "env.example"
     real_name = "." + "env"
     assert (dest / "runtime" / "openmemory" / template_name).is_file()
@@ -624,6 +642,7 @@ def test_module_entrypoint_dry_run_json_reports_public_field_exclusions(tmp_path
     assert summary["ok"] is True
     assert summary["counts"]["wiki_public_pages"] == 1
     assert summary["excluded_counts"]["excluded_by_public_field"] == 2
+    assert summary["excluded_counts"]["excluded_by_private_partition"] == 2
     assert summary["excluded_counts"]["excluded_by_person_partition"] == 1
     assert summary["plan"]["wiki_public_pages"] == ["wiki/systems/public-page.md"]
     assert not (tmp_path / "out" / "AGENTS.md").exists()

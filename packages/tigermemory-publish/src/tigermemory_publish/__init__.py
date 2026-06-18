@@ -95,7 +95,7 @@ WIKI_PUBLISH_PARTITIONS = (
     "systems",
 )
 
-EXCLUDED_WIKI_PARTITIONS = ("person",)
+EXCLUDED_WIKI_PARTITIONS = ("person", "investment")
 DEFAULT_DEST_DIRNAME = "dist"
 MAX_FINDINGS = 50
 PUBLIC_FIELD_DEFAULT = False
@@ -146,7 +146,12 @@ INCLUDED_PLAN_KEYS = (
     "wiki_public_pages",
     "config_files",
 )
-EXCLUDED_PLAN_KEYS = ("excluded_by_public_field", "excluded_by_person_partition", "excluded_by_pii")
+EXCLUDED_PLAN_KEYS = (
+    "excluded_by_public_field",
+    "excluded_by_private_partition",
+    "excluded_by_person_partition",
+    "excluded_by_pii",
+)
 
 
 def _detect_repo_root() -> pathlib.Path:
@@ -234,6 +239,7 @@ def collect_publish_plan(repo_root: pathlib.Path) -> dict[str, list[str]]:
         "wiki_public_pages": [],
         "config_files": [],
         "excluded_by_public_field": [],
+        "excluded_by_private_partition": [],
         "excluded_by_person_partition": [],
         "excluded_by_pii": [],
     }
@@ -267,7 +273,10 @@ def collect_publish_plan(repo_root: pathlib.Path) -> dict[str, list[str]]:
                 continue
             for md in sorted(partition_dir.rglob("*.md")):
                 if md.is_file():
-                    plan["excluded_by_person_partition"].append(md.relative_to(repo_root).as_posix())
+                    rel = md.relative_to(repo_root).as_posix()
+                    plan["excluded_by_private_partition"].append(rel)
+                    if partition == "person":
+                        plan["excluded_by_person_partition"].append(rel)
         for partition in WIKI_PUBLISH_PARTITIONS:
             if partition in EXCLUDED_WIKI_PARTITIONS:
                 continue

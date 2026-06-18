@@ -36,6 +36,7 @@ jobs:
             tests/test_tm_publish.py \
             packages/tigermemory-publish/tests/test_tigermemory_publish.py \
             tests/test_pre_push_publish_smoke.py \
+            tests/test_public_boundary.py \
             -q
 
       - name: Publish snapshot audit via package command
@@ -61,12 +62,14 @@ jobs:
           python3 -m pip install -q "$snapshot"
 
           work="$(mktemp -d)"
-          TIGERMEMORY_ROOT="$work" tm init
+          TIGERMEMORY_ROOT="$work" tm init --profile local
+          TIGERMEMORY_ROOT="$work" tm profile show | python3 -c 'import sys; out=sys.stdin.read(); assert "effective=local" in out, out'
           memory_id="$(printf 'hello local memory' | TIGERMEMORY_ROOT="$work" tm write-memory --agent codex --topic systems | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+          TIGERMEMORY_ROOT="$work" tm ask --offline --query "hello local memory" --scope all | python3 -c 'import json,sys; payload=json.load(sys.stdin); assert payload["offline"] is True and any(e.get("source") == "memory" for e in payload["evidence"]), payload'
           TIGERMEMORY_ROOT="$work" tm search --query "hello local" --size 3 | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["count"] >= 1, data'
           TIGERMEMORY_ROOT="$work" tm verify --id "$memory_id" --terms "hello local" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["direct_readback_ok"] and data["search_by_terms_self_hit"], data'
 
-          TIGERMEMORY_ROOT="$snapshot" TIGERMEMORY_PROFILE=local tm dashboard --host 127.0.0.1 --port 9789 &
+          TIGERMEMORY_ROOT="$work" TIGERMEMORY_PROFILE=local tm dashboard --host 127.0.0.1 --port 9789 &
           dashboard_pid="$!"
           python3 - <<'PY'
           import http.cookiejar

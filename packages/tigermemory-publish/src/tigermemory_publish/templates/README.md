@@ -105,6 +105,13 @@ Start with **local** unless you already know you need a shared memory service.
 Do not install WSL, Docker, Qdrant, Caddy, or OpenMemory just to try the basic
 mode. Those pieces are advanced integrations and can be added later.
 
+## Public Core Contract
+
+The public snapshot promises a small local-first core before any advanced
+integrations. The stable contract for CLI commands, JSON fields, profile
+behavior, optional services, and release gates is documented in
+`wiki/systems/public-core-contract.md`.
+
 ## Runtime Profiles
 
 - `local`: default basic mode. Uses Markdown + Git + local SQLite + FTS5
