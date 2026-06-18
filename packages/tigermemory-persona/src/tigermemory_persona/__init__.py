@@ -18,12 +18,15 @@ Depends-on (must-have): tm_core helpers, local filesystem/git state, and configu
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import pathlib
 import re
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Iterable
+from zoneinfo import ZoneInfo
 
 def _detect_repo_root() -> pathlib.Path:
     explicit = os.environ.get("TIGERMEMORY_ROOT")
@@ -51,6 +54,7 @@ SOURCE_PATHS = [
     "wiki/systems/services-inventory.md",
 ]
 SNAPSHOT_PAGE = "wiki/systems/agent-onboarding.md"
+AGENT_CONTEXT_PACK = "runtime/agent-context/latest.json"
 SNAPSHOT_PAGE_REQUIRED_PHRASES = [
     "v0.2.3 接入状态",
     "暂时停止大功能开发",
@@ -147,6 +151,40 @@ def _load_services_inventory() -> str:
     return "\n\n".join(parts).strip() or "（services-inventory.md 解析失败，请人工核查）"
 
 
+def _load_agent_context_status() -> str:
+    path = REPO_ROOT / AGENT_CONTEXT_PACK
+    if not path.exists():
+        return (
+            "- Agent Context Pack：missing。运行 "
+            "`py tools\\tm_agent_context.py build --profile codex --task \"<task>\"` 生成。"
+        )
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return f"- Agent Context Pack：unreadable（{type(exc).__name__}）。运行 `py tools\\tm_agent_context.py validate --json` 检查。"
+    generated_raw = str(data.get("generated_at") or "")
+    stale_after = int((data.get("freshness") or {}).get("stale_after_minutes") or 240)
+    status = "unknown"
+    age_text = "age unknown"
+    try:
+        generated = datetime.fromisoformat(generated_raw)
+        if generated.tzinfo is None:
+            generated = generated.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+        age_minutes = max(
+            0,
+            int((datetime.now(ZoneInfo("Asia/Shanghai")) - generated.astimezone(ZoneInfo("Asia/Shanghai"))).total_seconds() // 60),
+        )
+        status = "fresh" if age_minutes <= stale_after else "stale"
+        age_text = f"age={age_minutes}min"
+    except Exception:
+        status = "invalid_time"
+    pack_hash = str(data.get("pack_hash") or "")[:16]
+    return (
+        f"- Agent Context Pack：{status}，{age_text}，hash={pack_hash or 'none'}，"
+        f"path=`{path}`。重建：`py tools\\tm_agent_context.py build --profile codex --task \"<task>\"`。"
+    )
+
+
 def render_30s() -> str:
     return """# tigermemory Agent Onboarding Snapshot (30s)
 
@@ -233,17 +271,21 @@ def render_5min(lessons: list[Lesson]) -> str:
 
 {agent_ecosystem}
 
-## 5. 生产服务清单（live runtime services）
+## 5. 当前上下文卡
+
+{_load_agent_context_status()}
+
+## 6. 生产服务清单（live runtime services）
 
 下表自动从 `deploy/mcp/*.service` 编译（`tools/tm_compile_systemd_inventory.py`），是 tigermemory 当前实际跑在 WSL2 / VPS 上的长驻服务与端口的事实源。完整页含 timer / oneshot / 编译规则：`wiki/systems/services-inventory.md`。
 
 {services_inventory}
 
-## 6. Live-state 优先原则
+## 7. Live-state 优先原则
 
 {live_state_rules}
 
-## 7. 必须避免的 lesson
+## 8. 必须避免的 lesson
 
 {lesson_entries}
 """
@@ -271,15 +313,15 @@ def render_full(lessons: list[Lesson]) -> str:
     source_lines = _bullet_lines(SOURCE_PATHS)
     return f"""{render_5min(lessons).rstrip()}
 
-## 8. Agent 接入边界
+## 9. Agent 接入边界
 
 {access_boundaries}
 
-## 9. 完整 lesson 清单
+## 10. 完整 lesson 清单
 
 {lesson_catalog}
 
-## 10. v0.2 范围
+## 11. v0.2 范围
 
 {v02_scope}
 

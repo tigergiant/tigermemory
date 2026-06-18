@@ -56,18 +56,19 @@ def test_get_agent_onboarding_5min():
     assert "## 2. 写入权限边界" in content
     assert "## 3. 工具入口" in content
     assert "## 4. Agent 生态地图（一句话定位）" in content
-    assert "## 5. 生产服务清单（live runtime services）" in content
-    assert "## 6. Live-state 优先原则" in content
-    assert "## 7. 必须避免的 lesson" in content
+    assert "## 5. 当前上下文卡" in content
+    assert "## 6. 生产服务清单（live runtime services）" in content
+    assert "## 7. Live-state 优先原则" in content
+    assert "## 8. 必须避免的 lesson" in content
 
 
 def test_get_agent_onboarding_full():
     result = tm_mcp.get_agent_onboarding("full")
     assert result["depth"] == "full"
     content = result["content"]
-    assert "## 8. Agent 接入边界" in content
-    assert "## 9. 完整 lesson 清单" in content
-    assert "## 10. v0.2 范围" in content
+    assert "## 9. Agent 接入边界" in content
+    assert "## 10. 完整 lesson 清单" in content
+    assert "## 11. v0.2 范围" in content
     assert "## 来源" in content
     assert len(content) > len(tm_mcp.get_agent_onboarding("5min")["content"])
 

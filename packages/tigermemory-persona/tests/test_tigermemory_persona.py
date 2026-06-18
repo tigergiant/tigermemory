@@ -43,9 +43,11 @@ def test_compile_snapshot_5min():
     assert "## 2. 写入权限边界" in out
     assert "## 3. 工具入口" in out
     assert "## 4. Agent 生态地图（一句话定位）" in out
-    assert "## 5. 生产服务清单（live runtime services）" in out
-    assert "## 6. Live-state 优先原则" in out
-    assert "## 7. 必须避免的 lesson" in out
+    assert "## 5. 当前上下文卡" in out
+    assert "## 6. 生产服务清单（live runtime services）" in out
+    assert "## 7. Live-state 优先原则" in out
+    assert "## 8. 必须避免的 lesson" in out
+    assert "Agent Context Pack" in out
     # Agent ecosystem must mention the major systems by name
     for token in ("OpenClaw", "Hermes", "DeerFlow", "Mem0", "OpenSpace", "memory_answer"):
         assert token in out, f"agent ecosystem section missing {token!r}"
@@ -60,19 +62,19 @@ def test_compile_snapshot_5min():
     assert 'get_agent_onboarding("30s")' in out
     assert "selfevolution" in out
     # 5min should be longer than 30s; embedded inventory adds ~2KB so the
-    # ceiling is now 10KB (was 8KB). Keep the guard as drift detector.
+    # ceiling is now 11KB after the compact Agent Context Pack status.
     assert len(out) > 1500, f"5min length {len(out)} suspiciously short"
-    assert len(out) < 10000, f"5min length {len(out)} suspiciously long"
+    assert len(out) < 11000, f"5min length {len(out)} suspiciously long"
 
 
 def test_compile_snapshot_full():
     out = tigermemory_persona.compile_snapshot("full")
     assert isinstance(out, str)
     assert out.startswith("# tigermemory Agent Onboarding Snapshot (5min)")
-    # full is 5min superset (sections 8/9/10 + 来源)
-    assert "## 8. Agent 接入边界" in out
-    assert "## 9. 完整 lesson 清单" in out
-    assert "## 10. v0.2 范围" in out
+    # full is 5min superset (sections 9/10/11 + 来源)
+    assert "## 9. Agent 接入边界" in out
+    assert "## 10. 完整 lesson 清单" in out
+    assert "## 11. v0.2 范围" in out
     assert "## 来源" in out
     # Must contain source path list (the contract footer)
     assert "AGENTS.md" in out
