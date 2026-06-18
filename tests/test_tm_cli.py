@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import types
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -43,6 +44,35 @@ def test_detect_repo_root_honors_explicit_env_for_empty_local_root(tmp_path, mon
     monkeypatch.setenv("TIGERMEMORY_ROOT", str(tmp_path))
 
     assert tigermemory_cli._detect_repo_root() == tmp_path.resolve()
+
+
+def test_detect_repo_root_prefers_cli_checkout_over_parent_config_root(tmp_path, monkeypatch) -> None:
+    parent = tmp_path / "parent"
+    snapshot = parent / "snapshot"
+    (parent / ".git").mkdir(parents=True)
+    (parent / "tools").mkdir()
+    (parent / "wiki").mkdir()
+    (snapshot / "tools").mkdir(parents=True)
+    (snapshot / "wiki").mkdir()
+    cli_path = snapshot / "tigermemory_cli.py"
+    cli_path.write_text("# snapshot cli marker\n", encoding="utf-8")
+
+    fake_config = types.ModuleType("tigermemory_config")
+    fake_config._detect_repo_root = lambda: parent
+    monkeypatch.setitem(sys.modules, "tigermemory_config", fake_config)
+    monkeypatch.setattr(tigermemory_cli, "__file__", str(cli_path))
+
+    assert tigermemory_cli._detect_repo_root() == snapshot.resolve()
+
+
+def test_subprocess_env_pins_detected_repo_root_for_child_tools(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(tigermemory_cli, "REPO_ROOT", tmp_path)
+    monkeypatch.delenv("TIGERMEMORY_ROOT", raising=False)
+
+    env = tigermemory_cli._subprocess_env()
+
+    assert env["TIGERMEMORY_ROOT"] == str(tmp_path)
+    assert env["PYTHONIOENCODING"] == "utf-8"
 
 
 def test_profile_set_and_show_uses_runtime_profile_file(tmp_path, monkeypatch, capsys) -> None:
@@ -570,6 +600,33 @@ def test_published_snapshot_cli_detects_root_without_env(tmp_path) -> None:
     wiki_payload = json.loads(wiki.stdout)
     assert wiki_payload["results"][0]["path"] == "wiki/operations/project-canvas.md"
 
+    dashboard_help = subprocess.run(
+        [sys.executable, str(snapshot / "tools" / "tm_review_ui.py"), "--help"],
+        cwd=snapshot,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=20,
+        check=False,
+    )
+    assert dashboard_help.returncode == 0, dashboard_help.stderr
+    assert "Run tigermemory Memory Ops dashboard" in dashboard_help.stdout
+
+    wiki_cn = subprocess.run(
+        [sys.executable, "-m", "tigermemory_cli", "search", "--scope", "wiki", "--query", "项目画布", "--size", "3"],
+        cwd=snapshot,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=20,
+        check=False,
+    )
+    assert wiki_cn.returncode == 0, wiki_cn.stderr
+    wiki_cn_payload = json.loads(wiki_cn.stdout)
+    assert wiki_cn_payload["results"][0]["path"] == "wiki/operations/project-canvas.md"
+
     ask = subprocess.run(
         [
             sys.executable,
@@ -594,6 +651,31 @@ def test_published_snapshot_cli_detects_root_without_env(tmp_path) -> None:
     ask_payload = json.loads(ask.stdout)
     assert ask_payload["offline"] is True
     assert ask_payload["memory"]["results"][0]["id"] == memory_id
+
+    ask_wiki_cn = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "tigermemory_cli",
+            "ask",
+            "--offline",
+            "--scope",
+            "wiki",
+            "--query",
+            "项目画布",
+        ],
+        cwd=snapshot,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=20,
+        check=False,
+    )
+    assert ask_wiki_cn.returncode == 0, ask_wiki_cn.stderr
+    ask_wiki_cn_payload = json.loads(ask_wiki_cn.stdout)
+    assert ask_wiki_cn_payload["offline"] is True
+    assert ask_wiki_cn_payload["wiki"]["results"][0]["path"] == "wiki/operations/project-canvas.md"
 
 
 def test_publish_passthrough_accepts_tool_options(monkeypatch) -> None:

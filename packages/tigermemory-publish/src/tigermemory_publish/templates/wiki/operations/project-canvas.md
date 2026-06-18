@@ -1,6 +1,7 @@
 ---
-title: "Project Canvas"
-updated: 2026-05-31
+title: "Project Canvas / 项目画布"
+aliases: ["项目画布", "project canvas", "starter canvas"]
+updated: 2026-06-19
 owner: human
 status: active
 public: true
@@ -12,6 +13,9 @@ public: true
 
 This starter canvas is safe for public snapshots. Replace it with your own
 project stages after `tm init`.
+
+中文说明：项目画布是 TigerMemory 的项目进展入口，用来记录阶段、
+活跃模块、阻塞点和下一步。
 
 ## Current State
 

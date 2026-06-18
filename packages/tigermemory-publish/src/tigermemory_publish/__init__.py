@@ -79,6 +79,9 @@ PUBLISH_TOOL_FILES = (
     "tools/tm_review_ui.py",
     "tools/tm_route.py",
     "tools/tm_route_audit.py",
+    "tools/tm_route_events.py",
+    "tools/tm_runtime_events.py",
+    "tools/tm_self_evolution.py",
 )
 
 PUBLISH_TOOL_DIRS = (
@@ -88,7 +91,6 @@ PUBLISH_TOOL_DIRS = (
 
 WIKI_PUBLISH_PARTITIONS = (
     "brand",
-    "investment",
     "operations",
     "production",
     "self-evolution",

@@ -32,6 +32,10 @@ def _detect_repo_root() -> pathlib.Path:
     explicit = os.environ.get("TIGERMEMORY_ROOT")
     if explicit:
         return pathlib.Path(explicit).resolve()
+    here = pathlib.Path(__file__).resolve()
+    for ancestor in [here.parent, *here.parents]:
+        if (ancestor / "tools").is_dir() and (ancestor / "wiki").is_dir():
+            return ancestor
     try:
         from tigermemory_config import _detect_repo_root as config_detect_repo_root
 
@@ -40,10 +44,6 @@ def _detect_repo_root() -> pathlib.Path:
             return root
     except Exception:
         pass
-    here = pathlib.Path(__file__).resolve()
-    for ancestor in [here.parent, *here.parents]:
-        if (ancestor / "tools").is_dir() and (ancestor / "wiki").is_dir():
-            return ancestor
     return pathlib.Path.cwd().resolve()
 
 
@@ -66,6 +66,7 @@ def _subprocess_env() -> dict[str, str]:
     prefix = os.pathsep.join(_package_src_paths())
     if prefix:
         env["PYTHONPATH"] = prefix + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    env.setdefault("TIGERMEMORY_ROOT", str(REPO_ROOT))
     env.setdefault("PYTHONIOENCODING", "utf-8")
     return env
 
