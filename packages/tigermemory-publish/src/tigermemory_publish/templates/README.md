@@ -24,7 +24,7 @@ maintainer. TigerMemory's public basic mode is installed from this snapshot
 checkout with Python:
 
 ```powershell
-py -m pip install -e .
+py -m pip install .
 ```
 
 If TigerMemory later offers an npm installer, it must use a scoped or different
@@ -43,7 +43,7 @@ Third-party dependency and vendored dashboard asset notices are listed in
 Run these commands from this repository checkout:
 
 ```powershell
-py -m pip install -e .
+py -m pip install .
 tm init
 tm profile show
 ```

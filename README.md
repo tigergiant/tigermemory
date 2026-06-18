@@ -24,7 +24,7 @@ maintainer. TigerMemory's public basic mode is installed from this Git checkout
 with Python:
 
 ```powershell
-py -m pip install -e .
+py -m pip install .
 ```
 
 If TigerMemory later offers an npm installer, it must use a scoped or different
@@ -42,7 +42,7 @@ state, and non-public research are outside the public release boundary.
 ```powershell
 git clone https://github.com/tigergiant/tigermemory.git
 cd tigermemory
-py -m pip install -e .
+py -m pip install .
 tm init
 tm profile show
 ```

@@ -91,6 +91,13 @@ def test_snapshot_build_excludes_private_boundary_paths(tmp_path, monkeypatch, c
     assert not (snapshot / "wiki" / "investment").exists(), "investment资料 should not be shipped in open snapshot"
 
 
+def test_root_readme_uses_regular_install_not_editable_install() -> None:
+    readme = (pathlib.Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
+
+    assert "py -m pip install ." in readme
+    assert "py -m pip install -e ." not in readme
+
+
 def test_snapshot_audit_blocks_local_path_leaks_with_path_and_reason(tmp_path, monkeypatch, capsys) -> None:
     repo = tmp_path / "repo"
     _build_snapshot_repo(repo)

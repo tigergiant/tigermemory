@@ -65,6 +65,31 @@ def test_detect_repo_root_prefers_cli_checkout_over_parent_config_root(tmp_path,
     assert tigermemory_cli._detect_repo_root() == snapshot.resolve()
 
 
+def test_detect_repo_root_prefers_cwd_snapshot_over_parent_config_root_for_wheel_install(
+    tmp_path, monkeypatch
+) -> None:
+    parent = tmp_path / "parent"
+    snapshot = parent / "snapshot"
+    site_packages = parent / ".tmp" / "venv" / "Lib" / "site-packages"
+    (parent / ".git").mkdir(parents=True)
+    (parent / "tools").mkdir()
+    (parent / "wiki").mkdir()
+    (parent / "tigermemory_cli.py").write_text("# private parent cli marker\n", encoding="utf-8")
+    (snapshot / "tools").mkdir(parents=True)
+    (snapshot / "wiki").mkdir()
+    site_packages.mkdir(parents=True)
+    cli_path = site_packages / "tigermemory_cli.py"
+    cli_path.write_text("# installed cli marker\n", encoding="utf-8")
+
+    fake_config = types.ModuleType("tigermemory_config")
+    fake_config._detect_repo_root = lambda: parent
+    monkeypatch.setitem(sys.modules, "tigermemory_config", fake_config)
+    monkeypatch.setattr(tigermemory_cli, "__file__", str(cli_path))
+    monkeypatch.chdir(snapshot)
+
+    assert tigermemory_cli._detect_repo_root() == snapshot.resolve()
+
+
 def test_subprocess_env_pins_detected_repo_root_for_child_tools(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(tigermemory_cli, "REPO_ROOT", tmp_path)
     monkeypatch.delenv("TIGERMEMORY_ROOT", raising=False)

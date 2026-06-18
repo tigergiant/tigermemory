@@ -272,6 +272,17 @@ def test_parse_frontmatter_public_rejects_false_like_values() -> None:
         assert tigermemory_publish.parse_frontmatter_public(content) is False
 
 
+def test_public_templates_use_regular_install_not_editable_install() -> None:
+    templates = pathlib.Path(tigermemory_publish.__file__).resolve().parent / "templates"
+    readme = (templates / "README.md").read_text(encoding="utf-8")
+    index = (templates / "index.md").read_text(encoding="utf-8")
+
+    assert "py -m pip install ." in readme
+    assert "py -m pip install ." in index
+    assert "py -m pip install -e ." not in readme
+    assert "py -m pip install -e ." not in index
+
+
 def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
     _build_fake_repo(tmp_path)
     plan = tigermemory_publish.collect_publish_plan(tmp_path)

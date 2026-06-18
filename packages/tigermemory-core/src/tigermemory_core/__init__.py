@@ -164,6 +164,10 @@ def _detect_repo_root() -> pathlib.Path:
     explicit = os.environ.get("TIGERMEMORY_ROOT")
     if explicit:
         return pathlib.Path(explicit).resolve()
+    cwd = pathlib.Path.cwd().resolve()
+    for ancestor in [cwd, *cwd.parents]:
+        if (ancestor / "wiki").is_dir() and (ancestor / "tools").is_dir():
+            return ancestor
     here = pathlib.Path(__file__).resolve()
     for ancestor in [here.parent, *here.parents]:
         if (ancestor / "wiki").is_dir() and (

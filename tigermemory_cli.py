@@ -34,6 +34,14 @@ def _detect_repo_root() -> pathlib.Path:
         return pathlib.Path(explicit).resolve()
     here = pathlib.Path(__file__).resolve()
     for ancestor in [here.parent, *here.parents]:
+        if (
+            (ancestor / "tools").is_dir()
+            and (ancestor / "wiki").is_dir()
+            and (ancestor / "tigermemory_cli.py").resolve() == here
+        ):
+            return ancestor
+    cwd = pathlib.Path.cwd().resolve()
+    for ancestor in [cwd, *cwd.parents]:
         if (ancestor / "tools").is_dir() and (ancestor / "wiki").is_dir():
             return ancestor
     try:
@@ -44,7 +52,7 @@ def _detect_repo_root() -> pathlib.Path:
             return root
     except Exception:
         pass
-    return pathlib.Path.cwd().resolve()
+    return cwd
 
 
 REPO_ROOT = _detect_repo_root()
