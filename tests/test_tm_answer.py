@@ -599,6 +599,23 @@ def test_trusted_external_evidence_paths_are_precise(monkeypatch, tmp_path):
     assert tm_answer._effective_source("wiki", trusted_key) == "sources"
 
 
+def test_trusted_external_evidence_paths_can_come_from_env(monkeypatch, tmp_path):
+    trusted = tmp_path / "codex" / "hooks2" / "stop_tigermemory_guard.ps1"
+    other = tmp_path / "codex" / "hooks2" / "other.ps1"
+    trusted.parent.mkdir(parents=True, exist_ok=True)
+    trusted.write_text("Session handoff reminder", encoding="utf-8")
+    other.write_text("No access", encoding="utf-8")
+    trusted_key = trusted.resolve().as_posix()
+    other_key = other.resolve().as_posix()
+    monkeypatch.setattr(tm_answer, "TRUSTED_EXTERNAL_EVIDENCE_PATHS", set())
+    monkeypatch.setenv(tm_answer.TRUSTED_EXTERNAL_EVIDENCE_PATHS_ENV, trusted_key)
+
+    assert tm_answer._is_allowed_evidence_path(trusted_key)
+    assert not tm_answer._is_allowed_evidence_path(other_key)
+    assert tm_answer._read_hit_content(trusted_key) == "Session handoff reminder"
+    assert tm_answer._read_hit_content(other_key) is None
+
+
 def test_memory_answer_conflict_scan_uses_untrimmed_evidence(monkeypatch, tmp_path):
     hits = [
         {

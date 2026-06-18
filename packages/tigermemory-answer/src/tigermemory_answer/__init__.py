@@ -473,10 +473,8 @@ HISTORICAL_QUERY_MARKERS = (
 STALE_CONFLICT_WINDOW_DAYS = 7
 
 ROOT_WIKI_PATHS = {"AGENTS.md"}
-TRUSTED_EXTERNAL_EVIDENCE_PATHS = {
-    "C:/Users/Giant/.codex/skills/delegated-dev-workflow/SKILL.md",
-    "C:/Users/Giant/.codex/hooks2/stop_tigermemory_guard.ps1",
-}
+TRUSTED_EXTERNAL_EVIDENCE_PATHS_ENV = "TM_TRUSTED_EXTERNAL_EVIDENCE_PATHS"
+TRUSTED_EXTERNAL_EVIDENCE_PATHS: set[str] = set()
 WEAK_EVIDENCE_MIN_RELEVANCE = 1.0
 WEAK_EVIDENCE_MIN_MATCHES = 1
 MUST_READ_THRESHOLD = 70.0
@@ -662,8 +660,22 @@ def _normalize_local_path_text(value: Any) -> str:
     return text
 
 
+def _trusted_external_evidence_paths() -> set[str]:
+    paths = {
+        normalized
+        for item in TRUSTED_EXTERNAL_EVIDENCE_PATHS
+        if (normalized := _normalize_local_path_text(item))
+    }
+    raw = os.environ.get(TRUSTED_EXTERNAL_EVIDENCE_PATHS_ENV, "")
+    for item in re.split(r"[;\r\n]+", raw):
+        normalized = _normalize_local_path_text(item)
+        if normalized:
+            paths.add(normalized)
+    return paths
+
+
 def _is_trusted_external_evidence_path(value: Any) -> bool:
-    return _normalize_local_path_text(value) in TRUSTED_EXTERNAL_EVIDENCE_PATHS
+    return _normalize_local_path_text(value) in _trusted_external_evidence_paths()
 
 
 def _is_allowed_evidence_path(value: Any) -> bool:
