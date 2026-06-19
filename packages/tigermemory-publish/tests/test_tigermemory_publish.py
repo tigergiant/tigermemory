@@ -484,6 +484,20 @@ def test_validate_module_checks_reports_missing_path(tmp_path) -> None:
     assert any(item["path"] == "tests/test_tm_cli.py" for item in payload["missing"])
 
 
+def test_detect_repo_root_accepts_git_worktree_file(tmp_path, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    module_file = repo / "packages/tigermemory-publish/src/tigermemory_publish/__init__.py"
+    module_file.parent.mkdir(parents=True)
+    module_file.write_text("# module placeholder\n", encoding="utf-8")
+    (repo / "wiki").mkdir()
+    (repo / ".git").write_text("gitdir: ../.git/worktrees/repo\n", encoding="utf-8")
+
+    monkeypatch.delenv("TIGERMEMORY_ROOT", raising=False)
+    monkeypatch.setattr(tigermemory_publish, "__file__", str(module_file))
+
+    assert tigermemory_publish._detect_repo_root() == repo.resolve()
+
+
 def test_main_with_evidence_report_json_includes_release_evidence_payload(tmp_path, monkeypatch, capsys) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

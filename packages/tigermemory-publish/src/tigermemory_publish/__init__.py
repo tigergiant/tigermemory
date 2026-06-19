@@ -111,7 +111,8 @@ def _detect_repo_root() -> pathlib.Path:
         return pathlib.Path(explicit).resolve()
     here = pathlib.Path(__file__).resolve()
     for ancestor in [here.parent, *here.parents]:
-        if (ancestor / ".git").is_dir() and (ancestor / "wiki").is_dir():
+        git_marker = ancestor / ".git"
+        if (git_marker.is_dir() or git_marker.is_file()) and (ancestor / "wiki").is_dir():
             return ancestor
     return here.parent.parent.parent.parent
 
