@@ -112,6 +112,21 @@ integrations. The stable contract for CLI commands, JSON fields, profile
 behavior, optional services, and release gates is documented in
 `wiki/systems/public-core-contract.md`.
 
+## What Ships In This Snapshot
+
+The public snapshot is assembled from declared public modules:
+
+- `public-cli`: the `tm` command and root install files.
+- `public-core`: local memory, config, route, search, index, lessons, persona,
+  doctor, digest, protocols, and schemas.
+- `public-answer-offline`: evidence-only offline ask.
+- `public-dashboard`: local dashboard entrypoint and static assets.
+- `public-publish`: snapshot builder, audit, and release templates.
+- `public-wiki-seed`: starter project canvas and public wiki pages.
+
+Private dogfood modules and optional hybrid integrations are intentionally not
+part of the basic public snapshot.
+
 ## Runtime Profiles
 
 - `local`: default basic mode. Uses Markdown + Git + local SQLite + FTS5

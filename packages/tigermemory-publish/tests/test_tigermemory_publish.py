@@ -1,10 +1,12 @@
 ﻿from __future__ import annotations
 
+import ast
 import json
 import os
 import pathlib
 import subprocess
 import sys
+import tomllib
 
 import pytest
 
@@ -319,6 +321,87 @@ def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
     assert findings == []
 
 
+def test_public_modules_own_publish_constants() -> None:
+    modules = tigermemory_publish.PUBLIC_MODULES
+
+    assert tigermemory_publish.PUBLISH_TOP_FILES == tuple(
+        item for module in modules for item in module.top_files
+    )
+    assert tigermemory_publish.PUBLISH_MAPPED_FILES == tuple(
+        item for module in modules for item in module.mapped_files
+    )
+    assert tigermemory_publish.PUBLISH_WHOLE_DIRS == (
+        *tuple(item for module in modules for item in module.data_dirs),
+        *tuple(item for module in modules for item in module.package_roots),
+    )
+    assert tigermemory_publish.PUBLISH_TOOL_FILES == tuple(
+        item for module in modules for item in module.tool_files
+    )
+    assert tigermemory_publish.PUBLISH_TOOL_DIRS == tuple(
+        item for module in modules for item in module.tool_dirs
+    )
+    assert tigermemory_publish.WIKI_PUBLISH_PARTITIONS == tuple(
+        item for module in modules for item in module.wiki_partitions
+    )
+
+
+def test_schemas_are_data_dir_not_installable_package_root() -> None:
+    assert "schemas" in tigermemory_publish.PUBLISH_WHOLE_DIRS
+    assert "schemas" not in tigermemory_publish.PUBLISH_PACKAGE_ROOTS
+
+
+def test_public_pyproject_package_roots_match_modules() -> None:
+    repo_root = pathlib.Path(__file__).resolve().parents[3]
+    template = repo_root / "packages" / "tigermemory-publish" / "src" / "tigermemory_publish" / "templates" / "pyproject.toml"
+    data = tomllib.loads(template.read_text(encoding="utf-8"))
+    where = data["tool"]["setuptools"]["packages"]["find"]["where"]
+
+    assert set(where) == set(tigermemory_publish.PUBLISH_PACKAGE_ROOTS)
+    assert "schemas" not in where
+
+    private_package_roots = {
+        "packages/tigerledger/src",
+        "packages/tigermemory-eval/src",
+        "packages/tigermemory-minimax/src",
+    }
+    existing_private_roots = {
+        rel
+        for rel in private_package_roots
+        if (repo_root / rel).exists()
+    }
+    assert not existing_private_roots.intersection(where)
+
+
+def test_public_packages_do_not_import_private_packages() -> None:
+    repo_root = pathlib.Path(__file__).resolve().parents[3]
+    private_modules = {
+        "tigerledger",
+        "tigermemory_eval",
+        "tigermemory_minimax",
+    }
+    violations: list[str] = []
+
+    for rel_root in tigermemory_publish.PUBLISH_PACKAGE_ROOTS:
+        root = repo_root / rel_root
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    imported = [alias.name.split(".", 1)[0] for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    imported = [node.module.split(".", 1)[0]]
+                else:
+                    continue
+                for name in imported:
+                    if name in private_modules:
+                        rel = path.relative_to(repo_root).as_posix()
+                        violations.append(f"{rel} imports {name}")
+
+    assert violations == []
+
+
 def test_collect_publish_plan_excludes_person_partition(tmp_path: pathlib.Path) -> None:
     _build_fake_repo(tmp_path)
     plan = tigermemory_publish.collect_publish_plan(tmp_path)
@@ -436,6 +519,9 @@ def test_execute_plan_dry_run_via_main(tmp_path, monkeypatch, capsys) -> None:
     assert summary["dry_run"] is True
     assert summary["files_copied"] == 0
     assert summary["counts"]["wiki_public_pages"] == 1
+    assert "public-core" in summary["modules"]["included"]
+    assert "private-dogfood" in summary["modules"]["excluded"]
+    assert summary["modules"]["count"] == len(tigermemory_publish.PUBLIC_MODULES)
     assert not (tmp_path / "out" / "AGENTS.md").exists()
 
 

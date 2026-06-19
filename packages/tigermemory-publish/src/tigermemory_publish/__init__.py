@@ -20,82 +20,26 @@ import shutil
 import subprocess
 import sys
 
-
-PUBLISH_TOP_FILES = (
-    "tigermemory_cli.py",
-    ".gitignore",
+from .modules import (
+    PRIVATE_EXCLUDED_MODULES,
+    PUBLIC_MODULES,
+    module_summary,
+    public_mapped_files,
+    public_package_roots,
+    public_tool_dirs,
+    public_tool_files,
+    public_top_files,
+    public_whole_dirs,
+    public_wiki_partitions,
 )
 
-PUBLISH_MAPPED_FILES = (
-    ("packages/tigermemory-publish/src/tigermemory_publish/templates/AGENTS.md", "AGENTS.md"),
-    ("packages/tigermemory-publish/src/tigermemory_publish/templates/index.md", "index.md"),
-    ("packages/tigermemory-publish/src/tigermemory_publish/templates/LICENSE", "LICENSE"),
-    (
-        "packages/tigermemory-publish/src/tigermemory_publish/templates/THIRD_PARTY_NOTICES.md",
-        "THIRD_PARTY_NOTICES.md",
-    ),
-    ("packages/tigermemory-publish/src/tigermemory_publish/templates/pyproject.toml", "pyproject.toml"),
-    (
-        "packages/tigermemory-publish/src/tigermemory_publish/templates/wiki/operations/project-canvas.md",
-        "wiki/operations/project-canvas.md",
-    ),
-    ("packages/tigermemory-publish/src/tigermemory_publish/templates/README.md", "README.md"),
-)
-
-PUBLISH_WHOLE_DIRS = (
-    "schemas",
-    "packages/tigermemory-answer/src",
-    "packages/tigermemory-config/src",
-    "packages/tigermemory-core/src",
-    "packages/tigermemory-digest/src",
-    "packages/tigermemory-doctor/src",
-    "packages/tigermemory-index/src",
-    "packages/tigermemory-lessons/src",
-    "packages/tigermemory-persona/src",
-    "packages/tigermemory-protocols/src",
-    "packages/tigermemory-publish/src",
-    "packages/tigermemory-route/src",
-    "packages/tigermemory-search/src",
-)
-
-PUBLISH_TOOL_FILES = (
-    "tools/_bootstrap_paths.py",
-    "tools/tm_agent_doctor.py",
-    "tools/tm_answer_trace.py",
-    "tools/tm_compile_index.py",
-    "tools/tm_core.py",
-    "tools/tm_cron_apply.py",
-    "tools/tm_dashboard_prefs.py",
-    "tools/tm_io.py",
-    "tools/tm_lessons.py",
-    "tools/tm_local_memory.py",
-    "tools/tm_memory_ops.py",
-    "tools/tm_memory_reflection.py",
-    "tools/tm_persona.py",
-    "tools/tm_publish.py",
-    "tools/tm_retention_audit.py",
-    "tools/tm_review.py",
-    "tools/tm_review_tools.py",
-    "tools/tm_review_ui.py",
-    "tools/tm_route.py",
-    "tools/tm_route_audit.py",
-    "tools/tm_route_events.py",
-    "tools/tm_runtime_events.py",
-    "tools/tm_self_evolution.py",
-)
-
-PUBLISH_TOOL_DIRS = (
-    "tools/memory_answer",
-    "tools/static",
-)
-
-WIKI_PUBLISH_PARTITIONS = (
-    "brand",
-    "operations",
-    "production",
-    "self-evolution",
-    "systems",
-)
+PUBLISH_TOP_FILES = public_top_files()
+PUBLISH_MAPPED_FILES = public_mapped_files()
+PUBLISH_WHOLE_DIRS = public_whole_dirs()
+PUBLISH_PACKAGE_ROOTS = public_package_roots()
+PUBLISH_TOOL_FILES = public_tool_files()
+PUBLISH_TOOL_DIRS = public_tool_dirs()
+WIKI_PUBLISH_PARTITIONS = public_wiki_partitions()
 
 EXCLUDED_WIKI_PARTITIONS = ("person", "investment")
 DEFAULT_DEST_DIRNAME = "dist"
@@ -761,6 +705,7 @@ def main(argv: list[str] | None = None) -> int:
         "counts": counts,
         "excluded_counts": excluded_counts,
         "files_copied": copied,
+        "modules": module_summary(),
         "plan": included,
         "included": included,
         "excluded": excluded,
