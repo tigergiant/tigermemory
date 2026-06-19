@@ -1,0 +1,32 @@
+{
+  "name": "TigerMemory",
+  "short_name": "TigerMemory",
+  "description": "TigerMemory 个人记忆面板：处理今日待确认内容，查看运行检查，管理记忆质量与偏好设置。",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "start_url": "/digest",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f2e6",
+  "theme_color": "#c8a560",
+  "icons": [
+    {
+      "src": "/static/tiger/tigermemory_tiger_logo_192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/tiger/tigermemory_tiger_logo_512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/tiger/tigermemory_tiger_logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

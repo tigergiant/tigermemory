@@ -40,6 +40,7 @@ from .modules import (
     public_whole_dirs,
     public_wiki_partitions,
 )
+from .split import build_split_report, run_public_core_instance_smoke
 
 PUBLISH_TOP_FILES = public_top_files()
 PUBLISH_MAPPED_FILES = public_mapped_files()
@@ -893,6 +894,22 @@ def main(argv: list[str] | None = None) -> int:
         "--evidence-output",
         help="write public release evidence as Markdown to path",
     )
+    p.add_argument(
+        "--target",
+        choices=["snapshot", "public-core"],
+        default="snapshot",
+        help="publish target; public-core is the true split export candidate",
+    )
+    p.add_argument(
+        "--split-report",
+        action="store_true",
+        help="include true split readiness fields in JSON output",
+    )
+    p.add_argument(
+        "--verify-split-smoke",
+        action="store_true",
+        help="run a temporary public-core install plus external instance smoke before marking public_core_independent true",
+    )
     args = p.parse_args(argv)
 
     if args.print_checks:
@@ -935,6 +952,17 @@ def main(argv: list[str] | None = None) -> int:
     blocking_findings = [f for f in sensitive_findings if f.get("severity") != "warning"]
     has_blocking_findings = bool(blocking_findings)
 
+    split_smoke_ok = False
+    if args.verify_split_smoke:
+        def _publish_public_core_for_smoke(dest: pathlib.Path) -> None:
+            smoke_plan = collect_publish_plan(REPO_ROOT)
+            execute_plan(smoke_plan, REPO_ROOT, dest)
+
+        split_smoke_ok = run_public_core_instance_smoke(
+            repo_root=REPO_ROOT,
+            publish_func=_publish_public_core_for_smoke,
+        )
+
     copied = 0
     if not args.dry_run and not has_blocking_findings:
         dest.mkdir(parents=True, exist_ok=True)
@@ -944,10 +972,10 @@ def main(argv: list[str] | None = None) -> int:
         pii_findings_path = write_pii_findings(dest, sensitive_findings)
 
     module_check_validation = None
-    if args.validate_checks or args.evidence_output or args.evidence_report:
+    if args.validate_checks or args.evidence_output or args.evidence_report or args.split_report or args.verify_split_smoke:
         module_check_validation = validate_module_checks(REPO_ROOT)
     public_boundary_validation = None
-    if args.validate_checks or args.evidence_output or args.evidence_report:
+    if args.validate_checks or args.evidence_output or args.evidence_report or args.split_report or args.verify_split_smoke:
         public_boundary_validation = validate_public_boundaries(REPO_ROOT, args.module)
     module_check_failure_is_blocking = bool(
         (args.validate_checks or args.evidence_output or args.evidence_report)
@@ -955,17 +983,24 @@ def main(argv: list[str] | None = None) -> int:
         and not module_check_validation["ok"]
     )
     public_boundary_failure_is_blocking = bool(
-        (args.validate_checks or args.evidence_output or args.evidence_report)
+        (args.validate_checks or args.evidence_output or args.evidence_report or args.verify_split_smoke)
         and public_boundary_validation is not None
         and not public_boundary_validation["ok"]
     )
-    overall_ok = not blocking_findings and not module_check_failure_is_blocking and not public_boundary_failure_is_blocking
+    split_smoke_failure_is_blocking = bool(args.verify_split_smoke and not split_smoke_ok)
+    overall_ok = (
+        not blocking_findings
+        and not module_check_failure_is_blocking
+        and not public_boundary_failure_is_blocking
+        and not split_smoke_failure_is_blocking
+    )
 
     summary = {
         "ok": overall_ok,
         "dest": str(dest),
         "dry_run": args.dry_run,
         "module": args.module,
+        "target": args.target,
         "inspection_only": args.module is not None,
         "release_gate_scope": "inspection-only" if args.module else "full-snapshot",
         "release_gate_ok": False if args.module else overall_ok,
@@ -991,8 +1026,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if (args.validate_checks or args.evidence_report) and module_check_validation is not None:
         summary["module_check_validation"] = module_check_validation
-    if (args.validate_checks or args.evidence_report) and public_boundary_validation is not None:
+    if (args.validate_checks or args.evidence_report or args.split_report or args.verify_split_smoke) and public_boundary_validation is not None:
         summary["public_boundary_validation"] = public_boundary_validation
+    if args.split_report:
+        if public_boundary_validation is None:
+            public_boundary_validation = validate_public_boundaries(REPO_ROOT, args.module)
+        boundary_ok = bool(public_boundary_validation and public_boundary_validation["ok"])
+        summary["split_report"] = build_split_report(
+            args.target,
+            boundary_ok=boundary_ok,
+            smoke_ok=split_smoke_ok,
+        )
 
     if args.evidence_report and args.json:
         summary["release_evidence"] = {
@@ -1012,6 +1056,8 @@ def main(argv: list[str] | None = None) -> int:
             "module_check_validation": module_check_validation,
             "public_boundary_validation": public_boundary_validation,
         }
+        if args.split_report and "split_report" in summary:
+            summary["release_evidence"]["true_split"] = summary["split_report"]
 
     if not args.json and args.validate_checks:
         if module_check_validation and module_check_validation["ok"]:

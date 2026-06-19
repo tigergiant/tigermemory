@@ -43,6 +43,8 @@ import urllib.request
 import uuid
 from typing import Any
 
+from .roots import resolve_app_root, resolve_instance_root, subprocess_root_env
+
 __all__ = [
     "ACTIONS",
     "AGENTS",
@@ -125,7 +127,10 @@ __all__ = [
     "mem0_write",
     "now",
     "primary_search_scope",
+    "resolve_app_root",
+    "resolve_instance_root",
     "verify_memory_record",
+    "subprocess_root_env",
     "refine_from_summary",
     "render_inbox_body",
     "render_wiki_body",
@@ -161,12 +166,15 @@ TZ_CN = _TZ_CN_IMPL
 
 
 def _detect_repo_root() -> pathlib.Path:
-    explicit = os.environ.get("TIGERMEMORY_ROOT")
+    explicit = os.environ.get("TIGERMEMORY_INSTANCE_ROOT")
     if explicit:
         return pathlib.Path(explicit).resolve()
+    legacy = os.environ.get("TIGERMEMORY_ROOT")
+    if legacy:
+        return pathlib.Path(legacy).resolve()
     cwd = pathlib.Path.cwd().resolve()
     for ancestor in [cwd, *cwd.parents]:
-        if (ancestor / "wiki").is_dir() and (ancestor / "tools").is_dir():
+        if (ancestor / "wiki").is_dir() and ((ancestor / "tools").is_dir() or (ancestor / "runtime").is_dir()):
             return ancestor
     here = pathlib.Path(__file__).resolve()
     for ancestor in [here.parent, *here.parents]:

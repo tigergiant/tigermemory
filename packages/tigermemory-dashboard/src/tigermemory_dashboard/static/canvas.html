@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#c8a560">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="TigerMemory" data-i18n-attr="content" data-i18n-content="app.title">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/static/tiger/tigermemory_tiger_logo_192.png">
+  <link rel="apple-touch-icon" href="/static/tiger/tigermemory_tiger_logo_192.png">
+  <title data-i18n="page.canvas.title">TigerMemory 项目进展</title>
+  <script src="/static/assets/tailwindcss.min.js"></script>
+  <script src="/static/assets/lucide.min.js"></script>
+  <style>__STYLE__</style>
+</head>
+<body data-page="canvas">
+  __HEADER__
+  <script id="canvas-data" type="application/json">__CANVAS_JSON__</script>
+  <img class="dashboard-motif" src="/static/tiger/tigerlogo.png" alt="">
+  <div class="stripe-motif tr"></div>
+  <div class="stripe-motif br"></div>
+
+  <main class="relative z-10 mx-auto max-w-[118rem] px-6 py-8">
+    <section class="card mb-6 p-6">
+      <div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+        <div>
+          <div class="mb-2 inline-flex items-center gap-2 text-sm font-medium text-[#8a8275]">
+            <i data-lucide="activity" class="h-4 w-4 text-[#c8a560]"></i>
+            <span data-i18n="brand.subtitle">记忆管家</span>
+          </div>
+          <h1 class="text-3xl font-extrabold leading-9 text-[#1f1d1b]" data-i18n="page.canvas.title">项目进展</h1>
+          <p class="mt-2 max-w-3xl text-sm leading-6 text-[#4a443d]" data-i18n="page.canvas.intro">渲染 `wiki/operations/project-canvas.md` 中的 Mermaid 状态图。当前为只读视图，仅用于快速观察项目级状态。</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+          <span id="canvas-status" class="status-badge status-warn"><span class="status-dot"></span>加载中</span>
+          <span id="canvas-updated" class="rounded-full border border-[#c9bf9f] bg-[#f0e9d8] px-3 py-1 text-xs text-[#4a443d]">更新：-</span>
+          <span id="canvas-source" class="rounded-full border border-[#c9bf9f] bg-[#f0e9d8] px-3 py-1 text-xs text-[#4a443d]">来源：-</span>
+        </div>
+      </div>
+      <div id="canvas-info" class="mt-4 text-sm text-[#8a6b1f]"></div>
+    </section>
+
+    <section class="canvas-layout mb-6">
+      <div class="card canvas-main-card p-6">
+        <div class="mb-3 grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
+          <div class="flex min-w-0 items-center gap-2 text-[#1f1d1b]">
+            <i data-lucide="workflow" class="h-5 w-5 text-[#c8a560]"></i>
+            <h2 class="text-lg font-semibold" data-i18n="page.canvas.diagram_title">项目状态图</h2>
+          </div>
+          <div class="flex min-w-0 flex-wrap items-center gap-2 xl:justify-end">
+            <span id="canvas-module-count" class="rounded-full border border-[#c9bf9f] bg-[#f0e9d8] px-2 py-1 text-xs text-[#4a443d]">共 0 项</span>
+            <div class="canvas-segment" role="tablist" aria-label="Canvas view tabs" data-i18n-attr="aria-label" data-i18n-aria-label="page.canvas.view_tabs_label">
+              <button id="canvas-view-overview" class="canvas-segment-btn active" type="button" data-canvas-view="overview" data-i18n="page.canvas.view_overview" role="tab" aria-selected="true">星图</button>
+              <button id="canvas-view-modules" class="canvas-segment-btn" type="button" data-canvas-view="module" data-i18n="page.canvas.view_modules" role="tab" aria-selected="false">模块视图</button>
+              <button id="canvas-view-technical" class="canvas-segment-btn" type="button" data-canvas-view="technical" data-i18n="page.canvas.view_technical" role="tab" aria-selected="false">技术图</button>
+            </div>
+          </div>
+        </div>
+        <div id="canvas-view-shell" class="canvas-view-shell" data-mode="overview">
+          <section id="canvas-overview-panel" class="canvas-view-panel" aria-live="polite">
+            <div id="canvas-roadmap" class="canvas-roadmap-wrap" aria-live="polite" data-no-i18n></div>
+          </section>
+          <section id="canvas-module-panel" class="canvas-view-panel hidden" aria-live="polite">
+            <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <h3 class="text-lg font-semibold text-[#1f1d1b]" data-i18n="page.canvas.module_view_title">模块详情</h3>
+              <button id="canvas-back-overview" class="inline-flex items-center gap-2 rounded-full border border-[#c8a560] bg-[#f4e6c4] px-3 py-1.5 text-xs font-semibold text-[#4a443d]" type="button">
+                <i data-lucide="arrow-left" class="h-3.5 w-3.5"></i>
+                <span data-i18n="page.canvas.module_return_overview">返回总览</span>
+              </button>
+            </div>
+            <div id="canvas-module-detail" class="space-y-3" data-no-i18n>请先从右侧“活跃模块”点击任一模块。</div>
+          </section>
+          <section id="canvas-technical-panel" class="canvas-view-panel hidden" aria-live="polite">
+            <p class="mb-3 text-xs text-[#8a8275]" data-i18n="page.canvas.legend">图例：绿色=已完成，黄色=进行中，灰色=待开工；蓝色高亮表示当前待处理模块。</p>
+            <div id="canvas-empty" class="rounded-xl border border-[#e6dfcc] bg-[#f0e9d8] px-4 py-3 text-sm text-[#8a8275]" data-i18n="page.canvas.empty_state">暂未读取到 Mermaid 图。请确认源文件里有 Mermaid fenced block。</div>
+            <div id="canvas-mermaid" class="canvas-mermaid-wrap" aria-live="polite" data-no-i18n></div>
+          </section>
+        </div>
+      </div>
+
+      <div class="card canvas-side-card p-5">
+        <div class="mb-6 rounded-2xl border border-dashed border-[#d8cfba] bg-[#f7f3ea]/70 p-4">
+          <div class="mb-3 flex min-w-0 items-center justify-between gap-3">
+            <h2 class="flex min-w-0 items-center gap-2 text-base font-semibold text-[#4a443d]"><i data-lucide="inbox" class="h-4 w-4 text-[#8a8275]"></i><span>待纳入星图</span></h2>
+            <span id="canvas-candidate-count" class="shrink-0 rounded-full border border-[#d8cfba] bg-[#f7f3ea] px-2 py-0.5 text-[11px] text-[#8a8275]">0 项</span>
+          </div>
+          <p class="mb-3 text-xs leading-5 text-[#8a8275]">来自交接卡的只读候选，需人工确认后才会进入已验证模块。</p>
+          <div id="canvas-candidates" class="space-y-3" data-no-i18n>
+            <div class="rounded-xl border border-dashed border-[#d8cfba] bg-[#f7f3ea] p-3 text-xs leading-5 text-[#8a8275]">正在读取候选...</div>
+          </div>
+        </div>
+        <h2 class="mb-3 flex items-center gap-2 text-lg font-semibold text-[#1f1d1b]" data-i18n="page.canvas.active_modules_title"><i data-lucide="list-checks" class="h-5 w-5 text-[#c8a560]"></i>活跃模块</h2>
+        <p class="mb-3 text-sm text-[#8a8275]" data-i18n="page.canvas.active_modules_intro">页面读取源文件中的“活跃模块”表，仅展示最近状态。</p>
+        <div id="canvas-modules" data-no-i18n></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const canvasData = JSON.parse(document.getElementById('canvas-data').textContent);
+    window.tmPages.canvas.init(document, canvasData);
+    window.tmDashboard.registerServiceWorker();
+  </script>
+</body>
+</html>

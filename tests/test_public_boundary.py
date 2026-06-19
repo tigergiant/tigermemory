@@ -139,3 +139,34 @@ def test_repo_audit_scope_does_not_block_snapshot_release(tmp_path, monkeypatch,
     assert repo_summary["ok"] is False
     assert repo_summary["audit_scope"] == "repo"
     assert any(f["path"] == "data/sensitive.txt" and f["kind"] == "api_key" for f in repo_summary["sensitive_findings"])
+
+
+def test_public_dashboard_static_assets_do_not_embed_private_surfaces() -> None:
+    static_root = pathlib.Path("packages/tigermemory-dashboard/src/tigermemory_dashboard/static")
+    forbidden = [
+        "D:\\tigermemory",
+        "C:\\Users\\Giant",
+        "wiki/person",
+        "wiki/investment",
+        "sources/internal-analysis",
+        "development-reviews",
+        ".tmp",
+        "runtime/openmemory/.env",
+        "TM_OPENAI_MCP_LINK_SECRET",
+        "py tools",
+        "python tools",
+        "wsl -- python tools",
+        "/api/investment/trading-node/status",
+        "MiniQMT",
+        "B_qmt",
+    ]
+    checked_suffixes = {".html", ".js", ".json", ".webmanifest", ".svg", ".css", ".txt"}
+    offenders: list[str] = []
+    for path in static_root.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in checked_suffixes:
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        for needle in forbidden:
+            if needle in text:
+                offenders.append(f"{path}:{needle}")
+    assert offenders == []

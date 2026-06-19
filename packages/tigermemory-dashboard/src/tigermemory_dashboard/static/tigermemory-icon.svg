@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="tigermemory icon">
+  <rect width="512" height="512" rx="96" fill="#2563eb"/>
+  <path d="M136 154c0-28 22-50 50-50h178c28 0 50 22 50 50v204c0 28-22 50-50 50H186c-28 0-50-22-50-50V154Z" fill="#eff6ff"/>
+  <path d="M188 162h136c18 0 32 14 32 32v150c0 18-14 32-32 32H188V162Z" fill="#bfdbfe"/>
+  <path d="M188 162v214c-20 0-36-16-36-36V198c0-20 16-36 36-36Z" fill="#1d4ed8"/>
+  <path d="M214 212h96M214 256h112M214 300h78" stroke="#1e3a8a" stroke-width="22" stroke-linecap="round"/>
+  <circle cx="364" cy="154" r="34" fill="#f59e0b"/>
+</svg>

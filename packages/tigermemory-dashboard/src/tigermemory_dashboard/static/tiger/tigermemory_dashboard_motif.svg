@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1920" width="1440" height="1920" role="img" aria-label="TigerMemory dashboard background motif">
+  <rect width="1440" height="1920" fill="none"/>
+
+  <defs>
+    <style>
+      .s{fill:none;stroke:#B8863B;stroke-linecap:round;stroke-linejoin:round;opacity:.26;}
+      .s2{fill:none;stroke:#9A6A22;stroke-linecap:round;stroke-linejoin:round;opacity:.18;}
+      .thin{fill:none;stroke:#B8863B;stroke-linecap:round;stroke-linejoin:round;opacity:.14;}
+    </style>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="0.6"/>
+    </filter>
+  </defs>
+
+  <!-- left side abstract tiger contour + stripes -->
+  <g transform="translate(-72,490) scale(1.05)" filter="url(#soft)">
+    <path class="thin" stroke-width="6" d="M140 100 C230 25 355 55 410 145 C463 232 428 356 343 416 C274 465 178 454 116 406"/>
+    <path class="thin" stroke-width="5" d="M210 145 C247 112 306 107 346 142"/>
+    <path class="thin" stroke-width="5" d="M181 235 C220 203 271 199 309 230"/>
+    <path class="thin" stroke-width="4" d="M95 280 C163 271 218 287 259 325"/>
+    <path class="s" stroke-width="13" d="M25 18 C118 65 201 69 318 21"/>
+    <path class="s" stroke-width="11" d="M13 80 C108 122 206 129 358 76"/>
+    <path class="s2" stroke-width="9" d="M8 148 C116 187 205 188 332 143"/>
+    <path class="s" stroke-width="12" d="M-7 512 C113 464 228 459 374 513"/>
+    <path class="s2" stroke-width="10" d="M-30 585 C91 538 225 548 352 612"/>
+  </g>
+
+  <!-- top right brush tiger marks -->
+  <g transform="translate(1020,18) rotate(-8)">
+    <path class="s" stroke-width="14" d="M35 185 C135 125 238 85 380 37"/>
+    <path class="s2" stroke-width="10" d="M92 235 C190 185 278 145 420 96"/>
+    <path class="s" stroke-width="11" d="M155 282 C246 240 329 201 456 160"/>
+  </g>
+
+  <!-- bottom right sweep marks -->
+  <g transform="translate(940,1455) rotate(-16)">
+    <path class="s" stroke-width="16" d="M0 265 C148 155 288 81 472 0"/>
+    <path class="s2" stroke-width="12" d="M40 350 C185 237 333 163 508 98"/>
+    <path class="s" stroke-width="10" d="M118 445 C246 337 372 268 560 206"/>
+    <path class="s2" stroke-width="8" d="M168 518 C303 420 432 355 590 304"/>
+  </g>
+
+  <!-- bottom left accent -->
+  <g transform="translate(-24,1642) rotate(12)">
+    <path class="s" stroke-width="12" d="M0 28 C98 77 185 80 305 34"/>
+    <path class="s2" stroke-width="9" d="M-10 92 C94 135 197 132 338 82"/>
+  </g>
+
+</svg>

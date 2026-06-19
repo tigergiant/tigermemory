@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#c8a560">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="TigerMemory" data-i18n-attr="content" data-i18n-content="app.title">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/static/tiger/tigermemory_tiger_logo_192.png">
+  <title data-i18n="page.self_evolution.title">TigerMemory 自我进化</title>
+  <script src="/static/assets/tailwindcss.min.js"></script>
+  <script src="/static/assets/lucide.min.js"></script>
+  <style>__STYLE__</style>
+</head>
+<body data-page="self-evolution">
+  __HEADER__
+  <script id="self-evolution-data" type="application/json">__SELF_EVOLUTION_JSON__</script>
+  <img class="dashboard-motif" src="/static/tiger/tigerlogo.png" alt="">
+  <div class="stripe-motif tr"></div>
+  <div class="stripe-motif br"></div>
+
+  <main class="relative z-10 mx-auto max-w-6xl px-6 py-8">
+    <section class="card mb-6 p-6">
+      <div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+        <div>
+          <div class="mb-2 inline-flex items-center gap-2 text-sm font-medium text-[#8a8275]">
+            <i data-lucide="sparkles" class="h-4 w-4 text-[#c8a560]"></i>
+            <span data-i18n="brand.subtitle">个人记忆控制台</span>
+          </div>
+          <h1 class="text-3xl font-extrabold leading-9 text-[#1f1d1b]" data-i18n="nav.self_evolution">自我进化</h1>
+          <p class="mt-2 max-w-2xl text-sm leading-6 text-[#4a443d]" data-i18n="page.self_evolution.intro">只读查看 hook 证据、重复问题和安全提案；默认只提案，不自动改核心规则。</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2 text-sm">
+          <span id="self-evolution-mode" class="rounded-full border border-[#c9bf9f] bg-[#f0e9d8] px-3 py-1 text-[#4a443d]">propose_only</span>
+          <span id="self-evolution-date" class="rounded-full border border-[#c9bf9f] bg-[#f0e9d8] px-3 py-1 text-[#4a443d]">-</span>
+          <button id="self-evolution-refresh" class="primary-button" type="button" data-i18n="action.refresh">手动刷新</button>
+        </div>
+      </div>
+      <div id="self-evolution-notice" class="mt-4 hidden rounded-md border border-[#d8c99f] bg-[#f5edd3] px-4 py-3 text-sm text-[#6f5619]"></div>
+    </section>
+
+    <section id="self-evolution-kpis" class="mb-6 grid gap-5 md:grid-cols-2 xl:grid-cols-4"></section>
+    <section id="self-evolution-sources" class="mb-6 grid gap-3 md:grid-cols-2"></section>
+
+    <section class="mb-6 grid gap-5 lg:grid-cols-[1.15fr_.85fr]">
+      <div class="card p-6">
+        <div class="mb-4 flex items-center justify-between gap-3">
+          <h2 class="flex items-center gap-2 text-lg font-semibold text-[#1f1d1b]">
+            <i data-lucide="inbox" class="h-5 w-5 text-[#c8a560]"></i>
+            <span data-i18n="section.self_evolution.proposals">重复问题提案</span>
+          </h2>
+          <span id="self-evolution-proposal-pill" class="status-badge status-ok"><span class="status-dot"></span>-</span>
+        </div>
+        <div id="self-evolution-proposals" class="space-y-3"></div>
+      </div>
+
+      <div class="card p-6">
+        <div class="mb-4 flex items-center justify-between gap-3">
+          <h2 class="flex items-center gap-2 text-lg font-semibold text-[#1f1d1b]">
+            <i data-lucide="line-chart" class="h-5 w-5 text-[#c8a560]"></i>
+            <span data-i18n="section.self_evolution.baseline">安全基线</span>
+          </h2>
+          <span id="self-evolution-baseline-status"></span>
+        </div>
+        <div id="self-evolution-baseline" class="space-y-3 text-sm text-[#4a443d]"></div>
+      </div>
+    </section>
+
+    <section class="card p-6">
+      <div class="mb-4 flex items-center gap-2">
+        <i data-lucide="list-checks" class="h-5 w-5 text-[#c8a560]"></i>
+        <h2 class="text-lg font-semibold text-[#1f1d1b]" data-i18n="section.self_evolution.samples">最近证据样本</h2>
+      </div>
+      <div id="self-evolution-samples" class="grid gap-3 md:grid-cols-2"></div>
+    </section>
+  </main>
+
+  <script>
+    const selfEvolutionData = JSON.parse(document.getElementById('self-evolution-data').textContent);
+    window.tmPages.selfEvolution.init(document, selfEvolutionData);
+    window.tmDashboard.registerServiceWorker();
+  </script>
+</body>
+</html>

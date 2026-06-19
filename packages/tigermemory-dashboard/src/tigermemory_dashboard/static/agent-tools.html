@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#c8a560">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="TigerMemory">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/static/tiger/tigermemory_tiger_logo_192.png">
+  <title data-i18n="page.agent_tools.title">TigerMemory AI 连接</title>
+  <script src="/static/assets/tailwindcss.min.js"></script>
+  <script src="/static/assets/lucide.min.js"></script>
+  <style>__STYLE__</style>
+</head>
+<body data-page="agent-tools">
+  __HEADER__
+
+  <img class="dashboard-motif main opacity-10" src="/static/tiger/tigerlogo.png" alt="">
+  <div class="stripe-motif tl"></div>
+  <div class="stripe-motif tr"></div>
+  <div class="stripe-motif br"></div>
+
+  <main class="relative z-10 mx-auto max-w-6xl px-6 py-8">
+    
+    <!-- 🧁 顶部欢迎与运维卡片 -->
+    <section class="card mb-6 p-6">
+      <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <div class="flex items-center gap-2 text-sm font-medium text-[#8a8275]">
+            <i data-lucide="cpu" class="h-4 w-4 text-[#c8a560]"></i>
+            <span data-i18n="agent.tagline">AI 连接控制台</span>
+          </div>
+          <h1 class="mt-2 text-3xl font-extrabold leading-9 text-[#1f1d1b]" data-i18n="agent.title">AI 连接与检查</h1>
+          <p class="mt-2 text-sm leading-6 text-[#4a443d]" data-i18n="agent.desc">检查 Claude / Cursor 是否连上 TigerMemory，并看看搜索能不能找到资料。</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+          <span class="rounded-full border border-[#c9bf9f] bg-[#f0e9d8] px-3 py-1 text-xs text-[#4a443d] flex items-center gap-1.5">
+            <span class="inline-block h-2 w-2 rounded-full bg-[#52733a]"></span>
+            <span data-i18n="agent.readonly_mode">只读模式（不会修改文件）</span>
+          </span>
+        </div>
+      </div>
+    </section>
+
+    <section class="card mb-6 p-6">
+      <div class="mb-4 flex items-center justify-between gap-3">
+        <h2 class="flex items-center gap-2 text-lg font-bold text-[#1f1d1b]">
+          <i data-lucide="activity" class="text-[#c8a560] h-5 w-5"></i>
+          <span>助手最近活跃</span>
+        </h2>
+        <span id="recent-activity-status" class="text-xs text-[#8a8275]">正在加载</span>
+      </div>
+      <div id="recent-activity-list" class="grid gap-2 md:grid-cols-2"></div>
+    </section>
+
+    <!-- 🧁 中间两栏：智能体状态 + 一键诊断 -->
+    <div class="mb-6 grid gap-6 md:grid-cols-2">
+      
+      <!-- 🔌 卡片 1: 智能体连接向导 -->
+      <section class="card p-6 flex flex-col justify-between">
+        <div>
+          <div class="mb-4 flex items-center justify-between">
+            <h2 class="flex items-center gap-2 text-lg font-bold text-[#1f1d1b]">
+              <i data-lucide="pocket-knife" class="text-[#c8a560] h-5 w-5"></i>
+            <span data-i18n="agent.connection_wizard">AI 连接状态</span>
+            </h2>
+            <span id="os-tag" class="rounded-full bg-[#f0e9d8] px-2 py-0.5 text-xs text-[#8a8275]">- OS</span>
+          </div>
+          <p class="text-sm text-[#4a443d] mb-4" data-i18n="agent.connection_desc">自动检测你的 Claude 和 Cursor 是否已成功连接到 TigerMemory。</p>
+          
+          <div class="space-y-3">
+            <!-- Cursor 连接状态 -->
+            <div class="rounded-xl border border-[#e6dfcc] bg-[#fcfaf2] p-4">
+              <div class="flex items-center justify-between">
+                <span class="font-semibold text-sm text-[#1f1d1b] flex items-center gap-2">
+                  <i data-lucide="code-2" class="h-4 w-4 text-[#8a8275]"></i>
+                  <span data-i18n="agent.cursor_conn">Cursor 连接</span>
+                </span>
+                <span id="cursor-badge">-</span>
+              </div>
+              <div class="mt-2 text-xs text-[#8a8275] break-all" id="cursor-path" data-i18n="term.loading">正在获取路径...</div>
+            </div>
+
+            <!-- Claude Desktop 连接状态 -->
+            <div class="rounded-xl border border-[#e6dfcc] bg-[#fcfaf2] p-4">
+              <div class="flex items-center justify-between">
+                <span class="font-semibold text-sm text-[#1f1d1b] flex items-center gap-2">
+                  <i data-lucide="bot" class="h-4 w-4 text-[#8a8275]"></i>
+                  <span data-i18n="agent.claude_conn">Claude 连接</span>
+                </span>
+                <span id="claude-badge">-</span>
+              </div>
+              <div class="mt-2 text-xs text-[#8a8275] break-all" id="claude-path" data-i18n="term.loading">正在获取路径...</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-6 pt-4 border-t border-[#e6dfcc] text-xs text-[#8a8275]" data-i18n="agent.wizard_footer">
+          📌 <strong>安全保障</strong>：本页只查看状态，不会修改你的配置文件。连接新的 AI 客户端请使用已安装的 TigerMemory 命令。
+        </div>
+      </section>
+
+      <!-- 🩺 卡片 2: 一键诊断 (Agent Doctor) -->
+      <section class="card p-6 flex flex-col justify-between">
+        <div>
+          <div class="mb-4 flex items-center justify-between">
+            <h2 class="flex items-center gap-2 text-lg font-bold text-[#1f1d1b]">
+              <i data-lucide="heart-pulse" class="text-[#c8a560] h-5 w-5"></i>
+              <span data-i18n="agent.doctor_title">一键健康体检</span>
+            </h2>
+            <div id="doctor-light" class="h-3 w-3 rounded-full glow-dot bg-slate-400"></div>
+          </div>
+          <p class="text-sm text-[#4a443d] mb-4" data-i18n="agent.doctor_desc">体检你的系统状态：文件是否同步、服务是否在线、记忆引擎是否正常，找出可能影响 AI 记忆的隐患。</p>
+          
+          <button id="doctor-btn" class="primary-button w-full flex items-center justify-center gap-2 py-3">
+            <i data-lucide="play" class="h-4 w-4"></i>
+            <span data-i18n="agent.run_doctor">开始体检</span>
+          </button>
+
+          <!-- 诊断结果卡片 -->
+          <div id="doctor-results" class="mt-4 space-y-2 hidden">
+            <!-- 动态注入体检条目 -->
+          </div>
+        </div>
+
+        <div class="mt-6 pt-4 border-t border-[#e6dfcc] text-xs text-[#8a8275]" id="doctor-advice" data-i18n="agent.doctor_footer_init">
+          🚦 点击上方按钮后，这里会显示体检结果和改进建议。
+        </div>
+      </section>
+
+    </div>
+
+    <!-- 🧁 底部大栏：双通道检索召回率评测 (Eval Runner) -->
+    <section class="card p-6 mb-6">
+      <div class="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h2 class="flex items-center gap-2 text-xl font-bold text-[#1f1d1b]">
+            <i data-lucide="trending-up" class="text-[#c8a560] h-5 w-5"></i>
+            <span data-i18n="agent.eval_title">搜索准确率测试</span>
+          </h2>
+          <p class="mt-1 text-sm text-[#4a443d]" data-i18n="agent.eval_desc">用预设的测试题检测知识库搜索和即时记忆搜索是否准确、是否够快。</p>
+        </div>
+        <button id="eval-btn" class="primary-button flex items-center gap-2" type="button">
+          <i data-lucide="check-square" class="h-4 w-4"></i>
+          <span data-i18n="agent.run_eval">开始测试</span>
+        </button>
+      </div>
+
+      <!-- 评测汇总栏 -->
+      <div id="eval-summary-bar" class="mb-6 grid gap-4 grid-cols-2 md:grid-cols-4 hidden">
+        
+        <!-- Wiki Recall@1 -->
+        <div class="rounded-xl border border-[#e6dfcc] bg-[#fcfaf2] p-4 flex flex-col items-center justify-center">
+          <div class="relative w-16 h-16 mb-2">
+            <svg class="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+              <path class="text-[#e6dfcc]" stroke-width="3" stroke="currentColor" fill="none" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+              <path id="wiki-recall-1-circle" class="text-[#52733a] transition-all duration-1000 ease-out" stroke-dasharray="0, 100" stroke-width="3" stroke-linecap="round" stroke="currentColor" fill="none" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+            </svg>
+            <div id="wiki-recall-1-text" class="absolute inset-0 flex items-center justify-center text-xs font-bold text-[#1f1d1b]">0%</div>
+          </div>
+          <span class="text-xs font-semibold text-[#4a443d]" data-i18n="agent.eval_wiki_r1">第一个结果找对</span>
+          <span class="text-[10px] text-[#8a8275] text-center mt-1" data-i18n="agent.eval_wiki_r1_desc">第一个结果就是正确资料</span>
+        </div>
+
+        <!-- Wiki Recall@3 -->
+        <div class="rounded-xl border border-[#e6dfcc] bg-[#fcfaf2] p-4 flex flex-col items-center justify-center">
+          <div class="relative w-16 h-16 mb-2">
+            <svg class="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+              <path class="text-[#e6dfcc]" stroke-width="3" stroke="currentColor" fill="none" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+              <path id="wiki-recall-3-circle" class="text-[#c8a560] transition-all duration-1000 ease-out" stroke-dasharray="0, 100" stroke-width="3" stroke-linecap="round" stroke="currentColor" fill="none" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+            </svg>
+            <div id="wiki-recall-3-text" class="absolute inset-0 flex items-center justify-center text-xs font-bold text-[#1f1d1b]">0%</div>
+          </div>
+          <span class="text-xs font-semibold text-[#4a443d]" data-i18n="agent.eval_wiki_r3">前三个结果找对</span>
+          <span class="text-[10px] text-[#8a8275] text-center mt-1" data-i18n="agent.eval_wiki_r3_desc">前三个结果里有正确资料</span>
+        </div>
+
+        <!-- Wiki 平均时延 -->
+        <div class="rounded-xl border border-[#e6dfcc] bg-[#fcfaf2] p-4 flex flex-col items-center justify-center">
+          <span id="wiki-latency" class="text-3xl font-extrabold text-[#1f1d1b] mb-1">--</span>
+          <span class="text-xs font-semibold text-[#4a443d] mt-2" data-i18n="agent.eval_wiki_latency">知识库搜索耗时</span>
+          <span class="text-[10px] text-[#8a8275] text-center mt-1" data-i18n="agent.eval_wiki_latency_desc">一次搜索平均要花多久</span>
+        </div>
+
+        <!-- Mem0 命中率/状态 -->
+        <div class="rounded-xl border border-[#e6dfcc] bg-[#fcfaf2] p-4 flex flex-col items-center justify-center">
+          <span id="mem0-accuracy-val" class="text-3xl font-extrabold text-[#1f1d1b] mb-1">--</span>
+          <span class="text-xs font-semibold text-[#4a443d] mt-2" data-i18n="agent.eval_mem0_acc">即时记忆命中率</span>
+          <span id="mem0-status-text" class="text-[10px] text-[#8a8275] text-center mt-1" data-i18n="agent.eval_mem0_desc">近期事件搜索能不能找到对的内容</span>
+        </div>
+
+      </div>
+
+      <!-- 评测用例明细表 -->
+      <div id="eval-details-box" class="rounded-xl border border-[#e6dfcc] bg-[#fcfaf2] overflow-hidden hidden">
+        <table class="w-full text-left text-sm text-[#4a443d]">
+          <thead class="bg-[#f0e9d8] font-semibold text-[#1f1d1b] border-b border-[#e6dfcc]">
+            <tr>
+              <th class="p-3" data-i18n="agent.eval_table_id">ID</th>
+              <th class="p-3" data-i18n="agent.eval_table_desc">测试问题</th>
+              <th class="p-3" data-i18n="agent.eval_table_wiki_rank">知识库结果位置</th>
+              <th class="p-3" data-i18n="agent.eval_table_wiki_latency">知识库搜索耗时</th>
+              <th class="p-3" data-i18n="agent.eval_table_mem0_status">即时记忆状态</th>
+              <th class="p-3" data-i18n="agent.eval_table_mem0_latency">即时记忆耗时</th>
+            </tr>
+          </thead>
+          <tbody id="eval-table-body" class="divide-y divide-[#e6dfcc]">
+            <!-- JS 动态注入行 -->
+          </tbody>
+        </table>
+      </div>
+
+      <div id="eval-suggestions" class="mt-4 p-4 rounded-xl border border-[#e6dfcc] bg-[#fcfaf2] text-sm text-[#4a443d] hidden">
+        <strong data-i18n="agent.eval_suggestions_title">检测结果与建议：</strong>
+        <p class="mt-1" id="eval-suggestions-content" data-i18n="agent.eval_suggestions_loading">正在载入中...</p>
+      </div>
+
+    </section>
+
+    <!-- 📚 科普专栏：检索大讲堂 -->
+    <section class="card p-6">
+      <details>
+        <summary class="flex cursor-pointer list-none items-center gap-2">
+          <i data-lucide="graduation-cap" class="text-[#c8a560] h-5 w-5"></i>
+          <h2 class="text-lg font-semibold text-[#1f1d1b]" data-i18n="agent.explanations_title">指标说明（点击展开了解更多）</h2>
+        </summary>
+        <div class="mt-4 grid gap-4 md:grid-cols-2 text-sm text-[#4a443d] leading-relaxed">
+          <div class="rounded-xl border border-[#e6dfcc] bg-[#fcfaf2] p-4">
+            <h3 class="font-bold text-[#1f1d1b] mb-1 flex items-center gap-1.5">
+              <span class="inline-block h-2 w-2 rounded-full bg-[#c8a560]"></span>
+              <span data-i18n="agent.exp1_title">1. 什么是命中？</span>
+            </h3>
+            <p data-i18n="agent.exp1_desc">简单说：你问 AI 一个问题，它给你的答案里能不能找到正确信息。数字越高越好。</p>
+            <ul class="mt-2 space-y-1 text-xs text-[#8a8275] list-disc list-inside">
+              <li data-i18n="agent.exp1_item1"><strong>首条命中</strong>：第一个结果就是正确答案，要求最高但最重要；</li>
+              <li data-i18n="agent.exp1_item2"><strong>前三命中</strong>：前 3 个结果里包含正确答案，实用性很高；</li>
+              <li data-i18n="agent.exp1_item3"><strong>前五命中</strong>：前 5 个结果里包含正确答案。若为 0%，说明搜索功能已失灵。</li>
+            </ul>
+          </div>
+          <div class="rounded-xl border border-[#e6dfcc] bg-[#fcfaf2] p-4">
+            <h3 class="font-bold text-[#1f1d1b] mb-1 flex items-center gap-1.5">
+              <span class="inline-block h-2 w-2 rounded-full bg-[#c8a560]"></span>
+              <span data-i18n="agent.exp2_title">2. 什么是响应时间？</span>
+            </h3>
+            <p data-i18n="agent.exp2_desc">AI 搜索一次要花多久，单位是毫秒（ms，1 秒 = 1000 毫秒）。大致分三档：</p>
+            <ul class="mt-2 space-y-1 text-xs text-[#8a8275] list-disc list-inside">
+              <li data-i18n="agent.exp2_item1"><strong>100ms 以内</strong>：非常快，几乎感觉不到等待；</li>
+              <li data-i18n="agent.exp2_item2"><strong>100ms ~ 500ms</strong>：正常速度，日常使用没问题；</li>
+              <li data-i18n="agent.exp2_item3"><strong>500ms 以上</strong>：偏慢，可能网络不稳定或服务器繁忙。</li>
+            </ul>
+          </div>
+        </div>
+      </details>
+    </section>
+
+  </main>
+
+  <script id="agent-tools-data" type="application/json">{}</script>
+  <script>
+    const agentToolsData = JSON.parse(document.getElementById('agent-tools-data').textContent);
+    window.tmPages.agentTools.init(document, agentToolsData);
+    window.tmDashboard.registerServiceWorker();
+  </script>
+</body>
+</html>

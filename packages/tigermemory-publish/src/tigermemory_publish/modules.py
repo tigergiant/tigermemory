@@ -97,6 +97,7 @@ PUBLIC_MODULES: tuple[PublishModule, ...] = (
         id="public-dashboard",
         description="Local dashboard entrypoint and static assets; advanced hosted service features remain optional.",
         stability="core",
+        package_roots=("packages/tigermemory-dashboard/src",),
         tool_files=(
             "tools/tm_cron_apply.py",
             "tools/tm_review.py",
@@ -104,8 +105,10 @@ PUBLIC_MODULES: tuple[PublishModule, ...] = (
             "tools/tm_review_ui.py",
             "tools/tm_self_evolution.py",
         ),
-        tool_dirs=("tools/static",),
-        checks=("tests/test_tm_cli.py",),
+        checks=(
+            "tests/test_tm_cli.py",
+            "tests/test_public_boundary.py",
+        ),
     ),
     PublishModule(
         id="public-publish",

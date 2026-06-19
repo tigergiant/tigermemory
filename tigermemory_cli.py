@@ -12,11 +12,21 @@ import sys
 PROFILE_VALUES = {"local", "hybrid"}
 PASSTHROUGH_COMMANDS = {
     "doctor": ("tools/tm_io.py", ["agent-doctor"]),
-    "publish": ("tools/tm_io.py", ["publish"]),
     "lessons": ("tools/tm_lessons.py", []),
     "persona": ("tools/tm_persona.py", []),
     "index": ("tools/tm_compile_index.py", []),
 }
+
+try:
+    from tigermemory_core.roots import (
+        resolve_app_root,
+        resolve_instance_root,
+        subprocess_root_env,
+    )
+except Exception:
+    resolve_app_root = None
+    resolve_instance_root = None
+    subprocess_root_env = None
 
 
 def _configure_stdio() -> None:
@@ -29,6 +39,9 @@ def _configure_stdio() -> None:
 
 
 def _detect_repo_root() -> pathlib.Path:
+    if resolve_instance_root is not None:
+        if os.environ.get("TIGERMEMORY_INSTANCE_ROOT") or os.environ.get("TIGERMEMORY_ROOT"):
+            return resolve_instance_root()
     explicit = os.environ.get("TIGERMEMORY_ROOT")
     if explicit:
         return pathlib.Path(explicit).resolve()
@@ -74,17 +87,30 @@ def _subprocess_env() -> dict[str, str]:
     prefix = os.pathsep.join(_package_src_paths())
     if prefix:
         env["PYTHONPATH"] = prefix + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-    env.setdefault("TIGERMEMORY_ROOT", str(REPO_ROOT))
+    if resolve_instance_root is not None:
+        try:
+            instance_root = resolve_instance_root()
+        except Exception:
+            instance_root = REPO_ROOT
+        env.update(subprocess_root_env(instance_root))
+    else:
+        env.setdefault("TIGERMEMORY_ROOT", str(REPO_ROOT))
+    env["TIGERMEMORY_INSTANCE_ROOT"] = env["TIGERMEMORY_ROOT"]
     env.setdefault("PYTHONIOENCODING", "utf-8")
     return env
 
 
-def _run_python(rel_path: str, args: list[str]) -> int:
-    script = REPO_ROOT / rel_path
+def _run_python(rel_path: str, args: list[str], *, cwd: pathlib.Path | None = None) -> int:
+    path = pathlib.Path(rel_path)
+    script = path if path.is_absolute() else REPO_ROOT / path
     if not script.is_file():
         print(f"missing tool script: {script}", file=sys.stderr)
         return 2
-    return subprocess.call([sys.executable, str(script), *args], cwd=REPO_ROOT, env=_subprocess_env())
+    return subprocess.call(
+        [sys.executable, str(script), *args],
+        cwd=str(cwd or REPO_ROOT),
+        env=_subprocess_env(),
+    )
 
 
 def _profile_path() -> pathlib.Path:
@@ -184,7 +210,19 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def cmd_publish(args: argparse.Namespace) -> int:
-    return _run_python("tools/tm_io.py", ["publish", *args.args])
+    if resolve_app_root is not None:
+        app_root = resolve_app_root()
+    else:
+        app_root = REPO_ROOT
+    checkout_script = app_root / "tools" / "tm_io.py"
+    if checkout_script.is_file():
+        return _run_python(str(checkout_script), ["publish", *args.args], cwd=app_root)
+    print(
+        "tm publish is a maintainer-only export command; run it from a TigerMemory source checkout "
+        "or set TIGERMEMORY_APP_ROOT to that checkout.",
+        file=sys.stderr,
+    )
+    return 2
 
 
 def cmd_lessons(args: argparse.Namespace) -> int:
@@ -357,7 +395,17 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
         forwarded.extend(["--host", args.host])
     if args.port is not None:
         forwarded.extend(["--port", str(args.port)])
-    return _run_python("tools/tm_review_ui.py", forwarded)
+    tool_script = REPO_ROOT / "tools" / "tm_review_ui.py"
+    if tool_script.is_file():
+        return _run_python(str(tool_script), forwarded)
+    try:
+        import tigermemory_dashboard
+    except ModuleNotFoundError:
+        return _run_python(str(tool_script), forwarded)
+    if hasattr(tigermemory_dashboard, "main"):
+        return tigermemory_dashboard.main(forwarded)
+    print("tm dashboard requires tigermemory_dashboard.main", file=sys.stderr)
+    return 2
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -383,7 +431,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_p.add_argument("args", nargs=argparse.REMAINDER)
     doctor_p.set_defaults(func=cmd_doctor)
 
-    publish_p = sub.add_parser("publish", help="run publish snapshot/audit")
+    publish_p = sub.add_parser("publish", help="maintainer-only public export/audit command")
     publish_p.add_argument("args", nargs=argparse.REMAINDER)
     publish_p.set_defaults(func=cmd_publish)
 
@@ -442,7 +490,16 @@ def main(argv: list[str] | None = None) -> int:
         script, prefix = PASSTHROUGH_COMMANDS[raw_args[0]]
         return _run_python(script, [*prefix, *raw_args[1:]])
     parser = build_parser()
-    args = parser.parse_args(raw_args)
+    args, extra_args = parser.parse_known_args(raw_args)
+    if args.command != "publish":
+        if extra_args:
+            parser.error(f"unrecognized arguments: {' '.join(extra_args)}")
+    else:
+        # Accept passthrough-style flags after `publish`.
+        # The child script is the real compatibility boundary in true-split mode,
+        # so we intentionally forward flags here (including legacy publish args).
+        combined = getattr(args, "args", [])
+        setattr(args, "args", extra_args + combined)
     return args.func(args)
 
 

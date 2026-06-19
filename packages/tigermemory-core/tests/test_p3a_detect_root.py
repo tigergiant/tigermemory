@@ -55,3 +55,14 @@ def test_detect_repo_root_prefers_cwd_snapshot_for_wheel_install(monkeypatch, tm
     monkeypatch.setattr(tigermemory_core, "__file__", str(installed_init))
 
     assert tigermemory_core._detect_repo_root() == snapshot.resolve()
+
+
+def test_detect_repo_root_prefers_explicit_instance_root(monkeypatch, tmp_path):
+    instance_root = tmp_path / "instance"
+    instance_root.mkdir()
+    monkeypatch.setenv("TIGERMEMORY_INSTANCE_ROOT", str(instance_root))
+    monkeypatch.setenv("TIGERMEMORY_ROOT", str(tmp_path / "legacy"))
+
+    module = importlib.reload(tigermemory_core)
+
+    assert module.REPO_ROOT == instance_root.resolve()

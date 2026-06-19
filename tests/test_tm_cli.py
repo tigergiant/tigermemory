@@ -22,6 +22,7 @@ def _cli_subprocess_env(root: pathlib.Path) -> dict[str, str]:
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(package_paths + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
     env["PYTHONIOENCODING"] = "utf-8"
+    env["TIGERMEMORY_INSTANCE_ROOT"] = str(root)
     env["TIGERMEMORY_ROOT"] = str(root)
     return env
 
@@ -97,7 +98,29 @@ def test_subprocess_env_pins_detected_repo_root_for_child_tools(tmp_path, monkey
     env = tigermemory_cli._subprocess_env()
 
     assert env["TIGERMEMORY_ROOT"] == str(tmp_path)
+    assert env["TIGERMEMORY_INSTANCE_ROOT"] == str(tmp_path)
     assert env["PYTHONIOENCODING"] == "utf-8"
+
+
+def test_cli_init_uses_explicit_instance_root_even_when_app_root_differs(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    app_root = tmp_path / "public-core"
+    instance_root = tmp_path / "private-instance"
+    app_root.mkdir()
+    instance_root.mkdir()
+    monkeypatch.setenv("TIGERMEMORY_APP_ROOT", str(app_root))
+    monkeypatch.setenv("TIGERMEMORY_INSTANCE_ROOT", str(instance_root))
+    monkeypatch.setattr(tigermemory_cli, "REPO_ROOT", instance_root)
+
+    assert tigermemory_cli.main(["init", "--profile", "local"]) == 0
+
+    out = capsys.readouterr().out
+    assert f"root={instance_root.resolve()}" in out
+    assert (instance_root / "runtime" / "tigermemory" / "profile.env").is_file()
+    assert not (app_root / "runtime" / "tigermemory" / "profile.env").exists()
 
 
 def test_profile_set_and_show_uses_runtime_profile_file(tmp_path, monkeypatch, capsys) -> None:
@@ -158,7 +181,7 @@ def test_profile_guide_local_explains_no_advanced_dependencies(tmp_path, monkeyp
 def test_dashboard_defaults_to_public_quickstart_port(monkeypatch) -> None:
     calls: list[tuple[str, list[str]]] = []
 
-    def fake_run(rel_path: str, args: list[str]) -> int:
+    def fake_run(rel_path: str, args: list[str], cwd: pathlib.Path | None = None) -> int:
         calls.append((rel_path, args))
         return 0
 
@@ -166,13 +189,13 @@ def test_dashboard_defaults_to_public_quickstart_port(monkeypatch) -> None:
 
     assert tigermemory_cli.main(["dashboard"]) == 0
 
-    assert calls == [("tools/tm_review_ui.py", ["--port", "9777"])]
+    assert calls == [(str(REPO_ROOT / "tools" / "tm_review_ui.py"), ["--port", "9777"])]
 
 
 def test_dashboard_accepts_explicit_private_service_port(monkeypatch) -> None:
     calls: list[tuple[str, list[str]]] = []
 
-    def fake_run(rel_path: str, args: list[str]) -> int:
+    def fake_run(rel_path: str, args: list[str], cwd: pathlib.Path | None = None) -> int:
         calls.append((rel_path, args))
         return 0
 
@@ -180,7 +203,7 @@ def test_dashboard_accepts_explicit_private_service_port(monkeypatch) -> None:
 
     assert tigermemory_cli.main(["dashboard", "--host", "127.0.0.1", "--port", "1998"]) == 0
 
-    assert calls == [("tools/tm_review_ui.py", ["--host", "127.0.0.1", "--port", "1998"])]
+    assert calls == [(str(REPO_ROOT / "tools" / "tm_review_ui.py"), ["--host", "127.0.0.1", "--port", "1998"])]
 
 
 def test_cli_module_help_smoke() -> None:
@@ -319,6 +342,55 @@ def test_installed_style_local_cli_does_not_require_tools_dir(tmp_path) -> None:
     )
     assert verify.returncode == 0, verify.stderr
     assert '"direct_readback_ok": true' in verify.stdout
+
+
+def test_installed_core_cli_can_use_external_instance_root(tmp_path) -> None:
+    instance_root = tmp_path / "instance"
+    instance_root.mkdir()
+    env = _cli_subprocess_env(instance_root)
+    env.pop("TIGERMEMORY_ROOT", None)
+
+    init = subprocess.run(
+        [sys.executable, "-m", "tigermemory_cli", "init", "--profile", "local"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=20,
+        check=False,
+    )
+
+    assert init.returncode == 0, init.stderr
+    assert f"root={instance_root.resolve()}" in init.stdout
+    assert (instance_root / "data" / "tigermemory").is_dir()
+    assert (instance_root / "runtime" / "tigermemory" / "profile.env").is_file()
+
+
+def test_installed_core_cli_prefers_instance_root_over_legacy_root(tmp_path) -> None:
+    instance_root = tmp_path / "instance"
+    legacy_root = tmp_path / "legacy"
+    instance_root.mkdir()
+    legacy_root.mkdir()
+    env = _cli_subprocess_env(instance_root)
+    env["TIGERMEMORY_INSTANCE_ROOT"] = str(instance_root)
+    env["TIGERMEMORY_ROOT"] = str(legacy_root)
+
+    init = subprocess.run(
+        [sys.executable, "-m", "tigermemory_cli", "init", "--profile", "local"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=20,
+        check=False,
+    )
+
+    assert init.returncode == 0, init.stderr
+    assert f"root={instance_root.resolve()}" in init.stdout
+    assert (instance_root / "runtime" / "tigermemory" / "profile.env").is_file()
+    assert not (legacy_root / "runtime" / "tigermemory" / "profile.env").exists()
 
 
 def test_installed_style_cli_searches_wiki_without_mem0(tmp_path) -> None:
@@ -703,49 +775,59 @@ def test_published_snapshot_cli_detects_root_without_env(tmp_path) -> None:
     assert ask_wiki_cn_payload["wiki"]["results"][0]["path"] == "wiki/operations/project-canvas.md"
 
 
-def test_publish_passthrough_accepts_tool_options(monkeypatch) -> None:
-    calls: list[tuple[str, list[str]]] = []
+def test_publish_is_maintainer_only_when_app_tools_are_missing(tmp_path, monkeypatch, capsys) -> None:
+    instance_root = tmp_path / "private-instance"
+    app_root = tmp_path / "installed-package"
+    instance_root.mkdir()
+    app_root.mkdir()
+    monkeypatch.setenv("TIGERMEMORY_INSTANCE_ROOT", str(instance_root))
+    monkeypatch.setenv("TIGERMEMORY_APP_ROOT", str(app_root))
+    monkeypatch.setattr(tigermemory_cli, "REPO_ROOT", instance_root)
 
-    def fake_run(rel_path: str, args: list[str]) -> int:
-        calls.append((rel_path, args))
+    rc = tigermemory_cli.main([
+        "publish",
+        "--dry-run",
+        "--json",
+        "--target",
+        "public-core",
+        "--split-report",
+    ])
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "maintainer-only" in captured.err
+    assert not (instance_root / "tools").exists()
+
+
+def test_publish_uses_app_root_tools_not_instance_root_tools(tmp_path, monkeypatch) -> None:
+    instance_root = tmp_path / "private-instance"
+    app_root = tmp_path / "app-source"
+    tools_dir = app_root / "tools"
+    instance_root.mkdir()
+    tools_dir.mkdir(parents=True)
+    script = tools_dir / "tm_io.py"
+    script.write_text(
+        "import sys\nprint('APP_ROOT_TOOL:' + ' '.join(sys.argv[1:]))\nsys.exit(0)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TIGERMEMORY_INSTANCE_ROOT", str(instance_root))
+    monkeypatch.setenv("TIGERMEMORY_APP_ROOT", str(app_root))
+    monkeypatch.setattr(tigermemory_cli, "REPO_ROOT", instance_root)
+    calls: list[tuple[str, list[str], str | None]] = []
+
+    def fake_run(rel_path: str, args: list[str], cwd: pathlib.Path | None = None) -> int:
+        calls.append((rel_path, args, str(cwd) if cwd is not None else None))
         return 0
 
     monkeypatch.setattr(tigermemory_cli, "_run_python", fake_run)
 
     assert tigermemory_cli.main([
         "publish",
-        "--dest",
-        "out",
         "--dry-run",
-        "--audit-pii",
-        "--audit-scope",
-        "repo",
-        "--module",
-        "public-dashboard",
-        "--print-checks",
-        "--evidence-report",
-        "--validate-checks",
-        "--evidence-output",
-        "out/evidence.md",
+        "--json",
+        "--target",
+        "public-core",
+        "--split-report",
     ]) == 0
-    assert calls == [
-        (
-            "tools/tm_io.py",
-            [
-                "publish",
-                "--dest",
-                "out",
-                "--dry-run",
-                "--audit-pii",
-                "--audit-scope",
-                "repo",
-                "--module",
-                "public-dashboard",
-                "--print-checks",
-                "--evidence-report",
-                "--validate-checks",
-                "--evidence-output",
-                "out/evidence.md",
-            ],
-        )
-    ]
+    assert calls == [(str(script), ["publish", "--dry-run", "--json", "--target", "public-core", "--split-report"], str(app_root))]
+    assert not (instance_root / "tools").exists()

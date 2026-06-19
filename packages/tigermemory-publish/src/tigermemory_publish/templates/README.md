@@ -112,6 +112,32 @@ integrations. The stable contract for CLI commands, JSON fields, profile
 behavior, optional services, and release gates is documented in
 `wiki/systems/public-core-contract.md`.
 
+## Public Core vs Your Data
+
+TigerMemory separates the installed framework from your personal memory
+workspace:
+
+- The **public core** is the Python package, `tm` CLI, dashboard package, schemas,
+  and public starter docs.
+- Your **instance root** is your own data workspace: `wiki/`, `data/`, and
+  `runtime/`.
+
+Set `TIGERMEMORY_INSTANCE_ROOT` when you want `tm` to operate on a workspace
+outside the installed source checkout:
+
+```powershell
+$env:TIGERMEMORY_INSTANCE_ROOT="C:\path\to\my-tigermemory"
+tm init
+tm write-memory --agent codex --topic systems
+```
+
+`TIGERMEMORY_ROOT` is still accepted as an older compatibility variable when
+`TIGERMEMORY_INSTANCE_ROOT` is not set.
+
+`tm publish` is a maintainer-only export and audit command. It uses the
+TigerMemory source/export root (`TIGERMEMORY_APP_ROOT` when set), not your
+personal instance root. Normal public usage does not require `tm publish`.
+
 ## What Ships In This Snapshot
 
 The public snapshot is assembled from declared public modules:
@@ -193,3 +219,13 @@ This release evidence command validates the public module manifest, checks that
 declared module check paths exist, includes per-module release evidence, and
 includes the full snapshot audit result. It is still a dry run and does not
 publish files.
+
+Maintainers can also verify the true split smoke:
+
+```powershell
+tm publish --dry-run --json --audit-pii --target public-core --split-report --verify-split-smoke
+```
+
+That check installs the exported public core into a temporary environment and
+runs it against a separate empty instance root. It is the proof that public core
+code and private user data are no longer the same thing.

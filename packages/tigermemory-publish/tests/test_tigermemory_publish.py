@@ -208,6 +208,26 @@ def _build_fake_repo(root: pathlib.Path) -> None:
     (root / "schemas").mkdir()
     (root / "schemas" / "PAGE_FORMATS.md").write_text("# schemas\n", encoding="utf-8")
 
+    for rel in tigermemory_publish.PUBLISH_WHOLE_DIRS:
+        if rel == "schemas":
+            continue
+        package_src = root / rel
+        package_src.mkdir(parents=True, exist_ok=True)
+        (package_src / "__init__.py").write_text("# package\n", encoding="utf-8")
+        if rel == "packages/tigermemory-dashboard/src":
+            static = package_src / "tigermemory_dashboard" / "static"
+            static.mkdir(parents=True, exist_ok=True)
+            for name in (
+                "start.html",
+                "review.html",
+                "health.html",
+                "quality.html",
+                "canvas.html",
+                "dashboard-common.js",
+                "dashboard-pages.js",
+            ):
+                (static / name).write_text(f"// {name}\n", encoding="utf-8")
+
     wiki = root / "wiki"
     (wiki / "systems").mkdir(parents=True)
     (wiki / "systems" / "public-page.md").write_text(PUBLIC_TRUE_PAGE, encoding="utf-8")
@@ -234,6 +254,13 @@ def _build_fake_repo(root: pathlib.Path) -> None:
     (openmemory / template_name).write_text("KEY=\n", encoding="utf-8")
     # Real runtime config (no .example suffix) must NOT be picked up.
     (openmemory / real_name).write_text("KEY=stub-value\n", encoding="utf-8")
+
+    for checks in tigermemory_publish.module_checks().values():
+        for check in checks:
+            path = root / check
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                path.write_text("# module check placeholder\n", encoding="utf-8")
 
     for checks in tigermemory_publish.module_checks().values():
         for check in checks:
@@ -297,10 +324,9 @@ def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
     plan = tigermemory_publish.collect_publish_plan(tmp_path)
 
     assert plan["top_files"] == sorted([".gitignore"])
-    assert plan["whole_dirs"] == [
-        "packages/tigermemory-publish/src",
-        "schemas",
-    ]
+    assert "packages/tigermemory-dashboard/src" in plan["whole_dirs"]
+    assert "packages/tigermemory-publish/src" in plan["whole_dirs"]
+    assert "schemas" in plan["whole_dirs"]
     assert plan["mapped_files"] == [
         "packages/tigermemory-publish/src/tigermemory_publish/templates/AGENTS.md=>AGENTS.md",
         "packages/tigermemory-publish/src/tigermemory_publish/templates/LICENSE=>LICENSE",
@@ -311,7 +337,7 @@ def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
         "packages/tigermemory-publish/src/tigermemory_publish/templates/wiki/operations/project-canvas.md=>wiki/operations/project-canvas.md",
     ]
     assert set(plan["tool_files"]) >= {"tools/tm_io.py", "tools/tm_review_ui.py"}
-    assert plan["tool_dirs"] == sorted(["tools/memory_answer", "tools/static"])
+    assert plan["tool_dirs"] == sorted(["tools/memory_answer"])
     assert plan["wiki_public_pages"] == ["wiki/systems/public-page.md"]
     assert plan["excluded_by_public_field"] == [
         "wiki/systems/private-flagged.md",
@@ -536,6 +562,35 @@ def test_main_with_evidence_report_json_includes_release_evidence_payload(tmp_pa
     assert out["module_check_validation"]["ok"] is True
 
 
+def test_release_evidence_includes_true_split_status(tmp_path, monkeypatch, capsys) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _build_fake_repo(repo)
+    monkeypatch.setattr(tigermemory_publish, "REPO_ROOT", repo)
+    monkeypatch.setattr(tigermemory_publish, "run_public_core_instance_smoke", lambda **_kwargs: True)
+
+    rc = tigermemory_publish.main([
+        "--dest",
+        str(tmp_path / "out"),
+        "--dry-run",
+        "--json",
+        "--audit-pii",
+        "--evidence-report",
+        "--validate-checks",
+        "--target",
+        "public-core",
+        "--split-report",
+        "--verify-split-smoke",
+    ])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["release_evidence"]["schema"] == "tigermemory-public-release-evidence-v1"
+    assert payload["release_evidence"]["true_split"]["target"] == "public-core"
+    assert payload["release_evidence"]["true_split"]["public_core_independent"] is True
+    assert payload["release_evidence"]["true_split"]["public_core_independence_reason"] == "verified"
+
+
 def test_module_dry_run_is_inspection_only_and_keeps_full_snapshot_audit(tmp_path, monkeypatch, capsys) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -558,7 +613,9 @@ def test_module_dry_run_is_inspection_only_and_keeps_full_snapshot_audit(tmp_pat
     assert out["inspection_only"] is True
     assert out["release_gate_scope"] == "inspection-only"
     assert out["release_gate_ok"] is False
-    assert out["plan"]["whole_dirs"] == ["schemas"]
+    assert "schemas" in out["plan"]["whole_dirs"]
+    assert "packages/tigermemory-core/src" in out["plan"]["whole_dirs"]
+    assert "packages/tigermemory-dashboard/src" not in out["plan"]["whole_dirs"]
     assert out["plan"]["tool_dirs"] == []
     release = out["release_evidence"]
     assert release["schema"] == "tigermemory-public-release-evidence-v1"
@@ -698,14 +755,15 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     assert "TradingAgents" not in public_canvas
     assert not (dest / "tools" / "tm_dummy.py").exists()
     assert (dest / "tools" / "tm_io.py").is_file()
-    assert (dest / "tools" / "static" / "asset.txt").is_file()
-    assert (dest / "tools" / "static" / "start.html").is_file()
-    assert (dest / "tools" / "static" / "review.html").is_file()
-    assert (dest / "tools" / "static" / "health.html").is_file()
-    assert (dest / "tools" / "static" / "quality.html").is_file()
-    assert (dest / "tools" / "static" / "canvas.html").is_file()
-    assert (dest / "tools" / "static" / "dashboard-common.js").is_file()
-    assert (dest / "tools" / "static" / "dashboard-pages.js").is_file()
+    dashboard_static = dest / "packages" / "tigermemory-dashboard" / "src" / "tigermemory_dashboard" / "static"
+    assert (dashboard_static / "start.html").is_file()
+    assert (dashboard_static / "review.html").is_file()
+    assert (dashboard_static / "health.html").is_file()
+    assert (dashboard_static / "quality.html").is_file()
+    assert (dashboard_static / "canvas.html").is_file()
+    assert (dashboard_static / "dashboard-common.js").is_file()
+    assert (dashboard_static / "dashboard-pages.js").is_file()
+    assert not (dest / "tools" / "static").exists()
     assert (dest / "schemas" / "PAGE_FORMATS.md").is_file()
     assert (dest / "wiki" / "systems" / "public-page.md").is_file()
     assert not (dest / "wiki" / "systems" / "private-flagged.md").exists()

@@ -84,6 +84,24 @@ jobs:
           assert any(item["id"] == "public-core" for item in manifest["modules"]), manifest
           PY
 
+      - name: Public core with external instance root smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          public_core="$(mktemp -d)"
+          instance="$(mktemp -d)"
+          python3 tools/tm_io.py publish --dest "$public_core" --json --audit-pii --target public-core --split-report
+
+          python3 -m venv .tmp/public-core-smoke-venv
+          . .tmp/public-core-smoke-venv/bin/activate
+          python3 -m pip install -q "$public_core"
+
+          TIGERMEMORY_INSTANCE_ROOT="$instance" tm init --profile local
+          test -f "$instance/runtime/tigermemory/profile.env"
+          memory_id="$(printf 'external instance memory' | TIGERMEMORY_INSTANCE_ROOT="$instance" tm write-memory --agent codex --topic systems | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+          TIGERMEMORY_INSTANCE_ROOT="$instance" tm verify --id "$memory_id" --terms "external instance" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["direct_readback_ok"], data'
+
           python3 -m venv .tmp/publish-smoke-venv
           . .tmp/publish-smoke-venv/bin/activate
           python3 -m pip install -q "$snapshot"

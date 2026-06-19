@@ -1,0 +1,42 @@
+<header class="sticky top-0 z-30 border-b border-[#d8cfb5] bg-[#f7f2e6]/95 backdrop-blur">
+  <div class="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-4">
+    <a href="/" class="flex shrink-0 items-center gap-3 w-[160px] sm:w-[180px] md:w-[220px] lg:w-[240px] select-none">
+      <img src="/static/tiger/tigerlogo.png" alt="" class="h-10 w-10">
+      <div>
+        <div class="text-base font-extrabold leading-none text-[#1f1d1b]" data-i18n="brand.name">TigerMemory</div>
+        <div class="mt-0.5 text-xs text-[#8a8275]" data-i18n="brand.tagline">你的 AI 第二大脑</div>
+      </div>
+    </a>
+    <nav class="hidden items-center justify-center gap-1 md:flex flex-1 relative">
+      <div class="nav-highlight opacity-0 absolute"></div>
+      <a class="nav-tab" href="/start" data-i18n="nav.start" data-target-page="start">开始</a>
+      <a class="nav-tab" href="/digest" data-i18n="nav.daily" data-target-page="daily">今日待确认</a>
+      <a class="nav-tab" href="/health" data-i18n="nav.health" data-target-page="health">运行检查</a>
+      <a class="nav-tab" href="/quality" data-i18n="nav.quality" data-target-page="quality">记忆质量</a>
+      <a class="nav-tab" href="/canvas" data-i18n="nav.canvas" data-target-page="canvas">项目进展</a>
+      <a class="nav-tab" href="/self-evolution" data-i18n="nav.self_evolution" data-target-page="self-evolution">自我进化</a>
+      <a class="nav-tab" href="/agent-tools" data-i18n="nav.agent_tools" data-target-page="agent-tools">AI 连接</a>
+      <a class="nav-tab" href="/settings" data-i18n="nav.settings" data-target-page="settings">偏好设置</a>
+    </nav>
+    <div class="flex shrink-0 items-center justify-end gap-2 w-[160px] sm:w-[180px] md:w-[220px] lg:w-[240px]">
+      <button id="lang-toggle" class="rounded-full border border-[#c9bf9f] bg-[#f0e9d8] px-2.5 py-1 text-xs font-semibold text-[#4a443d] hover:bg-[#e8e0c8]" type="button" onclick="window.tmI18n && window.tmI18n.setLang(window.tmI18n.getLang() === 'zh' ? 'en' : 'zh')">中</button>
+      <span id="last-refresh" class="text-xs text-[#8a8275] truncate text-center w-[50px] sm:w-[70px] md:w-[100px] lg:w-[120px]" data-i18n="header.just_now" title="刚刚">刚刚</span>
+      <code id="sha-pill" class="rounded-full bg-[#f0e9d8] px-2 py-1 text-xs text-[#4a443d]">__GIT_SHA__</code>
+    </div>
+  </div>
+</header>
+<script src="/static/i18n.js?v=__GIT_SHA__"></script>
+<script src="/static/dashboard-common.js?v=__GIT_SHA__"></script>
+<script src="/static/dashboard-pages.js?v=__GIT_SHA__"></script>
+<script>
+  (() => {
+    const page = document.body.dataset.page;
+    document.documentElement.classList.add('tm-page-ready');
+    document.body.classList.add('tm-page-ready');
+    document.querySelectorAll(`[data-target-page="${page}"]`).forEach(el => el.classList.add('active'));
+    if (window.tmI18n) window.tmI18n.init();
+    if (window.tmDashboard && typeof window.tmDashboard.updateNavHighlight === 'function') {
+      requestAnimationFrame(() => window.tmDashboard.updateNavHighlight());
+    }
+  })();
+</script>

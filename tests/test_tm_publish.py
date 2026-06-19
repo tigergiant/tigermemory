@@ -216,6 +216,19 @@ def _build_fake_repo(root: pathlib.Path) -> None:
         package_src = root / rel
         package_src.mkdir(parents=True, exist_ok=True)
         (package_src / "__init__.py").write_text("# package\n", encoding="utf-8")
+        if rel == "packages/tigermemory-dashboard/src":
+            static = package_src / "tigermemory_dashboard" / "static"
+            static.mkdir(parents=True, exist_ok=True)
+            for name in (
+                "start.html",
+                "review.html",
+                "health.html",
+                "quality.html",
+                "canvas.html",
+                "dashboard-common.js",
+                "dashboard-pages.js",
+            ):
+                (static / name).write_text(f"// {name}\n", encoding="utf-8")
 
     wiki = root / "wiki"
     (wiki / "systems").mkdir(parents=True)
@@ -302,7 +315,8 @@ def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
         "packages/tigermemory-publish/src/tigermemory_publish/templates/wiki/operations/project-canvas.md=>wiki/operations/project-canvas.md",
     ]
     assert set(plan["tool_files"]) >= {"tools/tm_io.py", "tools/tm_review_ui.py"}
-    assert plan["tool_dirs"] == sorted(["tools/memory_answer", "tools/static"])
+    assert "packages/tigermemory-dashboard/src" in plan["whole_dirs"]
+    assert plan["tool_dirs"] == sorted(["tools/memory_answer"])
     assert plan["wiki_public_pages"] == ["wiki/systems/public-page.md"]
     assert plan["excluded_by_public_field"] == [
         "wiki/systems/private-flagged.md",
@@ -401,14 +415,15 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     assert "TradingAgents" not in public_canvas
     assert not (dest / "tools" / "tm_dummy.py").exists()
     assert (dest / "tools" / "tm_io.py").is_file()
-    assert (dest / "tools" / "static" / "asset.txt").is_file()
-    assert (dest / "tools" / "static" / "start.html").is_file()
-    assert (dest / "tools" / "static" / "review.html").is_file()
-    assert (dest / "tools" / "static" / "health.html").is_file()
-    assert (dest / "tools" / "static" / "quality.html").is_file()
-    assert (dest / "tools" / "static" / "canvas.html").is_file()
-    assert (dest / "tools" / "static" / "dashboard-common.js").is_file()
-    assert (dest / "tools" / "static" / "dashboard-pages.js").is_file()
+    dashboard_static = dest / "packages" / "tigermemory-dashboard" / "src" / "tigermemory_dashboard" / "static"
+    assert (dashboard_static / "start.html").is_file()
+    assert (dashboard_static / "review.html").is_file()
+    assert (dashboard_static / "health.html").is_file()
+    assert (dashboard_static / "quality.html").is_file()
+    assert (dashboard_static / "canvas.html").is_file()
+    assert (dashboard_static / "dashboard-common.js").is_file()
+    assert (dashboard_static / "dashboard-pages.js").is_file()
+    assert not (dest / "tools" / "static").exists()
     assert (dest / "schemas" / "PAGE_FORMATS.md").is_file()
     assert (dest / "pyproject.toml").is_file()
     assert (dest / "tigermemory_cli.py").is_file()

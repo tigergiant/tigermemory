@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#c8a560">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="TigerMemory" data-i18n-attr="content" data-i18n-content="app.title">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/static/tiger/tigermemory_tiger_logo_192.png">
+  <title data-i18n="page.start.title">TigerMemory 开始</title>
+  <script src="/static/assets/tailwindcss.min.js"></script>
+  <script src="/static/assets/lucide.min.js"></script>
+  <style>__STYLE__</style>
+</head>
+<body data-page="start">
+  __HEADER__
+  <script id="start-data" type="application/json">__START_JSON__</script>
+  <img class="dashboard-motif main" src="/static/tiger/tigerlogo.png" alt="">
+  <div class="stripe-motif tl"></div>
+  <div class="stripe-motif br"></div>
+
+  <main class="relative z-10 mx-auto max-w-6xl px-6 py-8">
+    <section class="card mb-6 p-6">
+      <div class="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+        <div class="max-w-3xl">
+          <div class="mb-2 inline-flex items-center gap-2 text-sm font-medium text-[#8a8275]">
+            <i data-lucide="compass" class="h-4 w-4 text-[#c8a560]"></i>
+            <span data-i18n="brand.subtitle">个人记忆控制台</span>
+          </div>
+          <h1 class="text-3xl font-extrabold leading-9 text-[#1f1d1b]" data-i18n="nav.start">开始</h1>
+          <p class="mt-3 text-sm leading-6 text-[#4a443d]" data-i18n="page.start.intro">从本地模式开始：先确认资料库可读，再用离线问答拿到证据；高级记忆服务可以稍后再接。</p>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <a href="/health" class="rounded-xl border border-[#c9bf9f] bg-[#f0e9d8] px-4 py-2 text-sm font-semibold text-[#4a443d] hover:bg-[#e8e0c8]" data-i18n="start.action.health">运行检查</a>
+          <a href="/digest" class="rounded-xl bg-[#c8a560] px-4 py-2 text-sm font-semibold text-[#1f1d1b] hover:bg-[#b8932e] hover:text-[#fbf8f1]" data-i18n="start.action.daily">进入今日待确认</a>
+        </div>
+      </div>
+      <div class="mt-4 flex flex-wrap items-center gap-2 text-xs text-[#8a8275]">
+        <span class="rounded-full border border-[#c9bf9f] bg-[#f0e9d8] px-3 py-1"><span data-i18n="start.profile.label">当前模式：</span><b id="start-profile">-</b></span>
+        <span class="rounded-full border border-[#c9bf9f] bg-[#f0e9d8] px-3 py-1" data-i18n="start.offline.badge">离线问答：只返回本地证据</span>
+      </div>
+    </section>
+
+    <section class="mb-6 grid gap-4 md:grid-cols-3">
+      <article class="card p-5">
+        <div class="mb-3 flex items-center gap-2">
+          <i data-lucide="hard-drive" class="h-5 w-5 text-[#c8a560]"></i>
+          <h2 class="text-lg font-semibold text-[#1f1d1b]" data-i18n="start.local.title">本地模式</h2>
+        </div>
+        <p class="text-sm leading-6 text-[#4a443d]" data-i18n="start.local.desc">不用 Docker，也不用先接 OpenMemory；先让 Markdown 和本地 SQLite 能搜到。</p>
+        <div class="mt-4 space-y-2">
+          <button type="button" class="copy-command" data-copy-command="tm init">tm init</button>
+          <button type="button" class="copy-command" data-copy-command="tm profile show">tm profile show</button>
+        </div>
+      </article>
+
+      <article class="card p-5">
+        <div class="mb-3 flex items-center gap-2">
+          <i data-lucide="search-check" class="h-5 w-5 text-[#c8a560]"></i>
+          <h2 class="text-lg font-semibold text-[#1f1d1b]" data-i18n="start.evidence.title">先查证据</h2>
+        </div>
+        <p class="text-sm leading-6 text-[#4a443d]" data-i18n="start.evidence.desc">搜索能命中资料页以后，再让 AI 接入；这样问题更容易定位。</p>
+        <div class="mt-4 space-y-2">
+          <button type="button" class="copy-command" data-copy-command='tm search --query "hello local memory" --size 5'>tm search --query "hello local memory" --size 5</button>
+          <button type="button" class="copy-command" data-copy-command='tm ask --offline --query "项目画布" --scope wiki'>tm ask --offline --query "项目画布" --scope wiki</button>
+        </div>
+      </article>
+
+      <article class="card p-5">
+        <div class="mb-3 flex items-center gap-2">
+          <i data-lucide="layout-dashboard" class="h-5 w-5 text-[#c8a560]"></i>
+          <h2 class="text-lg font-semibold text-[#1f1d1b]" data-i18n="start.dashboard.title">打开控制台</h2>
+        </div>
+        <p class="text-sm leading-6 text-[#4a443d]" data-i18n="start.dashboard.desc">网页里看运行状态、项目进展和待确认内容；高级页面继续留给熟悉流程后使用。</p>
+        <div class="mt-4 space-y-2">
+          <button type="button" class="copy-command" data-copy-command="tm dashboard">tm dashboard</button>
+          <a href="/canvas" class="block rounded-lg border border-[#c9bf9f] bg-[#f0e9d8] px-3 py-2 text-sm font-semibold text-[#4a443d] hover:bg-[#e8e0c8]" data-i18n="start.dashboard.canvas">查看项目进展</a>
+        </div>
+      </article>
+    </section>
+
+    <section class="grid gap-4 lg:grid-cols-[1fr_1fr]">
+      <article class="card p-5">
+        <div class="mb-3 flex items-center gap-2">
+          <i data-lucide="map" class="h-5 w-5 text-[#c8a560]"></i>
+          <h2 class="text-lg font-semibold text-[#1f1d1b]" data-i18n="start.next.title">下一步去哪</h2>
+        </div>
+        <div class="grid gap-3 sm:grid-cols-2">
+          <a href="/health" class="rounded-lg border border-[#e6dfcc] bg-[#fbf8f1] p-3 hover:bg-[#f0e9d8]">
+            <div class="font-semibold text-[#1f1d1b]" data-i18n="start.next.health">运行检查</div>
+            <div class="mt-1 text-xs leading-5 text-[#8a8275]" data-i18n="start.next.health_desc">确认服务、缓存和资料库状态。</div>
+          </a>
+          <a href="/quality" class="rounded-lg border border-[#e6dfcc] bg-[#fbf8f1] p-3 hover:bg-[#f0e9d8]">
+            <div class="font-semibold text-[#1f1d1b]" data-i18n="start.next.quality">记忆质量</div>
+            <div class="mt-1 text-xs leading-5 text-[#8a8275]" data-i18n="start.next.quality_desc">看分流和问答失败情况。</div>
+          </a>
+          <a href="/agent-tools" class="rounded-lg border border-[#e6dfcc] bg-[#fbf8f1] p-3 hover:bg-[#f0e9d8]">
+            <div class="font-semibold text-[#1f1d1b]" data-i18n="start.next.agent">AI 连接</div>
+            <div class="mt-1 text-xs leading-5 text-[#8a8275]" data-i18n="start.next.agent_desc">检查 IDE 是否接上 TigerMemory。</div>
+          </a>
+          <a href="/settings" class="rounded-lg border border-[#e6dfcc] bg-[#fbf8f1] p-3 hover:bg-[#f0e9d8]">
+            <div class="font-semibold text-[#1f1d1b]" data-i18n="start.next.settings">偏好设置</div>
+            <div class="mt-1 text-xs leading-5 text-[#8a8275]" data-i18n="start.next.settings_desc">调整回复详细程度。</div>
+          </a>
+        </div>
+      </article>
+
+      <article class="card p-5">
+        <div class="mb-3 flex items-center gap-2">
+          <i data-lucide="shield-check" class="h-5 w-5 text-[#c8a560]"></i>
+          <h2 class="text-lg font-semibold text-[#1f1d1b]" data-i18n="start.boundary.title">边界说明</h2>
+        </div>
+        <ul class="space-y-3 text-sm leading-6 text-[#4a443d]">
+          <li data-i18n="start.boundary.offline">离线问答只读本地证据，不调用在线模型，也不写入长期 Wiki。</li>
+          <li data-i18n="start.boundary.review">今日待确认用于人工审批，适合处理真正要进入 Wiki 或即时记忆的内容。</li>
+          <li data-i18n="start.boundary.optional">高级服务未启动时，运行检查会把它们标为可选，不影响 basic/local 体验。</li>
+        </ul>
+      </article>
+    </section>
+  </main>
+
+  <div id="start-toast" class="fixed bottom-6 left-1/2 z-50 hidden max-w-[min(92vw,32rem)] -translate-x-1/2 rounded-xl border border-[#a0b889] bg-[#dde8ce] px-4 py-3 text-sm text-[#52733a] shadow-lg"></div>
+
+  <script>
+    const startData = JSON.parse(document.getElementById('start-data').textContent);
+    window.tmPages.start.init(document, startData);
+    window.tmDashboard.registerServiceWorker();
+  </script>
+</body>
+</html>

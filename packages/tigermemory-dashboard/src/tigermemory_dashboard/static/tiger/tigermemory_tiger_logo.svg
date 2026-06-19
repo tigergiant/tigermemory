@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="TigerMemory tiger head logo">
+  <defs>
+    <style>
+      .g{fill:none;stroke:#B8863B;stroke-width:18;stroke-linecap:round;stroke-linejoin:round;}
+      .gd{fill:none;stroke:#9A6A22;stroke-width:14;stroke-linecap:round;stroke-linejoin:round;}
+      .f{fill:#B8863B;}
+    </style>
+  </defs>
+  <g transform="translate(0,18)">
+    <!-- outer face and ears -->
+    <path class="g" d="M318 285 C270 222 212 201 162 221 C159 297 189 355 235 395"/>
+    <path class="g" d="M706 285 C754 222 812 201 862 221 C865 297 835 355 789 395"/>
+    <path class="g" d="M244 390 C202 486 230 656 347 755 C419 816 605 816 677 755 C794 656 822 486 780 390"/>
+    <path class="g" d="M316 292 C404 218 620 218 708 292"/>
+
+    <!-- forehead stripes -->
+    <path class="gd" d="M512 244 C496 292 496 337 512 381"/>
+    <path class="gd" d="M454 255 C472 305 470 352 438 398"/>
+    <path class="gd" d="M570 255 C552 305 554 352 586 398"/>
+    <path class="gd" d="M394 290 C423 324 424 358 393 391"/>
+    <path class="gd" d="M630 290 C601 324 600 358 631 391"/>
+    <path class="gd" d="M364 235 C424 207 600 207 660 235" opacity="0.75"/>
+
+    <!-- eyes and cheek marks -->
+    <path class="gd" d="M337 481 C381 448 426 455 458 486"/>
+    <path class="gd" d="M687 481 C643 448 598 455 566 486"/>
+    <path class="gd" d="M365 520 C405 511 433 523 455 548"/>
+    <path class="gd" d="M659 520 C619 511 591 523 569 548"/>
+    <circle class="f" cx="405" cy="492" r="12"/>
+    <circle class="f" cx="619" cy="492" r="12"/>
+
+    <!-- nose and mouth -->
+    <path class="gd" d="M468 616 C491 596 533 596 556 616 C549 647 526 662 512 664 C498 662 475 647 468 616 Z"/>
+    <path class="gd" d="M512 664 C512 696 488 720 456 728"/>
+    <path class="gd" d="M512 664 C512 696 536 720 568 728"/>
+    <path class="gd" d="M414 700 C462 770 562 770 610 700" opacity="0.65"/>
+
+    <!-- whisker/side stripes -->
+    <path class="gd" d="M247 445 C306 455 344 480 366 515"/>
+    <path class="gd" d="M238 544 C302 543 344 559 376 590"/>
+    <path class="gd" d="M262 642 C324 624 369 630 409 661"/>
+    <path class="gd" d="M777 445 C718 455 680 480 658 515"/>
+    <path class="gd" d="M786 544 C722 543 680 559 648 590"/>
+    <path class="gd" d="M762 642 C700 624 655 630 615 661"/>
+  </g>
+</svg>

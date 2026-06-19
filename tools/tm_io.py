@@ -455,10 +455,15 @@ def cmd_publish(args: argparse.Namespace) -> None:
     if args.evidence_output:
         argv.extend(["--evidence-output", args.evidence_output])
     argv.extend(["--audit-scope", args.audit_scope])
+    argv.extend(["--target", args.target])
     if args.module:
         argv.extend(["--module", args.module])
     if args.print_checks:
         argv.append("--print-checks")
+    if args.split_report:
+        argv.append("--split-report")
+    if args.verify_split_smoke:
+        argv.append("--verify-split-smoke")
     code = tm_publish.main(argv)
     if code:
         sys.exit(code)
@@ -675,6 +680,7 @@ def main() -> None:
         default="snapshot",
         help="sensitive audit scope: publish snapshot only, or the full tracked repo",
     )
+    pb.add_argument("--target", choices=["snapshot", "public-core"], default="snapshot")
     pb.add_argument("--module", help="limit module metadata/check output to one public module")
     pb.add_argument("--print-checks", action="store_true", help="print declared public module checks and exit")
     pb.add_argument("--evidence-report", action="store_true", help="add release_evidence in JSON output")
@@ -684,6 +690,8 @@ def main() -> None:
         help="validate module check paths and fail non-zero when missing",
     )
     pb.add_argument("--evidence-output", help="write a Markdown release evidence artifact")
+    pb.add_argument("--split-report", action="store_true")
+    pb.add_argument("--verify-split-smoke", action="store_true")
     pb.set_defaults(func=cmd_publish)
 
     ad = sub.add_parser("agent-doctor", help="read-only agent connect / doctor checks")

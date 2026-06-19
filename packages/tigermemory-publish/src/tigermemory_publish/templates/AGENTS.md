@@ -10,6 +10,10 @@ to run with Python, Markdown, Git, and a local SQLite memory store.
   paths.
 - Prefer the `tm` CLI over ad hoc scripts for normal operations.
 - Keep optional integrations separate from the basic local path.
+- Keep the installed framework separate from user data. Runtime commands should
+  use `TIGERMEMORY_INSTANCE_ROOT` for the user's workspace. Maintainer export
+  commands such as `tm publish` use the TigerMemory source/export root
+  (`TIGERMEMORY_APP_ROOT` when set).
 - Before publishing or sharing a snapshot, run:
 
 ```powershell
@@ -37,6 +41,10 @@ tm ask --offline --query "hello local memory"
 
 `tm ask --offline` returns local evidence only. It must not call online Mem0 or
 an AI model in the public basic path.
+
+`tm publish` is not part of the normal public runtime workflow. It is a
+maintainer-only snapshot/export command and must not read a user's personal
+instance root as if it were the source checkout.
 
 ## Runtime Profiles
 

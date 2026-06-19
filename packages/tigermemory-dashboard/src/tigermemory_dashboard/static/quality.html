@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#c8a560">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="TigerMemory" data-i18n-attr="content" data-i18n-content="app.title">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/static/tiger/tigermemory_tiger_logo_192.png">
+  <title data-i18n="page.quality.title">TigerMemory 记忆质量</title>
+  <!-- Updated for service worker cache version v60 -->
+  <script src="/static/assets/tailwindcss.min.js"></script>
+  <script src="/static/assets/lucide.min.js"></script>
+  <style>__STYLE__</style>
+</head>
+<body data-page="quality">
+  __HEADER__
+  <script id="quality-data" type="application/json">__QUALITY_JSON__</script>
+  <img class="dashboard-motif" src="/static/tiger/tigerlogo.png" alt="">
+  <div class="stripe-motif tr"></div>
+  <div class="stripe-motif br"></div>
+
+  <main class="quality-shell relative z-10">
+    <section class="card quality-hero mb-4">
+      <div class="min-w-0">
+        <div class="mb-2 inline-flex items-center gap-2 text-sm font-medium text-[#8a8275]">
+          <i data-lucide="activity" class="h-4 w-4 text-[#c8a560]"></i>
+          <span data-i18n="brand.subtitle">记忆管家</span>
+        </div>
+        <h1 class="text-3xl font-extrabold leading-9 text-[#1f1d1b]" data-i18n="nav.quality">记忆质量</h1>
+        <p class="mt-2 max-w-3xl text-sm leading-6 text-[#4a443d]" data-i18n="page.quality.intro">查看今天的待确认内容、记忆服务连接、回答速度和失败问题；未接入的低频指标不在常规视图里占位。</p>
+      </div>
+      <button id="refresh-button" class="rounded-xl bg-[#c8a560] px-5 py-2.5 text-sm font-semibold text-[#1f1d1b] hover:bg-[#b8932e] hover:text-[#fbf8f1]" data-i18n="action.refresh_quality">刷新质量数据</button>
+    </section>
+
+    <section id="quality-alert" class="mb-4"></section>
+    <section id="kpi-grid" class="quality-kpi-grid"></section>
+
+    <section class="quality-workspace">
+      <section class="card quality-flow-panel">
+        <div class="quality-panel-title">
+          <div class="min-w-0">
+            <div class="mb-3 inline-flex rounded-full border border-[#d8c99f] bg-[#f5eedf] p-1 text-sm font-semibold text-[#5a5146]">
+              <span class="rounded-full bg-[#c8a560] px-4 py-2 text-[#1f1d1b]" data-i18n="quality.tab.memory">记忆系统质量</span>
+            </div>
+            <div class="flex items-start gap-2">
+              <i data-lucide="route" class="mt-1 h-5 w-5 shrink-0 text-[#c8a560]"></i>
+              <div class="min-w-0">
+                <h2 id="quality-flow-title" class="text-xl font-semibold text-[#1f1d1b]">今日记忆分流</h2>
+                <p id="quality-flow-subtitle" class="text-sm leading-6 text-[#5f5648]">按待审记录的推荐去向展示 mem0 / Wiki / inbox / discard；回答异常单独放在右侧状态区。</p>
+                <div id="quality-range-controls" class="mt-3 inline-flex rounded-full border border-[#d8c99f] bg-[#f5eedf] p-1 text-xs font-semibold text-[#6f6258]">
+                  <button type="button" data-quality-range="today" class="rounded-full px-3 py-1.5">今日</button>
+                  <button type="button" data-quality-range="7d" class="rounded-full px-3 py-1.5">近 7 天</button>
+                  <button type="button" data-quality-range="30d" class="rounded-full px-3 py-1.5">近 1 个月</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <span id="trace-summary-pill" class="status-badge status-ok min-w-0 max-w-full break-words"><span class="status-dot"></span>AI 推理过程可查</span>
+        </div>
+
+        <div data-panel="memory">
+          <section id="route-section" class="min-w-0">
+            <div id="route-bars" class="rounded-2xl border border-[#e6dfcc] bg-[#f0e9d8] p-4"></div>
+          </section>
+          <div id="quality-empty-state" class="mt-6 hidden rounded-2xl border border-[#d8c99f] bg-[#f4e6c4] p-4 text-sm leading-6 text-[#6f5318]"></div>
+        </div>
+      </section>
+
+      <aside class="quality-side-column">
+        <section id="status-section" class="card quality-side-card min-w-0">
+          <div class="mb-3 flex items-center gap-2">
+            <i data-lucide="bar-chart-3" class="h-5 w-5 text-[#c8a560]"></i>
+            <h2 id="quality-status-title" class="text-lg font-semibold text-[#1f1d1b]">回答状态分布（近 7 天）</h2>
+          </div>
+          <div id="status-bars" class="space-y-4 rounded-2xl border border-[#e6dfcc] bg-[#f0e9d8] p-4"></div>
+        </section>
+
+        <section id="recommendation-quality-section" class="card quality-side-card min-w-0">
+          <div class="mb-3 flex items-center gap-2">
+            <i data-lucide="sparkles" class="h-5 w-5 text-[#c8a560]"></i>
+            <h2 class="text-lg font-semibold text-[#1f1d1b]">相关证据推荐质量</h2>
+          </div>
+          <div id="recommendation-quality-list" class="space-y-3"></div>
+        </section>
+
+        <section id="retrieval-release-section" class="card quality-side-card min-w-0">
+          <div class="mb-3 flex items-center gap-2">
+            <i data-lucide="radar" class="h-5 w-5 text-[#c8a560]"></i>
+            <h2 class="text-lg font-semibold text-[#1f1d1b]">检索放行状态</h2>
+          </div>
+          <div id="retrieval-release-list" class="space-y-3"></div>
+        </section>
+
+        <section id="failure-section" class="card quality-side-card min-w-0">
+          <div class="mb-3 flex items-center gap-2">
+            <i data-lucide="triangle-alert" class="h-5 w-5 text-[#c8a560]"></i>
+            <h2 class="text-lg font-semibold text-[#1f1d1b]" data-i18n="section.quality.failures">P5 真实失败池</h2>
+          </div>
+          <div id="failure-list" class="space-y-3"></div>
+        </section>
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    const qualityData = JSON.parse(document.getElementById('quality-data').textContent);
+    window.tmPages.quality.init(document, qualityData);
+    window.tmDashboard.registerServiceWorker();
+  </script>
+</body>
+</html>

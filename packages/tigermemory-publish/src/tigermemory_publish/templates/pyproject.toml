@@ -33,6 +33,7 @@ where = [
   "packages/tigermemory-answer/src",
   "packages/tigermemory-config/src",
   "packages/tigermemory-core/src",
+  "packages/tigermemory-dashboard/src",
   "packages/tigermemory-digest/src",
   "packages/tigermemory-doctor/src",
   "packages/tigermemory-index/src",
@@ -45,4 +46,5 @@ where = [
 ]
 
 [tool.setuptools.package-data]
+tigermemory_dashboard = ["static/**/*"]
 tigermemory_publish = ["templates/*", "templates/wiki/operations/*.md"]
