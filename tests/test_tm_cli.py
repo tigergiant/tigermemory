@@ -723,6 +723,10 @@ def test_publish_passthrough_accepts_tool_options(monkeypatch) -> None:
         "--module",
         "public-dashboard",
         "--print-checks",
+        "--evidence-report",
+        "--validate-checks",
+        "--evidence-output",
+        "out/evidence.md",
     ]) == 0
     assert calls == [
         (
@@ -738,6 +742,10 @@ def test_publish_passthrough_accepts_tool_options(monkeypatch) -> None:
                 "--module",
                 "public-dashboard",
                 "--print-checks",
+                "--evidence-report",
+                "--validate-checks",
+                "--evidence-output",
+                "out/evidence.md",
             ],
         )
     ]

@@ -235,6 +235,13 @@ def _build_fake_repo(root: pathlib.Path) -> None:
     # Real runtime config (no .example suffix) must NOT be picked up.
     (openmemory / real_name).write_text("KEY=stub-value\n", encoding="utf-8")
 
+    for checks in tigermemory_publish.module_checks().values():
+        for check in checks:
+            path = root / check
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                path.write_text("# module check placeholder\n", encoding="utf-8")
+
 
 def test_has_public_true_recognizes_flag(tmp_path: pathlib.Path) -> None:
     page = tmp_path / "p.md"
@@ -425,6 +432,11 @@ def test_print_checks_json_outputs_module_checks(tmp_path, monkeypatch, capsys) 
     assert payload["modules"]["private_package_names"] == list(tigermemory_publish.PRIVATE_PACKAGE_NAMES)
 
 
+def test_module_checks_unknown_module_raises_key_error() -> None:
+    with pytest.raises(KeyError):
+        tigermemory_publish.module_checks("missing-module")
+
+
 def test_print_checks_json_can_filter_one_module(tmp_path, monkeypatch, capsys) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -439,6 +451,91 @@ def test_print_checks_json_can_filter_one_module(tmp_path, monkeypatch, capsys) 
     assert payload["module"] == "public-publish"
     assert set(payload["checks"]) == {"public-publish"}
     assert "packages/tigermemory-publish/tests/test_tigermemory_publish.py" in payload["checks"]["public-publish"]
+
+
+def test_validate_module_checks_points_to_existing_paths() -> None:
+    repo_root = pathlib.Path(__file__).resolve().parents[3]
+    result = tigermemory_publish.validate_module_checks(repo_root)
+
+    assert result["ok"] is True
+    assert result["missing"] == []
+    assert result["checked"], "there should be at least one module check configured"
+
+
+def test_validate_module_checks_reports_missing_path(tmp_path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    checks = {
+        check
+        for checks in tigermemory_publish.module_checks().values()
+        for check in checks
+    }
+    for check in checks:
+        path = repo_root / check
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("placeholder\n", encoding="utf-8")
+
+    payload = tigermemory_publish.validate_module_checks(repo_root)
+    assert payload["ok"] is True
+
+    (repo_root / "tests/test_tm_cli.py").unlink()
+    payload = tigermemory_publish.validate_module_checks(repo_root)
+    assert payload["ok"] is False
+    assert any(item["path"] == "tests/test_tm_cli.py" for item in payload["missing"])
+
+
+def test_main_with_evidence_report_json_includes_release_evidence_payload(tmp_path, monkeypatch, capsys) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _build_fake_repo(repo)
+    monkeypatch.setattr(tigermemory_publish, "REPO_ROOT", repo)
+
+    rc = tigermemory_publish.main([
+        "--dest",
+        str(tmp_path / "out"),
+        "--dry-run",
+        "--json",
+        "--audit-pii",
+        "--evidence-report",
+    ])
+    out = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert out["ok"] is True
+    release = out["release_evidence"]
+    assert release["schema"] == "tigermemory-public-release-evidence-v1"
+    assert release["module_count"] == len(tigermemory_publish.PUBLIC_MODULES)
+    assert "public-dashboard" in release["module_checks"]
+    assert release["snapshot_audit"]["sensitive_total"] == 0
+    assert release["module_check_validation"]["ok"] is True
+    assert out["module_check_validation"]["ok"] is True
+
+
+def test_main_with_evidence_output_generates_markdown(tmp_path, monkeypatch, capsys) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _build_fake_repo(repo)
+    monkeypatch.setattr(tigermemory_publish, "REPO_ROOT", repo)
+
+    out_path = tmp_path / "release-evidence.md"
+    rc = tigermemory_publish.main([
+        "--dest",
+        str(tmp_path / "out"),
+        "--dry-run",
+        "--audit-pii",
+        "--evidence-output",
+        str(out_path),
+    ])
+    _ = capsys.readouterr().out
+
+    assert rc == 0
+    assert out_path.exists()
+    text = out_path.read_text(encoding="utf-8")
+    assert "# TigerMemory Public Release Evidence" in text
+    assert "Generated at:" in text
+    assert "Snapshot audit" in text
+    assert "Repo-scope audit" in text
+    assert "public-dashboard" in text
 
 
 def test_collect_publish_plan_excludes_person_partition(tmp_path: pathlib.Path) -> None:
@@ -782,3 +879,91 @@ def test_module_entrypoint_dry_run_json_reports_public_field_exclusions(tmp_path
     assert summary["excluded_counts"]["excluded_by_person_partition"] == 1
     assert summary["plan"]["wiki_public_pages"] == ["wiki/systems/public-page.md"]
     assert not (tmp_path / "out" / "AGENTS.md").exists()
+
+
+def test_main_validate_checks_json_includes_payload_and_non_json_fails_on_missing_checks(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    checks_root = tmp_path / "repo"
+    checks_root.mkdir()
+    checks = {
+        check
+        for checks in tigermemory_publish.module_checks().values()
+        for check in checks
+    }
+    for check in checks:
+        path = checks_root / check
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("placeholder\n", encoding="utf-8")
+    (checks_root / "tests/test_tm_cli.py").unlink()
+
+    monkeypatch.setattr(tigermemory_publish, "REPO_ROOT", checks_root)
+    rc_non_json = tigermemory_publish.main(["--dry-run", "--validate-checks"])
+    out_non_json = capsys.readouterr().out
+    assert rc_non_json == 3
+    assert "module check validation: FAIL" in out_non_json
+
+    rc_json = tigermemory_publish.main(["--dry-run", "--json", "--validate-checks"])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc_json == 3
+    assert payload["ok"] is False
+    assert payload["module_check_validation"]["ok"] is False
+    assert payload["module_check_validation"]["missing"]
+
+
+def test_main_evidence_output_fails_when_module_checks_are_missing(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    checks_root = tmp_path / "repo"
+    checks_root.mkdir()
+    checks = {
+        check
+        for checks in tigermemory_publish.module_checks().values()
+        for check in checks
+    }
+    for check in checks:
+        path = checks_root / check
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("placeholder\n", encoding="utf-8")
+    (checks_root / "tests/test_tm_cli.py").unlink()
+
+    monkeypatch.setattr(tigermemory_publish, "REPO_ROOT", checks_root)
+    out_path = tmp_path / "release-evidence.md"
+    rc = tigermemory_publish.main(["--dry-run", "--evidence-output", str(out_path)])
+    _ = capsys.readouterr().out
+
+    assert rc == 3
+    text = out_path.read_text(encoding="utf-8")
+    assert "Module check validation: FAIL" in text
+
+
+def test_main_evidence_report_json_fails_when_module_checks_are_missing(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    checks_root = tmp_path / "repo"
+    checks_root.mkdir()
+    checks = {
+        check
+        for checks in tigermemory_publish.module_checks().values()
+        for check in checks
+    }
+    for check in checks:
+        path = checks_root / check
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("placeholder\n", encoding="utf-8")
+    (checks_root / "tests/test_tm_cli.py").unlink()
+
+    monkeypatch.setattr(tigermemory_publish, "REPO_ROOT", checks_root)
+    rc = tigermemory_publish.main(["--dry-run", "--json", "--evidence-report"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 3
+    assert payload["ok"] is False
+    assert payload["module_check_validation"]["ok"] is False
+    assert payload["release_evidence"]["module_check_validation"]["ok"] is False

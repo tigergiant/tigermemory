@@ -174,3 +174,13 @@ To inspect the declared release checks for each public module:
 ```powershell
 tm publish --print-checks --json
 ```
+
+To inspect the full snapshot release evidence before publishing:
+
+```powershell
+tm publish --dry-run --json --audit-pii --evidence-report --validate-checks
+```
+
+This release evidence command validates the public module manifest, checks that
+declared module check paths exist, and includes the snapshot audit result. It is
+still a dry run and does not publish files.

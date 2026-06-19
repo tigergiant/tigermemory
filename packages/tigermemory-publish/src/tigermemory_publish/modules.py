@@ -7,6 +7,7 @@ tuples in the publisher entrypoint.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 MappedFile = tuple[str, str]
@@ -218,6 +219,19 @@ def module_checks(module_id: str | None = None) -> dict[str, list[str]]:
         if not modules:
             raise KeyError(module_id)
     return {module.id: list(module.checks) for module in modules}
+
+
+def validate_module_checks(project_root: str | Path) -> dict[str, object]:
+    """Return module check path coverage for a given project root."""
+    root = Path(project_root)
+    checked: list[dict[str, str]] = []
+    missing: list[dict[str, str]] = []
+    for module in PUBLIC_MODULES:
+        for check_path in module.checks:
+            checked.append({"module": module.id, "path": check_path})
+            if not (root / check_path).exists():
+                missing.append({"module": module.id, "path": check_path})
+    return {"ok": not missing, "checked": checked, "missing": missing}
 
 
 def module_summary() -> dict[str, object]:

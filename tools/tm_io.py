@@ -448,6 +448,12 @@ def cmd_publish(args: argparse.Namespace) -> None:
         argv.append("--json")
     if args.audit_pii:
         argv.append("--audit-pii")
+    if args.evidence_report:
+        argv.append("--evidence-report")
+    if args.validate_checks:
+        argv.append("--validate-checks")
+    if args.evidence_output:
+        argv.extend(["--evidence-output", args.evidence_output])
     argv.extend(["--audit-scope", args.audit_scope])
     if args.module:
         argv.extend(["--module", args.module])
@@ -671,6 +677,13 @@ def main() -> None:
     )
     pb.add_argument("--module", help="limit module metadata/check output to one public module")
     pb.add_argument("--print-checks", action="store_true", help="print declared public module checks and exit")
+    pb.add_argument("--evidence-report", action="store_true", help="add release_evidence in JSON output")
+    pb.add_argument(
+        "--validate-checks",
+        action="store_true",
+        help="validate module check paths and fail non-zero when missing",
+    )
+    pb.add_argument("--evidence-output", help="write a Markdown release evidence artifact")
     pb.set_defaults(func=cmd_publish)
 
     ad = sub.add_parser("agent-doctor", help="read-only agent connect / doctor checks")

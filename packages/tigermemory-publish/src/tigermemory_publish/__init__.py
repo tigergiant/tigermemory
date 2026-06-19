@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+from datetime import datetime
 import json
 import os
 import pathlib
@@ -24,6 +25,7 @@ from .modules import (
     PRIVATE_EXCLUDED_MODULES,
     PRIVATE_PACKAGE_NAMES,
     PUBLIC_MODULES,
+    validate_module_checks,
     module_checks,
     module_ids,
     module_summary,
@@ -555,6 +557,97 @@ def _excluded_plan(plan: dict[str, list[str]]) -> dict[str, list[str]]:
     return {key: list(plan.get(key, [])) for key in EXCLUDED_PLAN_KEYS}
 
 
+def _format_status(value: bool) -> str:
+    return "PASS" if value else "FAIL"
+
+
+def _snapshot_audit_payload(
+    sensitive_findings: list[dict[str, object]],
+    has_blocking_findings: bool,
+) -> dict[str, object]:
+    return {"ok": not has_blocking_findings, "sensitive_total": len(sensitive_findings)}
+
+
+def _write_evidence_report(
+    out_path: pathlib.Path,
+    *,
+    generated: str,
+    module_checks_payload: dict[str, list[str]],
+    private_package_names: list[str],
+    snapshot_audit: dict[str, object],
+    module_check_validation: dict[str, object] | None,
+) -> None:
+    if module_check_validation is None:
+        module_check_validation = validate_module_checks(REPO_ROOT)
+
+    rows = sorted(module_checks_payload.items())
+    lines = [
+        "---",
+        'source_url: "local-command:tm-publish-release-evidence"',
+        f'fetched_at: "{generated}"',
+        'fetched_by: "codex-via-tm_publish"',
+        'title: "TigerMemory Public Release Evidence"',
+        f"status: {'passed' if snapshot_audit['ok'] and module_check_validation['ok'] else 'failed'}",
+        "---",
+        "",
+        "# TigerMemory Public Release Evidence",
+        "",
+        f"Generated at: {generated}",
+        "",
+        "## Summary",
+        f"- Snapshot audit: {_format_status(snapshot_audit['ok'])}",
+        f"- Module check validation: {_format_status(module_check_validation['ok'])}",
+        "",
+        "## Module checks",
+        "| Module | Checks |",
+        "| --- | --- |",
+    ]
+    for module_id, checks in rows:
+        line = ", ".join(checks) if checks else "(none)"
+        lines.append(f"| {module_id} | {line} |")
+
+    lines.extend(
+        [
+            "",
+            "## Private package names",
+            "",
+            "- " + "\n- ".join(private_package_names),
+            "",
+            "## Snapshot audit",
+            f"- Result: {_format_status(snapshot_audit['ok'])}",
+            f"- Sensitive findings: {snapshot_audit['sensitive_total']}",
+            "",
+        ]
+    )
+
+    lines.extend(
+        [
+            "## Module check validation",
+            f"- Result: {_format_status(module_check_validation['ok'])}",
+            f"- Checked: {len(module_check_validation['checked'])}",
+            f"- Missing: {len(module_check_validation['missing'])}",
+            "",
+        ]
+    )
+    for item in module_check_validation["missing"]:
+        lines.append(f"- {item['module']}: {item['path']}")
+
+    lines.extend(
+        [
+            "",
+            "## Recommended pre-release commands",
+            "- tm publish --dry-run --json --audit-pii --evidence-report --validate-checks",
+            "- py -m pytest tests/test_tm_cli.py packages/tigermemory-publish/tests/test_tigermemory_publish.py -q",
+            "",
+            "## Repo-scope audit",
+            "- Repo-scope audit is a separate true-split readiness check and is run with `tm publish --audit-scope repo`.",
+        ]
+    )
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 _BYTECODE_CACHE_DIRNAME = "__py" + "cache__"
 
 
@@ -680,6 +773,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="print declared checks for public modules and exit",
     )
+    p.add_argument(
+        "--evidence-report",
+        action="store_true",
+        help="add release_evidence object in JSON output",
+    )
+    p.add_argument(
+        "--validate-checks",
+        action="store_true",
+        help="validate module check paths",
+    )
+    p.add_argument(
+        "--evidence-output",
+        help="write public release evidence as Markdown to path",
+    )
     args = p.parse_args(argv)
 
     if args.print_checks:
@@ -724,8 +831,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.audit_pii and not args.dry_run:
         pii_findings_path = write_pii_findings(dest, sensitive_findings)
 
+    module_check_validation = None
+    if args.validate_checks or args.evidence_output or args.evidence_report:
+        module_check_validation = validate_module_checks(REPO_ROOT)
+    module_check_failure_is_blocking = bool(
+        (args.validate_checks or args.evidence_output or args.evidence_report)
+        and module_check_validation is not None
+        and not module_check_validation["ok"]
+    )
+    overall_ok = not blocking_findings and not module_check_failure_is_blocking
+
     summary = {
-        "ok": not blocking_findings,
+        "ok": overall_ok,
         "dest": str(dest),
         "dry_run": args.dry_run,
         "audit_pii": args.audit_pii,
@@ -747,6 +864,28 @@ def main(argv: list[str] | None = None) -> int:
             "medium": sum(1 for f in sensitive_findings if f["severity"] == "medium"),
         },
     }
+
+    if (args.validate_checks or args.evidence_report) and module_check_validation is not None:
+        summary["module_check_validation"] = module_check_validation
+
+    if args.evidence_report and args.json:
+        summary["release_evidence"] = {
+            "schema": "tigermemory-public-release-evidence-v1",
+            "module_count": len(PUBLIC_MODULES),
+            "module_checks": module_checks(),
+            "private_package_names": list(PRIVATE_PACKAGE_NAMES),
+            "snapshot_audit": _snapshot_audit_payload(sensitive_findings, has_blocking_findings),
+            "module_check_validation": module_check_validation,
+        }
+
+    if not args.json and args.validate_checks:
+        if module_check_validation and module_check_validation["ok"]:
+            print("module check validation: PASS")
+        else:
+            print("module check validation: FAIL")
+            if module_check_validation is not None:
+                for item in module_check_validation["missing"]:
+                    print(f"- {item['module']}: {item['path']}")
 
     if args.json:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
@@ -774,8 +913,19 @@ def main(argv: list[str] | None = None) -> int:
                     f"  - {finding['severity']} {finding['kind']} "
                     f"{finding['path']}:{finding['line']} {finding['preview']}"
                 )
-    blocking_findings = [f for f in sensitive_findings if f.get("severity") != "warning"]
-    return 3 if blocking_findings else 0
+
+    if args.evidence_output:
+        _write_evidence_report(
+            pathlib.Path(args.evidence_output),
+            generated=datetime.now().astimezone().isoformat(),
+            module_checks_payload=module_checks(),
+            private_package_names=list(PRIVATE_PACKAGE_NAMES),
+            snapshot_audit=_snapshot_audit_payload(sensitive_findings, has_blocking_findings),
+            module_check_validation=module_check_validation,
+        )
+
+    return_code = 0 if overall_ok else 3
+    return return_code
 
 
 if __name__ == "__main__":

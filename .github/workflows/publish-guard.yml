@@ -47,6 +47,19 @@ jobs:
         run: |
           tm publish --dry-run --audit-pii --json
 
+      - name: Public release evidence report
+        run: |
+          tm publish --dry-run --audit-pii --json --evidence-report --validate-checks > /tmp/tigermemory-release-evidence.json
+          python3 - <<'PY'
+          import json
+
+          payload = json.load(open("/tmp/tigermemory-release-evidence.json", encoding="utf-8"))
+          assert payload["ok"] is True, payload
+          assert payload["module_check_validation"]["ok"] is True, payload["module_check_validation"]
+          assert payload["release_evidence"]["schema"] == "tigermemory-public-release-evidence-v1"
+          assert payload["release_evidence"]["snapshot_audit"]["ok"] is True
+          PY
+
       - name: Build snapshot and smoke local install
         shell: bash
         run: |
