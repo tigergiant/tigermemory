@@ -71,6 +71,22 @@ def test_hash_source_report_accepts_literal_hash(tmp_path: pathlib.Path) -> None
     assert hash_value in report["sources"]
 
 
+def test_hash_source_report_accepts_uppercase_literal_hash_source(tmp_path: pathlib.Path) -> None:
+    hash_value = "a" * 64
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    (reports / "artifact.md").write_text(
+        f"file sha256 `{hash_value.upper()}`\n",
+        encoding="utf-8",
+    )
+
+    report = guard._hash_source_report([f"file sha256 `{hash_value}`"], tmp_path)
+
+    assert report["ok"] is True
+    assert report["missing"] == []
+    assert hash_value in report["sources"]
+
+
 def test_hash_source_report_accepts_file_sha256(tmp_path: pathlib.Path) -> None:
     reports = tmp_path / "reports"
     reports.mkdir()

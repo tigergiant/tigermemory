@@ -928,6 +928,11 @@ def test_lint_page_accepts_missing_public_field():
     assert tm_core.lint_page_errors(text) == []
 
 
+def test_lint_page_accepts_utf8_bom_before_frontmatter():
+    text = "\ufeff" + _LINT_PAGE_BASE.format(extra="")
+    assert tm_core.lint_page_errors(text) == []
+
+
 def test_lint_page_accepts_public_true_and_false():
     text_true = _LINT_PAGE_BASE.format(extra="public: true\n")
     text_false = _LINT_PAGE_BASE.format(extra="public: false\n")

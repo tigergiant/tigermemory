@@ -2943,6 +2943,7 @@ def render_wiki_body(frontmatter: str, body: str, date: str | None = None) -> st
 
 def lint_page_errors(text: str) -> list[str]:
     """Return list of lint errors for a wiki page's full text. Empty list = clean."""
+    text = text.removeprefix("\ufeff")
     errors: list[str] = []
 
     if not text.startswith("---\n"):
