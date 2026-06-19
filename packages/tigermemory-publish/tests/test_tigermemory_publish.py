@@ -372,13 +372,18 @@ def test_public_pyproject_package_roots_match_modules() -> None:
     assert not existing_private_roots.intersection(where)
 
 
+def test_module_summary_exposes_private_package_single_source() -> None:
+    summary = tigermemory_publish.module_summary()
+
+    assert summary["private_package_names"] == list(tigermemory_publish.PRIVATE_PACKAGE_NAMES)
+    assert {"tigerledger", "tigermemory_eval", "tigermemory_minimax"}.issubset(
+        set(tigermemory_publish.PRIVATE_PACKAGE_NAMES)
+    )
+
+
 def test_public_packages_do_not_import_private_packages() -> None:
     repo_root = pathlib.Path(__file__).resolve().parents[3]
-    private_modules = {
-        "tigerledger",
-        "tigermemory_eval",
-        "tigermemory_minimax",
-    }
+    private_modules = set(tigermemory_publish.PRIVATE_PACKAGE_NAMES)
     violations: list[str] = []
 
     for rel_root in tigermemory_publish.PUBLISH_PACKAGE_ROOTS:
@@ -400,6 +405,40 @@ def test_public_packages_do_not_import_private_packages() -> None:
                         violations.append(f"{rel} imports {name}")
 
     assert violations == []
+
+
+def test_print_checks_json_outputs_module_checks(tmp_path, monkeypatch, capsys) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _build_fake_repo(repo)
+    monkeypatch.setattr(tigermemory_publish, "REPO_ROOT", repo)
+
+    rc = tigermemory_publish.main(["--print-checks", "--json"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    payload = json.loads(out)
+    assert payload["ok"] is True
+    assert payload["module"] is None
+    assert "public-dashboard" in payload["checks"]
+    assert "tests/test_tm_cli.py" in payload["checks"]["public-dashboard"]
+    assert payload["modules"]["private_package_names"] == list(tigermemory_publish.PRIVATE_PACKAGE_NAMES)
+
+
+def test_print_checks_json_can_filter_one_module(tmp_path, monkeypatch, capsys) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _build_fake_repo(repo)
+    monkeypatch.setattr(tigermemory_publish, "REPO_ROOT", repo)
+
+    rc = tigermemory_publish.main(["--print-checks", "--module", "public-publish", "--json"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    payload = json.loads(out)
+    assert payload["module"] == "public-publish"
+    assert set(payload["checks"]) == {"public-publish"}
+    assert "packages/tigermemory-publish/tests/test_tigermemory_publish.py" in payload["checks"]["public-publish"]
 
 
 def test_collect_publish_plan_excludes_person_partition(tmp_path: pathlib.Path) -> None:

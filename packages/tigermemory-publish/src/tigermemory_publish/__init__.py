@@ -22,7 +22,10 @@ import sys
 
 from .modules import (
     PRIVATE_EXCLUDED_MODULES,
+    PRIVATE_PACKAGE_NAMES,
     PUBLIC_MODULES,
+    module_checks,
+    module_ids,
     module_summary,
     public_mapped_files,
     public_package_roots,
@@ -667,7 +670,33 @@ def main(argv: list[str] | None = None) -> int:
         default="snapshot",
         help="sensitive audit scope: publish snapshot only, or the full tracked repo",
     )
+    p.add_argument(
+        "--module",
+        choices=module_ids(),
+        help="limit module metadata output to one public module",
+    )
+    p.add_argument(
+        "--print-checks",
+        action="store_true",
+        help="print declared checks for public modules and exit",
+    )
     args = p.parse_args(argv)
+
+    if args.print_checks:
+        payload = {
+            "ok": True,
+            "module": args.module,
+            "checks": module_checks(args.module),
+            "modules": module_summary(),
+        }
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            for module_id, checks in payload["checks"].items():
+                print(f"{module_id}:")
+                for check in checks:
+                    print(f"  {check}")
+        return 0
 
     dest = pathlib.Path(args.dest)
     if not dest.is_absolute():

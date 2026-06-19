@@ -11,6 +11,12 @@ from dataclasses import dataclass, field
 
 MappedFile = tuple[str, str]
 
+PRIVATE_PACKAGE_NAMES = (
+    "tigerledger",
+    "tigermemory_eval",
+    "tigermemory_minimax",
+)
+
 
 @dataclass(frozen=True)
 class PublishModule:
@@ -201,11 +207,25 @@ def public_wiki_partitions() -> tuple[str, ...]:
     return _flatten(PUBLIC_MODULES, "wiki_partitions")
 
 
+def module_ids() -> tuple[str, ...]:
+    return tuple(module.id for module in PUBLIC_MODULES)
+
+
+def module_checks(module_id: str | None = None) -> dict[str, list[str]]:
+    modules = PUBLIC_MODULES
+    if module_id is not None:
+        modules = tuple(module for module in PUBLIC_MODULES if module.id == module_id)
+        if not modules:
+            raise KeyError(module_id)
+    return {module.id: list(module.checks) for module in modules}
+
+
 def module_summary() -> dict[str, object]:
     return {
         "included": [module.id for module in PUBLIC_MODULES],
         "excluded": [module.id for module in PRIVATE_EXCLUDED_MODULES],
         "count": len(PUBLIC_MODULES),
+        "private_package_names": list(PRIVATE_PACKAGE_NAMES),
         "details": [
             {
                 "id": module.id,

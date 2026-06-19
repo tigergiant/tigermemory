@@ -449,6 +449,10 @@ def cmd_publish(args: argparse.Namespace) -> None:
     if args.audit_pii:
         argv.append("--audit-pii")
     argv.extend(["--audit-scope", args.audit_scope])
+    if args.module:
+        argv.extend(["--module", args.module])
+    if args.print_checks:
+        argv.append("--print-checks")
     code = tm_publish.main(argv)
     if code:
         sys.exit(code)
@@ -665,6 +669,8 @@ def main() -> None:
         default="snapshot",
         help="sensitive audit scope: publish snapshot only, or the full tracked repo",
     )
+    pb.add_argument("--module", help="limit module metadata/check output to one public module")
+    pb.add_argument("--print-checks", action="store_true", help="print declared public module checks and exit")
     pb.set_defaults(func=cmd_publish)
 
     ad = sub.add_parser("agent-doctor", help="read-only agent connect / doctor checks")

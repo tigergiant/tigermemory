@@ -720,10 +720,24 @@ def test_publish_passthrough_accepts_tool_options(monkeypatch) -> None:
         "--audit-pii",
         "--audit-scope",
         "repo",
+        "--module",
+        "public-dashboard",
+        "--print-checks",
     ]) == 0
     assert calls == [
         (
             "tools/tm_io.py",
-            ["publish", "--dest", "out", "--dry-run", "--audit-pii", "--audit-scope", "repo"],
+            [
+                "publish",
+                "--dest",
+                "out",
+                "--dry-run",
+                "--audit-pii",
+                "--audit-scope",
+                "repo",
+                "--module",
+                "public-dashboard",
+                "--print-checks",
+            ],
         )
     ]

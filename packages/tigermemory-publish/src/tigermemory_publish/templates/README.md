@@ -168,3 +168,9 @@ tm publish --dry-run --json --audit-pii --audit-scope repo
 Use the repo-scope audit before making an entire development repository public.
 It may fail in private worktrees that still contain non-public notes, local
 paths, or research pages.
+
+To inspect the declared release checks for each public module:
+
+```powershell
+tm publish --print-checks --json
+```
