@@ -87,6 +87,23 @@ def test_hash_source_report_accepts_uppercase_literal_hash_source(tmp_path: path
     assert hash_value in report["sources"]
 
 
+def test_hash_source_report_accepts_literal_hash_without_rg(tmp_path: pathlib.Path, monkeypatch) -> None:
+    hash_value = "b" * 64
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    (reports / "artifact.md").write_text(
+        f"payload hash `{hash_value}`\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(guard.shutil, "which", lambda name: None)
+
+    report = guard._hash_source_report([f"payload hash `{hash_value}`"], tmp_path)
+
+    assert report["ok"] is True
+    assert report["missing"] == []
+    assert report["sources"][hash_value].replace("\\", "/") == "reports/artifact.md"
+
+
 def test_hash_source_report_accepts_file_sha256(tmp_path: pathlib.Path) -> None:
     reports = tmp_path / "reports"
     reports.mkdir()
