@@ -25,10 +25,13 @@ from .modules import (
     PRIVATE_EXCLUDED_MODULES,
     PRIVATE_PACKAGE_NAMES,
     PUBLIC_MODULES,
+    module_details,
     validate_module_checks,
+    validate_public_boundaries,
     module_checks,
     module_ids,
     module_summary,
+    private_excluded_wiki_partitions,
     public_mapped_files,
     public_package_roots,
     public_tool_dirs,
@@ -46,7 +49,7 @@ PUBLISH_TOOL_FILES = public_tool_files()
 PUBLISH_TOOL_DIRS = public_tool_dirs()
 WIKI_PUBLISH_PARTITIONS = public_wiki_partitions()
 
-EXCLUDED_WIKI_PARTITIONS = ("person", "investment")
+EXCLUDED_WIKI_PARTITIONS = private_excluded_wiki_partitions()
 DEFAULT_DEST_DIRNAME = "dist"
 MAX_FINDINGS = 50
 PUBLIC_FIELD_DEFAULT = False
@@ -96,6 +99,7 @@ INCLUDED_PLAN_KEYS = (
     "tool_dirs",
     "wiki_public_pages",
     "config_files",
+    "generated_files",
 )
 EXCLUDED_PLAN_KEYS = (
     "excluded_by_public_field",
@@ -175,13 +179,34 @@ def _runtime_config_templates(repo_root: pathlib.Path) -> list[str]:
     return rels
 
 
-def collect_publish_plan(repo_root: pathlib.Path) -> dict[str, list[str]]:
+def _module_publish_inputs(module_id: str | None) -> dict[str, tuple]:
+    if module_id is None:
+        return {
+            "top_files": PUBLISH_TOP_FILES,
+            "mapped_files": PUBLISH_MAPPED_FILES,
+            "whole_dirs": PUBLISH_WHOLE_DIRS,
+            "tool_files": PUBLISH_TOOL_FILES,
+            "tool_dirs": PUBLISH_TOOL_DIRS,
+            "wiki_partitions": WIKI_PUBLISH_PARTITIONS,
+        }
+    return {
+        "top_files": public_top_files(module_id),
+        "mapped_files": public_mapped_files(module_id),
+        "whole_dirs": public_whole_dirs(module_id),
+        "tool_files": public_tool_files(module_id),
+        "tool_dirs": public_tool_dirs(module_id),
+        "wiki_partitions": public_wiki_partitions(module_id),
+    }
+
+
+def collect_publish_plan(repo_root: pathlib.Path, module_id: str | None = None) -> dict[str, list[str]]:
     """Return categorized lists of repo-relative paths slated for publishing.
 
     Keys include top_files, mapped_files, whole_dirs, wiki_public_pages, config_files.
     Each value is a sorted list of forward-slash relative paths. Paths that
     do not exist on disk are skipped silently.
     """
+    inputs = _module_publish_inputs(module_id)
     plan: dict[str, list[str]] = {
         "top_files": [],
         "whole_dirs": [],
@@ -190,6 +215,7 @@ def collect_publish_plan(repo_root: pathlib.Path) -> dict[str, list[str]]:
         "tool_dirs": [],
         "wiki_public_pages": [],
         "config_files": [],
+        "generated_files": ["MODULES.md", "tigermemory-public-modules.json"],
         "excluded_by_public_field": [],
         "excluded_by_private_partition": [],
         "excluded_by_person_partition": [],
@@ -197,23 +223,23 @@ def collect_publish_plan(repo_root: pathlib.Path) -> dict[str, list[str]]:
     }
     pii_findings: list[dict[str, object]] = []
 
-    for name in PUBLISH_TOP_FILES:
+    for name in inputs["top_files"]:
         if (repo_root / name).is_file():
             plan["top_files"].append(name)
 
-    for src, dst in PUBLISH_MAPPED_FILES:
+    for src, dst in inputs["mapped_files"]:
         if (repo_root / src).is_file():
             plan["mapped_files"].append(f"{src}=>{dst}")
 
-    for d in PUBLISH_WHOLE_DIRS:
+    for d in inputs["whole_dirs"]:
         if (repo_root / d).is_dir():
             plan["whole_dirs"].append(d)
 
-    for name in PUBLISH_TOOL_FILES:
+    for name in inputs["tool_files"]:
         if (repo_root / name).is_file():
             plan["tool_files"].append(name)
 
-    for d in PUBLISH_TOOL_DIRS:
+    for d in inputs["tool_dirs"]:
         if (repo_root / d).is_dir():
             plan["tool_dirs"].append(d)
 
@@ -229,7 +255,7 @@ def collect_publish_plan(repo_root: pathlib.Path) -> dict[str, list[str]]:
                     plan["excluded_by_private_partition"].append(rel)
                     if partition == "person":
                         plan["excluded_by_person_partition"].append(rel)
-        for partition in WIKI_PUBLISH_PARTITIONS:
+        for partition in inputs["wiki_partitions"]:
             if partition in EXCLUDED_WIKI_PARTITIONS:
                 continue
             partition_dir = wiki_root / partition
@@ -569,6 +595,82 @@ def _snapshot_audit_payload(
     return {"ok": not has_blocking_findings, "sensitive_total": len(sensitive_findings)}
 
 
+def _public_module_manifest(module_id: str | None = None) -> dict[str, object]:
+    return {
+        "schema": "tigermemory-public-modules-v1",
+        "inspection_only": module_id is not None,
+        "selected_module": module_id,
+        "modules": module_details(module_id),
+        "excluded_surfaces": [
+            {
+                "id": module.id,
+                "description": module.description,
+                "stability": module.stability,
+            }
+            for module in PRIVATE_EXCLUDED_MODULES
+        ],
+        "private_wiki_partitions": [f"wiki/{partition}" for partition in EXCLUDED_WIKI_PARTITIONS],
+    }
+
+
+def _public_modules_markdown(module_id: str | None = None) -> str:
+    manifest = _public_module_manifest(module_id)
+    lines = [
+        "# TigerMemory Public Modules",
+        "",
+        "This file is generated from TigerMemory's public module manifest during snapshot publish.",
+        "",
+        f"Inspection only: {'yes' if manifest['inspection_only'] else 'no'}",
+        "",
+        "## Included Modules",
+        "",
+    ]
+    for module in manifest["modules"]:  # type: ignore[assignment]
+        lines.extend(
+            [
+                f"### {module['id']}",
+                "",
+                f"- Stability: {module['stability']}",
+                f"- Description: {module['description']}",
+                f"- Package roots: {len(module['package_roots'])}",
+                f"- Tool files: {len(module['tool_files'])}",
+                f"- Tool dirs: {len(module['tool_dirs'])}",
+                f"- Wiki partitions: {', '.join(module['wiki_partitions']) or '(none)'}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Excluded Private Surfaces",
+            "",
+            "These surfaces are intentionally not part of the public snapshot:",
+            "",
+        ]
+    )
+    for item in manifest["excluded_surfaces"]:  # type: ignore[assignment]
+        lines.append(f"- {item['id']}: {item['description']}")
+    lines.extend(
+        [
+            "",
+            "Private wiki partitions are force-excluded even if a module declaration is wrong:",
+            "",
+        ]
+    )
+    for partition in manifest["private_wiki_partitions"]:  # type: ignore[assignment]
+        lines.append(f"- {partition}")
+    return "\n".join(lines) + "\n"
+
+
+def _write_generated_module_files(dest: pathlib.Path, module_id: str | None = None) -> int:
+    payload = _public_module_manifest(module_id)
+    (dest / "tigermemory-public-modules.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (dest / "MODULES.md").write_text(_public_modules_markdown(module_id), encoding="utf-8")
+    return 2
+
+
 def _write_evidence_report(
     out_path: pathlib.Path,
     *,
@@ -677,6 +779,7 @@ def execute_plan(
     plan: dict[str, list[str]],
     repo_root: pathlib.Path,
     dest: pathlib.Path,
+    module_id: str | None = None,
 ) -> int:
     """Copy every file listed in the plan into dest, mirroring repo layout.
 
@@ -720,6 +823,8 @@ def execute_plan(
     for rel in plan["config_files"]:
         _copy_file(repo_root / rel, dest / rel)
         copied += 1
+
+    copied += _write_generated_module_files(dest, module_id)
 
     return copied
 
@@ -767,7 +872,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--module",
         choices=module_ids(),
-        help="limit module metadata output to one public module",
+        help="inspect one public module; module output is not a full release gate",
     )
     p.add_argument(
         "--print-checks",
@@ -795,7 +900,8 @@ def main(argv: list[str] | None = None) -> int:
             "ok": True,
             "module": args.module,
             "checks": module_checks(args.module),
-            "modules": module_summary(),
+            "modules": module_summary(args.module),
+            "inspection_only": args.module is not None,
         }
         if args.json:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -810,7 +916,8 @@ def main(argv: list[str] | None = None) -> int:
     if not dest.is_absolute():
         dest = REPO_ROOT / dest
 
-    plan = collect_publish_plan(REPO_ROOT)
+    plan = collect_publish_plan(REPO_ROOT, module_id=args.module)
+    full_snapshot_plan = collect_publish_plan(REPO_ROOT)
     included = _included_plan(plan)
     excluded = _excluded_plan(plan)
     counts = {k: len(v) for k, v in included.items()}
@@ -821,13 +928,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.audit_scope == "repo"
         else audit_publish_plan(plan, REPO_ROOT)
     )
+    full_snapshot_findings = audit_publish_plan(full_snapshot_plan, REPO_ROOT)
+    full_snapshot_blocking_findings = [
+        f for f in full_snapshot_findings if f.get("severity") != "warning"
+    ]
     blocking_findings = [f for f in sensitive_findings if f.get("severity") != "warning"]
     has_blocking_findings = bool(blocking_findings)
 
     copied = 0
     if not args.dry_run and not has_blocking_findings:
         dest.mkdir(parents=True, exist_ok=True)
-        copied = execute_plan(plan, REPO_ROOT, dest)
+        copied = execute_plan(plan, REPO_ROOT, dest, module_id=args.module)
     pii_findings_path = None
     if args.audit_pii and not args.dry_run:
         pii_findings_path = write_pii_findings(dest, sensitive_findings)
@@ -835,24 +946,36 @@ def main(argv: list[str] | None = None) -> int:
     module_check_validation = None
     if args.validate_checks or args.evidence_output or args.evidence_report:
         module_check_validation = validate_module_checks(REPO_ROOT)
+    public_boundary_validation = None
+    if args.validate_checks or args.evidence_output or args.evidence_report:
+        public_boundary_validation = validate_public_boundaries(REPO_ROOT, args.module)
     module_check_failure_is_blocking = bool(
         (args.validate_checks or args.evidence_output or args.evidence_report)
         and module_check_validation is not None
         and not module_check_validation["ok"]
     )
-    overall_ok = not blocking_findings and not module_check_failure_is_blocking
+    public_boundary_failure_is_blocking = bool(
+        (args.validate_checks or args.evidence_output or args.evidence_report)
+        and public_boundary_validation is not None
+        and not public_boundary_validation["ok"]
+    )
+    overall_ok = not blocking_findings and not module_check_failure_is_blocking and not public_boundary_failure_is_blocking
 
     summary = {
         "ok": overall_ok,
         "dest": str(dest),
         "dry_run": args.dry_run,
+        "module": args.module,
+        "inspection_only": args.module is not None,
+        "release_gate_scope": "inspection-only" if args.module else "full-snapshot",
+        "release_gate_ok": False if args.module else overall_ok,
         "audit_pii": args.audit_pii,
         "audit_scope": args.audit_scope,
         "pii_findings_path": str(pii_findings_path) if pii_findings_path else None,
         "counts": counts,
         "excluded_counts": excluded_counts,
         "files_copied": copied,
-        "modules": module_summary(),
+        "modules": module_summary(args.module),
         "plan": included,
         "included": included,
         "excluded": excluded,
@@ -868,15 +991,26 @@ def main(argv: list[str] | None = None) -> int:
 
     if (args.validate_checks or args.evidence_report) and module_check_validation is not None:
         summary["module_check_validation"] = module_check_validation
+    if (args.validate_checks or args.evidence_report) and public_boundary_validation is not None:
+        summary["public_boundary_validation"] = public_boundary_validation
 
     if args.evidence_report and args.json:
         summary["release_evidence"] = {
             "schema": "tigermemory-public-release-evidence-v1",
-            "module_count": len(PUBLIC_MODULES),
-            "module_checks": module_checks(),
+            "inspection_only": args.module is not None,
+            "selected_module": args.module,
+            "release_gate_scope": "inspection-only" if args.module else "full-snapshot",
+            "module_count": len(PUBLIC_MODULES) if args.module is None else 1,
+            "module_details": module_details(args.module),
+            "module_checks": module_checks(args.module),
             "private_package_names": list(PRIVATE_PACKAGE_NAMES),
             "snapshot_audit": _snapshot_audit_payload(sensitive_findings, has_blocking_findings),
+            "full_snapshot_audit": _snapshot_audit_payload(
+                full_snapshot_findings,
+                bool(full_snapshot_blocking_findings),
+            ),
             "module_check_validation": module_check_validation,
+            "public_boundary_validation": public_boundary_validation,
         }
 
     if not args.json and args.validate_checks:

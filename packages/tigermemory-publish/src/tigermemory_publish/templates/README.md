@@ -127,6 +127,14 @@ The public snapshot is assembled from declared public modules:
 Private dogfood modules and optional hybrid integrations are intentionally not
 part of the basic public snapshot.
 
+Generated snapshots also include:
+
+- `MODULES.md`: human-readable public module summary.
+- `tigermemory-public-modules.json`: machine-readable module manifest.
+
+`tm publish --module <id>` is an inspection view for maintainers. It is not a
+complete release gate and does not replace the full snapshot audit.
+
 ## Runtime Profiles
 
 - `local`: default basic mode. Uses Markdown + Git + local SQLite + FTS5
@@ -182,5 +190,6 @@ tm publish --dry-run --json --audit-pii --evidence-report --validate-checks
 ```
 
 This release evidence command validates the public module manifest, checks that
-declared module check paths exist, and includes the snapshot audit result. It is
-still a dry run and does not publish files.
+declared module check paths exist, includes per-module release evidence, and
+includes the full snapshot audit result. It is still a dry run and does not
+publish files.

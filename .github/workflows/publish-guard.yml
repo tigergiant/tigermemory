@@ -56,8 +56,12 @@ jobs:
           payload = json.load(open("/tmp/tigermemory-release-evidence.json", encoding="utf-8"))
           assert payload["ok"] is True, payload
           assert payload["module_check_validation"]["ok"] is True, payload["module_check_validation"]
+          assert payload["public_boundary_validation"]["ok"] is True, payload["public_boundary_validation"]
           assert payload["release_evidence"]["schema"] == "tigermemory-public-release-evidence-v1"
+          assert payload["release_evidence"]["inspection_only"] is False
+          assert payload["release_evidence"]["module_details"], payload["release_evidence"]
           assert payload["release_evidence"]["snapshot_audit"]["ok"] is True
+          assert payload["release_evidence"]["full_snapshot_audit"]["ok"] is True
           PY
 
       - name: Build snapshot and smoke local install
@@ -69,6 +73,16 @@ jobs:
 
           snapshot="$(mktemp -d)"
           tm publish --dest "$snapshot" --json --audit-pii
+          test -f "$snapshot/MODULES.md"
+          test -f "$snapshot/tigermemory-public-modules.json"
+          python3 - <<PY
+          import json, pathlib
+          snapshot = pathlib.Path("$snapshot")
+          manifest = json.loads((snapshot / "tigermemory-public-modules.json").read_text(encoding="utf-8"))
+          assert manifest["schema"] == "tigermemory-public-modules-v1", manifest
+          assert manifest["inspection_only"] is False, manifest
+          assert any(item["id"] == "public-core" for item in manifest["modules"]), manifest
+          PY
 
           python3 -m venv .tmp/publish-smoke-venv
           . .tmp/publish-smoke-venv/bin/activate

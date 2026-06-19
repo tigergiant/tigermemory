@@ -383,9 +383,15 @@ def test_module_summary_exposes_private_package_single_source() -> None:
     summary = tigermemory_publish.module_summary()
 
     assert summary["private_package_names"] == list(tigermemory_publish.PRIVATE_PACKAGE_NAMES)
+    assert summary["private_excluded_wiki_partitions"] == ["person", "investment"]
     assert {"tigerledger", "tigermemory_eval", "tigermemory_minimax"}.issubset(
         set(tigermemory_publish.PRIVATE_PACKAGE_NAMES)
     )
+
+
+def test_private_excluded_wiki_partitions_are_manifest_owned() -> None:
+    assert tigermemory_publish.EXCLUDED_WIKI_PARTITIONS == ("person", "investment")
+    assert tigermemory_publish.private_excluded_wiki_partitions() == ("person", "investment")
 
 
 def test_public_packages_do_not_import_private_packages() -> None:
@@ -519,10 +525,48 @@ def test_main_with_evidence_report_json_includes_release_evidence_payload(tmp_pa
     release = out["release_evidence"]
     assert release["schema"] == "tigermemory-public-release-evidence-v1"
     assert release["module_count"] == len(tigermemory_publish.PUBLIC_MODULES)
+    assert release["inspection_only"] is False
+    assert release["release_gate_scope"] == "full-snapshot"
+    assert release["module_details"]
     assert "public-dashboard" in release["module_checks"]
     assert release["snapshot_audit"]["sensitive_total"] == 0
+    assert release["full_snapshot_audit"]["sensitive_total"] == 0
     assert release["module_check_validation"]["ok"] is True
+    assert release["public_boundary_validation"]["ok"] is True
     assert out["module_check_validation"]["ok"] is True
+
+
+def test_module_dry_run_is_inspection_only_and_keeps_full_snapshot_audit(tmp_path, monkeypatch, capsys) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _build_fake_repo(repo)
+    monkeypatch.setattr(tigermemory_publish, "REPO_ROOT", repo)
+
+    rc = tigermemory_publish.main([
+        "--dest",
+        str(tmp_path / "out"),
+        "--dry-run",
+        "--json",
+        "--audit-pii",
+        "--evidence-report",
+        "--module",
+        "public-core",
+    ])
+    out = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert out["inspection_only"] is True
+    assert out["release_gate_scope"] == "inspection-only"
+    assert out["release_gate_ok"] is False
+    assert out["plan"]["whole_dirs"] == ["schemas"]
+    assert out["plan"]["tool_dirs"] == []
+    release = out["release_evidence"]
+    assert release["schema"] == "tigermemory-public-release-evidence-v1"
+    assert release["inspection_only"] is True
+    assert release["selected_module"] == "public-core"
+    assert set(release["module_checks"]) == {"public-core"}
+    assert release["snapshot_audit"]["sensitive_total"] == 0
+    assert release["full_snapshot_audit"]["sensitive_total"] == 0
 
 
 def test_main_with_evidence_output_generates_markdown(tmp_path, monkeypatch, capsys) -> None:
@@ -579,6 +623,26 @@ def test_collect_publish_plan_forces_person_excluded_even_if_partition_list_incl
     plan = tigermemory_publish.collect_publish_plan(tmp_path)
 
     assert "wiki/person/tiger-preferences.md" not in plan["wiki_public_pages"]
+
+
+def test_collect_publish_plan_forces_private_partition_excluded_even_if_module_declares_it(tmp_path: pathlib.Path, monkeypatch) -> None:
+    _build_fake_repo(tmp_path)
+    real_inputs = tigermemory_publish._module_publish_inputs
+
+    def fake_inputs(module_id: str | None) -> dict[str, tuple]:
+        inputs = real_inputs(module_id)
+        values = dict(inputs)
+        values["wiki_partitions"] = (*values["wiki_partitions"], "person", "investment")
+        return values
+
+    monkeypatch.setattr(tigermemory_publish, "_module_publish_inputs", fake_inputs)
+
+    plan = tigermemory_publish.collect_publish_plan(tmp_path)
+
+    assert "wiki/person/tiger-preferences.md" not in plan["wiki_public_pages"]
+    assert "wiki/investment/portfolio-rules.md" not in plan["wiki_public_pages"]
+    assert "wiki/person/tiger-preferences.md" in plan["excluded_by_private_partition"]
+    assert "wiki/investment/portfolio-rules.md" in plan["excluded_by_private_partition"]
 
 
 def test_collect_publish_plan_allows_public_non_person_partition_when_person_is_forced_excluded(tmp_path: pathlib.Path, monkeypatch) -> None:
@@ -652,6 +716,14 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     real_name = "." + "env"
     assert (dest / "runtime" / "openmemory" / template_name).is_file()
     assert not (dest / "runtime" / "openmemory" / real_name).exists()
+    assert (dest / "MODULES.md").is_file()
+    manifest = json.loads((dest / "tigermemory-public-modules.json").read_text(encoding="utf-8"))
+    assert manifest["schema"] == "tigermemory-public-modules-v1"
+    assert manifest["inspection_only"] is False
+    assert "public-core" in [item["id"] for item in manifest["modules"]]
+    manifest_text = json.dumps(manifest, ensure_ascii=False)
+    assert str(tmp_path) not in manifest_text
+    assert "wiki/person/tiger-preferences.md" not in manifest_text
 
 
 def test_execute_plan_dry_run_via_main(tmp_path, monkeypatch, capsys) -> None:
