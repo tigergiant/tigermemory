@@ -102,6 +102,18 @@ def test_tracked_dirty_file_blocks_apply(tmp_path: pathlib.Path):
     assert result["reason"] == "dirty_worktree"
 
 
+def test_untracked_file_blocks_apply(tmp_path: pathlib.Path):
+    work, seed = clone_with_origin(tmp_path)
+    add_remote_commit(seed)
+    (work / "scratch.md").write_text("local note\n", encoding="utf-8")
+
+    result = apply_update(work, dry_run=True)
+
+    assert result["ok"] is False
+    assert result["applied"] is False
+    assert result["reason"] == "untracked_files"
+
+
 def test_local_commit_blocks_ff_only_apply(tmp_path: pathlib.Path):
     work, seed = clone_with_origin(tmp_path)
     add_remote_commit(seed)

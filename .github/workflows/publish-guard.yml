@@ -39,6 +39,7 @@ jobs:
             tests/test_public_boundary.py \
             tests/test_dashboard_update_status.py \
             tests/test_true_split_publish.py \
+            tests/test_true_split_roots.py \
             packages/tigermemory-doctor/tests/test_diagnose.py \
             packages/tigermemory-update/tests/test_tigermemory_update.py \
             -q
