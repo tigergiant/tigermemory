@@ -55,6 +55,27 @@ def test_safety_blocks_positive_trade_readiness_and_1999() -> None:
     ]
 
 
+def test_blocked_notice_lines_hide_machine_payload_details() -> None:
+    lines = guard._blocked_notice_lines(
+        {
+            "blocked_reason": "unsafe_investment_canvas_claim",
+            "details": [
+                {
+                    "check": "unsafe_1999_reference",
+                    "line": "investment_cio_macro_research_cycle: P2b-2 live dry-run seal touched 1999",
+                }
+            ],
+        }
+    )
+
+    joined = "\n".join(lines)
+    assert lines[0] == "结论：project-canvas 自动提交被阻断。"
+    assert "1999" in joined
+    assert "unsafe_1999_reference" not in joined
+    assert "investment_cio_macro_research_cycle" not in joined
+    assert "{" not in joined
+
+
 def test_hash_source_report_accepts_literal_hash(tmp_path: pathlib.Path) -> None:
     hash_value = "a" * 64
     reports = tmp_path / "reports"

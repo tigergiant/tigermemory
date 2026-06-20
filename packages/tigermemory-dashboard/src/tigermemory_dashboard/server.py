@@ -2988,17 +2988,9 @@ def _get_opposite_sha(is_wsl: bool) -> str | None:
                     return res.stdout.strip()
             except Exception:
                 pass
-        try:
-            res = subprocess.run(
-                ["git", "-C", "/mnt/d/tigermemory", "rev-parse", "--short", "HEAD"],
-                capture_output=True,
-                text=True,
-                timeout=0.5
-            )
-            if res.returncode == 0 and res.stdout.strip():
-                return res.stdout.strip()
-        except Exception:
-            pass
+        # Public builds must not guess a maintainer-specific Windows mount.
+        # Set TIGERMEMORY_WINDOWS_ROOT when this host has a second checkout to probe.
+        return None
     else:
         # Current is Windows, target is to probe WSL (~/tigermemory)
         if shutil.which("wsl"):

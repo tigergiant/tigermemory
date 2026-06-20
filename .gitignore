@@ -36,7 +36,6 @@ log.md
 wiki/investment/
 wiki/person/
 wiki/operations/**
-!wiki/operations/project-canvas.md
 plans/
 __pycache__/
 *.pyc
@@ -48,6 +47,8 @@ deploy/openclaw-ce/*.tsbuildinfo
 # 敏感个人数据 - 记账记录与导入流水；这些属于用户 instance root，不属于公开源码仓。
 data/expense_tracker/
 data/expense_import/
+tools/expense_import/
+tools/openclaw-expense-adapter/
 
 # Local memory backend state (P4.1 local profile)
 data/tigermemory/*.sqlite
