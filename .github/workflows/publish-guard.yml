@@ -69,6 +69,21 @@ jobs:
           assert payload["release_evidence"]["full_snapshot_audit"]["ok"] is True
           PY
 
+      - name: Public core split and source update smoke
+        run: |
+          tm publish --dry-run --audit-pii --json --target public-core --split-report --verify-split-smoke --verify-source-update-smoke > /tmp/tigermemory-public-core-split.json
+          python3 - <<'PY'
+          import json
+
+          payload = json.load(open("/tmp/tigermemory-public-core-split.json", encoding="utf-8"))
+          split_report = payload["split_report"]
+          assert payload["ok"] is True, payload
+          assert split_report["public_core_independent"] is True, split_report
+          assert split_report["public_core_independence_reason"] == "verified", split_report
+          assert split_report["source_updateable"] is True, split_report
+          assert split_report["source_update_reason"] == "verified", split_report
+          PY
+
       - name: Build snapshot and smoke local install
         shell: bash
         run: |
