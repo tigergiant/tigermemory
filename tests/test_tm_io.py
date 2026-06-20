@@ -4,6 +4,7 @@ import io
 import json
 import pathlib
 import sys
+import types
 
 import pytest
 
@@ -44,6 +45,37 @@ def test_status_pretty_includes_phantom_count(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "dirty_count: 0" in out
     assert "phantom_count: 2" in out
+
+
+def test_publish_forwards_source_update_smoke_flag(monkeypatch):
+    captured: dict[str, list[str]] = {}
+
+    def fake_main(argv):
+        captured["argv"] = list(argv)
+        return 0
+
+    monkeypatch.setitem(sys.modules, "tm_publish", types.SimpleNamespace(main=fake_main))
+
+    class Args:
+        dest = "dist"
+        dry_run = True
+        json = True
+        audit_pii = True
+        evidence_report = False
+        validate_checks = False
+        evidence_output = None
+        audit_scope = "snapshot"
+        target = "public-core"
+        module = None
+        print_checks = False
+        split_report = True
+        verify_split_smoke = True
+        verify_source_update_smoke = True
+
+    tm_io.cmd_publish(Args())
+
+    assert "--verify-split-smoke" in captured["argv"]
+    assert "--verify-source-update-smoke" in captured["argv"]
 
 
 def test_cmd_mem0_update_content_reads_stdin(monkeypatch, capsys):

@@ -12,7 +12,9 @@
 - wiki pages whose frontmatter has `public: true`
 - runtime config templates ending in `.example`
 
-It does not call Git, Mem0, LLMs, or network services.
+Normal snapshot planning does not call Git, Mem0, LLMs, or network services.
+The explicit `--verify-source-update-smoke` release check creates temporary
+local Git repositories only to prove source-first update behavior.
 It deliberately does not copy the private source repository's root `README.md`
 or `AGENTS.md`; those files can contain workspace-specific operating rules or
 private-repository instructions. The public snapshot gets sanitized root
@@ -40,6 +42,16 @@ builder. It blocks on high-confidence private data or local-only paths. Warning-
 only test fixtures remain visible for review but no longer make
 `repo_public_ready` false; use `repo_warning_free` when you need a completely
 quiet audit.
+
+For the stronger public-core split and source-update smoke:
+
+```powershell
+tigermemory-publish --dry-run --json --audit-pii --target public-core --split-report --verify-split-smoke --verify-source-update-smoke
+```
+
+That command installs the exported public core with a separate instance root,
+then proves a cloned public-core source checkout can fast-forward through
+`tm update apply --strategy ff-only` without overwriting instance data.
 
 The package is extracted from `tools/tm_publish.py`. The legacy script remains as a compatibility shim:
 

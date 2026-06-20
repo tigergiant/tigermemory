@@ -464,6 +464,8 @@ def cmd_publish(args: argparse.Namespace) -> None:
         argv.append("--split-report")
     if args.verify_split_smoke:
         argv.append("--verify-split-smoke")
+    if args.verify_source_update_smoke:
+        argv.append("--verify-source-update-smoke")
     code = tm_publish.main(argv)
     if code:
         sys.exit(code)
@@ -692,6 +694,7 @@ def main() -> None:
     pb.add_argument("--evidence-output", help="write a Markdown release evidence artifact")
     pb.add_argument("--split-report", action="store_true")
     pb.add_argument("--verify-split-smoke", action="store_true")
+    pb.add_argument("--verify-source-update-smoke", action="store_true")
     pb.set_defaults(func=cmd_publish)
 
     ad = sub.add_parser("agent-doctor", help="read-only agent connect / doctor checks")

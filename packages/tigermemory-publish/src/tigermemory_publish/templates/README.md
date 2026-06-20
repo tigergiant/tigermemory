@@ -304,9 +304,11 @@ publish files.
 Maintainers can also verify the true split smoke:
 
 ```powershell
-tm publish --dry-run --json --audit-pii --target public-core --split-report --verify-split-smoke
+tm publish --dry-run --json --audit-pii --target public-core --split-report --verify-split-smoke --verify-source-update-smoke
 ```
 
 That check installs the exported public core into a temporary environment and
-runs it against a separate empty instance root. It is the proof that public core
-code and private user data are no longer the same thing.
+runs it against a separate empty instance root. It also creates a temporary
+public-core Git remote and proves `tm update apply --strategy ff-only` can bring
+a cloned checkout forward without touching instance data. It is the proof that
+public core code and private user data are no longer the same thing.

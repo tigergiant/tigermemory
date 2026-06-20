@@ -163,6 +163,16 @@ data or local-only paths. Warning-only test fixtures are reported as warnings:
 snapshot audit for public-package preparation; use `--audit-scope repo` to prove
 that the entire tracked repository is safe to expose.
 
+For the stronger public-core split and source-update smoke:
+
+```powershell
+tm publish --dry-run --json --audit-pii --target public-core --split-report --verify-split-smoke --verify-source-update-smoke
+```
+
+This installs the public core into a temporary environment, uses an external
+instance root, then proves a cloned public-core Git checkout can fast-forward via
+`tm update apply --strategy ff-only` without touching instance data.
+
 ## Development Checks
 
 ```powershell

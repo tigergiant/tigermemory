@@ -40,7 +40,7 @@ from .modules import (
     public_whole_dirs,
     public_wiki_partitions,
 )
-from .split import build_split_report, run_public_core_instance_smoke
+from .split import build_split_report, run_public_core_instance_smoke, run_public_core_source_update_smoke
 
 PUBLISH_TOP_FILES = public_top_files()
 PUBLISH_MAPPED_FILES = public_mapped_files()
@@ -1049,6 +1049,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="run a temporary public-core install plus external instance smoke before marking public_core_independent true",
     )
+    p.add_argument(
+        "--verify-source-update-smoke",
+        action="store_true",
+        help="run a temporary public-core Git checkout smoke proving tm update can fast-forward without touching instance data",
+    )
     args = p.parse_args(argv)
 
     if args.print_checks:
@@ -1092,6 +1097,7 @@ def main(argv: list[str] | None = None) -> int:
     has_blocking_findings = bool(blocking_findings)
 
     split_smoke_ok = False
+    source_update_smoke_ok = False
     if args.verify_split_smoke:
         def _publish_public_core_for_smoke(dest: pathlib.Path) -> None:
             smoke_plan = collect_publish_plan(REPO_ROOT)
@@ -1100,6 +1106,15 @@ def main(argv: list[str] | None = None) -> int:
         split_smoke_ok = run_public_core_instance_smoke(
             repo_root=REPO_ROOT,
             publish_func=_publish_public_core_for_smoke,
+        )
+    if args.verify_source_update_smoke:
+        def _publish_public_core_for_update_smoke(dest: pathlib.Path) -> None:
+            smoke_plan = collect_publish_plan(REPO_ROOT)
+            execute_plan(smoke_plan, REPO_ROOT, dest)
+
+        source_update_smoke_ok = run_public_core_source_update_smoke(
+            repo_root=REPO_ROOT,
+            publish_func=_publish_public_core_for_update_smoke,
         )
 
     copied = 0
@@ -1111,10 +1126,24 @@ def main(argv: list[str] | None = None) -> int:
         pii_findings_path = write_pii_findings(dest, sensitive_findings)
 
     module_check_validation = None
-    if args.validate_checks or args.evidence_output or args.evidence_report or args.split_report or args.verify_split_smoke:
+    if (
+        args.validate_checks
+        or args.evidence_output
+        or args.evidence_report
+        or args.split_report
+        or args.verify_split_smoke
+        or args.verify_source_update_smoke
+    ):
         module_check_validation = validate_module_checks(REPO_ROOT)
     public_boundary_validation = None
-    if args.validate_checks or args.evidence_output or args.evidence_report or args.split_report or args.verify_split_smoke:
+    if (
+        args.validate_checks
+        or args.evidence_output
+        or args.evidence_report
+        or args.split_report
+        or args.verify_split_smoke
+        or args.verify_source_update_smoke
+    ):
         public_boundary_validation = validate_public_boundaries(REPO_ROOT, args.module)
     module_check_failure_is_blocking = bool(
         (args.validate_checks or args.evidence_output or args.evidence_report)
@@ -1122,16 +1151,24 @@ def main(argv: list[str] | None = None) -> int:
         and not module_check_validation["ok"]
     )
     public_boundary_failure_is_blocking = bool(
-        (args.validate_checks or args.evidence_output or args.evidence_report or args.verify_split_smoke)
+        (
+            args.validate_checks
+            or args.evidence_output
+            or args.evidence_report
+            or args.verify_split_smoke
+            or args.verify_source_update_smoke
+        )
         and public_boundary_validation is not None
         and not public_boundary_validation["ok"]
     )
     split_smoke_failure_is_blocking = bool(args.verify_split_smoke and not split_smoke_ok)
+    source_update_smoke_failure_is_blocking = bool(args.verify_source_update_smoke and not source_update_smoke_ok)
     overall_ok = (
         not blocking_findings
         and not module_check_failure_is_blocking
         and not public_boundary_failure_is_blocking
         and not split_smoke_failure_is_blocking
+        and not source_update_smoke_failure_is_blocking
     )
 
     summary = {
@@ -1167,7 +1204,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if (args.validate_checks or args.evidence_report) and module_check_validation is not None:
         summary["module_check_validation"] = module_check_validation
-    if (args.validate_checks or args.evidence_report or args.split_report or args.verify_split_smoke) and public_boundary_validation is not None:
+    if (
+        args.validate_checks
+        or args.evidence_report
+        or args.split_report
+        or args.verify_split_smoke
+        or args.verify_source_update_smoke
+    ) and public_boundary_validation is not None:
         summary["public_boundary_validation"] = public_boundary_validation
     if args.split_report:
         if public_boundary_validation is None:
@@ -1177,6 +1220,7 @@ def main(argv: list[str] | None = None) -> int:
             args.target,
             boundary_ok=boundary_ok,
             smoke_ok=split_smoke_ok,
+            source_update_smoke_ok=source_update_smoke_ok,
         )
 
     if args.evidence_report and args.json:

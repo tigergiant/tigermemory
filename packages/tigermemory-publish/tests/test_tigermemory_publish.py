@@ -589,6 +589,7 @@ def test_release_evidence_includes_true_split_status(tmp_path, monkeypatch, caps
     _build_fake_repo(repo)
     monkeypatch.setattr(tigermemory_publish, "REPO_ROOT", repo)
     monkeypatch.setattr(tigermemory_publish, "run_public_core_instance_smoke", lambda **_kwargs: True)
+    monkeypatch.setattr(tigermemory_publish, "run_public_core_source_update_smoke", lambda **_kwargs: True)
 
     rc = tigermemory_publish.main([
         "--dest",
@@ -602,6 +603,7 @@ def test_release_evidence_includes_true_split_status(tmp_path, monkeypatch, caps
         "public-core",
         "--split-report",
         "--verify-split-smoke",
+        "--verify-source-update-smoke",
     ])
 
     payload = json.loads(capsys.readouterr().out)
@@ -610,6 +612,8 @@ def test_release_evidence_includes_true_split_status(tmp_path, monkeypatch, caps
     assert payload["release_evidence"]["true_split"]["target"] == "public-core"
     assert payload["release_evidence"]["true_split"]["public_core_independent"] is True
     assert payload["release_evidence"]["true_split"]["public_core_independence_reason"] == "verified"
+    assert payload["release_evidence"]["true_split"]["source_updateable"] is True
+    assert payload["release_evidence"]["true_split"]["source_update_reason"] == "verified"
 
 
 def test_module_dry_run_is_inspection_only_and_keeps_full_snapshot_audit(tmp_path, monkeypatch, capsys) -> None:

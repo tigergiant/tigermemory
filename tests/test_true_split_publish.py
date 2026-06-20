@@ -222,3 +222,12 @@ def test_public_core_snapshot_can_use_external_instance_root(tmp_path: pathlib.P
         check=False,
     )
     assert verify.returncode == 0, verify.stderr
+
+
+def test_public_core_source_checkout_can_apply_fast_forward_update(tmp_path: pathlib.Path) -> None:
+    from tigermemory_publish.split import run_public_core_source_update_smoke
+
+    assert run_public_core_source_update_smoke(
+        repo_root=REPO_ROOT,
+        publish_func=lambda dest: _publish_public_core(dest, REPO_ROOT),
+    )
