@@ -45,6 +45,7 @@ where = [
   "packages/tigermemory-publish/src",
   "packages/tigermemory-route/src",
   "packages/tigermemory-search/src",
+  "packages/tigermemory-update/src",
 ]
 
 [tool.setuptools.package-data]

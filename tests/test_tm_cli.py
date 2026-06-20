@@ -93,6 +93,8 @@ def test_detect_repo_root_prefers_cwd_snapshot_over_parent_config_root_for_wheel
 
 def test_subprocess_env_pins_detected_repo_root_for_child_tools(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(tigermemory_cli, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tigermemory_cli, "resolve_instance_root", None)
+    monkeypatch.setattr(tigermemory_cli, "subprocess_root_env", None)
     monkeypatch.delenv("TIGERMEMORY_ROOT", raising=False)
 
     env = tigermemory_cli._subprocess_env()
@@ -234,6 +236,97 @@ def test_dashboard_help_mentions_public_default_port() -> None:
 
     assert result.returncode == 0
     assert "default: 9777" in result.stdout
+
+
+def test_update_status_uses_app_root(monkeypatch, tmp_path, capsys) -> None:
+    app_root = tmp_path / "app-source"
+    instance_root = tmp_path / "private-instance"
+    app_root.mkdir()
+    instance_root.mkdir()
+    monkeypatch.setenv("TIGERMEMORY_APP_ROOT", str(app_root))
+    monkeypatch.setenv("TIGERMEMORY_INSTANCE_ROOT", str(instance_root))
+
+    calls: list[tuple[pathlib.Path, bool]] = []
+    fake_update = types.ModuleType("tigermemory_update")
+
+    def fake_status(root, refresh_remote=False):
+        calls.append((pathlib.Path(root), refresh_remote))
+        return {
+            "ok": True,
+            "source_mode": "git_source",
+            "app_root": str(root),
+            "branch": "master",
+            "head": "abc",
+            "upstream": "origin/master",
+            "behind": 0,
+            "ahead": 0,
+            "dirty": False,
+            "update_available": False,
+            "safe_to_apply": False,
+            "recommended_action": "Already up to date.",
+            "warnings": [],
+        }
+
+    fake_update.get_update_status = fake_status
+    fake_update.apply_update = lambda *_args, **_kwargs: {}
+    monkeypatch.setitem(sys.modules, "tigermemory_update", fake_update)
+
+    assert tigermemory_cli.main(["update", "status"]) == 0
+
+    out = capsys.readouterr().out
+    assert "source_mode=git_source" in out
+    assert calls == [(app_root.resolve(), False)]
+
+
+def test_update_check_refreshes_remote(monkeypatch, tmp_path, capsys) -> None:
+    app_root = tmp_path / "app-source"
+    app_root.mkdir()
+    monkeypatch.setenv("TIGERMEMORY_APP_ROOT", str(app_root))
+
+    calls: list[bool] = []
+    fake_update = types.ModuleType("tigermemory_update")
+
+    def fake_status(_root, refresh_remote=False):
+        calls.append(refresh_remote)
+        return {"ok": True, "source_mode": "git_source", "recommended_action": "ok"}
+
+    fake_update.get_update_status = fake_status
+    fake_update.apply_update = lambda *_args, **_kwargs: {}
+    monkeypatch.setitem(sys.modules, "tigermemory_update", fake_update)
+
+    assert tigermemory_cli.main(["update", "check", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["source_mode"] == "git_source"
+    assert calls == [True]
+
+
+def test_update_apply_dry_run_returns_nonzero_when_not_safe(monkeypatch, tmp_path, capsys) -> None:
+    app_root = tmp_path / "app-source"
+    app_root.mkdir()
+    monkeypatch.setenv("TIGERMEMORY_APP_ROOT", str(app_root))
+
+    calls: list[tuple[pathlib.Path, str, bool]] = []
+    fake_update = types.ModuleType("tigermemory_update")
+    fake_update.get_update_status = lambda *_args, **_kwargs: {}
+
+    def fake_apply(root, strategy="ff-only", dry_run=False):
+        calls.append((pathlib.Path(root), strategy, dry_run))
+        return {
+            "ok": False,
+            "applied": False,
+            "reason": "dirty_worktree",
+            "status": {"recommended_action": "Commit local edits first."},
+        }
+
+    fake_update.apply_update = fake_apply
+    monkeypatch.setitem(sys.modules, "tigermemory_update", fake_update)
+
+    assert tigermemory_cli.main(["update", "apply", "--dry-run"]) == 4
+
+    out = capsys.readouterr().out
+    assert "reason=dirty_worktree" in out
+    assert calls == [(app_root.resolve(), "ff-only", True)]
 
 
 def test_local_profile_cli_write_search_verify_smoke(tmp_path) -> None:

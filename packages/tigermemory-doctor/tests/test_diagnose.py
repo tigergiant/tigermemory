@@ -75,9 +75,42 @@ def test_check_retention_uses_retention_module_functions():
     assert diagnose.load_mem0_json is retention.load_mem0_json
 
 
+def test_check_update_status_is_read_only(monkeypatch, tmp_path):
+    monkeypatch.setattr(diagnose, "resolve_app_root", lambda: tmp_path)
+
+    def fake_status(root, refresh_remote=False):
+        assert root == tmp_path
+        assert refresh_remote is False
+        return {
+            "ok": True,
+            "source_mode": "git_source",
+            "app_root": str(root),
+            "branch": "master",
+            "head": "abc123",
+            "upstream": "origin/master",
+            "ahead": 0,
+            "behind": 2,
+            "dirty": False,
+            "update_available": True,
+            "safe_to_apply": True,
+            "reason": "",
+            "recommended_action": "Run tm update apply.",
+        }
+
+    monkeypatch.setattr(diagnose, "get_update_status", fake_status)
+
+    result = diagnose.check_update_status()
+
+    assert result["name"] == "source_update"
+    assert result["status"] == "warn"
+    assert result["behind"] == 2
+    assert result["safe_to_apply"] is True
+
+
 def test_run_agent_doctor_combines_checks_and_warnings(monkeypatch):
     monkeypatch.setattr(diagnose, "check_worktree", lambda: {"name": "worktree", "status": "ok"})
     monkeypatch.setattr(diagnose, "check_remote_master", lambda: {"name": "remote_master", "status": "ok"})
+    monkeypatch.setattr(diagnose, "check_update_status", lambda: {"name": "source_update", "status": "ok"})
     monkeypatch.setattr(diagnose, "check_tm_http", lambda _url: {"name": "tm_http", "status": "warn"})
     monkeypatch.setattr(diagnose, "check_mem0", lambda: {"name": "mem0", "status": "ok"})
     monkeypatch.setattr(diagnose, "search_lessons", lambda query: {"name": "lessons", "status": "ok", "query": query})
@@ -88,6 +121,6 @@ def test_run_agent_doctor_combines_checks_and_warnings(monkeypatch):
     report = diagnose.run_agent_doctor(query="doctor query", http_url="http://tm")
 
     assert report["status"] == "warn"
-    assert report["summary"] == {"fail_count": 0, "warn_count": 1, "ok_count": 7}
-    assert [check["name"] for check in report["checks"]] == ["worktree", "remote_master", "tm_http", "mem0", "lessons", "lessons_log", "retention", "l2"]
+    assert report["summary"] == {"fail_count": 0, "warn_count": 1, "ok_count": 8}
+    assert [check["name"] for check in report["checks"]] == ["worktree", "remote_master", "source_update", "tm_http", "mem0", "lessons", "lessons_log", "retention", "l2"]
     assert "write_memory" in report["mcp_tool_contract"]["required_tools"]

@@ -29,6 +29,13 @@ import tigermemory_lessons as tm_lessons
 import tm_review
 from tigermemory_doctor.retention import load_mem0_json, run_retention_audit, score_item
 
+try:
+    from tigermemory_core.roots import resolve_app_root
+    from tigermemory_update import get_update_status
+except Exception:  # pragma: no cover - package may be absent in old installs
+    resolve_app_root = None  # type: ignore[assignment]
+    get_update_status = None  # type: ignore[assignment]
+
 REPO_ROOT = tm_core.REPO_ROOT
 DEFAULT_QUERY = "retention dry-run agent doctor connect mem0 audit"
 MCP_REQUIRED_TOOLS = [
@@ -133,6 +140,44 @@ def check_remote_master(timeout: int = 3) -> dict[str, Any]:
         "local_head": local_head[:12] if local_head else None,
         "remote_head": remote_head[:12] if remote_head else None,
         "reason": None if ok else "runtime checkout is not at latest origin/master; fast-forward and restart services",
+    }
+
+
+def check_update_status() -> dict[str, Any]:
+    if resolve_app_root is None or get_update_status is None:
+        return {
+            "name": "source_update",
+            "status": "warn",
+            "ok": False,
+            "reason": "tigermemory_update_unavailable",
+        }
+    try:
+        status = get_update_status(resolve_app_root(), refresh_remote=False)
+    except Exception as exc:
+        return {
+            "name": "source_update",
+            "status": "warn",
+            "ok": False,
+            "error": str(exc)[:200],
+        }
+    ok = bool(status.get("ok", False))
+    warning = bool(status.get("update_available") or status.get("requires_user_action"))
+    return {
+        "name": "source_update",
+        "status": "warn" if ok and warning else _warn_status(ok),
+        "ok": ok,
+        "source_mode": status.get("source_mode"),
+        "app_root": status.get("app_root"),
+        "branch": status.get("branch"),
+        "head": status.get("head"),
+        "upstream": status.get("upstream"),
+        "ahead": status.get("ahead"),
+        "behind": status.get("behind"),
+        "dirty": status.get("dirty"),
+        "update_available": status.get("update_available"),
+        "safe_to_apply": status.get("safe_to_apply"),
+        "reason": status.get("reason"),
+        "recommended_action": status.get("recommended_action"),
     }
 
 
@@ -326,6 +371,7 @@ def run_agent_doctor(
     checks = [
         check_worktree(),
         check_remote_master(),
+        check_update_status(),
         check_tm_http(http_url),
         check_mem0(),
         search_lessons(query),
@@ -374,7 +420,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     ]
     for check in report["checks"]:
         evidence_bits = []
-        for key in ("head", "branch", "dirty_count", "ahead", "behind", "local_head", "remote_head", "latency_ms", "hit_count", "score", "error", "reason", "item_count", "action_counts", "offline_only"):
+        for key in ("head", "branch", "source_mode", "dirty", "dirty_count", "ahead", "behind", "update_available", "safe_to_apply", "local_head", "remote_head", "latency_ms", "hit_count", "score", "error", "reason", "item_count", "action_counts", "offline_only"):
             if check.get(key) not in (None, "", []):
                 evidence_bits.append(f"{key}={check[key]}")
         evidence = "; ".join(str(bit) for bit in evidence_bits).replace("|", "\\|")

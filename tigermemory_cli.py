@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import pathlib
 import subprocess
@@ -389,6 +390,58 @@ def cmd_verify(args: argparse.Namespace) -> int:
         return 4
 
 
+def _update_app_root() -> pathlib.Path:
+    if resolve_app_root is not None:
+        return resolve_app_root()
+    return REPO_ROOT
+
+
+def _print_update_status(status: dict, *, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(status, ensure_ascii=False, indent=2))
+        return
+    print(f"source_mode={status.get('source_mode', '')}")
+    print(f"app_root={status.get('app_root', '')}")
+    print(f"branch={status.get('branch', '')}")
+    print(f"head={status.get('head', '')}")
+    print(f"upstream={status.get('upstream', '')}")
+    print(f"behind={status.get('behind', 0)}")
+    print(f"ahead={status.get('ahead', 0)}")
+    print(f"dirty={str(bool(status.get('dirty'))).lower()}")
+    print(f"update_available={str(bool(status.get('update_available'))).lower()}")
+    print(f"safe_to_apply={str(bool(status.get('safe_to_apply'))).lower()}")
+    print(f"recommended_action={status.get('recommended_action', '')}")
+    for warning in status.get("warnings") or []:
+        print(f"warning={warning}")
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    try:
+        from tigermemory_update import apply_update, get_update_status
+    except ModuleNotFoundError:
+        print("tigermemory_update package is not installed; reinstall or run from a source checkout.", file=sys.stderr)
+        return 2
+    app_root = _update_app_root()
+    if args.update_command in {"status", "check"}:
+        status = get_update_status(app_root, refresh_remote=bool(args.refresh))
+        _print_update_status(status, as_json=bool(args.json))
+        return 0 if status.get("ok", False) else 4
+    if args.update_command == "apply":
+        result = apply_update(app_root, strategy=args.strategy, dry_run=bool(args.dry_run))
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"ok={str(bool(result.get('ok'))).lower()}")
+            print(f"applied={str(bool(result.get('applied'))).lower()}")
+            print(f"reason={result.get('reason', '')}")
+            status = result.get("status")
+            if isinstance(status, dict):
+                print(f"recommended_action={status.get('recommended_action', '')}")
+        return 0 if result.get("ok", False) else 4
+    print("update command required: status|check|apply", file=sys.stderr)
+    return 2
+
+
 def cmd_dashboard(args: argparse.Namespace) -> int:
     forwarded = []
     if args.host:
@@ -474,6 +527,22 @@ def build_parser() -> argparse.ArgumentParser:
     verify_p.add_argument("--digest-date", default=None)
     verify_p.add_argument("--db", default=None)
     verify_p.set_defaults(func=cmd_verify)
+
+    update_p = sub.add_parser("update", help="check or apply source checkout updates")
+    update_sub = update_p.add_subparsers(dest="update_command", required=True)
+    update_status = update_sub.add_parser("status", help="show local update status without network refresh")
+    update_status.add_argument("--json", action="store_true")
+    update_status.add_argument("--refresh", action="store_true", help="fetch remote before reporting")
+    update_status.set_defaults(func=cmd_update)
+    update_check = update_sub.add_parser("check", help="fetch remote and check whether an update is available")
+    update_check.add_argument("--json", action="store_true")
+    update_check.add_argument("--refresh", action="store_true", default=True)
+    update_check.set_defaults(func=cmd_update)
+    update_apply = update_sub.add_parser("apply", help="apply a safe Git update to the source checkout")
+    update_apply.add_argument("--dry-run", action="store_true")
+    update_apply.add_argument("--strategy", choices=["ff-only", "rebase"], default="ff-only")
+    update_apply.add_argument("--json", action="store_true")
+    update_apply.set_defaults(func=cmd_update)
 
     dashboard_p = sub.add_parser("dashboard", help="start dashboard server")
     dashboard_p.add_argument("--host", default=None, help="bind host; default is tm_review_ui.py's local host")

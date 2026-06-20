@@ -2963,6 +2963,8 @@
       }
 
       this.renderWorktree(report);
+      this.renderSourceUpdate(report.source_update || null);
+      this.fetchSourceUpdate();
       this.renderDigest(report);
       if (Object.prototype.hasOwnProperty.call(report, 'memory_overview')) {
         this.renderMemoryOverview(report.memory_overview || {});
@@ -3175,6 +3177,62 @@
             </div>
           ` : '<div class="rounded-xl border border-[#a0b889] bg-[#dde8ce] p-3 text-sm text-[#52733a]">工作区干净，可以继续操作。</div>'}
         `;
+      }
+    },
+
+    renderSourceUpdate(update) {
+      const c = window.tmDashboard;
+      const statusEl = document.getElementById('source-update-status');
+      const body = document.getElementById('source-update-body');
+      if (!body && !statusEl) return;
+      if (!update) {
+        if (statusEl) statusEl.innerHTML = c.badge('warn', '读取中');
+        if (body) body.innerHTML = '<div class="rounded-xl border border-[#e6dfcc] bg-[#f0e9d8] p-3 text-[#8a8275]">正在读取源码更新状态...</div>';
+        return;
+      }
+      const ok = update.ok !== false;
+      const status = !ok
+        ? 'warn'
+        : update.update_available
+          ? (update.safe_to_apply ? 'warn' : 'fail')
+          : 'ok';
+      const label = !ok
+        ? '不可判断'
+        : update.update_available
+          ? (update.safe_to_apply ? '有更新' : '需先处理')
+          : '已是最新';
+      if (statusEl) statusEl.innerHTML = c.badge(status, label);
+      if (body) {
+        const warnings = Array.isArray(update.warnings) ? update.warnings : [];
+        body.innerHTML = `
+          <div class="rounded-xl border border-[#e6dfcc] bg-[#f0e9d8] p-3">
+            <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <span>模式 <code class="font-mono text-[#1f1d1b]">${c.esc(update.source_mode || '-')}</code></span>
+              <span>↓ <code class="font-mono text-[#1f1d1b]">${c.esc(update.behind ?? 0)}</code></span>
+              <span>↑ <code class="font-mono text-[#1f1d1b]">${c.esc(update.ahead ?? 0)}</code></span>
+              <span>可自动更新 <code class="font-mono text-[#1f1d1b]">${update.safe_to_apply ? 'yes' : 'no'}</code></span>
+            </div>
+            <div class="mt-2 break-all text-xs text-[#8a8275]">${c.esc(update.app_root || '')}</div>
+          </div>
+          <div class="rounded-xl border border-[#e6dfcc] bg-[#fbf8f1] p-3 text-sm leading-6">
+            ${c.esc(update.recommended_action || '暂无建议。')}
+          </div>
+          ${warnings.length ? `<ul class="space-y-1 rounded-xl border border-[#e0c889] bg-[#f4e6c4] p-3 text-xs text-[#8a6b1f]">${warnings.slice(0, 3).map(item => `<li>${c.esc(item)}</li>`).join('')}</ul>` : ''}
+        `;
+      }
+    },
+
+    async fetchSourceUpdate() {
+      try {
+        const response = await fetch('/api/update/status');
+        const data = await response.json();
+        this.renderSourceUpdate(data);
+      } catch (error) {
+        this.renderSourceUpdate({
+          ok: false,
+          reason: 'fetch_failed',
+          recommended_action: `读取源码更新状态失败：${error.message || error}`,
+        });
       }
     },
 

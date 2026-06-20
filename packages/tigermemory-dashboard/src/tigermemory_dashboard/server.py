@@ -33,6 +33,7 @@ except ImportError:  # pragma: no cover - installed package mode
 
 import tigermemory_core as tm_core
 from tigermemory_core import runtime_events as tm_runtime_events
+from tigermemory_core.roots import resolve_app_root
 
 
 def _optional_import(name: str):
@@ -51,6 +52,7 @@ tm_memory_reflection = _optional_import("tm_memory_reflection")
 tm_route_events = _optional_import("tm_route_events")
 tm_review_tools = _optional_import("tm_review_tools")
 tm_self_evolution = _optional_import("tm_self_evolution")
+tm_update = _optional_import("tigermemory_update")
 
 try:
     from fastapi import FastAPI, Query, Request
@@ -3254,6 +3256,7 @@ def dashboard_health_summary() -> dict[str, Any]:
         },
         "services": services,
         "agent_doctor": report,
+        "source_update": dashboard_update_status(),
         "recent_commits": commits,
         "daily_digest": {
             "date": today(),
@@ -3291,6 +3294,17 @@ def dashboard_health_summary() -> dict[str, Any]:
         ttl_seconds=API_CACHE_TTL,
     )
     return result
+
+
+def dashboard_update_status() -> dict[str, Any]:
+    if tm_update is None or not hasattr(tm_update, "get_update_status"):
+        return {
+            "ok": False,
+            "source_mode": "unknown",
+            "reason": "tigermemory_update_unavailable",
+            "recommended_action": "当前安装缺少 tigermemory-update 包。",
+        }
+    return tm_update.get_update_status(resolve_app_root(), refresh_remote=False)
 
 
 def _status_label(status: str) -> str:
@@ -4451,6 +4465,14 @@ async def review_page():
 async def api_health_summary():
     try:
         return await run_in_threadpool(dashboard_health_summary)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.get("/api/update/status")
+async def api_update_status():
+    try:
+        return await run_in_threadpool(dashboard_update_status)
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 
