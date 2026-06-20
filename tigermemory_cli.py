@@ -25,12 +25,14 @@ PASSTHROUGH_COMMANDS = {
 }
 
 try:
+    from tigermemory_core.llm_status import llm_status_payload
     from tigermemory_core.roots import (
         resolve_app_root,
         resolve_instance_root,
         subprocess_root_env,
     )
 except Exception:
+    llm_status_payload = None
     resolve_app_root = None
     resolve_instance_root = None
     subprocess_root_env = None
@@ -255,6 +257,8 @@ def _llm_env_value(name: str, default: str = "") -> str:
 
 
 def _llm_status_payload() -> dict[str, object]:
+    if llm_status_payload is not None:
+        return llm_status_payload(REPO_ROOT)
     deepseek_base = _llm_env_value("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     deepseek_model = _llm_env_value("DEEPSEEK_MODEL", "deepseek-v4-flash")
     deepseek_admin_model = _llm_env_value("DEEPSEEK_ADMIN_MODEL", "deepseek-v4-pro")

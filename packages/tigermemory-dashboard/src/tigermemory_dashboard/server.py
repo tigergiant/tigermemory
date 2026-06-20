@@ -3022,6 +3022,7 @@ def _dashboard_fast_agent_doctor() -> dict[str, Any]:
         ("worktree", _dashboard_worktree_check),
         ("tm_http", lambda: tm_agent_doctor.check_tm_http(timeout=0.3)),
         ("mem0_api", lambda: tm_agent_doctor.check_mem0(timeout=0.5)),
+        ("public_ask_llm", tm_agent_doctor.check_public_ask_llm),
     ]:
         try:
             checks.append(fn())

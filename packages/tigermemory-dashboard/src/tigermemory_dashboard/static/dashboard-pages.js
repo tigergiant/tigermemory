@@ -2722,6 +2722,10 @@
                 detail = t('agent.doctor_lessons_hit', `已为您拦截防御，命中 lessons 记录 {count} 个。`, {
                   count: window.tmDashboard.esc(check.hit_count)
                 });
+              } else if (check.name === 'public_ask_llm') {
+                const state = check.llm_configured ? '在线问答已配置' : '在线问答未配置';
+                const model = check.routine_model || '未记录模型';
+                detail = `${state} · ${model}`;
               }
               return `
                 <div class="flex items-center justify-between p-3 rounded-xl border border-[#e6dfcc] bg-[#fcfaf2]">
@@ -3328,7 +3332,27 @@
                   <code class="block font-mono bg-[#f0e9d8] p-1 rounded select-all text-center">tm doctor</code>
                 </div>
               `;
+            } else if (check.name === 'public_ask_llm') {
+              guidanceHtml = `
+                <div class="mt-2 rounded bg-[#fcfaf2] border border-[#e6dfcc] p-2 text-[11px] text-[#8a6b1f]">
+                  <div class="font-semibold mb-1">💡 解决方案：在线问答模型未配置</div>
+                  <div class="mb-1">设置 DeepSeek 或 OpenAI 兼容 Key 后，用下面命令确认不会泄露密钥：</div>
+                  <code class="block font-mono bg-[#f0e9d8] p-1 rounded select-all text-center">${c.esc(check.verify_command || 'tm llm status --json')}</code>
+                </div>
+              `;
             }
+          }
+
+          let publicAskHtml = '';
+          if (check.name === 'public_ask_llm') {
+            const providers = (check.configured_providers || []).join(', ') || '未配置';
+            publicAskHtml = `
+              <div>在线问答：<code>${check.llm_configured ? '已配置' : '未配置'}</code></div>
+              <div>推荐模型：<code>${c.esc(check.routine_model || '未记录')}</code> / 管理模型：<code>${c.esc(check.admin_model || '未记录')}</code></div>
+              <div>已配置通道：<code>${c.esc(providers)}</code></div>
+              <div>离线备用：<code>${c.esc(check.offline_fallback || 'tm ask --offline')}</code></div>
+              <div>在线验证：<code>${c.esc(check.online_smoke || 'tm ask --query "TigerMemory 是什么？" --scope wiki')}</code></div>
+            `;
           }
 
           return `
@@ -3342,6 +3366,7 @@
                 ${errHtml}
                 ${check.reason ? `<div>原因：${c.esc(check.reason)}</div>` : ''}
                 ${check.paths ? `<div class="break-all font-mono">路径：${c.esc((check.paths || []).slice(0, 3).join(' | '))}</div>` : ''}
+                ${publicAskHtml}
                 ${guidanceHtml}
               </div>
             </article>

@@ -12,8 +12,10 @@ import tm_agent_doctor  # type: ignore[import-not-found]
 def test_agent_doctor_aggregates_ok_warn_and_fail(monkeypatch):
     monkeypatch.setattr(tm_agent_doctor, "check_worktree", lambda: {"name": "worktree", "status": "ok", "ok": True})
     monkeypatch.setattr(tm_agent_doctor, "check_remote_master", lambda: {"name": "remote_master", "status": "ok", "ok": True})
+    monkeypatch.setattr(tm_agent_doctor, "check_update_status", lambda: {"name": "source_update", "status": "ok", "ok": True})
     monkeypatch.setattr(tm_agent_doctor, "check_tm_http", lambda _url=None: {"name": "tm_http", "status": "warn", "ok": False})
     monkeypatch.setattr(tm_agent_doctor, "check_mem0", lambda: {"name": "mem0_api", "status": "ok", "ok": True})
+    monkeypatch.setattr(tm_agent_doctor, "check_public_ask_llm", lambda: {"name": "public_ask_llm", "status": "ok", "ok": True})
     monkeypatch.setattr(tm_agent_doctor, "search_lessons", lambda _query: {"name": "lessons", "status": "fail", "ok": False, "hit_count": 0})
     monkeypatch.setattr(tm_agent_doctor, "recent_lessons_log", lambda: {"name": "lessons_log", "status": "ok", "ok": True})
     monkeypatch.setattr(tm_agent_doctor, "check_retention", lambda: {"name": "retention_audit", "status": "ok", "ok": True})
@@ -23,7 +25,7 @@ def test_agent_doctor_aggregates_ok_warn_and_fail(monkeypatch):
 
     assert report["status"] == "fail"
     assert report["ok"] is False
-    assert report["summary"] == {"fail_count": 1, "warn_count": 1, "ok_count": 6}
+    assert report["summary"] == {"fail_count": 1, "warn_count": 1, "ok_count": 8}
     assert "write_memory" in report["mcp_tool_contract"]["required_tools"]
     assert "Resolve failing checks" in report["recommended_action"]
 
@@ -32,8 +34,10 @@ def test_agent_doctor_can_skip_l2(monkeypatch):
     called = []
     monkeypatch.setattr(tm_agent_doctor, "check_worktree", lambda: {"name": "worktree", "status": "ok", "ok": True})
     monkeypatch.setattr(tm_agent_doctor, "check_remote_master", lambda: {"name": "remote_master", "status": "ok", "ok": True})
+    monkeypatch.setattr(tm_agent_doctor, "check_update_status", lambda: {"name": "source_update", "status": "ok", "ok": True})
     monkeypatch.setattr(tm_agent_doctor, "check_tm_http", lambda _url=None: {"name": "tm_http", "status": "ok", "ok": True})
     monkeypatch.setattr(tm_agent_doctor, "check_mem0", lambda: {"name": "mem0_api", "status": "ok", "ok": True})
+    monkeypatch.setattr(tm_agent_doctor, "check_public_ask_llm", lambda: {"name": "public_ask_llm", "status": "ok", "ok": True})
     monkeypatch.setattr(tm_agent_doctor, "search_lessons", lambda _query: {"name": "lessons", "status": "ok", "ok": True, "hit_count": 2})
     monkeypatch.setattr(tm_agent_doctor, "recent_lessons_log", lambda: {"name": "lessons_log", "status": "ok", "ok": True})
     monkeypatch.setattr(tm_agent_doctor, "check_retention", lambda: {"name": "retention_audit", "status": "ok", "ok": True})
@@ -46,8 +50,10 @@ def test_agent_doctor_can_skip_l2(monkeypatch):
     assert [check["name"] for check in report["checks"]] == [
         "worktree",
         "remote_master",
+        "source_update",
         "tm_http",
         "mem0_api",
+        "public_ask_llm",
         "lessons",
         "lessons_log",
         "retention_audit",
@@ -63,6 +69,7 @@ def test_agent_doctor_markdown_includes_evidence():
             {"name": "worktree", "status": "ok", "head": "abc", "dirty_count": 0},
             {"name": "remote_master", "status": "warn", "local_head": "abc", "remote_head": "def", "reason": "runtime checkout is not at latest origin/master"},
             {"name": "tm_http", "status": "warn", "error": "offline | refused"},
+            {"name": "public_ask_llm", "status": "ok", "llm_configured": True, "routine_model": "deepseek-v4-flash", "verify_command": "tm llm status --json"},
             {"name": "retention_audit", "status": "ok", "item_count": 3, "offline_only": True},
         ],
         "mcp_tool_contract": {
@@ -79,6 +86,25 @@ def test_agent_doctor_markdown_includes_evidence():
     assert "write_memory" in markdown
     assert "Run tool discovery." in markdown
     assert "offline_only=True" in markdown
+    assert "public_ask_llm" in markdown
+    assert "llm_configured=True" in markdown
+    assert "tm llm status --json" in markdown
+
+
+def test_check_public_ask_llm_reports_config_without_secret(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-do-not-leak")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+
+    res = tm_agent_doctor.check_public_ask_llm()
+
+    assert res["name"] == "public_ask_llm"
+    assert res["status"] == "ok"
+    assert res["llm_configured"] is True
+    assert res["recommended_provider"] == "deepseek"
+    assert "deepseek" in res["configured_providers"]
+    assert res["routine_model"] == "deepseek-v4-flash"
+    assert res["verify_command"] == "tm llm status --json"
+    assert "sk-do-not-leak" not in str(res)
 
 
 def test_agent_doctor_retention_check_runs_real_offline_sample():

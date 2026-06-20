@@ -20,6 +20,7 @@ import urllib.request
 from typing import Any
 
 import tigermemory_core as tm_core
+from tigermemory_core.llm_status import llm_status_payload
 
 _TOOLS_DIR = tm_core.REPO_ROOT / "tools"
 if str(_TOOLS_DIR) not in sys.path:
@@ -362,6 +363,46 @@ def check_retention() -> dict[str, Any]:
         }
 
 
+def check_public_ask_llm() -> dict[str, Any]:
+    start = time.time()
+    try:
+        payload = llm_status_payload(REPO_ROOT)
+        configured_providers = [
+            provider["id"]
+            for provider in payload.get("providers", [])
+            if provider.get("configured")
+        ]
+        role_models = payload.get("role_models") or {}
+        routine_model = (role_models.get("routine_json") or {}).get("model")
+        admin_model = (role_models.get("wiki_admin") or {}).get("model")
+        configured = bool(payload.get("llm_configured"))
+        return {
+            "name": "public_ask_llm",
+            "status": "ok" if configured else "warn",
+            "ok": configured,
+            "latency_ms": round((time.time() - start) * 1000, 1),
+            "schema": payload.get("schema"),
+            "llm_configured": configured,
+            "recommended_provider": payload.get("recommended_provider"),
+            "configured_providers": configured_providers,
+            "routine_model": routine_model,
+            "admin_model": admin_model,
+            "offline_fallback": payload.get("offline_fallback"),
+            "verify_command": "tm llm status --json",
+            "online_smoke": 'tm ask --query "TigerMemory 是什么？" --scope wiki',
+            "reason": None if configured else "No LLM provider key is configured; tm ask can still run with --offline.",
+        }
+    except Exception as exc:
+        return {
+            "name": "public_ask_llm",
+            "status": "warn",
+            "ok": False,
+            "latency_ms": round((time.time() - start) * 1000, 1),
+            "error": str(exc)[:200],
+            "verify_command": "tm llm status --json",
+        }
+
+
 def run_agent_doctor(
     *,
     query: str = DEFAULT_QUERY,
@@ -374,6 +415,7 @@ def run_agent_doctor(
         check_update_status(),
         check_tm_http(http_url),
         check_mem0(),
+        check_public_ask_llm(),
         search_lessons(query),
         recent_lessons_log(),
         check_retention(),
@@ -420,7 +462,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     ]
     for check in report["checks"]:
         evidence_bits = []
-        for key in ("head", "branch", "source_mode", "dirty", "dirty_count", "ahead", "behind", "update_available", "safe_to_apply", "local_head", "remote_head", "latency_ms", "hit_count", "score", "error", "reason", "item_count", "action_counts", "offline_only"):
+        for key in ("head", "branch", "source_mode", "dirty", "dirty_count", "ahead", "behind", "update_available", "safe_to_apply", "local_head", "remote_head", "latency_ms", "hit_count", "score", "error", "reason", "item_count", "action_counts", "offline_only", "llm_configured", "recommended_provider", "configured_providers", "routine_model", "admin_model", "verify_command", "offline_fallback"):
             if check.get(key) not in (None, "", []):
                 evidence_bits.append(f"{key}={check[key]}")
         evidence = "; ".join(str(bit) for bit in evidence_bits).replace("|", "\\|")
