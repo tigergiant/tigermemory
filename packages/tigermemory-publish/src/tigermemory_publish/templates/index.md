@@ -1,16 +1,19 @@
 # TigerMemory Public Snapshot
 
-This snapshot contains the local-first TigerMemory framework, starter Wiki
-content, CLI, dashboard assets, publish guard, and basic runtime templates.
+This snapshot contains the TigerMemory LLM Wiki Admin starter: public framework,
+starter Wiki content, CLI, dashboard assets, publish guard, and safe runtime
+templates. Use DeepSeek or another OpenAI-compatible model for the full Wiki
+Admin experience.
 
 ## Start Here
 
 - Read `README.md` first.
 - Run `py -m pip install .`.
 - Run `tm init` and `tm profile show`.
+- Run `tm llm guide` and `tm llm status`.
 - Use `tm profile guide local` before changing runtime mode.
 - Use `tm ask --offline` when you want local evidence without connecting an AI
-  model.
+  model; it is a fallback, not the full LLM answer path.
 - Open `http://127.0.0.1:9777/start` after `tm dashboard` for the beginner
   start page.
 

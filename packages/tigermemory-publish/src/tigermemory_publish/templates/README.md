@@ -1,14 +1,19 @@
 # TigerMemory
 
-TigerMemory is a local-first LLM wiki and memory runtime. The public snapshot is
-designed to start with Python, Markdown, Git, and a local SQLite memory store.
-Docker, WSL, OpenMemory, Qdrant, Caddy, npm, and multi-IDE integrations are
-optional advanced features, not first-run requirements.
+TigerMemory is an LLM-first local Wiki and memory admin starter. It keeps your
+durable knowledge in Markdown + Git, uses local SQLite for a private memory
+store, and is designed for an AI model to help organize, review, and answer from
+your own Wiki with sources.
+
+The recommended first LLM provider is DeepSeek through an OpenAI-compatible
+endpoint. Docker, WSL, OpenMemory, Qdrant, Caddy, npm, and multi-IDE
+integrations are optional advanced features, not first-run requirements.
 
 ## Requirements
 
 - Python 3.10 or newer.
 - Git.
+- An LLM API key for the full Wiki Admin experience. DeepSeek is recommended.
 - No Docker, WSL, OpenMemory, Qdrant, Caddy, or npm for the basic mode.
 
 Node/npm is only used by optional subprojects such as the OpenClaw context
@@ -46,6 +51,8 @@ Run these commands from this repository checkout:
 py -m pip install -e .
 tm init
 tm profile show
+tm llm guide
+tm llm status
 ```
 
 Editable install is recommended for the public source-first workflow: code stays
@@ -58,6 +65,11 @@ Expected profile after `tm init`:
 ```text
 effective=local
 ```
+
+`tm llm status` does not call the model and does not print secrets. It only
+checks whether provider environment variables are present. For the recommended
+DeepSeek path, set `DEEPSEEK_API_KEY`; optionally set `DEEPSEEK_BASE_URL` and
+`DEEPSEEK_MODEL`.
 
 Write, search, and verify local memory:
 
@@ -75,7 +87,8 @@ tm search --scope all --query "local memory"
 tm search --scope wiki --query "项目画布"
 ```
 
-Ask without an online model:
+Use the offline fallback when you want to inspect evidence without calling a
+model:
 
 ```powershell
 tm ask --offline --query "local memory" --scope all
@@ -83,7 +96,9 @@ tm ask --offline --query "项目画布" --scope wiki
 ```
 
 Offline ask only returns local evidence from SQLite and Markdown. It does not
-call an AI model and does not generate a final natural-language answer.
+call an AI model and does not generate a final natural-language answer. The full
+TigerMemory Wiki Admin path is LLM-first; offline ask is a fallback and release
+smoke, not the main product experience.
 
 Start the local dashboard:
 
@@ -96,11 +111,13 @@ Then open `http://127.0.0.1:9777/start` for the beginner start page, or
 
 ## Which Mode Should I Use?
 
-Start with **local** unless you already know you need a shared memory service.
+Start with **local + LLM** unless you already know you need a shared memory
+service.
 
 | Need | Use | Requires |
 |---|---|---|
-| Try TigerMemory, keep personal notes local, search Markdown Wiki and local memory | `local` | Python + Git |
+| Try TigerMemory as an AI Wiki Admin with local data | `local + LLM` | Python + Git + DeepSeek/OpenAI-compatible key |
+| Inspect evidence without model calls | offline fallback | Python + Git |
 | Connect multiple machines or IDE agents to the same live memory layer | `hybrid` | OpenMemory/Mem0 service and extra deployment setup |
 | Develop the optional OpenClaw Context Engine plugin | optional subproject | Node/npm for that subproject only |
 
@@ -109,9 +126,9 @@ mode. Those pieces are advanced integrations and can be added later.
 
 ## Public Core Contract
 
-The public snapshot promises a small local-first core before any advanced
-integrations. The stable contract for CLI commands, JSON fields, profile
-behavior, optional services, and release gates is documented in
+The public snapshot promises an LLM-first starter with a local evidence
+fallback before any advanced integrations. The stable contract for CLI
+commands, JSON fields, profile behavior, optional services, and release gates is documented in
 `wiki/systems/public-core-contract.md`.
 
 ## Public Core vs Your Data
@@ -120,7 +137,7 @@ TigerMemory separates the installed framework from your personal memory
 workspace:
 
 - The **public core** is the Python package, `tm` CLI, dashboard package, schemas,
-  and public starter docs.
+  public starter docs, and LLM configuration checks.
 - Your **instance root** is your own data workspace: `wiki/`, `data/`, and
   `runtime/`.
 
@@ -176,8 +193,9 @@ The public snapshot is assembled from declared public modules:
 - `public-cli`: the `tm` command and root install files.
 - `public-core`: local memory, config, route, search, index, lessons, persona,
   doctor, digest, protocols, source updater, and schemas.
-- `public-answer-offline`: evidence-only offline ask.
-- `public-dashboard`: local dashboard entrypoint and static assets.
+- `public-answer-offline`: evidence-only fallback before or beside LLM calls.
+- `public-dashboard`: local dashboard package and static assets; private
+  review/promote tools are not shipped in public core.
 - `public-publish`: snapshot builder, audit, and release templates.
 - `public-wiki-seed`: starter project canvas and public wiki pages.
 
@@ -195,7 +213,8 @@ complete release gate and does not replace the full snapshot audit.
 ## Runtime Profiles
 
 - `local`: default basic mode. Uses Markdown + Git + local SQLite + FTS5
-  lexical search.
+  lexical search. Pair it with an LLM provider for the intended Wiki Admin
+  experience.
 - `hybrid`: advanced mode. Requires OpenMemory/Mem0 and can use Qdrant/Caddy
   and multi-IDE integrations.
 
@@ -204,6 +223,8 @@ Useful commands:
 ```powershell
 tm profile guide local
 tm profile guide hybrid
+tm llm guide
+tm llm status --json
 tm profile set hybrid
 tm profile set local
 ```

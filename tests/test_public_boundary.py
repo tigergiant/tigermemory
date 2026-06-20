@@ -170,3 +170,27 @@ def test_public_dashboard_static_assets_do_not_embed_private_surfaces() -> None:
             if needle in text:
                 offenders.append(f"{path}:{needle}")
     assert offenders == []
+
+
+def test_public_boundary_validation_blocks_dashboard_private_markers() -> None:
+    repo_root = pathlib.Path(__file__).resolve().parent.parent
+
+    result = tigermemory_publish.validate_public_boundaries(repo_root)
+
+    offenders = [
+        item
+        for item in result["violations"]
+        if item["kind"] in {"dashboard_admin_tool_in_public_core", "private_source_marker"}
+    ]
+    assert offenders == []
+
+
+def test_public_publish_plan_excludes_private_dashboard_review_tools() -> None:
+    repo_root = pathlib.Path(__file__).resolve().parent.parent
+
+    plan = tigermemory_publish.collect_publish_plan(repo_root)
+
+    assert "tools/tm_review_ui.py" not in plan["tool_files"]
+    assert "tools/tm_review_tools.py" not in plan["tool_files"]
+    assert "tools/tm_review.py" not in plan["tool_files"]
+    assert "tools/tm_self_evolution.py" not in plan["tool_files"]

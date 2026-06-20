@@ -65,7 +65,7 @@ except ImportError as exc:  # pragma: no cover
 
 VERSION = "0.2.0"
 HOST = os.getenv("TM_DASHBOARD_HOST", "127.0.0.1")
-PORT = int(os.getenv("TM_DASHBOARD_PORT", "1998"))
+PORT = int(os.getenv("TM_DASHBOARD_PORT", "9777"))
 REPO_ROOT = tm_core.REPO_ROOT
 UI_REPO_ROOT = REPO_ROOT
 STATIC_DIR = pathlib.Path(str(resources.files("tigermemory_dashboard") / "static"))
@@ -85,26 +85,17 @@ PUBLIC_PATHS = {"/healthz", "/manifest.webmanifest", "/service-worker.js", "/off
 PAGE_PREFIXES = ("/start", "/digest", "/daily", "/review", "/health", "/quality", "/settings", "/agent-tools", "/canvas", "/self-evolution", "/sw-reset")
 DEFAULT_ALLOWED_HOSTS = {
     "127.0.0.1",
-    "127.0.0.1:1998",
     "127.0.0.1:9777",
     "localhost",
-    "localhost:1998",
     "localhost:9777",
-    "tigermemory-wsl",
-    "tigermemory-wsl:1998",
 }
 ALLOWED_HOSTS = DEFAULT_ALLOWED_HOSTS | {
     item.strip().lower()
     for item in os.getenv("TM_DASHBOARD_ALLOWED_HOSTS", "").split(",")
     if item.strip()
 }
-LOCAL_HOSTS = {"127.0.0.1", "127.0.0.1:1998", "127.0.0.1:9777", "localhost", "localhost:1998", "localhost:9777"}
-COOKIE_BOOTSTRAP_HOSTS = LOCAL_HOSTS | {
-    "tigermemory-wsl",
-    "tigermemory-wsl:1998",
-    "tigermemory-wsl.tail9fe9e3.ts.net",
-    "tigermemory-wsl.tail9fe9e3.ts.net:1998",
-}
+LOCAL_HOSTS = {"127.0.0.1", "127.0.0.1:9777", "localhost", "localhost:9777"}
+COOKIE_BOOTSTRAP_HOSTS = set(LOCAL_HOSTS)
 ACTION_LABELS = {
     "archive": "归档",
     "promote_mem0": "写入 Mem0",

@@ -206,6 +206,84 @@ def cmd_profile(args: argparse.Namespace) -> int:
     return 2
 
 
+def _mask_env_presence(name: str) -> dict[str, object]:
+    value = os.environ.get(name, "")
+    return {
+        "name": name,
+        "configured": bool(value.strip()),
+    }
+
+
+def _llm_status_payload() -> dict[str, object]:
+    deepseek_base = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    deepseek_model = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+    openai_base = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    openai_model = os.environ.get("OPENAI_MODEL", "")
+    deepseek_configured = bool(os.environ.get("DEEPSEEK_API_KEY", "").strip())
+    openai_configured = bool(os.environ.get("OPENAI_API_KEY", "").strip())
+    return {
+        "ok": True,
+        "schema": "tigermemory-llm-status-v1",
+        "recommended_provider": "deepseek",
+        "llm_configured": deepseek_configured or openai_configured,
+        "providers": [
+            {
+                "id": "deepseek",
+                "configured": deepseek_configured,
+                "api_key": _mask_env_presence("DEEPSEEK_API_KEY"),
+                "base_url": deepseek_base,
+                "model": deepseek_model,
+                "openai_compatible": True,
+                "recommended": True,
+            },
+            {
+                "id": "openai_compatible",
+                "configured": openai_configured,
+                "api_key": _mask_env_presence("OPENAI_API_KEY"),
+                "base_url": openai_base,
+                "model": openai_model,
+                "openai_compatible": True,
+                "recommended": False,
+            },
+        ],
+        "offline_fallback": "tm ask --offline --query \"your question\" --scope all",
+        "next": "Set DEEPSEEK_API_KEY, then run tm llm status.",
+    }
+
+
+def cmd_llm(args: argparse.Namespace) -> int:
+    if args.llm_command == "status":
+        payload = _llm_status_payload()
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+        print(f"recommended_provider={payload['recommended_provider']}")
+        print(f"llm_configured={str(bool(payload['llm_configured'])).lower()}")
+        for provider in payload["providers"]:
+            print(
+                "provider="
+                f"{provider['id']} "
+                f"configured={str(bool(provider['configured'])).lower()} "
+                f"base_url={provider['base_url']} "
+                f"model={provider['model']}"
+            )
+        print(f"offline_fallback={payload['offline_fallback']}")
+        print(f"next={payload['next']}")
+        return 0
+    if args.llm_command == "guide":
+        print("purpose=configure TigerMemory's LLM-first Wiki Admin path")
+        print("recommended_provider=deepseek")
+        print("set=DEEPSEEK_API_KEY")
+        print("optional=DEEPSEEK_BASE_URL,DEEPSEEK_MODEL")
+        print("compatible=OPENAI_API_KEY,OPENAI_BASE_URL,OPENAI_MODEL")
+        print("verify=tm llm status --json")
+        print("fallback=tm ask --offline returns local evidence only")
+        print("security=keys stay in your shell or local runtime env; do not commit them")
+        return 0
+    print("llm command required: status|guide", file=sys.stderr)
+    return 2
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     return _run_python("tools/tm_io.py", ["agent-doctor", *args.args])
 
@@ -480,6 +558,14 @@ def build_parser() -> argparse.ArgumentParser:
     profile_guide.add_argument("value", choices=sorted(PROFILE_VALUES), nargs="?")
     profile_guide.set_defaults(func=cmd_profile)
 
+    llm_p = sub.add_parser("llm", help="show or explain LLM provider configuration")
+    llm_sub = llm_p.add_subparsers(dest="llm_command", required=True)
+    llm_status = llm_sub.add_parser("status", help="show DeepSeek/OpenAI-compatible configuration without printing keys")
+    llm_status.add_argument("--json", action="store_true")
+    llm_status.set_defaults(func=cmd_llm)
+    llm_guide = llm_sub.add_parser("guide", help="print the recommended LLM setup path")
+    llm_guide.set_defaults(func=cmd_llm)
+
     doctor_p = sub.add_parser("doctor", help="run agent doctor")
     doctor_p.add_argument("args", nargs=argparse.REMAINDER)
     doctor_p.set_defaults(func=cmd_doctor)
@@ -545,7 +631,7 @@ def build_parser() -> argparse.ArgumentParser:
     update_apply.set_defaults(func=cmd_update)
 
     dashboard_p = sub.add_parser("dashboard", help="start dashboard server")
-    dashboard_p.add_argument("--host", default=None, help="bind host; default is tm_review_ui.py's local host")
+    dashboard_p.add_argument("--host", default=None, help="bind host; default is the dashboard server's local host")
     dashboard_p.add_argument("--port", type=int, default=9777, help="bind port for public quick start; default: 9777")
     dashboard_p.set_defaults(func=cmd_dashboard)
 

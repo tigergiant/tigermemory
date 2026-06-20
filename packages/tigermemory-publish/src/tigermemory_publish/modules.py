@@ -87,7 +87,7 @@ PUBLIC_MODULES: tuple[PublishModule, ...] = (
     ),
     PublishModule(
         id="public-answer-offline",
-        description="Evidence-first answer and offline ask path that does not require an online model.",
+        description="Local evidence fallback for users before an LLM provider is configured.",
         stability="core",
         package_roots=("packages/tigermemory-answer/src",),
         tool_files=("tools/tm_answer_trace.py",),
@@ -96,16 +96,9 @@ PUBLIC_MODULES: tuple[PublishModule, ...] = (
     ),
     PublishModule(
         id="public-dashboard",
-        description="Local dashboard entrypoint and static assets; advanced hosted service features remain optional.",
+        description="Local dashboard package and static assets; private review/promote tools stay out of public core.",
         stability="core",
         package_roots=("packages/tigermemory-dashboard/src",),
-        tool_files=(
-            "tools/tm_cron_apply.py",
-            "tools/tm_review.py",
-            "tools/tm_review_tools.py",
-            "tools/tm_review_ui.py",
-            "tools/tm_self_evolution.py",
-        ),
         checks=(
             "tests/test_tm_cli.py",
             "tests/test_public_boundary.py",
@@ -172,7 +165,28 @@ PRIVATE_EXCLUDED_MODULES: tuple[PublishModule, ...] = (
         description="OpenMemory, Qdrant, Caddy, WSL service, and other hybrid deployment integrations.",
         stability="optional",
     ),
+    PublishModule(
+        id="private-dashboard-admin",
+        description="TigerMemory dogfood review UI helpers, promote actions, cron apply, and self-evolution pages.",
+        stability="private-excluded",
+    ),
 )
+
+
+PUBLIC_DASHBOARD_PRIVATE_TOOL_FILES = {
+    "tools/tm_cron_apply.py",
+    "tools/tm_review.py",
+    "tools/tm_review_tools.py",
+    "tools/tm_review_ui.py",
+    "tools/tm_self_evolution.py",
+}
+PUBLIC_SOURCE_PRIVATE_MARKERS = (
+    "tigermemory-wsl",
+    "tail9fe9e3",
+)
+PUBLIC_SOURCE_MARKER_ALLOWLIST = {
+    "packages/tigermemory-publish/src/tigermemory_publish/modules.py",
+}
 
 
 def _unique(values: list[str]) -> tuple[str, ...]:
@@ -311,6 +325,15 @@ def validate_public_boundaries(project_root: str | Path, module_id: str | None =
     private_modules = set(PRIVATE_PACKAGE_NAMES)
 
     for module in public_modules(module_id):
+        for tool_file in module.tool_files:
+            if module.id == "public-dashboard" and tool_file in PUBLIC_DASHBOARD_PRIVATE_TOOL_FILES:
+                violations.append(
+                    {
+                        "kind": "dashboard_admin_tool_in_public_core",
+                        "module": module.id,
+                        "path": tool_file,
+                    }
+                )
         for partition in module.wiki_partitions:
             if partition in private_wiki:
                 violations.append(
@@ -341,6 +364,65 @@ def validate_public_boundaries(project_root: str | Path, module_id: str | None =
                 marker in lowered for marker in ("openclaw", "investment", "supervisor", "internal-analysis")
             ):
                 violations.append({"kind": "private_tool_pattern", "module": module.id, "path": rel})
+
+    for module in public_modules(module_id):
+        scan_roots = (*module.package_roots, *module.data_dirs)
+        scan_files = (*module.top_files, *(src for src, _dst in module.mapped_files), *module.tool_files)
+        for rel in scan_files:
+            path = root / rel
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            rel_posix = path.relative_to(root).as_posix()
+            if rel_posix in PUBLIC_SOURCE_MARKER_ALLOWLIST:
+                continue
+            lowered = text.lower()
+            for marker in PUBLIC_SOURCE_PRIVATE_MARKERS:
+                if marker in lowered:
+                    violations.append(
+                        {
+                            "kind": "private_source_marker",
+                            "module": module.id,
+                            "path": rel,
+                            "detail": marker,
+                        }
+                    )
+        for rel_root in scan_roots:
+            source_root = root / rel_root
+            if not source_root.exists():
+                continue
+            for path in sorted(source_root.rglob("*")):
+                if not path.is_file() or path.suffix.lower() not in {
+                    ".py",
+                    ".md",
+                    ".txt",
+                    ".toml",
+                    ".json",
+                    ".js",
+                    ".html",
+                }:
+                    continue
+                rel_posix = path.relative_to(root).as_posix()
+                if rel_posix in PUBLIC_SOURCE_MARKER_ALLOWLIST:
+                    continue
+                try:
+                    text = path.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    continue
+                lowered = text.lower()
+                for marker in PUBLIC_SOURCE_PRIVATE_MARKERS:
+                    if marker in lowered:
+                        violations.append(
+                            {
+                                "kind": "private_source_marker",
+                                "module": module.id,
+                                "path": path.relative_to(root).as_posix(),
+                                "detail": marker,
+                            }
+                        )
 
     for rel_root in public_package_roots(module_id):
         source_root = root / rel_root

@@ -180,6 +180,32 @@ def test_profile_guide_local_explains_no_advanced_dependencies(tmp_path, monkeyp
     assert "does_not_require=WSL,Docker,OpenMemory,Qdrant,Caddy,npm" in out
 
 
+def test_llm_status_reports_provider_presence_without_secret(monkeypatch, capsys) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-secret-value")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-chat")
+
+    assert tigermemory_cli.main(["llm", "status", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema"] == "tigermemory-llm-status-v1"
+    assert payload["recommended_provider"] == "deepseek"
+    assert payload["llm_configured"] is True
+    deepseek = payload["providers"][0]
+    assert deepseek["id"] == "deepseek"
+    assert deepseek["configured"] is True
+    assert deepseek["api_key"] == {"name": "DEEPSEEK_API_KEY", "configured": True}
+    assert "sk-test-secret-value" not in json.dumps(payload)
+
+
+def test_llm_guide_points_to_deepseek(capsys) -> None:
+    assert tigermemory_cli.main(["llm", "guide"]) == 0
+
+    out = capsys.readouterr().out
+    assert "recommended_provider=deepseek" in out
+    assert "set=DEEPSEEK_API_KEY" in out
+    assert "fallback=tm ask --offline returns local evidence only" in out
+
+
 def test_dashboard_defaults_to_public_quickstart_port(monkeypatch) -> None:
     calls: list[tuple[str, list[str]]] = []
 
@@ -791,7 +817,7 @@ def test_published_snapshot_cli_detects_root_without_env(tmp_path) -> None:
     assert wiki_payload["results"][0]["path"] == "wiki/operations/project-canvas.md"
 
     dashboard_help = subprocess.run(
-        [sys.executable, str(snapshot / "tools" / "tm_review_ui.py"), "--help"],
+        [sys.executable, "-m", "tigermemory_cli", "dashboard", "--help"],
         cwd=snapshot,
         capture_output=True,
         text=True,
@@ -801,7 +827,7 @@ def test_published_snapshot_cli_detects_root_without_env(tmp_path) -> None:
         check=False,
     )
     assert dashboard_help.returncode == 0, dashboard_help.stderr
-    assert "Run tigermemory Memory Ops dashboard" in dashboard_help.stdout
+    assert "default: 9777" in dashboard_help.stdout
 
     wiki_cn = subprocess.run(
         [sys.executable, "-m", "tigermemory_cli", "search", "--scope", "wiki", "--query", "项目画布", "--size", "3"],

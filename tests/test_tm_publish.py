@@ -145,7 +145,8 @@ def _build_fake_repo(root: pathlib.Path) -> None:
                 "Do not run `npm install -g tigermemory` for this project. "
                 "That npm package is a different Node/TypeScript Claude Code memory server.\n\n"
                 "## Which Mode Should I Use?\n\n"
-                "Start with **local** unless you already know you need a shared memory service.\n\n"
+                "Start with **local + LLM** unless you already know you need a shared memory service.\n\n"
+                "Run `tm llm guide` and `tm llm status` before the full Wiki Admin path.\n\n"
                 "Use `tm ask --offline --query \"hello local memory\"` to return local evidence without AI.\n\n"
                 "Do not install WSL, Docker, Qdrant, Caddy, or OpenMemory just to try the basic mode.\n"
                 "Do not use `python -m tm`; use the installed `tm` console script.\n",
@@ -154,11 +155,18 @@ def _build_fake_repo(root: pathlib.Path) -> None:
         elif dst == "AGENTS.md":
             path.write_text(
                 "# public AGENTS\n\n"
+                "tm llm status checks provider configuration without printing secrets.\n"
                 "tm ask --offline returns local evidence only and must not call online Mem0.\n",
                 encoding="utf-8",
             )
         elif dst == "index.md":
-            path.write_text("# public index\n\nNo private endpoint here.\n\nUse `tm ask --offline` for local evidence.\n", encoding="utf-8")
+            path.write_text(
+                "# public index\n\n"
+                "No private endpoint here.\n\n"
+                "Run `tm llm status` before the LLM Wiki Admin path.\n\n"
+                "Use `tm ask --offline` for local evidence.\n",
+                encoding="utf-8",
+            )
         elif dst == "LICENSE":
             path.write_text("AGPL-3.0-or-later\n", encoding="utf-8")
         elif dst == "THIRD_PARTY_NOTICES.md":
@@ -314,7 +322,9 @@ def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
         "packages/tigermemory-publish/src/tigermemory_publish/templates/pyproject.toml=>pyproject.toml",
         "packages/tigermemory-publish/src/tigermemory_publish/templates/wiki/operations/project-canvas.md=>wiki/operations/project-canvas.md",
     ]
-    assert set(plan["tool_files"]) >= {"tools/tm_io.py", "tools/tm_review_ui.py"}
+    assert "tools/tm_io.py" in plan["tool_files"]
+    assert "tools/tm_review_ui.py" not in plan["tool_files"]
+    assert "tools/tm_review_tools.py" not in plan["tool_files"]
     assert "packages/tigermemory-dashboard/src" in plan["whole_dirs"]
     assert plan["tool_dirs"] == sorted(["tools/memory_answer"])
     assert plan["wiki_public_pages"] == ["wiki/systems/public-page.md"]
@@ -396,11 +406,14 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     assert "npm install -g tigermemory" in public_readme
     assert "different Node/TypeScript Claude Code memory server" in public_readme
     assert "Which Mode Should I Use?" in public_readme
-    assert "Start with **local**" in public_readme
+    assert "Start with **local + LLM**" in public_readme
+    assert "tm llm status" in public_readme
     assert "tm ask --offline" in public_readme
     assert "Do not install WSL, Docker, Qdrant, Caddy, or OpenMemory just to try the basic" in public_readme
     assert "Do not use `python -m tm`" in public_readme
+    assert "tm llm status" in (dest / "AGENTS.md").read_text(encoding="utf-8")
     assert "tm ask --offline" in (dest / "AGENTS.md").read_text(encoding="utf-8")
+    assert "tm llm status" in (dest / "index.md").read_text(encoding="utf-8")
     assert "tm ask --offline" in (dest / "index.md").read_text(encoding="utf-8")
     public_pyproject = (dest / "pyproject.toml").read_text(encoding="utf-8")
     assert "AGPL-3.0-or-later" in public_pyproject
@@ -415,6 +428,8 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     assert "TradingAgents" not in public_canvas
     assert not (dest / "tools" / "tm_dummy.py").exists()
     assert (dest / "tools" / "tm_io.py").is_file()
+    assert not (dest / "tools" / "tm_review_ui.py").exists()
+    assert not (dest / "tools" / "tm_review_tools.py").exists()
     dashboard_static = dest / "packages" / "tigermemory-dashboard" / "src" / "tigermemory_dashboard" / "static"
     assert (dashboard_static / "start.html").is_file()
     assert (dashboard_static / "review.html").is_file()

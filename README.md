@@ -1,14 +1,20 @@
 # TigerMemory
 
-TigerMemory is a local-first LLM wiki and memory runtime. It keeps durable
-knowledge in Markdown + Git, uses a local SQLite memory store by default, and
-can optionally connect to OpenMemory/Mem0 for advanced cross-device memory.
+TigerMemory is an LLM-first local Wiki and memory admin starter. It keeps
+durable knowledge in Markdown + Git, uses a local SQLite memory store by
+default, and is designed for an AI model to help organize, review, and answer
+from your own Wiki with sources.
+
+DeepSeek through an OpenAI-compatible endpoint is the recommended first LLM
+provider. OpenMemory/Mem0 remains an advanced optional layer for cross-device
+memory.
 
 ## What You Need
 
 - Python 3.10 or newer.
 - Git.
-- No Docker, WSL, OpenMemory, Qdrant, Caddy, or npm for the basic mode.
+- An LLM API key for the full Wiki Admin experience. DeepSeek is recommended.
+- No Docker, WSL, OpenMemory, Qdrant, Caddy, or npm for the first-run local path.
 
 Node/npm is only used by optional subprojects such as the OpenClaw context
 engine plugin under `deploy/openclaw-ce/` and ingestion experiments under
@@ -45,6 +51,8 @@ cd tigermemory
 py -m pip install .
 tm init
 tm profile show
+tm llm guide
+tm llm status
 ```
 
 The installed command is the `tm` console script. Do not use `python -m tm`;
@@ -55,6 +63,11 @@ Expected profile after `tm init`:
 ```text
 effective=local
 ```
+
+`tm llm status` only checks whether provider environment variables are present.
+It does not call the model and does not print secrets. For the recommended
+DeepSeek path, set `DEEPSEEK_API_KEY`; optionally set `DEEPSEEK_BASE_URL` and
+`DEEPSEEK_MODEL`.
 
 Write, search, and verify local memory without Docker:
 
@@ -87,11 +100,13 @@ port `1998`, so public first-run testing does not collide with that service.
 
 ## Which Mode Should I Use?
 
-Start with **local** unless you already know you need a shared memory service.
+Start with **local + LLM** unless you already know you need a shared memory
+service.
 
 | Need | Use | Requires |
 |---|---|---|
-| Try TigerMemory, keep personal notes local, search Markdown Wiki and local memory | `local` | Python + Git |
+| Try TigerMemory as an AI Wiki Admin with local data | `local + LLM` | Python + Git + DeepSeek/OpenAI-compatible key |
+| Inspect evidence without model calls | offline fallback | Python + Git |
 | Connect multiple machines or IDE agents to the same live memory layer | `hybrid` | OpenMemory/Mem0 service and extra deployment setup |
 | Develop the optional OpenClaw Context Engine plugin | optional subproject | Node/npm for that subproject only |
 
@@ -101,8 +116,8 @@ mode. Those pieces are advanced integrations and can be added later.
 ## Runtime Profiles
 
 - `local`: default basic mode. Uses Markdown + Git + local SQLite + FTS5
-  lexical search. It is intended for new users and does not require external
-  services.
+  lexical search. Pair it with an LLM provider for the intended Wiki Admin
+  experience.
 - `hybrid`: advanced mode. Requires OpenMemory/Mem0 and can use Qdrant/Caddy
   and multi-IDE integrations.
 
@@ -111,6 +126,8 @@ Useful commands:
 ```powershell
 tm profile guide local
 tm profile guide hybrid
+tm llm guide
+tm llm status --json
 tm profile set hybrid
 tm profile set local
 ```
