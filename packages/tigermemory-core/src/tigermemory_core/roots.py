@@ -30,7 +30,10 @@ def resolve_app_root(cwd: pathlib.Path | None = None) -> pathlib.Path:
         return explicit
     here = pathlib.Path(__file__).resolve()
     for ancestor in [here.parent, *here.parents]:
-        if (ancestor / "pyproject.toml").is_file() or (ancestor / "tigermemory_cli.py").is_file():
+        if (ancestor / "tigermemory_cli.py").is_file():
+            return ancestor
+    for ancestor in [here.parent, *here.parents]:
+        if (ancestor / "pyproject.toml").is_file():
             return ancestor
     return (cwd or pathlib.Path.cwd()).resolve()
 

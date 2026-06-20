@@ -96,6 +96,8 @@ jobs:
           public_core="$(mktemp -d)"
           instance="$(mktemp -d)"
           python3 tools/tm_io.py publish --dest "$public_core" --json --audit-pii --target public-core --split-report
+          snapshot="$(mktemp -d)"
+          tm publish --dest "$snapshot" --json --audit-pii
 
           python3 -m venv .tmp/public-core-smoke-venv
           . .tmp/public-core-smoke-venv/bin/activate
