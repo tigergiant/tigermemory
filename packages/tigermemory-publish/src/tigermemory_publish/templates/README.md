@@ -53,6 +53,7 @@ tm init
 tm profile show
 tm llm guide
 tm llm status
+tm admin guide
 ```
 
 Editable install is recommended for the public source-first workflow: code stays
@@ -70,6 +71,19 @@ effective=local
 checks whether provider environment variables are present. For the recommended
 DeepSeek path, set `DEEPSEEK_API_KEY`; optionally set `DEEPSEEK_BASE_URL` and
 `DEEPSEEK_MODEL`.
+
+Draft a reviewable Wiki proposal with the LLM Admin flow:
+
+```powershell
+Get-Content .\notes.md | tm admin propose --partition systems --title "My Notes"
+tm admin list
+tm admin show "<proposal-id>"
+tm admin approve "<proposal-id>"
+```
+
+`tm admin propose` writes a proposal under `runtime/tigermemory/admin-proposals/`.
+It does not modify `wiki/`. `tm admin approve` is the explicit user action that
+writes the generated Markdown page to the proposed `wiki/<partition>/...` path.
 
 Write, search, and verify local memory:
 

@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import datetime
+import hashlib
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
 
 PROFILE_VALUES = {"local", "hybrid"}
+ADMIN_PARTITIONS = ("brand", "investment", "operations", "production", "systems", "self-evolution")
+ADMIN_PROPOSAL_SCHEMA = "tigermemory-admin-proposal-v1"
+ADMIN_PROPOSAL_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 PASSTHROUGH_COMMANDS = {
     "doctor": ("tools/tm_io.py", ["agent-doctor"]),
     "lessons": ("tools/tm_lessons.py", []),
@@ -281,6 +287,239 @@ def cmd_llm(args: argparse.Namespace) -> int:
         print("security=keys stay in your shell or local runtime env; do not commit them")
         return 0
     print("llm command required: status|guide", file=sys.stderr)
+    return 2
+
+
+def _admin_proposals_dir() -> pathlib.Path:
+    return REPO_ROOT / "runtime" / "tigermemory" / "admin-proposals"
+
+
+def _admin_now_iso() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _admin_read_source(args: argparse.Namespace) -> tuple[str | None, dict[str, object]]:
+    if getattr(args, "source_file", None):
+        path = pathlib.Path(args.source_file).expanduser()
+        if not path.is_absolute():
+            path = pathlib.Path.cwd() / path
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as e:
+            print(f"cannot read source file: {e}", file=sys.stderr)
+            return None, {}
+        return text, {"kind": "file", "path": str(path), "sha256_12": hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]}
+    text = sys.stdin.read()
+    if not text.strip():
+        print("source text required on stdin or via --source-file", file=sys.stderr)
+        return None, {}
+    return text, {"kind": "stdin", "sha256_12": hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]}
+
+
+def _admin_proposal_id(title: str, text: str) -> str:
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    digest = hashlib.sha256(f"{title}\n{text}".encode("utf-8")).hexdigest()[:8]
+    return f"{stamp}-{digest}"
+
+
+def _admin_safe_json_path(proposal_id: str) -> pathlib.Path:
+    if not ADMIN_PROPOSAL_ID_RE.fullmatch(proposal_id):
+        raise ValueError("invalid proposal id")
+    root = _admin_proposals_dir().resolve()
+    path = (root / f"{proposal_id}.json").resolve()
+    if root not in [path.parent, *path.parents]:
+        raise ValueError("proposal id escapes proposal directory")
+    return path
+
+
+def _admin_load_proposal(proposal_id: str) -> dict:
+    path = _admin_safe_json_path(proposal_id)
+    if not path.is_file():
+        raise FileNotFoundError(f"proposal not found: {proposal_id}")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if data.get("schema") != ADMIN_PROPOSAL_SCHEMA:
+        raise ValueError("unsupported proposal schema")
+    data["_path"] = str(path)
+    return data
+
+
+def _admin_write_proposal(data: dict) -> pathlib.Path:
+    proposal_id = str(data["id"])
+    path = _admin_safe_json_path(proposal_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def _admin_target_path(data: dict) -> pathlib.Path:
+    target = str(data.get("target_path") or "")
+    normalized = target.replace("\\", "/").strip("/")
+    if not normalized.startswith("wiki/") or "/../" in f"/{normalized}/":
+        raise ValueError("proposal target_path must stay under wiki/")
+    if normalized.startswith("wiki/person/"):
+        raise ValueError("person pages are not supported by the public Wiki Admin flow")
+    path = (REPO_ROOT / normalized).resolve()
+    root = REPO_ROOT.resolve()
+    if root not in [path.parent, *path.parents]:
+        raise ValueError("proposal target_path escapes instance root")
+    return path
+
+
+def _admin_print_or_json(payload: dict | list[dict], *, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    if isinstance(payload, list):
+        for item in payload:
+            print(
+                f"{item.get('id')} status={item.get('status')} "
+                f"target={item.get('target_path', '')} title={item.get('title', '')}"
+            )
+        return
+    for key, value in payload.items():
+        if key.startswith("_"):
+            continue
+        if isinstance(value, (dict, list)):
+            print(f"{key}={json.dumps(value, ensure_ascii=False)}")
+        else:
+            print(f"{key}={value}")
+
+
+def cmd_admin(args: argparse.Namespace) -> int:
+    if args.admin_command == "guide":
+        print("purpose=LLM Wiki Admin proposal workflow")
+        print("propose=cat notes.md | tm admin propose --partition systems --title \"My Notes\"")
+        print("review=tm admin list; tm admin show <proposal-id>")
+        print("approve=tm admin approve <proposal-id>")
+        print("safety=propose only writes runtime proposals; approve is the explicit user action that writes wiki")
+        print("fallback=tm ask --offline returns evidence only")
+        return 0
+
+    if args.admin_command == "propose":
+        text, source = _admin_read_source(args)
+        if text is None:
+            return 2
+        try:
+            import tigermemory_core as tm_core
+
+            proposal = tm_core.propose_wiki_admin_page(
+                text,
+                partition=args.partition,
+                title=args.title,
+                source=str(source.get("path") or source.get("kind") or "stdin"),
+                timeout=args.timeout,
+            )
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 2
+        except RuntimeError as e:
+            print(str(e), file=sys.stderr)
+            return 4
+        proposal_id = _admin_proposal_id(args.title, text)
+        created_at = _admin_now_iso()
+        proposal.update({
+            "schema": ADMIN_PROPOSAL_SCHEMA,
+            "id": proposal_id,
+            "status": "pending",
+            "created_at": created_at,
+            "source": source,
+            "user_review_required": True,
+        })
+        if args.dry_run:
+            _admin_print_or_json(proposal, as_json=args.json)
+            return 0
+        path = _admin_write_proposal(proposal)
+        proposal["proposal_path"] = str(path)
+        _admin_print_or_json(proposal, as_json=args.json)
+        return 0
+
+    if args.admin_command == "list":
+        root = _admin_proposals_dir()
+        items: list[dict] = []
+        for path in sorted(root.glob("*.json")) if root.is_dir() else []:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if data.get("schema") == ADMIN_PROPOSAL_SCHEMA:
+                items.append({
+                    "id": data.get("id") or path.stem,
+                    "status": data.get("status", "unknown"),
+                    "title": data.get("title", ""),
+                    "target_path": data.get("target_path", ""),
+                    "created_at": data.get("created_at", ""),
+                })
+        _admin_print_or_json(items, as_json=args.json)
+        return 0
+
+    if args.admin_command == "show":
+        try:
+            data = _admin_load_proposal(args.proposal_id)
+        except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
+            print(str(e), file=sys.stderr)
+            return 2
+        if args.json:
+            _admin_print_or_json(data, as_json=True)
+        else:
+            _admin_print_or_json({
+                "id": data.get("id"),
+                "status": data.get("status"),
+                "title": data.get("title"),
+                "target_path": data.get("target_path"),
+                "rationale": data.get("rationale"),
+                "confidence": data.get("confidence"),
+                "wiki_markdown_preview": str(data.get("wiki_markdown") or "")[:1200],
+            }, as_json=False)
+        return 0
+
+    if args.admin_command == "approve":
+        try:
+            data = _admin_load_proposal(args.proposal_id)
+            if data.get("status") != "pending":
+                raise ValueError(f"proposal is not pending: {data.get('status')}")
+            if data.get("should_write") is False:
+                raise ValueError("proposal is marked should_write=false")
+            target = _admin_target_path(data)
+            if target.exists() and not args.force:
+                raise ValueError(f"target exists; rerun with --force to overwrite: {data.get('target_path')}")
+            wiki_markdown = str(data.get("wiki_markdown") or "").strip()
+            if not wiki_markdown.startswith("---\n"):
+                raise ValueError("proposal wiki_markdown is missing frontmatter")
+            if args.dry_run:
+                payload = {"ok": True, "dry_run": True, "id": data.get("id"), "target_path": data.get("target_path")}
+                _admin_print_or_json(payload, as_json=args.json)
+                return 0
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(wiki_markdown.rstrip() + "\n", encoding="utf-8")
+            data["status"] = "approved"
+            data["approved_at"] = _admin_now_iso()
+            data["written_path"] = str(target)
+            _admin_write_proposal(data)
+        except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
+            print(str(e), file=sys.stderr)
+            return 2
+        payload = {"ok": True, "id": data.get("id"), "status": data.get("status"), "target_path": data.get("target_path")}
+        _admin_print_or_json(payload, as_json=args.json)
+        return 0
+
+    if args.admin_command == "reject":
+        try:
+            data = _admin_load_proposal(args.proposal_id)
+            if data.get("status") != "pending":
+                raise ValueError(f"proposal is not pending: {data.get('status')}")
+            data["status"] = "rejected"
+            data["rejected_at"] = _admin_now_iso()
+            if args.reason:
+                data["reject_reason"] = args.reason[:500]
+            _admin_write_proposal(data)
+        except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
+            print(str(e), file=sys.stderr)
+            return 2
+        payload = {"ok": True, "id": data.get("id"), "status": data.get("status")}
+        _admin_print_or_json(payload, as_json=args.json)
+        return 0
+
+    print("admin command required: guide|propose|list|show|approve|reject", file=sys.stderr)
     return 2
 
 
@@ -565,6 +804,37 @@ def build_parser() -> argparse.ArgumentParser:
     llm_status.set_defaults(func=cmd_llm)
     llm_guide = llm_sub.add_parser("guide", help="print the recommended LLM setup path")
     llm_guide.set_defaults(func=cmd_llm)
+
+    admin_p = sub.add_parser("admin", help="LLM Wiki Admin proposal workflow")
+    admin_sub = admin_p.add_subparsers(dest="admin_command", required=True)
+    admin_guide = admin_sub.add_parser("guide", help="explain the proposal-first admin workflow")
+    admin_guide.set_defaults(func=cmd_admin)
+    admin_propose = admin_sub.add_parser("propose", help="draft a reviewable wiki proposal from source text")
+    admin_propose.add_argument("--partition", required=True, choices=ADMIN_PARTITIONS)
+    admin_propose.add_argument("--title", required=True)
+    admin_propose.add_argument("--source-file", default=None)
+    admin_propose.add_argument("--timeout", type=int, default=20)
+    admin_propose.add_argument("--dry-run", action="store_true")
+    admin_propose.add_argument("--json", action="store_true")
+    admin_propose.set_defaults(func=cmd_admin)
+    admin_list = admin_sub.add_parser("list", help="list pending and handled wiki admin proposals")
+    admin_list.add_argument("--json", action="store_true")
+    admin_list.set_defaults(func=cmd_admin)
+    admin_show = admin_sub.add_parser("show", help="show a wiki admin proposal")
+    admin_show.add_argument("proposal_id")
+    admin_show.add_argument("--json", action="store_true")
+    admin_show.set_defaults(func=cmd_admin)
+    admin_approve = admin_sub.add_parser("approve", help="write an approved proposal to its wiki target")
+    admin_approve.add_argument("proposal_id")
+    admin_approve.add_argument("--dry-run", action="store_true")
+    admin_approve.add_argument("--force", action="store_true", help="allow overwriting an existing target page")
+    admin_approve.add_argument("--json", action="store_true")
+    admin_approve.set_defaults(func=cmd_admin)
+    admin_reject = admin_sub.add_parser("reject", help="mark a proposal as rejected")
+    admin_reject.add_argument("proposal_id")
+    admin_reject.add_argument("--reason", default="")
+    admin_reject.add_argument("--json", action="store_true")
+    admin_reject.set_defaults(func=cmd_admin)
 
     doctor_p = sub.add_parser("doctor", help="run agent doctor")
     doctor_p.add_argument("args", nargs=argparse.REMAINDER)

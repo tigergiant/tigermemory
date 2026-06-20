@@ -127,6 +127,7 @@ __all__ = [
     "mem0_write",
     "now",
     "primary_search_scope",
+    "propose_wiki_admin_page",
     "resolve_app_root",
     "resolve_instance_root",
     "verify_memory_record",
@@ -3825,6 +3826,44 @@ SUGGEST_PATCH_MAX_SUMMARY_CHARS = 6000    # cap input summary
 SUGGEST_PATCH_DEFAULT_MAX = 5
 SUGGEST_PATCH_TYPES = {"append", "update_section", "new_section"}
 
+WIKI_ADMIN_PUBLIC_PARTITIONS = {
+    "brand",
+    "investment",
+    "operations",
+    "production",
+    "systems",
+    "self-evolution",
+}
+
+WIKI_ADMIN_PROPOSAL_PROMPT = """你是 TigerMemory 公开版的 Wiki Admin。
+
+任务：把用户提供的资料整理成一个“待用户审批”的 Markdown Wiki 页面草案。
+
+硬边界：
+1. 只输出 JSON 对象，不要输出 markdown 代码块或解释。
+2. 不要声称已经写入长期 Wiki；你只是在生成草案。
+3. 不要编造来源。资料里没有来源时，在 sources 里写 "user-provided text"。
+4. 不要包含密钥、token、密码、身份证、银行卡、家庭住址等敏感信息。
+5. 不要写 person/private 页面；涉及个人隐私时 should_write=false。
+6. 内容必须区分已验证、推断、待确认；没有证据的结论放入待确认。
+
+输出 JSON 格式：
+{
+  "should_write": true,
+  "title": "1-80 字页面标题",
+  "slug": "lowercase-ascii-slug",
+  "summary": "200 字以内摘要",
+  "body_markdown": "不含 frontmatter 和 H1 的正文，必须含 ## 摘要 与 ## 来源",
+  "rationale": "为什么值得进长期 Wiki",
+  "confidence": 0-100,
+  "aliases": ["可选别名"],
+  "evidence_refs": ["来源或证据"]
+}
+
+如果不适合写入 Wiki，输出：
+{"should_write": false, "rationale": "...", "confidence": 0, "evidence_refs": []}
+"""
+
 SUGGEST_PATCH_PROMPT = """你是 tigermemory wiki 的编辑助手。根据对话摘要和现有 wiki 页目录，判断该对话是否应该更新某些已有 wiki 页。
 
 严格规则：
@@ -3978,6 +4017,176 @@ def suggest_wiki_patches(
         })
 
     return valid[:max_patches]
+
+
+_ADMIN_SLUG_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_ADMIN_PRIVATE_KEY_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
+_ADMIN_BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{24,}")
+_ADMIN_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(api[_-]?key|secret|token|password|passwd)\b\s*[:=]\s*['\"]?([^\s'\"`]{12,})"
+)
+
+
+def _admin_yaml_quote(value: str) -> str:
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def _admin_slug(value: str, *, fallback_seed: str) -> str:
+    raw = str(value or "").strip().lower()
+    raw = raw.replace("_", "-").replace(" ", "-")
+    raw = re.sub(r"[^a-z0-9\-]+", "-", raw)
+    raw = re.sub(r"-{2,}", "-", raw).strip("-")
+    if raw and SLUG_RE.fullmatch(raw):
+        return raw[:80].strip("-") or raw
+    tokens = _ADMIN_SLUG_TOKEN_RE.findall(str(fallback_seed or "").lower())
+    if tokens:
+        return "-".join(tokens)[:80].strip("-") or "wiki-admin-proposal"
+    digest = hashlib.sha256(str(fallback_seed or value or "wiki-admin-proposal").encode("utf-8")).hexdigest()[:10]
+    return f"wiki-admin-{digest}"
+
+
+def _admin_clean_title(value: str, fallback: str) -> str:
+    title = re.sub(r"\s+", " ", str(value or "").strip()).strip("# ")
+    if not title:
+        title = fallback
+    if len(title) > 80:
+        title = title[:79].rstrip() + "…"
+    return title or "TigerMemory Wiki Admin Proposal"
+
+
+def _admin_string_list(value: Any, *, limit: int = 8) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        text = re.sub(r"\s+", " ", str(item or "").strip())
+        if text:
+            out.append(text[:200])
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _admin_confidence(value: Any) -> int:
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError):
+        number = 0
+    return max(0, min(100, number))
+
+
+def _admin_body_with_required_sections(body: str, summary: str, evidence_refs: list[str]) -> str:
+    text = str(body or "").strip()
+    if not text:
+        text = f"## 摘要\n\n{summary or '待补充摘要。'}\n"
+    if "## 摘要" not in text:
+        text = f"## 摘要\n\n{summary or '待补充摘要。'}\n\n{text}"
+    if "## 来源" not in text:
+        refs = evidence_refs or ["user-provided text"]
+        text = text.rstrip() + "\n\n## 来源\n\n" + "\n".join(f"- {ref}" for ref in refs) + "\n"
+    return text.rstrip() + "\n"
+
+
+def _admin_secret_like_reason(text: str) -> str | None:
+    if _ADMIN_PRIVATE_KEY_RE.search(text):
+        return "private_key"
+    if _ADMIN_BEARER_RE.search(text):
+        return "bearer_token"
+    if _ADMIN_SECRET_ASSIGNMENT_RE.search(text):
+        return "secret_assignment"
+    return None
+
+
+def propose_wiki_admin_page(
+    text: str,
+    *,
+    partition: str,
+    title: str = "",
+    source: str = "user-provided text",
+    timeout: int = REFINE_DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    """Use the configured DeepSeek-compatible LLM to draft a reviewable wiki page proposal.
+
+    The function returns a proposal payload only. It never writes wiki files and
+    never commits. Callers must put the payload through an explicit human review
+    step before writing the generated markdown to disk.
+    """
+    validate_partition(partition)
+    if partition not in WIKI_ADMIN_PUBLIC_PARTITIONS:
+        raise ValueError(f"partition '{partition}' is not supported by the public Wiki Admin proposal flow")
+    source_text = str(text or "").strip()
+    if len(source_text) < 20:
+        raise ValueError("proposal source text must be at least 20 characters")
+    secret_reason = _admin_secret_like_reason(source_text)
+    if secret_reason:
+        raise ValueError(f"proposal source text appears to contain {secret_reason}; remove secrets before calling an online LLM")
+
+    fallback_title = _admin_clean_title(title, "TigerMemory Wiki Admin Proposal")
+    user_msg = (
+        f"target_partition: {partition}\n"
+        f"preferred_title: {fallback_title}\n"
+        f"source_ref: {source or 'user-provided text'}\n\n"
+        f"资料：\n{source_text[:12000]}\n\n"
+        "请输出 JSON 对象。"
+    )
+    ok, parsed = _call_deepseek_json(
+        WIKI_ADMIN_PROPOSAL_PROMPT,
+        user_msg,
+        timeout=timeout,
+        temperature=0.1,
+        max_tokens=1600,
+        purpose="wiki_admin_proposal",
+    )
+    if not ok:
+        raise RuntimeError(str(parsed))
+    if not isinstance(parsed, dict):
+        raise RuntimeError("malformed Wiki Admin proposal response")
+    if parsed.get("should_write") is False:
+        rationale = str(parsed.get("rationale") or "model judged this source unsuitable for wiki")
+        return {
+            "schema": "tigermemory-admin-proposal-v1",
+            "should_write": False,
+            "partition": partition,
+            "title": fallback_title,
+            "rationale": rationale[:500],
+            "confidence": _admin_confidence(parsed.get("confidence")),
+            "evidence_refs": _admin_string_list(parsed.get("evidence_refs")),
+            "user_review_required": True,
+        }
+
+    proposal_title = _admin_clean_title(parsed.get("title"), fallback_title)
+    summary = re.sub(r"\s+", " ", str(parsed.get("summary") or "").strip())[:220]
+    evidence_refs = _admin_string_list(parsed.get("evidence_refs"))
+    aliases = _admin_string_list(parsed.get("aliases"), limit=6)
+    slug = _admin_slug(str(parsed.get("slug") or ""), fallback_seed=f"{proposal_title} {source_text[:200]}")
+    target_path = f"wiki/{partition}/{slug}.md"
+    body = _admin_body_with_required_sections(str(parsed.get("body_markdown") or ""), summary, evidence_refs)
+    fm_lines = [
+        "owner: human",
+        "status: active",
+        f"title: {_admin_yaml_quote(proposal_title)}",
+    ]
+    if aliases:
+        fm_lines.append("aliases:")
+        for alias in aliases:
+            fm_lines.append(f"  - {_admin_yaml_quote(alias)}")
+    wiki_markdown = render_wiki_body("\n".join(fm_lines), body)
+    return {
+        "schema": "tigermemory-admin-proposal-v1",
+        "should_write": True,
+        "partition": partition,
+        "title": proposal_title,
+        "slug": slug,
+        "target_path": target_path,
+        "action": "create",
+        "summary": summary,
+        "rationale": str(parsed.get("rationale") or "").strip()[:500],
+        "confidence": _admin_confidence(parsed.get("confidence")),
+        "aliases": aliases,
+        "evidence_refs": evidence_refs or [source or "user-provided text"],
+        "wiki_markdown": wiki_markdown,
+        "user_review_required": True,
+    }
 
 
 def save_wiki_patches_to_inbox(

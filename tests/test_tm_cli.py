@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import pathlib
 import json
 import os
@@ -204,6 +205,86 @@ def test_llm_guide_points_to_deepseek(capsys) -> None:
     assert "recommended_provider=deepseek" in out
     assert "set=DEEPSEEK_API_KEY" in out
     assert "fallback=tm ask --offline returns local evidence only" in out
+
+
+def test_admin_guide_explains_proposal_first_flow(capsys) -> None:
+    assert tigermemory_cli.main(["admin", "guide"]) == 0
+
+    out = capsys.readouterr().out
+    assert "propose=" in out
+    assert "approve=" in out
+    assert "propose only writes runtime proposals" in out
+
+
+def test_admin_propose_and_approve_roundtrip(tmp_path, monkeypatch, capsys) -> None:
+    fake_core = types.ModuleType("tigermemory_core")
+
+    def fake_propose_wiki_admin_page(text, *, partition, title, source, timeout):
+        assert "source material" in text
+        assert partition == "systems"
+        assert title == "Starter Admin"
+        return {
+            "schema": "tigermemory-admin-proposal-v1",
+            "should_write": True,
+            "partition": partition,
+            "title": title,
+            "slug": "starter-admin",
+            "target_path": "wiki/systems/starter-admin.md",
+            "action": "create",
+            "summary": "Admin summary",
+            "rationale": "Useful durable note.",
+            "confidence": 91,
+            "evidence_refs": [source],
+            "wiki_markdown": "---\nowner: human\nstatus: active\nupdated: 2026-06-20\n---\n\n# Starter Admin\n\n## 摘要\n\nAdmin summary.\n\n## 来源\n\n- stdin\n",
+            "user_review_required": True,
+        }
+
+    fake_core.propose_wiki_admin_page = fake_propose_wiki_admin_page
+    monkeypatch.setitem(sys.modules, "tigermemory_core", fake_core)
+    monkeypatch.setattr(tigermemory_cli, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("source material worth preserving in a wiki proposal"))
+
+    assert tigermemory_cli.main(["admin", "propose", "--partition", "systems", "--title", "Starter Admin", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    proposal_id = payload["id"]
+    assert payload["status"] == "pending"
+    assert payload["user_review_required"] is True
+    assert (tmp_path / "runtime" / "tigermemory" / "admin-proposals" / f"{proposal_id}.json").is_file()
+    assert not (tmp_path / "wiki" / "systems" / "starter-admin.md").exists()
+
+    assert tigermemory_cli.main(["admin", "approve", proposal_id, "--json"]) == 0
+
+    approved = json.loads(capsys.readouterr().out)
+    assert approved["status"] == "approved"
+    page = tmp_path / "wiki" / "systems" / "starter-admin.md"
+    assert page.is_file()
+    assert "Admin summary" in page.read_text(encoding="utf-8")
+    stored = json.loads((tmp_path / "runtime" / "tigermemory" / "admin-proposals" / f"{proposal_id}.json").read_text(encoding="utf-8"))
+    assert stored["status"] == "approved"
+
+
+def test_admin_approve_refuses_existing_target_without_force(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(tigermemory_cli, "REPO_ROOT", tmp_path)
+    target = tmp_path / "wiki" / "systems" / "existing.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("# Existing\n", encoding="utf-8")
+    proposal = {
+        "schema": "tigermemory-admin-proposal-v1",
+        "id": "unit-existing",
+        "status": "pending",
+        "should_write": True,
+        "title": "Existing",
+        "target_path": "wiki/systems/existing.md",
+        "wiki_markdown": "---\nowner: human\nstatus: active\nupdated: 2026-06-20\n---\n\n# Existing\n\n## 摘要\n\nNew.\n\n## 来源\n\n- test\n",
+    }
+    tigermemory_cli._admin_write_proposal(proposal)
+
+    assert tigermemory_cli.main(["admin", "approve", "unit-existing"]) == 2
+
+    err = capsys.readouterr().err
+    assert "target exists" in err
+    assert target.read_text(encoding="utf-8") == "# Existing\n"
 
 
 def test_dashboard_defaults_to_public_quickstart_port(monkeypatch) -> None:

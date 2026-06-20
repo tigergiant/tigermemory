@@ -324,8 +324,12 @@ def test_public_templates_document_source_first_update_install() -> None:
     assert "py -m pip install ." in readme
     assert "py -m pip install -e ." in readme
     assert "tm update status" in readme
+    assert "tm admin guide" in readme
+    assert "tm admin propose" in readme
+    assert "propose` writes a proposal" in readme
     assert "git reset --hard" in readme
     assert "py -m pip install ." in index
+    assert "tm admin guide" in index
     assert "py -m pip install -e ." not in index
 
 

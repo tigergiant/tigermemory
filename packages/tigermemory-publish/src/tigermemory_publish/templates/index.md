@@ -11,6 +11,7 @@ Admin experience.
 - Run `py -m pip install .`.
 - Run `tm init` and `tm profile show`.
 - Run `tm llm guide` and `tm llm status`.
+- Run `tm admin guide` before asking an AI to maintain the Wiki.
 - Use `tm profile guide local` before changing runtime mode.
 - Use `tm ask --offline` when you want local evidence without connecting an AI
   model; it is a fallback, not the full LLM answer path.

@@ -44,6 +44,7 @@ tm init
 tm profile show
 tm llm guide
 tm llm status
+tm admin guide
 "hello local memory" | tm write-memory --agent codex --topic systems
 tm search --query "hello local memory"
 tm ask --offline --query "hello local memory"
@@ -61,6 +62,8 @@ When acting as the TigerMemory Wiki Admin:
 - Prefer durable Markdown pages for stable knowledge.
 - Prefer local memory for recent, short-lived conversation context.
 - Generate reviewable proposals before changing long-term Wiki facts.
+- Use `tm admin propose` to draft into `runtime/tigermemory/admin-proposals/`;
+  only `tm admin approve` may write the generated page to `wiki/`.
 - Include source paths or evidence snippets when answering.
 - Keep private data, person notes, investment data, runtime env files, and
   review archives out of public snapshots.
