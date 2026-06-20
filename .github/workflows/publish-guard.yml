@@ -37,6 +37,10 @@ jobs:
             packages/tigermemory-publish/tests/test_tigermemory_publish.py \
             tests/test_pre_push_publish_smoke.py \
             tests/test_public_boundary.py \
+            tests/test_dashboard_update_status.py \
+            tests/test_true_split_publish.py \
+            packages/tigermemory-doctor/tests/test_diagnose.py \
+            packages/tigermemory-update/tests/test_tigermemory_update.py \
             -q
 
       - name: Publish snapshot audit via package command
@@ -99,6 +103,8 @@ jobs:
 
           TIGERMEMORY_INSTANCE_ROOT="$instance" tm init --profile local
           test -f "$instance/runtime/tigermemory/profile.env"
+          TIGERMEMORY_INSTANCE_ROOT="$instance" tm update status --json | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["schema"] == "tigermemory-update-status-v1", data'
+          TIGERMEMORY_INSTANCE_ROOT="$instance" tm update apply --dry-run --json | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["applied"] is False, data' || test "$?" = "4"
           memory_id="$(printf 'external instance memory' | TIGERMEMORY_INSTANCE_ROOT="$instance" tm write-memory --agent codex --topic systems | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
           TIGERMEMORY_INSTANCE_ROOT="$instance" tm verify --id "$memory_id" --terms "external instance" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["direct_readback_ok"], data'
 
