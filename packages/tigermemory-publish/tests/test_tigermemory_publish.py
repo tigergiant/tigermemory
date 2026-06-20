@@ -308,14 +308,16 @@ def test_parse_frontmatter_public_rejects_false_like_values() -> None:
         assert tigermemory_publish.parse_frontmatter_public(content) is False
 
 
-def test_public_templates_use_regular_install_not_editable_install() -> None:
+def test_public_templates_document_source_first_update_install() -> None:
     templates = pathlib.Path(tigermemory_publish.__file__).resolve().parent / "templates"
     readme = (templates / "README.md").read_text(encoding="utf-8")
     index = (templates / "index.md").read_text(encoding="utf-8")
 
     assert "py -m pip install ." in readme
+    assert "py -m pip install -e ." in readme
+    assert "tm update status" in readme
+    assert "git reset --hard" in readme
     assert "py -m pip install ." in index
-    assert "py -m pip install -e ." not in readme
     assert "py -m pip install -e ." not in index
 
 

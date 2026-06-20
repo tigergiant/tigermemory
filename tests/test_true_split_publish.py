@@ -60,6 +60,7 @@ def _publish_public_core(dest: pathlib.Path, repo_root: pathlib.Path) -> None:
                 '  "packages/tigermemory-protocols/src",',
                 '  "packages/tigermemory-route/src",',
                 '  "packages/tigermemory-search/src",',
+                '  "packages/tigermemory-update/src",',
                 "]",
                 "",
             ]
@@ -150,6 +151,7 @@ def test_public_core_snapshot_can_use_external_instance_root(tmp_path: pathlib.P
     env.pop("MEM0_BASE_URL", None)
     env.pop("MEM0_URL", None)
     env.pop("MEM0_USER_ID", None)
+    env.pop("PYTHONPATH", None)
     env["PYTHONIOENCODING"] = "utf-8"
 
     init = subprocess.run(
@@ -164,6 +166,36 @@ def test_public_core_snapshot_can_use_external_instance_root(tmp_path: pathlib.P
     )
     assert init.returncode == 0, init.stderr
     assert (instance_root / "runtime" / "tigermemory" / "profile.env").is_file()
+
+    update_status = subprocess.run(
+        [str(tm), "update", "status", "--json"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+        check=False,
+    )
+    assert update_status.returncode == 0, update_status.stderr
+    update_status_payload = json.loads(update_status.stdout)
+    assert update_status_payload["schema"] == "tigermemory-update-status-v1"
+    assert update_status_payload["source_mode"] in {"installed_package", "git_source", "editable_install"}
+
+    update_apply = subprocess.run(
+        [str(tm), "update", "apply", "--dry-run", "--json"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+        check=False,
+    )
+    assert update_apply.returncode in {0, 4}, update_apply.stderr
+    update_apply_payload = json.loads(update_apply.stdout)
+    assert update_apply_payload["applied"] is False
+    assert update_apply_payload["reason"] in {"dry_run", "missing_upstream", "up_to_date"}
 
     write = subprocess.run(
         [str(tm), "write-memory", "--agent", "codex", "--topic", "systems"],

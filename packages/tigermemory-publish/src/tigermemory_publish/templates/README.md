@@ -43,13 +43,15 @@ Third-party dependency and vendored dashboard asset notices are listed in
 Run these commands from this repository checkout:
 
 ```powershell
-py -m pip install .
+py -m pip install -e .
 tm init
 tm profile show
 ```
 
-The installed command is the `tm` console script. Do not use `python -m tm`;
-there is no module entry point with that name.
+Editable install is recommended for the public source-first workflow: code stays
+in the Git checkout, while `tm` is available as a normal command. The installed
+command is the `tm` console script. Do not use `python -m tm`; there is no
+module entry point with that name.
 
 Expected profile after `tm init`:
 
@@ -138,13 +140,42 @@ tm write-memory --agent codex --topic systems
 TigerMemory source/export root (`TIGERMEMORY_APP_ROOT` when set), not your
 personal instance root. Normal public usage does not require `tm publish`.
 
+## Updating TigerMemory
+
+When you use TigerMemory from a Git source checkout, update the framework with
+the built-in Git-aware updater:
+
+```powershell
+tm update status
+tm update check
+tm update apply --dry-run
+tm update apply --strategy ff-only
+```
+
+The updater only changes the source checkout. It does not touch your
+`TIGERMEMORY_INSTANCE_ROOT` data.
+
+Local source edits are protected:
+
+- uncommitted tracked edits block automatic update;
+- untracked files block automatic update until you review them;
+- local commits are not overwritten;
+- the updater never runs `git reset --hard`, `git clean`, or an automatic stash.
+
+If you changed TigerMemory locally, commit your work to a branch first. A clean
+checkout can fast-forward from upstream. Real merge or rebase conflicts are
+reported for you to resolve manually.
+
+The dashboard health page and `tm doctor` show the same read-only update status.
+The dashboard does not apply code updates from the browser.
+
 ## What Ships In This Snapshot
 
 The public snapshot is assembled from declared public modules:
 
 - `public-cli`: the `tm` command and root install files.
 - `public-core`: local memory, config, route, search, index, lessons, persona,
-  doctor, digest, protocols, and schemas.
+  doctor, digest, protocols, source updater, and schemas.
 - `public-answer-offline`: evidence-only offline ask.
 - `public-dashboard`: local dashboard entrypoint and static assets.
 - `public-publish`: snapshot builder, audit, and release templates.

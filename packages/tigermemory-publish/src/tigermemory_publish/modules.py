@@ -46,7 +46,7 @@ PUBLIC_MODULES: tuple[PublishModule, ...] = (
     ),
     PublishModule(
         id="public-core",
-        description="Local-first memory, config, search, routing, index, lessons, persona, doctor, digest, and schemas.",
+        description="Local-first memory, config, search, routing, index, lessons, persona, doctor, digest, source updater, and schemas.",
         stability="core",
         package_roots=(
             "packages/tigermemory-config/src",
@@ -59,6 +59,7 @@ PUBLIC_MODULES: tuple[PublishModule, ...] = (
             "packages/tigermemory-protocols/src",
             "packages/tigermemory-route/src",
             "packages/tigermemory-search/src",
+            "packages/tigermemory-update/src",
         ),
         data_dirs=("schemas",),
         tool_files=(

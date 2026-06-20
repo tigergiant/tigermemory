@@ -14,6 +14,9 @@ to run with Python, Markdown, Git, and a local SQLite memory store.
   use `TIGERMEMORY_INSTANCE_ROOT` for the user's workspace. Maintainer export
   commands such as `tm publish` use the TigerMemory source/export root
   (`TIGERMEMORY_APP_ROOT` when set).
+- Source updates must go through `tm update status/check/apply` or normal Git
+  commands. Do not overwrite user source edits, run `git reset --hard`, run
+  `git clean`, or silently stash local work during an update.
 - Before publishing or sharing a snapshot, run:
 
 ```powershell
