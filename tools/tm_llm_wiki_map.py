@@ -12,6 +12,7 @@ import dataclasses
 import datetime as dt
 import hashlib
 import json
+import os
 import re
 import statistics
 import sys
@@ -33,8 +34,18 @@ FORBIDDEN_PATHS = ("tests/", ".tmp/", "runtime/", "sources/internal-analysis/dev
 PERSON_PATH_PREFIXES = ("wiki/person/", "sources/person/")
 SOURCE_SURFACES = {"wiki", "sources"}
 ROOT_WIKI_PATHS = {"AGENTS.md"}
+
+
+def _codex_home() -> Path:
+    return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+
+
+def _codex_home_path(*parts: str) -> str:
+    return (_codex_home().joinpath(*parts)).resolve().as_posix()
+
+
 DEFAULT_TRUSTED_EXTERNAL_PATHS = {
-    "C:/Users/Giant/.codex/skills/delegated-dev-workflow/SKILL.md": {
+    _codex_home_path("skills", "delegated-dev-workflow", "SKILL.md"): {
         "source_surface": "sources",
         "partition": "systems",
         "title": "Delegated Dev Workflow Skill",
@@ -46,7 +57,7 @@ DEFAULT_TRUSTED_EXTERNAL_PATHS = {
         ],
         "keywords": ["2000", "1999", "codex", "gemini", "port", "skill", "workflow"],
     },
-    "C:/Users/Giant/.codex/hooks2/stop_tigermemory_guard.ps1": {
+    _codex_home_path("hooks2", "stop_tigermemory_guard.ps1"): {
         "source_surface": "sources",
         "partition": "systems",
         "title": "Codex hooks2 Stop Tigermemory Guard",

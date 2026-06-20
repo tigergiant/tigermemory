@@ -120,3 +120,19 @@ def test_route_prompt_patch_is_high_risk_even_without_flag(tmp_path):
 
     assert result["required"] is True
     assert result["ok"] is False
+
+
+def test_codex_automation_patch_is_high_risk_without_literal_user_path(tmp_path):
+    pdir = tmp_path / "proposal-2026-06-14-003"
+    pdir.mkdir()
+    codex_automation = "C:" + "/Users/Example/.codex/automations/daily/task.toml"
+    (pdir / "proposal.json").write_text(json.dumps({"type": "prompt-tuning"}), encoding="utf-8")
+    (pdir / "patch").write_text(
+        f"diff --git a/{codex_automation} b/{codex_automation}\n+++ b/{codex_automation}\n+enabled=true\n",
+        encoding="utf-8",
+    )
+
+    result = tm_spec_capsule.validate_proposal_dir(pdir)
+
+    assert result["required"] is True
+    assert result["ok"] is False

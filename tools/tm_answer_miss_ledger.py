@@ -39,9 +39,18 @@ def _target_family(path: str) -> str:
     if normalized.startswith("sources/"):
         parts = normalized.split("/")
         return "/".join(parts[:2]) if len(parts) >= 2 else "sources"
-    if normalized.startswith("C:/Users/Giant/.codex/") or normalized.startswith(".tmp/"):
+    if _is_runtime_only_path(normalized):
         return "external_runtime_or_codex_config"
     return normalized.split("/", 1)[0]
+
+
+def _is_runtime_only_path(path: str) -> bool:
+    normalized = str(path or "").replace("\\", "/")
+    return (
+        normalized.startswith(".tmp/")
+        or normalized.startswith(".codex/")
+        or "/.codex/" in normalized
+    )
 
 
 def _primary_expected_path(row: dict[str, Any]) -> str:
@@ -58,7 +67,7 @@ def _decision_bucket(row: dict[str, Any]) -> str:
     bucket = str(row.get("map_bridge_bucket") or "")
     reason = str(row.get("evidence_gate_reason_category") or "")
     expected = _primary_expected_path(row)
-    if expected.startswith("C:/Users/Giant/.codex/") or expected.startswith(".tmp/"):
+    if _is_runtime_only_path(expected):
         return "source_policy_or_surrogate_needed"
     if bucket == "missing_knowledge" or reason == "missing_knowledge":
         return "missing_knowledge"

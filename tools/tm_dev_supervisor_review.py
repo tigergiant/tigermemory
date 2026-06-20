@@ -18,25 +18,39 @@ from zoneinfo import ZoneInfo
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 TZ_CN = ZoneInfo("Asia/Shanghai")
 
+
+def _env_path(name: str, default: pathlib.Path) -> pathlib.Path:
+    value = os.environ.get(name)
+    return pathlib.Path(value).expanduser() if value else default
+
+
+LOCAL_APPDATA = pathlib.Path(os.environ.get("LOCALAPPDATA", pathlib.Path.home() / "AppData" / "Local"))
+USER_DOCUMENTS = pathlib.Path.home() / "Documents"
+
 OFFICIAL_CHANNEL = "claude-official-review"
 API_TEST_CHANNEL = "claude-api-test"
-OFFICIAL_LAUNCHER = pathlib.Path(
-    r"C:\Users\Giant\AppData\Local\ClaudeCodeOfficial\start-official-claude.ps1"
+OFFICIAL_HOME = _env_path("TM_CLAUDE_OFFICIAL_HOME", LOCAL_APPDATA / "ClaudeCodeOfficial")
+OFFICIAL_LAUNCHER = _env_path(
+    "TM_CLAUDE_OFFICIAL_LAUNCHER",
+    OFFICIAL_HOME / "start-official-claude.ps1",
 )
-API_TEST_EXE = pathlib.Path(r"C:\Users\Giant\AppData\Local\Microsoft\WinGet\Links\claude.exe")
+API_TEST_EXE = _env_path(
+    "TM_CLAUDE_API_TEST_EXE",
+    LOCAL_APPDATA / "Microsoft" / "WinGet" / "Links" / "claude.exe",
+)
 API_TEST_EXPECTED_VERSION = "2.1.110"
-OFFICIAL_CONFIG_DIR = pathlib.Path(r"C:\Users\Giant\AppData\Local\ClaudeCodeOfficial\config")
-OFFICIAL_PLUGIN_DIR = pathlib.Path(r"C:\Users\Giant\AppData\Local\ClaudeCodeOfficial\plugins")
-OFFICIAL_TMP_DIR = pathlib.Path(r"C:\Users\Giant\AppData\Local\ClaudeCodeOfficial\tmp")
+OFFICIAL_CONFIG_DIR = _env_path("TM_CLAUDE_OFFICIAL_CONFIG_DIR", OFFICIAL_HOME / "config")
+OFFICIAL_PLUGIN_DIR = _env_path("TM_CLAUDE_OFFICIAL_PLUGIN_DIR", OFFICIAL_HOME / "plugins")
+OFFICIAL_TMP_DIR = _env_path("TM_CLAUDE_OFFICIAL_TMP_DIR", OFFICIAL_HOME / "tmp")
 
 DEFAULT_WORKSPACE = "TigerMemory"
 DEFAULT_ROLE = "tiger-development-reviewer"
 DEFAULT_STAGE = "p0"
 WORKSPACES = {
     "TigerMemory": REPO_ROOT,
-    "NewProject": pathlib.Path(r"C:\Users\Giant\Documents\New project"),
-    "ClaudeHub": pathlib.Path(r"C:\Users\Giant\Documents\ClaudeHub"),
-    "ClaudeScratch": pathlib.Path(r"C:\Users\Giant\Documents\ClaudeScratch"),
+    "NewProject": _env_path("TM_CLAUDE_WORKSPACE_NEWPROJECT", USER_DOCUMENTS / "New project"),
+    "ClaudeHub": _env_path("TM_CLAUDE_WORKSPACE_CLAUDEHUB", USER_DOCUMENTS / "ClaudeHub"),
+    "ClaudeScratch": _env_path("TM_CLAUDE_WORKSPACE_SCRATCH", USER_DOCUMENTS / "ClaudeScratch"),
 }
 SUPERVISOR_STATE_DIR = REPO_ROOT / ".supervisor"
 SESSION_FILE = SUPERVISOR_STATE_DIR / "claude-sessions.json"

@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-NEW_PROJECT_ROOT = pathlib.Path(r"C:\Users\Giant\Documents\New project")
+NEW_PROJECT_ROOT = pathlib.Path(
+    os.environ.get(
+        "TIGERMEMORY_SUPERVISOR_PACKER_ROOT",
+        pathlib.Path.home() / "Documents" / "New project",
+    )
+).expanduser()
 if str(NEW_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(NEW_PROJECT_ROOT))
 

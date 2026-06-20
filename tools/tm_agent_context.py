@@ -213,15 +213,15 @@ def build_context_pack(
 
     must_read = [
         {
-            "path": "D:\\tigermemory\\wiki\\operations\\project-canvas.md",
+            "path": str(PROJECT_CANVAS),
             "reason": "current project map and active module state",
         },
         {
-            "path": "D:\\tigermemory\\wiki\\systems\\memory-answer-development-plan.md",
+            "path": str(MEMORY_ANSWER_PLAN),
             "reason": "Memory Answer P5 boundaries and release discipline",
         },
         {
-            "path": "D:\\tigermemory\\wiki\\systems\\session-handoff-protocol.md",
+            "path": str(SESSION_HANDOFF_PROTOCOL),
             "reason": "handoff card schema and retrieval convention",
         },
     ]

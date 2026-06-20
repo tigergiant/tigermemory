@@ -2,6 +2,9 @@
 Obsidian/
 .omx/
 .supervisor/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
 *.base
 runtime/
 !runtime/
@@ -16,6 +19,10 @@ runtime/tigermemory/*
 # index pages for GitHub-backed memory retrieval.
 sources/assets/*
 !sources/assets/index.md
+sources/documents/
+sources/external/
+sources/internal-analysis/
+memory_exports/
 *.tmp
 .tmp/
 .trash/
@@ -24,7 +31,12 @@ sources/assets/*
 progress.md
 # Real-time digest views: regenerated continuously by debounced timer;
 # canonical commit owned by daily-lint cron (force-add).
-inbox/daily/*.md
+inbox/
+log.md
+wiki/investment/
+wiki/person/
+wiki/operations/**
+!wiki/operations/project-canvas.md
 plans/
 __pycache__/
 *.pyc
@@ -33,8 +45,9 @@ deploy/openclaw-ce/node_modules/
 deploy/openclaw-ce/dist/
 deploy/openclaw-ce/*.tsbuildinfo
 
-# 敏感个人数据 - 记账记录
+# 敏感个人数据 - 记账记录与导入流水；这些属于用户 instance root，不属于公开源码仓。
 data/expense_tracker/
+data/expense_import/
 
 # Local memory backend state (P4.1 local profile)
 data/tigermemory/*.sqlite

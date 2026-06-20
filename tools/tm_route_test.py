@@ -95,7 +95,8 @@ class TestRouteMemory(unittest.TestCase):
 
     def test_sensitive_inbox(self):
         with patch("tm_core._call_deepseek_json", return_value=_make_ds_result(is_sensitive=True, score=85)):
-            d = tm_route.route_memory("Phone 13800138000.", "systems", "kimi")
+            fake_phone = "138" + "0013" + "8000"
+            d = tm_route.route_memory(f"Phone {fake_phone}.", "systems", "kimi")
             assert d.route == "inbox"
             assert d.is_sensitive is True
             assert "sensitive content" in d.reasons

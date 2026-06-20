@@ -1060,6 +1060,31 @@ def test_repo_audit_scope_reports_true_split_blocker_buckets(tmp_path, monkeypat
     assert payload["release_evidence"]["true_split_blockers"]["schema"] == "tigermemory-true-split-blockers-v1"
 
 
+def test_repo_audit_downgrades_explicit_test_fixture_findings() -> None:
+    findings = tigermemory_publish._scan_text_for_sensitive(
+        "dummy api_key=sk-1234567890abcdefghijklmnopqrstuvwxyz\n"
+        "assert path == 'D:/tigermemory/wiki/person/tiger.md'\n",
+        "tests/test_example.py",
+        "repo_audit",
+        pathlib.Path.cwd(),
+    )
+
+    assert findings
+    assert {finding["severity"] for finding in findings} == {"warning"}
+
+
+def test_repo_audit_keeps_source_findings_blocking() -> None:
+    findings = tigermemory_publish._scan_text_for_sensitive(
+        "dummy api_key=sk-1234567890abcdefghijklmnopqrstuvwxyz\n",
+        "tools/public_module.py",
+        "repo_audit",
+        pathlib.Path.cwd(),
+    )
+
+    assert findings
+    assert any(finding["severity"] == "high" for finding in findings)
+
+
 def test_true_split_blockers_report_warning_only_repo_not_public_ready(tmp_path, monkeypatch, capsys) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

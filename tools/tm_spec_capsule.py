@@ -146,9 +146,15 @@ def capsule_required_for(
         "tools/tm_io.py",
         ".githooks/",
         "deploy/mcp/",
-        "C:/Users/Giant/.codex/automations/",
     )
-    return any(path.startswith(high_risk_paths) or path in high_risk_paths for path in paths)
+    normalized_paths = [path.replace("\\", "/") for path in paths]
+    return any(
+        path.startswith(high_risk_paths)
+        or path in high_risk_paths
+        or path.startswith(".codex/automations/")
+        or "/.codex/automations/" in path
+        for path in normalized_paths
+    )
 
 
 def load_proposal_capsule(proposal_dir: pathlib.Path, *, meta: dict[str, Any] | None = None) -> dict[str, Any]:

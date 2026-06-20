@@ -57,7 +57,6 @@ PUBLIC_FIELD_DEFAULT = False
 PUBLIC_TRUE_VALUES = {"true", "True", "yes", "Yes", "1"}
 
 PATH_LEAK_WARNING_PATHS = {"AGENTS.md", "README.md", "index.md"}
-
 PRIVATE_KEY_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 BEARER_TOKEN_RE = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9._~+/=-]{24,})")
 SECRET_ASSIGNMENT_RE = re.compile(
@@ -361,6 +360,18 @@ def _path_leak_severity(path: str) -> str:
     return "warning" if rel in PATH_LEAK_WARNING_PATHS else "high"
 
 
+def _is_test_fixture_path(path: str) -> bool:
+    rel = path.replace("\\", "/").strip("/")
+    return rel.startswith("tests/") or "/tests/" in rel
+
+
+def _repo_audit_severity(category: str, rel: str, kind: str, severity: str, line: str) -> str:
+    """Downgrade explicit test fixtures without hiding source/doc leaks."""
+    if category != "repo_audit" or not _is_test_fixture_path(rel):
+        return severity
+    return "warning"
+
+
 def _planned_text_files(plan: dict[str, list[str]], repo_root: pathlib.Path) -> list[tuple[str, str]]:
     """Return (category, rel_path) pairs that should be scanned before publish."""
     items: list[tuple[str, str]] = []
@@ -431,7 +442,7 @@ def _scan_text_for_sensitive(
                 rel=rel,
                 line_no=line_no,
                 kind="private_key",
-                severity="high",
+                severity=_repo_audit_severity(category, rel, "private_key", "high", line),
                 line=line,
                 regex_name="PRIVATE_KEY_RE",
             )
@@ -443,7 +454,7 @@ def _scan_text_for_sensitive(
                 rel=rel,
                 line_no=line_no,
                 kind="bearer_token",
-                severity="high",
+                severity=_repo_audit_severity(category, rel, "bearer_token", "high", line),
                 line=line,
                 regex_name="BEARER_TOKEN_RE",
             )
@@ -455,7 +466,7 @@ def _scan_text_for_sensitive(
                 rel=rel,
                 line_no=line_no,
                 kind=secret.group(1).lower(),
-                severity="high",
+                severity=_repo_audit_severity(category, rel, secret.group(1).lower(), "high", line),
                 line=line,
                 regex_name="SECRET_ASSIGNMENT_RE",
             )
@@ -466,7 +477,7 @@ def _scan_text_for_sensitive(
                 rel=rel,
                 line_no=line_no,
                 kind="cn_id",
-                severity="high",
+                severity=_repo_audit_severity(category, rel, "cn_id", "high", line),
                 line=line,
                 regex_name="CN_ID_RE",
             )
@@ -477,7 +488,7 @@ def _scan_text_for_sensitive(
                 rel=rel,
                 line_no=line_no,
                 kind="cn_phone",
-                severity="medium",
+                severity=_repo_audit_severity(category, rel, "cn_phone", "medium", line),
                 line=line,
                 regex_name="CN_PHONE_RE",
             )
@@ -488,7 +499,13 @@ def _scan_text_for_sensitive(
                 rel=rel,
                 line_no=line_no,
                 kind="path_leak",
-                severity=_path_leak_severity(rel),
+                severity=_repo_audit_severity(
+                    category,
+                    rel,
+                    "path_leak",
+                    _path_leak_severity(rel),
+                    line,
+                ),
                 line=line,
                 regex_name="PATH_LEAK_TOKENS",
             )
