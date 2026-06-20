@@ -70,7 +70,10 @@ effective=local
 `tm llm status` does not call the model and does not print secrets. It only
 checks whether provider environment variables are present. For the recommended
 DeepSeek path, set `DEEPSEEK_API_KEY`; optionally set `DEEPSEEK_BASE_URL` and
-`DEEPSEEK_MODEL`.
+`DEEPSEEK_MODEL`. Routine JSON/routing work defaults to `deepseek-v4-flash`.
+The reviewable Wiki Admin proposal flow defaults to `deepseek-v4-pro` through
+`DEEPSEEK_ADMIN_MODEL`, because those drafts become long-term knowledge after
+human approval.
 
 Draft a reviewable Wiki proposal with the LLM Admin flow:
 

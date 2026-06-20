@@ -222,7 +222,8 @@ def _mask_env_presence(name: str) -> dict[str, object]:
 
 def _llm_status_payload() -> dict[str, object]:
     deepseek_base = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-    deepseek_model = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+    deepseek_model = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
+    deepseek_admin_model = os.environ.get("DEEPSEEK_ADMIN_MODEL", "deepseek-v4-pro")
     openai_base = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
     openai_model = os.environ.get("OPENAI_MODEL", "")
     deepseek_configured = bool(os.environ.get("DEEPSEEK_API_KEY", "").strip())
@@ -239,6 +240,7 @@ def _llm_status_payload() -> dict[str, object]:
                 "api_key": _mask_env_presence("DEEPSEEK_API_KEY"),
                 "base_url": deepseek_base,
                 "model": deepseek_model,
+                "admin_model": deepseek_admin_model,
                 "openai_compatible": True,
                 "recommended": True,
             },
@@ -252,6 +254,20 @@ def _llm_status_payload() -> dict[str, object]:
                 "recommended": False,
             },
         ],
+        "role_models": {
+            "routine_json": {
+                "provider": "deepseek",
+                "env": "DEEPSEEK_MODEL",
+                "model": deepseek_model,
+                "default": "deepseek-v4-flash",
+            },
+            "wiki_admin": {
+                "provider": "deepseek",
+                "env": "DEEPSEEK_ADMIN_MODEL",
+                "model": deepseek_admin_model,
+                "default": "deepseek-v4-pro",
+            },
+        },
         "offline_fallback": "tm ask --offline --query \"your question\" --scope all",
         "next": "Set DEEPSEEK_API_KEY, then run tm llm status.",
     }
@@ -273,6 +289,8 @@ def cmd_llm(args: argparse.Namespace) -> int:
                 f"base_url={provider['base_url']} "
                 f"model={provider['model']}"
             )
+        for role, info in payload["role_models"].items():
+            print(f"role_model={role} provider={info['provider']} env={info['env']} model={info['model']}")
         print(f"offline_fallback={payload['offline_fallback']}")
         print(f"next={payload['next']}")
         return 0
@@ -280,7 +298,10 @@ def cmd_llm(args: argparse.Namespace) -> int:
         print("purpose=configure TigerMemory's LLM-first Wiki Admin path")
         print("recommended_provider=deepseek")
         print("set=DEEPSEEK_API_KEY")
-        print("optional=DEEPSEEK_BASE_URL,DEEPSEEK_MODEL")
+        print("default_model=deepseek-v4-flash")
+        print("wiki_admin_model=deepseek-v4-pro")
+        print("roles=DEEPSEEK_MODEL for routine JSON/routing; DEEPSEEK_ADMIN_MODEL for tm admin propose")
+        print("optional=DEEPSEEK_BASE_URL,DEEPSEEK_MODEL,DEEPSEEK_ADMIN_MODEL")
         print("compatible=OPENAI_API_KEY,OPENAI_BASE_URL,OPENAI_MODEL")
         print("verify=tm llm status --json")
         print("fallback=tm ask --offline returns local evidence only")

@@ -9,6 +9,7 @@ def test_propose_wiki_admin_page_normalizes_deepseek_json(monkeypatch) -> None:
     def fake_call(system_prompt, user_msg, **kwargs):
         assert "Wiki Admin" in system_prompt
         assert "target_partition: systems" in user_msg
+        assert kwargs["model"] == tm_core.DEFAULT_DEEPSEEK_ADMIN_MODEL
         return True, {
             "should_write": True,
             "title": "Starter Admin",
@@ -38,6 +39,33 @@ def test_propose_wiki_admin_page_normalizes_deepseek_json(monkeypatch) -> None:
     assert "## 摘要" in result["wiki_markdown"]
     assert "## 来源" in result["wiki_markdown"]
     assert "unit-test-source" in result["wiki_markdown"]
+
+
+def test_propose_wiki_admin_page_uses_admin_model_env(monkeypatch, tmp_path) -> None:
+    def fake_call(_system_prompt, _user_msg, **kwargs):
+        assert kwargs["model"] == "custom-admin-model"
+        return True, {
+            "should_write": True,
+            "title": "Admin Env",
+            "slug": "admin-env",
+            "summary": "A short durable summary.",
+            "body_markdown": "## 已验证现状\n\nThe user provided a stable project note.",
+            "rationale": "Stable enough for wiki.",
+            "confidence": 80,
+        }
+
+    env_path = tmp_path / ".env"
+    env_path.write_text("DEEPSEEK_ADMIN_MODEL=custom-admin-model\n", encoding="utf-8")
+    monkeypatch.setenv("TIGERMEMORY_OPENMEMORY_ENV", str(env_path))
+    monkeypatch.setattr(tm_core, "_call_deepseek_json", fake_call)
+
+    result = tm_core.propose_wiki_admin_page(
+        "This source material is long enough and stable enough for a wiki draft.",
+        partition="systems",
+        title="Fallback",
+    )
+
+    assert result["target_path"] == "wiki/systems/admin-env.md"
 
 
 def test_propose_wiki_admin_page_keeps_rejected_proposal_reviewable(monkeypatch) -> None:

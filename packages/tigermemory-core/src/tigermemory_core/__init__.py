@@ -54,6 +54,7 @@ __all__ = [
     "DAILY_DIGEST_RE",
     "DATA_SOURCE_AGENTS",
     "DEFAULT_DEEPSEEK_ENDPOINT",
+    "DEFAULT_DEEPSEEK_ADMIN_MODEL",
     "DEFAULT_DEEPSEEK_MODEL",
     "EMBEDDING_BATCH_SIZE",
     "EMBEDDING_TIMEOUT",
@@ -96,6 +97,7 @@ __all__ = [
     "WIKI_PATH_RE",
     "check_transport_security",
     "configure_stdio",
+    "deepseek_admin_model",
     "deepseek_endpoint",
     "deepseek_model",
     "derive_inbox_review_cn",
@@ -687,6 +689,14 @@ def _env_value(key: str) -> str:
     raise RuntimeError(f"{key} not found in {env_path}")
 
 
+def _deepseek_env_value(key: str) -> str:
+    """Read DeepSeek config from shell env first, then the local runtime env file."""
+    val = os.environ.get(key, "").strip()
+    if val:
+        return val
+    return _env_value(key)
+
+
 def mem0_key() -> str:
     return _env_value("MEM0_API_KEY")
 
@@ -758,12 +768,13 @@ def tigermemory_profile() -> str:
 
 DEFAULT_DEEPSEEK_ENDPOINT = "https://api.deepseek.com/v1/chat/completions"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
+DEFAULT_DEEPSEEK_ADMIN_MODEL = "deepseek-v4-pro"
 
 
 def deepseek_endpoint() -> str:
     """Return the configured DeepSeek chat-completions endpoint."""
     try:
-        return _env_value("DEEPSEEK_BASE_URL")
+        return _deepseek_env_value("DEEPSEEK_BASE_URL")
     except RuntimeError:
         return DEFAULT_DEEPSEEK_ENDPOINT
 
@@ -771,9 +782,17 @@ def deepseek_endpoint() -> str:
 def deepseek_model() -> str:
     """Return the configured DeepSeek model id."""
     try:
-        return _env_value("DEEPSEEK_MODEL")
+        return _deepseek_env_value("DEEPSEEK_MODEL")
     except RuntimeError:
         return DEFAULT_DEEPSEEK_MODEL
+
+
+def deepseek_admin_model() -> str:
+    """Return the configured DeepSeek model id for durable Wiki Admin drafting."""
+    try:
+        return _deepseek_env_value("DEEPSEEK_ADMIN_MODEL")
+    except RuntimeError:
+        return DEFAULT_DEEPSEEK_ADMIN_MODEL
 
 
 # 2026-04-30: tiered Mem0 timeouts. Hardcoded 30s used to mask slow LLM calls
@@ -3520,6 +3539,7 @@ def _call_deepseek_json(
     temperature: float = 0.2,
     max_tokens: int = 1024,
     purpose: str = "unknown",
+    model: str | None = None,
 ) -> tuple[bool, Any]:
     """Low-level DeepSeek JSON call. Returns (ok, parsed_or_reason).
 
@@ -3530,9 +3550,9 @@ def _call_deepseek_json(
     """
     prompt_chars = len(system_prompt) + len(user_msg)
     endpoint = deepseek_endpoint()
-    model = deepseek_model()
+    model = model or deepseek_model()
     try:
-        key = _env_value("DEEPSEEK_API_KEY")
+        key = _deepseek_env_value("DEEPSEEK_API_KEY")
     except RuntimeError as e:
         _log_llm_call(model, purpose, 0.0, False,
                       error=f"no DEEPSEEK_API_KEY: {e}", prompt_chars=prompt_chars)
@@ -4136,6 +4156,7 @@ def propose_wiki_admin_page(
         temperature=0.1,
         max_tokens=1600,
         purpose="wiki_admin_proposal",
+        model=deepseek_admin_model(),
     )
     if not ok:
         raise RuntimeError(str(parsed))

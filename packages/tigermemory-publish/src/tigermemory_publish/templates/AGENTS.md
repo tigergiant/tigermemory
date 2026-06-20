@@ -55,6 +55,10 @@ must not print secrets. `tm ask --offline` returns local evidence only. It must
 not call online Mem0 or an AI model and should be treated as fallback evidence,
 not the full Wiki Admin answer path.
 
+Recommended DeepSeek defaults are role-based: routine JSON/routing uses
+`DEEPSEEK_MODEL=deepseek-v4-flash`; `tm admin propose` uses
+`DEEPSEEK_ADMIN_MODEL=deepseek-v4-pro` for durable Wiki Admin drafts.
+
 ## Wiki Admin Role
 
 When acting as the TigerMemory Wiki Admin:

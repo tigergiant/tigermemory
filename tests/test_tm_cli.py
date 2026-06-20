@@ -183,7 +183,7 @@ def test_profile_guide_local_explains_no_advanced_dependencies(tmp_path, monkeyp
 
 def test_llm_status_reports_provider_presence_without_secret(monkeypatch, capsys) -> None:
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-secret-value")
-    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-chat")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
     assert tigermemory_cli.main(["llm", "status", "--json"]) == 0
 
@@ -195,6 +195,10 @@ def test_llm_status_reports_provider_presence_without_secret(monkeypatch, capsys
     assert deepseek["id"] == "deepseek"
     assert deepseek["configured"] is True
     assert deepseek["api_key"] == {"name": "DEEPSEEK_API_KEY", "configured": True}
+    assert deepseek["model"] == "deepseek-v4-flash"
+    assert deepseek["admin_model"] == "deepseek-v4-pro"
+    assert payload["role_models"]["routine_json"]["model"] == "deepseek-v4-flash"
+    assert payload["role_models"]["wiki_admin"]["model"] == "deepseek-v4-pro"
     assert "sk-test-secret-value" not in json.dumps(payload)
 
 
@@ -204,6 +208,9 @@ def test_llm_guide_points_to_deepseek(capsys) -> None:
     out = capsys.readouterr().out
     assert "recommended_provider=deepseek" in out
     assert "set=DEEPSEEK_API_KEY" in out
+    assert "default_model=deepseek-v4-flash" in out
+    assert "wiki_admin_model=deepseek-v4-pro" in out
+    assert "DEEPSEEK_ADMIN_MODEL" in out
     assert "fallback=tm ask --offline returns local evidence only" in out
 
 

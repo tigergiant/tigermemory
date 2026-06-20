@@ -829,6 +829,38 @@ def test_deepseek_model_reads_env_when_set(monkeypatch, tmp_path):
     assert tm_core.deepseek_model() == "custom-chat"
 
 
+def test_deepseek_model_prefers_shell_env(monkeypatch, tmp_path):
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setenv("DEEPSEEK_MODEL", "shell-model")
+
+    assert tm_core.deepseek_model() == "shell-model"
+
+
+def test_deepseek_admin_model_defaults_to_pro(monkeypatch, tmp_path):
+    env_path = tmp_path / "runtime" / "openmemory" / ".env"
+    env_path.parent.mkdir(parents=True)
+    env_path.write_text("DEEPSEEK_MODEL=custom-chat\n", encoding="utf-8")
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+
+    assert tm_core.deepseek_admin_model() == tm_core.DEFAULT_DEEPSEEK_ADMIN_MODEL
+
+
+def test_deepseek_admin_model_reads_env_when_set(monkeypatch, tmp_path):
+    env_path = tmp_path / "runtime" / "openmemory" / ".env"
+    env_path.parent.mkdir(parents=True)
+    env_path.write_text("DEEPSEEK_ADMIN_MODEL=custom-admin\n", encoding="utf-8")
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+
+    assert tm_core.deepseek_admin_model() == "custom-admin"
+
+
+def test_deepseek_admin_model_prefers_shell_env(monkeypatch, tmp_path):
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setenv("DEEPSEEK_ADMIN_MODEL", "shell-admin")
+
+    assert tm_core.deepseek_admin_model() == "shell-admin"
+
+
 _LINT_PAGE_BASE = (
     "---\n"
     "owner: cascade\n"
