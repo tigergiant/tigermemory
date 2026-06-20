@@ -279,8 +279,10 @@ tm publish --dry-run --json --audit-pii --audit-scope repo
 ```
 
 Use the repo-scope audit before making an entire development repository public.
-It may fail in private worktrees that still contain non-public notes, local
-paths, or research pages.
+It blocks on high-confidence non-public data or local-only paths. Warning-only
+test fixtures remain visible as review notes: `repo_public_ready=true` means no
+blocking findings remain, while `repo_warning_free=false` means the repository is
+not completely warning-free.
 
 To inspect the declared release checks for each public module:
 

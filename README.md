@@ -156,10 +156,12 @@ whole Git repository public, run the stricter tracked-repo audit:
 tm publish --dry-run --json --audit-pii --audit-scope repo
 ```
 
-That command is expected to fail while private notes, local paths, or non-public
-research pages remain in the repository. Use the default snapshot audit for
-public-package preparation; use `--audit-scope repo` only to prove that the
-entire tracked repository is safe to expose.
+That command blocks when tracked source still contains high-confidence private
+data or local-only paths. Warning-only test fixtures are reported as warnings:
+`repo_public_ready=true` means no blocking findings remain, while
+`repo_warning_free=false` means review notes still exist. Use the default
+snapshot audit for public-package preparation; use `--audit-scope repo` to prove
+that the entire tracked repository is safe to expose.
 
 ## Development Checks
 

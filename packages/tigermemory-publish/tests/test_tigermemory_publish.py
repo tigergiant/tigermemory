@@ -1047,6 +1047,8 @@ def test_repo_audit_scope_reports_true_split_blocker_buckets(tmp_path, monkeypat
     blockers = payload["true_split_blockers"]
     assert blockers["schema"] == "tigermemory-true-split-blockers-v1"
     assert blockers["repo_public_ready"] is False
+    assert blockers["repo_warning_free"] is False
+    assert blockers["readiness_reason"] == "blocking_findings_present"
     assert blockers["findings_capped"] is False
     assert blockers["counts_are_complete"] is True
     assert blockers["blocking_count"] >= 1
@@ -1085,7 +1087,7 @@ def test_repo_audit_keeps_source_findings_blocking() -> None:
     assert any(finding["severity"] == "high" for finding in findings)
 
 
-def test_true_split_blockers_report_warning_only_repo_not_public_ready(tmp_path, monkeypatch, capsys) -> None:
+def test_true_split_blockers_report_warning_only_repo_public_ready_with_warnings(tmp_path, monkeypatch, capsys) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     _build_fake_repo(repo)
@@ -1107,9 +1109,11 @@ def test_true_split_blockers_report_warning_only_repo_not_public_ready(tmp_path,
 
     assert rc == 0
     blockers = payload["true_split_blockers"]
-    assert blockers["repo_public_ready"] is False
+    assert blockers["repo_public_ready"] is True
+    assert blockers["repo_warning_free"] is False
     assert blockers["blocking_count"] == 0
     assert blockers["warning_count"] >= 1
+    assert blockers["readiness_reason"] == "warning_only_findings_present"
 
 
 def test_true_split_blocker_summary_marks_capped_counts() -> None:
@@ -1128,6 +1132,29 @@ def test_true_split_blocker_summary_marks_capped_counts() -> None:
     assert payload["max_findings"] == tigermemory_publish.MAX_FINDINGS
     assert payload["findings_capped"] is True
     assert payload["counts_are_complete"] is False
+    assert payload["repo_public_ready"] is False
+    assert payload["readiness_reason"] == "blocking_findings_present"
+
+
+def test_true_split_blocker_summary_does_not_release_capped_warning_only_counts() -> None:
+    findings = [
+        {
+            "path": f"tests/test_fixture_{idx}.py",
+            "severity": "warning",
+            "kind": "path_leak",
+        }
+        for idx in range(tigermemory_publish.MAX_FINDINGS)
+    ]
+
+    payload = tigermemory_publish.true_split_blocker_summary(findings)
+
+    assert payload["blocking_count"] == 0
+    assert payload["warning_count"] == tigermemory_publish.MAX_FINDINGS
+    assert payload["findings_capped"] is True
+    assert payload["counts_are_complete"] is False
+    assert payload["repo_public_ready"] is False
+    assert payload["repo_warning_free"] is False
+    assert payload["readiness_reason"] == "finding_cap_reached"
 
 
 def test_true_split_private_wiki_bucket_uses_excluded_partition_source(monkeypatch) -> None:

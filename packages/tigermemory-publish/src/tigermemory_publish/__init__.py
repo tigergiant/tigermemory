@@ -685,15 +685,28 @@ def true_split_blocker_summary(
     normalized_buckets.sort(key=lambda item: (-int(item["blocking_count"]), -int(item["count"]), str(item["id"])))
 
     blocking_count = sum(1 for finding in findings if finding.get("severity") != "warning")
+    warning_count = len(findings) - blocking_count
+    counts_are_complete = len(findings) < max_findings
+    repo_public_ready = blocking_count == 0 and counts_are_complete
     return {
         "schema": "tigermemory-true-split-blockers-v1",
-        "repo_public_ready": len(findings) == 0,
+        "repo_public_ready": repo_public_ready,
+        "repo_warning_free": len(findings) == 0,
         "finding_count": len(findings),
         "max_findings": max_findings,
         "findings_capped": len(findings) >= max_findings,
-        "counts_are_complete": len(findings) < max_findings,
+        "counts_are_complete": counts_are_complete,
         "blocking_count": blocking_count,
-        "warning_count": len(findings) - blocking_count,
+        "warning_count": warning_count,
+        "readiness_reason": (
+            "blocking_findings_present"
+            if blocking_count
+            else "finding_cap_reached"
+            if not counts_are_complete
+            else "warning_only_findings_present"
+            if warning_count
+            else "no_findings"
+        ),
         "buckets": normalized_buckets,
         "next_actions": [
             "Move private instance data out of the public source repo or keep publishing from generated public-core artifacts.",

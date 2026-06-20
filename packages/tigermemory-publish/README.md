@@ -36,9 +36,10 @@ tigermemory-publish --dry-run --json --audit-pii --audit-scope repo
 ```
 
 Use the repo scope as a release-readiness check, not as the normal snapshot
-builder. Private TigerMemory worktrees are expected to fail this stricter audit
-until local paths, private notes, and non-public research pages are removed or
-moved to a private repository.
+builder. It blocks on high-confidence private data or local-only paths. Warning-
+only test fixtures remain visible for review but no longer make
+`repo_public_ready` false; use `repo_warning_free` when you need a completely
+quiet audit.
 
 The package is extracted from `tools/tm_publish.py`. The legacy script remains as a compatibility shim:
 
