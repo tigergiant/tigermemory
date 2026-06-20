@@ -577,6 +577,115 @@ def audit_repo_sensitive(repo_root: pathlib.Path) -> list[dict[str, object]]:
     return findings
 
 
+TRUE_SPLIT_BUCKETS = {
+    "private_instance_data": {
+        "description": "Private user/runtime data that should live outside the public source repo.",
+        "suggested_action": "Move to a private instance/data repository or keep it behind the publish snapshot boundary.",
+    },
+    "private_wiki_partition": {
+        "description": "Private wiki partitions that should not be in the public source repo.",
+        "suggested_action": "Move to a private instance/wiki repository or keep the public repo on generated public seed pages.",
+    },
+    "internal_review_archive": {
+        "description": "Internal review archives and supervisor evidence.",
+        "suggested_action": "Keep in the private dogfood instance; do not ship as public source history.",
+    },
+    "root_agent_rules": {
+        "description": "Local agent entry rules with machine-specific paths.",
+        "suggested_action": "Replace with public template files in the public source repo; keep dogfood rules private.",
+    },
+    "public_source_surface": {
+        "description": "Code, tests, templates, or public docs that are intended to be source-level public.",
+        "suggested_action": "Remove the leak or replace it with a portable path before true split.",
+    },
+    "unclassified_repo_surface": {
+        "description": "Tracked files that need human classification before the full repo can be public.",
+        "suggested_action": "Classify as public source, private instance data, or intentional exclusion.",
+    },
+}
+
+
+def _true_split_bucket(path: str) -> str:
+    rel = path.replace("\\", "/").strip("/")
+    if rel in {"AGENTS.md", "CLAUDE.md", "GEMINI.md"}:
+        return "root_agent_rules"
+    if any(rel.startswith(f"wiki/{partition}/") for partition in EXCLUDED_WIKI_PARTITIONS):
+        return "private_wiki_partition"
+    if rel.startswith("sources/internal-analysis/development-reviews/"):
+        return "internal_review_archive"
+    if rel.startswith(("runtime/", ".tmp/", "data/expense_import/")):
+        return "private_instance_data"
+    if rel.startswith(("packages/", "tools/", "tests/", "schemas/", "wiki/")) or rel in {
+        "README.md",
+        "index.md",
+        "pyproject.toml",
+    }:
+        return "public_source_surface"
+    return "unclassified_repo_surface"
+
+
+def true_split_blocker_summary(
+    findings: list[dict[str, object]],
+    *,
+    max_findings: int = MAX_FINDINGS,
+) -> dict[str, object]:
+    """Group repo-scope findings into migration buckets for the True Split Gate."""
+    buckets: dict[str, dict[str, object]] = {}
+    for finding in findings:
+        path = str(finding.get("path") or finding.get("file_path") or "")
+        bucket_id = _true_split_bucket(path)
+        bucket = buckets.setdefault(
+            bucket_id,
+            {
+                "id": bucket_id,
+                "description": TRUE_SPLIT_BUCKETS[bucket_id]["description"],
+                "suggested_action": TRUE_SPLIT_BUCKETS[bucket_id]["suggested_action"],
+                "count": 0,
+                "blocking_count": 0,
+                "warning_count": 0,
+                "top_paths": {},
+            },
+        )
+        bucket["count"] = int(bucket["count"]) + 1
+        if finding.get("severity") == "warning":
+            bucket["warning_count"] = int(bucket["warning_count"]) + 1
+        else:
+            bucket["blocking_count"] = int(bucket["blocking_count"]) + 1
+        top_paths = bucket["top_paths"]
+        if isinstance(top_paths, dict):
+            top_paths[path] = int(top_paths.get(path, 0)) + 1
+
+    normalized_buckets: list[dict[str, object]] = []
+    for bucket in buckets.values():
+        top_paths = bucket.pop("top_paths")
+        if not isinstance(top_paths, dict):
+            top_paths = {}
+        bucket["top_paths"] = [
+            {"path": path, "count": count}
+            for path, count in sorted(top_paths.items(), key=lambda item: (-item[1], item[0]))[:10]
+        ]
+        normalized_buckets.append(bucket)
+    normalized_buckets.sort(key=lambda item: (-int(item["blocking_count"]), -int(item["count"]), str(item["id"])))
+
+    blocking_count = sum(1 for finding in findings if finding.get("severity") != "warning")
+    return {
+        "schema": "tigermemory-true-split-blockers-v1",
+        "repo_public_ready": len(findings) == 0,
+        "finding_count": len(findings),
+        "max_findings": max_findings,
+        "findings_capped": len(findings) >= max_findings,
+        "counts_are_complete": len(findings) < max_findings,
+        "blocking_count": blocking_count,
+        "warning_count": len(findings) - blocking_count,
+        "buckets": normalized_buckets,
+        "next_actions": [
+            "Move private instance data out of the public source repo or keep publishing from generated public-core artifacts.",
+            "Replace local AGENTS/GEMINI/CLAUDE entry files with portable public templates before opening the full repo.",
+            "Treat repo-scope audit as the True Split Gate; do not conflate it with the snapshot release gate.",
+        ],
+    }
+
+
 def _included_plan(plan: dict[str, list[str]]) -> dict[str, list[str]]:
     return {key: list(plan.get(key, [])) for key in INCLUDED_PLAN_KEYS}
 
@@ -1023,6 +1132,8 @@ def main(argv: list[str] | None = None) -> int:
             "medium": sum(1 for f in sensitive_findings if f["severity"] == "medium"),
         },
     }
+    if args.audit_scope == "repo":
+        summary["true_split_blockers"] = true_split_blocker_summary(sensitive_findings)
 
     if (args.validate_checks or args.evidence_report) and module_check_validation is not None:
         summary["module_check_validation"] = module_check_validation
@@ -1056,6 +1167,8 @@ def main(argv: list[str] | None = None) -> int:
             "module_check_validation": module_check_validation,
             "public_boundary_validation": public_boundary_validation,
         }
+        if args.audit_scope == "repo" and "true_split_blockers" in summary:
+            summary["release_evidence"]["true_split_blockers"] = summary["true_split_blockers"]
         if args.split_report and "split_report" in summary:
             summary["release_evidence"]["true_split"] = summary["split_report"]
 

@@ -1019,6 +1019,98 @@ def test_repo_audit_scope_flags_private_non_public_pages(tmp_path, monkeypatch, 
     )
 
 
+def test_repo_audit_scope_reports_true_split_blocker_buckets(tmp_path, monkeypatch, capsys) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _build_fake_repo(repo)
+    (repo / "AGENTS.md").write_text(
+        f"# Local agent rules\n\nUse local checkout {repo}\n",
+        encoding="utf-8",
+    )
+    private_report = repo / "data" / "expense_import" / "reports" / "2026" / "private.md"
+    private_report.parent.mkdir(parents=True, exist_ok=True)
+    private_report.write_text(f"Private expense import report path: {repo}\n", encoding="utf-8")
+    monkeypatch.setattr(tigermemory_publish, "REPO_ROOT", repo)
+
+    rc = tigermemory_publish.main([
+        "--dest",
+        str(tmp_path / "repo-audit"),
+        "--dry-run",
+        "--json",
+        "--audit-scope",
+        "repo",
+        "--evidence-report",
+    ])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 3
+    blockers = payload["true_split_blockers"]
+    assert blockers["schema"] == "tigermemory-true-split-blockers-v1"
+    assert blockers["repo_public_ready"] is False
+    assert blockers["findings_capped"] is False
+    assert blockers["counts_are_complete"] is True
+    assert blockers["blocking_count"] >= 1
+    buckets = {bucket["id"]: bucket for bucket in blockers["buckets"]}
+    assert buckets["private_instance_data"]["blocking_count"] >= 1
+    assert any(
+        item["path"] == "data/expense_import/reports/2026/private.md"
+        for item in buckets["private_instance_data"]["top_paths"]
+    )
+    assert buckets["root_agent_rules"]["warning_count"] >= 1
+    assert payload["release_evidence"]["true_split_blockers"]["schema"] == "tigermemory-true-split-blockers-v1"
+
+
+def test_true_split_blockers_report_warning_only_repo_not_public_ready(tmp_path, monkeypatch, capsys) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _build_fake_repo(repo)
+    (repo / "AGENTS.md").write_text(
+        f"# Local agent rules\n\nUse local checkout {repo}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tigermemory_publish, "REPO_ROOT", repo)
+
+    rc = tigermemory_publish.main([
+        "--dest",
+        str(tmp_path / "repo-audit"),
+        "--dry-run",
+        "--json",
+        "--audit-scope",
+        "repo",
+    ])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    blockers = payload["true_split_blockers"]
+    assert blockers["repo_public_ready"] is False
+    assert blockers["blocking_count"] == 0
+    assert blockers["warning_count"] >= 1
+
+
+def test_true_split_blocker_summary_marks_capped_counts() -> None:
+    findings = [
+        {
+            "path": f"data/expense_import/reports/2026/private-{idx}.md",
+            "severity": "high",
+            "kind": "path_leak",
+        }
+        for idx in range(tigermemory_publish.MAX_FINDINGS)
+    ]
+
+    payload = tigermemory_publish.true_split_blocker_summary(findings)
+
+    assert payload["finding_count"] == tigermemory_publish.MAX_FINDINGS
+    assert payload["max_findings"] == tigermemory_publish.MAX_FINDINGS
+    assert payload["findings_capped"] is True
+    assert payload["counts_are_complete"] is False
+
+
+def test_true_split_private_wiki_bucket_uses_excluded_partition_source(monkeypatch) -> None:
+    monkeypatch.setattr(tigermemory_publish, "EXCLUDED_WIKI_PARTITIONS", ("person", "investment", "private-notes"))
+
+    assert tigermemory_publish._true_split_bucket("wiki/private-notes/secret.md") == "private_wiki_partition"
+
+
 def test_module_entrypoint_dry_run_json_reports_public_field_exclusions(tmp_path: pathlib.Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
