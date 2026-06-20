@@ -95,6 +95,7 @@ __all__ = [
     "TOPICS",
     "TZ_CN",
     "WIKI_PATH_RE",
+    "answer_from_public_evidence",
     "check_transport_security",
     "configure_stdio",
     "deepseek_admin_model",
@@ -823,6 +824,7 @@ _LOCAL_CJK_STOP_TERMS = {
     "看看",
     "关于",
     "是否",
+    "是",
     "需要",
 }
 
@@ -2130,18 +2132,35 @@ _SEARCH_EXTS = {".md", ".txt"}
 _SEARCH_FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 _SEARCH_ALIASES_INLINE_RE = re.compile(r'^aliases:\s*\[(.+?)\]\s*$', re.MULTILINE)
 _SEARCH_ALIAS_ITEM_RE = re.compile(r'"([^"]*)"|\'([^\']*)\'')
+_SEARCH_SCALAR_RE_TEMPLATE = r"^{field}:\s*(.+?)\s*$"
+_SEARCH_HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 _SEARCH_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _SEARCH_AGGREGATE_REPORT_PATHS = {
     "wiki/systems/memory-retrieval-eval.md",
 }
 _SEARCH_CJK_STOP_TERMS = {
+    "是谁",
+    "是什么",
+    "什么",
     "如何",
     "怎么",
     "怎么办",
+    "一下",
+    "帮我",
+    "请问",
+    "查询",
+    "搜索",
+    "看看",
+    "关于",
+    "是否",
+    "需要",
     "方法",
     "步骤",
     "能力",
     "这样做",
+    "的",
+    "吗",
+    "呢",
 }
 _SEARCH_CJK_SYNONYMS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("提交", ("提交", "commit")),
@@ -2178,6 +2197,58 @@ _SEARCH_CJK_SYNONYMS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
+def _search_bridge_groups_from_cjk_token(token: str, *, max_terms_per_group: int = 8) -> list[list[str]]:
+    groups: list[list[str]] = []
+
+    def clean_term(term: str) -> str:
+        value = term.strip().lower()
+        if not value or value in _SEARCH_CJK_STOP_TERMS:
+            return ""
+        if _LOCAL_CJK_RUN_RE.fullmatch(value) and len(value) < 2:
+            return ""
+        return value
+
+    def group_from(candidates: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            value = clean_term(candidate)
+            if not value or value in seen:
+                continue
+            out.append(value)
+            seen.add(value)
+            if len(out) >= max_terms_per_group:
+                break
+        return out
+
+    stop_terms = sorted(_SEARCH_CJK_STOP_TERMS | _LOCAL_CJK_STOP_TERMS, key=len, reverse=True)
+    for run in _LOCAL_CJK_RUN_RE.findall(token):
+        cleaned = run
+        for stop in stop_terms:
+            cleaned = cleaned.replace(stop, "")
+        cleaned = clean_term(cleaned)
+        if not cleaned:
+            continue
+        if len(cleaned) <= 4:
+            candidates = [cleaned]
+            for width in (4, 3, 2):
+                if len(cleaned) < width:
+                    continue
+                for idx in range(0, len(cleaned) - width + 1):
+                    candidates.append(cleaned[idx : idx + width])
+            group = group_from(candidates)
+            if group:
+                groups.append(group)
+            continue
+        leading = group_from([cleaned, cleaned[:4], cleaned[:3], cleaned[:2]])
+        trailing = group_from([cleaned, cleaned[-4:], cleaned[-3:], cleaned[-2:]])
+        if leading:
+            groups.append(leading)
+        if trailing and trailing != leading:
+            groups.append(trailing)
+    return groups
+
+
 def search_query_term_groups(query: str) -> list[list[str]]:
     """Return AND groups with OR alternatives for lightweight lexical recall.
 
@@ -2188,16 +2259,23 @@ def search_query_term_groups(query: str) -> list[list[str]]:
     groups: list[list[str]] = []
     seen: set[tuple[str, ...]] = set()
     for raw in re.split(r"\s+", (query or "").strip().lower()):
-        token = raw.strip()
+        token = raw.strip().strip("，。！？；：,.!?;:()[]{}<>《》“”\"'")
         if not token:
             continue
         token_groups: list[list[str]] = []
+        latin_terms = _LOCAL_LATIN_TERM_RE.findall(token)
+        for latin in latin_terms:
+            token_groups.append([latin.lower()])
         if _SEARCH_CJK_RE.search(token):
+            cjk_synonym_count = 0
             for cjk_term, alternatives in _SEARCH_CJK_SYNONYMS:
                 if cjk_term in token:
                     token_groups.append([alt.lower() for alt in alternatives if alt])
-            for stop_term in _SEARCH_CJK_STOP_TERMS:
+                    cjk_synonym_count += 1
+            for stop_term in sorted(_SEARCH_CJK_STOP_TERMS, key=len, reverse=True):
                 token = token.replace(stop_term, "")
+            if cjk_synonym_count == 0:
+                token_groups.extend(_search_bridge_groups_from_cjk_token(token))
         if not token_groups and token:
             token_groups.append([token])
         for group in token_groups:
@@ -2235,20 +2313,116 @@ def _slug_search_text(rel: str) -> str:
     return re.sub(r"[^a-z0-9_]+", " ", rel.lower())
 
 
-def _extract_search_aliases(text: str) -> list[str]:
-    """Extract inline frontmatter aliases for lexical ranking."""
+def _extract_search_frontmatter(text: str) -> str:
     fm = _SEARCH_FRONTMATTER_RE.match(text)
     if not fm:
+        return ""
+    return fm.group(1)
+
+
+def _dedupe_search_strings(items: list[str], *, limit: int = 16) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        value = re.sub(r"\s+", " ", str(item or "").strip())
+        if not value:
+            continue
+        key = value.lower()
+        if key in seen:
+            continue
+        out.append(value[:200])
+        seen.add(key)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _parse_inline_search_list(value: str) -> list[str]:
+    raw = str(value or "").strip()
+    if raw.startswith("[") and raw.endswith("]"):
+        raw = raw[1:-1]
+    quoted = [match.group(1) or match.group(2) or "" for match in _SEARCH_ALIAS_ITEM_RE.finditer(raw)]
+    if quoted:
+        return _dedupe_search_strings(quoted)
+    return _dedupe_search_strings([part.strip() for part in raw.split(",")])
+
+
+def _extract_frontmatter_list(fm: str, field: str, *, limit: int = 16) -> list[str]:
+    """Extract simple YAML-ish scalar, inline list, or block-list values."""
+    if not fm:
         return []
-    aliases = _SEARCH_ALIASES_INLINE_RE.search(fm.group(1))
-    if not aliases:
-        return []
+    lines = fm.splitlines()
     items: list[str] = []
-    for match in _SEARCH_ALIAS_ITEM_RE.finditer(aliases.group(1)):
-        value = (match.group(1) or match.group(2) or "").strip()
+    field_prefix = f"{field}:"
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith(field_prefix):
+            continue
+        value = stripped[len(field_prefix):].strip()
         if value:
-            items.append(value)
-    return items
+            items.extend(_parse_inline_search_list(value))
+            break
+        for child in lines[idx + 1:]:
+            if child and not child.startswith((" ", "\t", "-")):
+                break
+            child_value = child.strip()
+            if child_value.startswith("-"):
+                items.extend(_parse_inline_search_list(child_value[1:].strip()))
+        break
+    return _dedupe_search_strings(items, limit=limit)
+
+
+def _extract_frontmatter_scalar(fm: str, field: str, *, limit: int = 260) -> str:
+    if not fm:
+        return ""
+    pattern = re.compile(_SEARCH_SCALAR_RE_TEMPLATE.format(field=re.escape(field)), re.MULTILINE)
+    match = pattern.search(fm)
+    if not match:
+        return ""
+    value = match.group(1).strip().strip('"').strip("'")
+    return re.sub(r"\s+", " ", value)[:limit]
+
+
+def _extract_markdown_section(text: str, heading_names: tuple[str, ...], *, limit: int = 500) -> str:
+    matches = list(_SEARCH_HEADING_RE.finditer(text))
+    wanted = {name.lower() for name in heading_names}
+    for idx, match in enumerate(matches):
+        heading = match.group(1).strip().lower()
+        if heading not in wanted:
+            continue
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        body = re.sub(r"\s+", " ", text[start:end].strip())
+        return body[:limit]
+    return ""
+
+
+def _extract_search_metadata(text: str) -> dict[str, Any]:
+    """Extract public Wiki metadata used by lexical search and answer evidence."""
+    fm = _extract_search_frontmatter(text)
+    aliases = _extract_frontmatter_list(fm, "aliases")
+    tags = _extract_frontmatter_list(fm, "tags", limit=12)
+    key_facts = _extract_frontmatter_list(fm, "key_facts", limit=8)
+    summary = _extract_frontmatter_scalar(fm, "summary")
+    if not summary:
+        summary = _extract_markdown_section(text, ("摘要", "summary"), limit=320)
+    if not key_facts:
+        facts_text = _extract_markdown_section(text, ("关键事实", "key facts", "facts"), limit=500)
+        key_facts = _dedupe_search_strings(
+            [re.sub(r"^\s*[-*]\s*", "", line).strip() for line in facts_text.split("。")],
+            limit=6,
+        )
+    return {
+        "aliases": aliases,
+        "tags": tags,
+        "summary": summary,
+        "key_facts": key_facts,
+    }
+
+
+def _extract_search_aliases(text: str) -> list[str]:
+    """Extract frontmatter aliases for lexical ranking."""
+    return list(_extract_search_metadata(text).get("aliases") or [])
 
 
 def primary_search_scope(query: str) -> str:
@@ -2322,12 +2496,17 @@ def _rank_search_hit(
     title: str,
     term_groups: list[list[str]],
     aliases: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> float:
     """Rank exact pages above aggregate pages without changing the AND contract."""
     score = float(raw_score)
     title_lower = title.lower()
     slug_words = set(_slug_search_text(rel).split())
     alias_text = " ".join(aliases or []).lower()
+    meta = metadata or {}
+    tag_text = " ".join(meta.get("tags") or []).lower()
+    summary_text = str(meta.get("summary") or "").lower()
+    facts_text = " ".join(meta.get("key_facts") or []).lower()
     query_phrase = " ".join(group[0] for group in term_groups if group and group[0]).strip()
 
     # Slug/title/alias hits are strong signals for canonical pages. Body-only
@@ -2339,6 +2518,16 @@ def _rank_search_hit(
             score += 15
         if _group_in_text(group, alias_text):
             score += 20
+        if _group_in_text(group, tag_text):
+            score += 18
+        if _group_in_text(group, summary_text):
+            score += 12
+        if _group_in_text(group, facts_text):
+            score += 16
+        if any(_SEARCH_CJK_RE.search(term) and len(term) >= 4 and term in summary_text for term in group):
+            score += 55
+        if any(_SEARCH_CJK_RE.search(term) and len(term) >= 4 and term in facts_text for term in group):
+            score += 60
     if title_lower and all(_group_in_text(group, title_lower) for group in term_groups):
         score += 80
         title_token_count = len([token for token in re.split(r"\W+", title_lower) if token])
@@ -2346,6 +2535,12 @@ def _rank_search_hit(
             score += 120
     if alias_text and all(_group_in_text(group, alias_text) for group in term_groups):
         score += 40
+    if tag_text and all(_group_in_text(group, tag_text) for group in term_groups):
+        score += 35
+    if summary_text and all(_group_in_text(group, summary_text) for group in term_groups):
+        score += 30
+    if facts_text and all(_group_in_text(group, facts_text) for group in term_groups):
+        score += 35
     if query_phrase:
         if query_phrase in title_lower:
             score += 120
@@ -2353,9 +2548,9 @@ def _rank_search_hit(
             score += 120
     if _is_person_profile_query(term_groups):
         if rel.startswith("wiki/person/") and not rel.endswith("/index.md"):
-            score += 300
+            score += 1000
         else:
-            score *= 0.2
+            score *= 0.02
 
     if rel in _SEARCH_AGGREGATE_REPORT_PATHS:
         score *= 0.05
@@ -2440,20 +2635,38 @@ def search_wiki(
                 if s and not s.startswith("---") and ":" not in s[:20]:
                     title = s[:80]
                     break
-            aliases = _extract_search_aliases(text)
-            searchable = f"{rel} {_slug_search_text(rel)} {title} {' '.join(aliases)}\n{text}"
+            metadata = _extract_search_metadata(text)
+            aliases = list(metadata.get("aliases") or [])
+            metadata_text = " ".join([
+                " ".join(aliases),
+                " ".join(metadata.get("tags") or []),
+                str(metadata.get("summary") or ""),
+                " ".join(metadata.get("key_facts") or []),
+            ])
+            searchable = f"{rel} {_slug_search_text(rel)} {title} {metadata_text}\n{text}"
             raw_score = _score_file_for_query(searchable.lower(), term_groups)
             if raw_score == 0:
                 continue
-            score = _rank_search_hit(raw_score, rel, title, term_groups, aliases)
+            score = _rank_search_hit(raw_score, rel, title, term_groups, aliases, metadata)
             hit = {
                 "path": rel,
                 "score": score,
                 "title": title,
                 "snippet": _best_snippet(text, snippet_terms),
             }
+            if aliases:
+                hit["aliases"] = aliases
+            if metadata.get("tags"):
+                hit["tags"] = metadata["tags"]
+            if metadata.get("summary"):
+                hit["summary"] = metadata["summary"]
+            if metadata.get("key_facts"):
+                hit["key_facts"] = metadata["key_facts"]
             if explain:
                 alias_text = " ".join(aliases).lower()
+                tag_text = " ".join(metadata.get("tags") or []).lower()
+                summary_text = str(metadata.get("summary") or "").lower()
+                facts_text = " ".join(metadata.get("key_facts") or []).lower()
                 hit["score_breakdown"] = {
                     "lexical_score": score,
                     "lexical_rank": None,
@@ -2462,6 +2675,18 @@ def search_wiki(
                     "alias_match": bool(
                         alias_text
                         and any(_group_in_text(group, alias_text) for group in term_groups)
+                    ),
+                    "tag_match": bool(
+                        tag_text
+                        and any(_group_in_text(group, tag_text) for group in term_groups)
+                    ),
+                    "summary_match": bool(
+                        summary_text
+                        and any(_group_in_text(group, summary_text) for group in term_groups)
+                    ),
+                    "key_fact_match": bool(
+                        facts_text
+                        and any(_group_in_text(group, facts_text) for group in term_groups)
                     ),
                     "rrf_score": None,
                     "lexical_anchor": False,
@@ -2766,6 +2991,174 @@ def search_wiki_hybrid(
             break
         add_entry(entry)
     return out
+
+
+# ---------- Public evidence-grounded answer ----------
+
+PUBLIC_ASK_PROMPT = """你是 TigerMemory 的公开版 Wiki Admin 问答助手。
+
+任务：只根据用户给出的 evidence 回答问题，并附来源。
+
+硬边界：
+1. 只能使用 evidence 中的信息；不要使用常识补全、不要猜测。
+2. 如果证据不足，answer 要明确说“当前证据不足”，insufficient_evidence=true。
+3. 每个关键结论都要引用 citation id，例如 W1、M1。
+4. 不要输出 markdown 代码块，不要输出思考过程，只输出 JSON 对象。
+
+输出 JSON：
+{
+  "answer": "面向普通用户的简洁中文回答，包含引用标记",
+  "claims": [{"text": "结论", "citation_ids": ["W1"]}],
+  "citations": [{"id": "W1", "reason": "为什么引用它"}],
+  "confidence": 0-100,
+  "insufficient_evidence": false
+}
+"""
+
+
+def _public_evidence_label(item: dict[str, Any], index_by_source: dict[str, int]) -> str:
+    source = str(item.get("source") or "evidence").lower()
+    prefix = "W" if source == "wiki" else "M" if source == "memory" else "E"
+    index_by_source[prefix] = index_by_source.get(prefix, 0) + 1
+    return f"{prefix}{index_by_source[prefix]}"
+
+
+def _public_evidence_text(item: dict[str, Any], label: str) -> str:
+    source = str(item.get("source") or "evidence")
+    lines = [f"[{label}] source={source}"]
+    if item.get("path"):
+        lines.append(f"path={item.get('path')}")
+    if item.get("id"):
+        lines.append(f"id={item.get('id')}")
+    if item.get("title"):
+        lines.append(f"title={item.get('title')}")
+    if item.get("topic"):
+        lines.append(f"topic={item.get('topic')}")
+    if item.get("tags"):
+        lines.append(f"tags={', '.join(str(x) for x in item.get('tags') or [])}")
+    if item.get("summary"):
+        lines.append(f"summary={str(item.get('summary'))[:420]}")
+    if item.get("key_facts"):
+        facts = "; ".join(str(x) for x in item.get("key_facts") or [])
+        lines.append(f"key_facts={facts[:600]}")
+    snippet = str(item.get("snippet") or "")
+    if snippet:
+        lines.append(f"snippet={snippet[:700]}")
+    return "\n".join(lines)
+
+
+def answer_from_public_evidence(
+    query: str,
+    evidence: list[dict[str, Any]],
+    *,
+    timeout: int = 15,
+    max_evidence: int = 8,
+) -> dict[str, Any]:
+    """Generate a source-grounded public answer from already-selected evidence."""
+    q = str(query or "").strip()
+    if not q:
+        raise ValueError("query is required")
+    selected = [item for item in evidence if isinstance(item, dict)][:max(1, max_evidence)]
+    if not selected:
+        return {
+            "schema": "tigermemory-public-answer-v1",
+            "query": q,
+            "answer": "当前证据不足，未找到可以回答这个问题的本地资料。",
+            "claims": [],
+            "citations": [],
+            "confidence": 0,
+            "insufficient_evidence": True,
+            "model": None,
+        }
+
+    index_by_source: dict[str, int] = {}
+    labelled: list[tuple[str, dict[str, Any]]] = []
+    evidence_blocks: list[str] = []
+    for item in selected:
+        label = _public_evidence_label(item, index_by_source)
+        labelled.append((label, item))
+        evidence_blocks.append(_public_evidence_text(item, label))
+    allowed_ids = {label for label, _item in labelled}
+    user_msg = (
+        f"question:\n{q}\n\n"
+        f"evidence:\n\n" + "\n\n".join(evidence_blocks) + "\n\n"
+        "请输出 JSON 对象。"
+    )
+    model = deepseek_admin_model()
+    ok, parsed = _call_deepseek_json(
+        PUBLIC_ASK_PROMPT,
+        user_msg,
+        timeout=timeout,
+        temperature=0.1,
+        max_tokens=1600,
+        purpose="public_ask",
+        model=model,
+    )
+    if not ok:
+        raise RuntimeError(str(parsed))
+    if not isinstance(parsed, dict):
+        raise RuntimeError("malformed public answer response")
+
+    raw_claims = parsed.get("claims") if isinstance(parsed.get("claims"), list) else []
+    claims: list[dict[str, Any]] = []
+    cited_ids: set[str] = set()
+    for claim in raw_claims:
+        if not isinstance(claim, dict):
+            continue
+        text = re.sub(r"\s+", " ", str(claim.get("text") or "").strip())
+        ids = [
+            str(cid).strip()
+            for cid in (claim.get("citation_ids") or [])
+            if str(cid).strip() in allowed_ids
+        ]
+        if text:
+            claims.append({"text": text[:400], "citation_ids": ids})
+            cited_ids.update(ids)
+
+    raw_citations = parsed.get("citations") if isinstance(parsed.get("citations"), list) else []
+    citation_reason_by_id: dict[str, str] = {}
+    for citation in raw_citations:
+        if not isinstance(citation, dict):
+            continue
+        cid = str(citation.get("id") or "").strip()
+        if cid in allowed_ids:
+            citation_reason_by_id[cid] = re.sub(r"\s+", " ", str(citation.get("reason") or "").strip())[:240]
+            cited_ids.add(cid)
+
+    citations: list[dict[str, Any]] = []
+    for label, item in labelled:
+        if label not in cited_ids:
+            continue
+        citation = {"id": label, "source": item.get("source")}
+        for key in ("path", "id", "title", "topic"):
+            if item.get(key):
+                citation[key] = item.get(key)
+        if citation_reason_by_id.get(label):
+            citation["reason"] = citation_reason_by_id[label]
+        citations.append(citation)
+
+    answer = re.sub(r"\s+", " ", str(parsed.get("answer") or "").strip())
+    insufficient = bool(parsed.get("insufficient_evidence"))
+    if not answer:
+        answer = "当前证据不足，未能生成可靠回答。"
+        insufficient = True
+    confidence = _admin_confidence(parsed.get("confidence"))
+    if not citations and not insufficient:
+        insufficient = True
+        confidence = min(confidence, 30)
+        answer = f"{answer}（注意：模型没有给出有效来源，建议只作为草稿参考。）"
+
+    return {
+        "schema": "tigermemory-public-answer-v1",
+        "query": q,
+        "answer": answer,
+        "claims": claims,
+        "citations": citations,
+        "confidence": confidence,
+        "insufficient_evidence": insufficient,
+        "model": model,
+        "evidence_used": [label for label, _item in labelled],
+    }
 
 
 # ---------- Validators ----------
@@ -3877,6 +4270,8 @@ WIKI_ADMIN_PROPOSAL_PROMPT = """你是 TigerMemory 公开版的 Wiki Admin。
   "rationale": "为什么值得进长期 Wiki",
   "confidence": 0-100,
   "aliases": ["可选别名"],
+  "tags": ["可选标签，短词"],
+  "key_facts": ["可选关键事实，每条一句话"],
   "evidence_refs": ["来源或证据"]
 }
 
@@ -4095,12 +4490,25 @@ def _admin_confidence(value: Any) -> int:
     return max(0, min(100, number))
 
 
-def _admin_body_with_required_sections(body: str, summary: str, evidence_refs: list[str]) -> str:
+def _admin_body_with_required_sections(
+    body: str,
+    summary: str,
+    evidence_refs: list[str],
+    key_facts: list[str] | None = None,
+) -> str:
     text = str(body or "").strip()
     if not text:
         text = f"## 摘要\n\n{summary or '待补充摘要。'}\n"
     if "## 摘要" not in text:
         text = f"## 摘要\n\n{summary or '待补充摘要。'}\n\n{text}"
+    facts = key_facts or []
+    if facts and "## 关键事实" not in text and "## Key Facts" not in text:
+        facts_md = "\n".join(f"- {fact}" for fact in facts)
+        if "## 来源" in text:
+            before, after = text.split("## 来源", 1)
+            text = before.rstrip() + "\n\n## 关键事实\n\n" + facts_md + "\n\n## 来源" + after
+        else:
+            text = text.rstrip() + "\n\n## 关键事实\n\n" + facts_md + "\n"
     if "## 来源" not in text:
         refs = evidence_refs or ["user-provided text"]
         text = text.rstrip() + "\n\n## 来源\n\n" + "\n".join(f"- {ref}" for ref in refs) + "\n"
@@ -4179,18 +4587,29 @@ def propose_wiki_admin_page(
     summary = re.sub(r"\s+", " ", str(parsed.get("summary") or "").strip())[:220]
     evidence_refs = _admin_string_list(parsed.get("evidence_refs"))
     aliases = _admin_string_list(parsed.get("aliases"), limit=6)
+    tags = _admin_string_list(parsed.get("tags"), limit=8)
+    key_facts = _admin_string_list(parsed.get("key_facts"), limit=8)
     slug = _admin_slug(str(parsed.get("slug") or ""), fallback_seed=f"{proposal_title} {source_text[:200]}")
     target_path = f"wiki/{partition}/{slug}.md"
-    body = _admin_body_with_required_sections(str(parsed.get("body_markdown") or ""), summary, evidence_refs)
+    body = _admin_body_with_required_sections(str(parsed.get("body_markdown") or ""), summary, evidence_refs, key_facts)
     fm_lines = [
         "owner: human",
         "status: active",
         f"title: {_admin_yaml_quote(proposal_title)}",
+        f"summary: {_admin_yaml_quote(summary)}",
     ]
     if aliases:
         fm_lines.append("aliases:")
         for alias in aliases:
             fm_lines.append(f"  - {_admin_yaml_quote(alias)}")
+    if tags:
+        fm_lines.append("tags:")
+        for tag in tags:
+            fm_lines.append(f"  - {_admin_yaml_quote(tag)}")
+    if key_facts:
+        fm_lines.append("key_facts:")
+        for fact in key_facts:
+            fm_lines.append(f"  - {_admin_yaml_quote(fact)}")
     wiki_markdown = render_wiki_body("\n".join(fm_lines), body)
     return {
         "schema": "tigermemory-admin-proposal-v1",
@@ -4204,6 +4623,8 @@ def propose_wiki_admin_page(
         "rationale": str(parsed.get("rationale") or "").strip()[:500],
         "confidence": _admin_confidence(parsed.get("confidence")),
         "aliases": aliases,
+        "tags": tags,
+        "key_facts": key_facts,
         "evidence_refs": evidence_refs or [source or "user-provided text"],
         "wiki_markdown": wiki_markdown,
         "user_review_required": True,

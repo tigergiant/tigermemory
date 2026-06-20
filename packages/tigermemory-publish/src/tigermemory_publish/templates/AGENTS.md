@@ -47,13 +47,14 @@ tm llm status
 tm admin guide
 "hello local memory" | tm write-memory --agent codex --topic systems
 tm search --query "hello local memory"
+tm ask --query "hello local memory"
 tm ask --offline --query "hello local memory"
 ```
 
 `tm llm status` only checks whether provider environment variables exist; it
-must not print secrets. `tm ask --offline` returns local evidence only. It must
-not call online Mem0 or an AI model and should be treated as fallback evidence,
-not the full Wiki Admin answer path.
+must not print secrets. `tm ask` retrieves local evidence first, then asks the
+configured LLM to answer with citations. `tm ask --offline` returns local
+evidence only and must not call online Mem0 or an AI model.
 
 Recommended DeepSeek defaults are role-based: routine JSON/routing uses
 `DEEPSEEK_MODEL=deepseek-v4-flash`; `tm admin propose` uses

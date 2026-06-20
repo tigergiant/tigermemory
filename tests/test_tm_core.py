@@ -344,6 +344,84 @@ investment portfolio family holdings investment portfolio family holdings invest
     assert results[0]["path"] == "wiki/investment/portfolio-overview.md"
 
 
+def test_search_wiki_uses_block_aliases_tags_summary_and_key_facts(monkeypatch, tmp_path):
+    wiki = tmp_path / "wiki"
+    (wiki / "systems").mkdir(parents=True)
+    (wiki / "systems" / "admin-answer.md").write_text(
+        """---
+owner: human
+status: active
+title: "Public Answer"
+summary: "公开版自然语言问答使用证据优先回答。"
+aliases:
+  - "public answer mode"
+tags:
+  - "问答"
+  - "LLM Admin"
+key_facts:
+  - "tm ask 在线模式必须返回带来源回答。"
+---
+
+# Public Answer
+
+Body intentionally sparse.
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+
+    alias_results = tm_core.search_wiki("public answer mode", size=1, include_sources=False, explain=True)
+    tag_results = tm_core.search_wiki("LLM Admin 问答", size=1, include_sources=False, explain=True)
+    fact_results = tm_core.search_wiki("带来源回答", size=1, include_sources=False, explain=True)
+
+    assert alias_results[0]["path"] == "wiki/systems/admin-answer.md"
+    assert alias_results[0]["aliases"] == ["public answer mode"]
+    assert tag_results[0]["tags"] == ["问答", "LLM Admin"]
+    assert tag_results[0]["score_breakdown"]["tag_match"] is True
+    assert fact_results[0]["key_facts"] == ["tm ask 在线模式必须返回带来源回答。"]
+    assert fact_results[0]["score_breakdown"]["key_fact_match"] is True
+
+
+def test_search_wiki_handles_unsegmented_chinese_question(monkeypatch, tmp_path):
+    wiki = tmp_path / "wiki"
+    (wiki / "systems").mkdir(parents=True)
+    (wiki / "systems" / "public-core-contract.md").write_text(
+        """---
+owner: human
+status: active
+title: "TigerMemory Public Core Contract"
+summary: "本文定义 TigerMemory 首次公开快照可以承诺的公共核心边界。"
+aliases: ["public core contract", "公共核心契约"]
+---
+
+# TigerMemory Public Core Contract
+
+## 摘要
+
+公开产品定位改为 LLM-first，同时保留 local fallback。
+""",
+        encoding="utf-8",
+    )
+    (wiki / "systems" / "product-vision.md").write_text(
+        """---
+owner: human
+status: active
+title: "TigerMemory Product Vision"
+summary: "TigerMemory 公开版会复用私有版核心能力，并持续明确产品边界。"
+aliases: ["tigermemory 产品愿景", "公开版核心能力"]
+---
+
+# TigerMemory Product Vision
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+
+    results = tm_core.search_wiki("TigerMemory公开版的核心边界是什么？", size=1, include_sources=False)
+
+    assert results[0]["path"] == "wiki/systems/public-core-contract.md"
+
+
 def test_search_wiki_ranks_exact_alias_phrase_above_related_spec(monkeypatch, tmp_path):
     wiki = tmp_path / "wiki"
     (wiki / "systems").mkdir(parents=True)
@@ -446,6 +524,59 @@ Body mentions routing.
     assert breakdown["alias_match"] is True
     assert breakdown["vector_score"] is None
     assert breakdown["rrf_score"] is None
+
+
+def test_answer_from_public_evidence_filters_invalid_citations(monkeypatch, tmp_path):
+    env_path = tmp_path / "runtime" / "openmemory" / ".env"
+    env_path.parent.mkdir(parents=True)
+    env_path.write_text("DEEPSEEK_ADMIN_MODEL=answer-model\nDEEPSEEK_API_KEY=stub\n", encoding="utf-8")
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+
+    def fake_call(_system_prompt, user_msg, **kwargs):
+        assert kwargs["model"] == "answer-model"
+        assert "[W1]" in user_msg
+        return True, {
+            "answer": "公开版可以基于本地证据回答问题 [W1]。",
+            "claims": [
+                {"text": "公开版可以回答。", "citation_ids": ["W1", "BAD"]},
+            ],
+            "citations": [
+                {"id": "W1", "reason": "测试证据"},
+                {"id": "BAD", "reason": "无效证据"},
+            ],
+            "confidence": 88,
+            "insufficient_evidence": False,
+        }
+
+    monkeypatch.setattr(tm_core, "_call_deepseek_json", fake_call)
+
+    result = tm_core.answer_from_public_evidence(
+        "公开版能回答吗",
+        [{"source": "wiki", "path": "wiki/systems/public.md", "title": "Public", "snippet": "公开版可以回答。"}],
+    )
+
+    assert result["schema"] == "tigermemory-public-answer-v1"
+    assert result["model"] == "answer-model"
+    assert result["confidence"] == 88
+    assert result["citations"] == [{"id": "W1", "source": "wiki", "path": "wiki/systems/public.md", "title": "Public", "reason": "测试证据"}]
+    assert result["claims"] == [{"text": "公开版可以回答。", "citation_ids": ["W1"]}]
+
+
+def test_answer_from_public_evidence_does_not_call_llm_without_evidence(monkeypatch):
+    called = False
+
+    def fake_call(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return True, {}
+
+    monkeypatch.setattr(tm_core, "_call_deepseek_json", fake_call)
+
+    result = tm_core.answer_from_public_evidence("unknown", [])
+
+    assert result["insufficient_evidence"] is True
+    assert result["model"] is None
+    assert called is False
 
 
 def test_search_wiki_hybrid_promotes_dominant_lexical_anchor(monkeypatch):

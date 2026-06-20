@@ -147,6 +147,7 @@ def _build_fake_repo(root: pathlib.Path) -> None:
                 "Run `tm llm guide` and `tm llm status` before the full Wiki Admin path.\n\n"
                 "Routine JSON/routing uses deepseek-v4-flash; Wiki Admin proposals use "
                 "DEEPSEEK_ADMIN_MODEL=deepseek-v4-pro by default.\n\n"
+                "Use `tm ask --query \"hello local memory\"` for a source-grounded LLM answer.\n\n"
                 "Use `tm ask --offline --query \"hello local memory\"` to return local evidence without AI.\n\n"
                 "Do not install WSL, Docker, Qdrant, Caddy, or OpenMemory just to try the basic mode.\n"
                 "Do not use `python -m tm`; use the installed `tm` console script.\n",
@@ -157,6 +158,7 @@ def _build_fake_repo(root: pathlib.Path) -> None:
                 "# public AGENTS\n\n"
                 "tm llm status checks provider configuration without printing secrets.\n"
                 "DEEPSEEK_ADMIN_MODEL=deepseek-v4-pro is the default for durable Wiki Admin drafts.\n"
+                "tm ask answers with citations from local evidence.\n"
                 "tm ask --offline returns local evidence only and must not call online Mem0.\n",
                 encoding="utf-8",
             )
@@ -759,11 +761,13 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     assert "tm llm status" in public_readme
     assert "DEEPSEEK_ADMIN_MODEL" in public_readme
     assert "deepseek-v4-pro" in public_readme
+    assert "tm ask --query" in public_readme
     assert "tm ask --offline" in public_readme
     assert "Do not install WSL, Docker, Qdrant, Caddy, or OpenMemory just to try the basic" in public_readme
     assert "Do not use `python -m tm`" in public_readme
     assert "tm llm status" in (dest / "AGENTS.md").read_text(encoding="utf-8")
     assert "DEEPSEEK_ADMIN_MODEL=deepseek-v4-pro" in (dest / "AGENTS.md").read_text(encoding="utf-8")
+    assert "tm ask answers with citations" in (dest / "AGENTS.md").read_text(encoding="utf-8")
     assert "tm ask --offline" in (dest / "AGENTS.md").read_text(encoding="utf-8")
     assert "tm llm status" in (dest / "index.md").read_text(encoding="utf-8")
     assert "tm ask --offline" in (dest / "index.md").read_text(encoding="utf-8")

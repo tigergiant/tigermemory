@@ -104,6 +104,18 @@ tm search --scope all --query "local memory"
 tm search --scope wiki --query "项目画布"
 ```
 
+Ask a source-grounded natural-language question with the configured LLM:
+
+```powershell
+tm ask --query "what do we know about project canvas?" --scope all
+tm ask --query "项目画布是什么？" --scope wiki
+```
+
+`tm ask` retrieves local memory and Wiki evidence first, then asks the configured
+LLM to answer only from that evidence with citations. The Wiki Admin answer role
+uses the durable admin model setting (`DEEPSEEK_ADMIN_MODEL`, default
+`deepseek-v4-pro`).
+
 Use the offline fallback when you want to inspect evidence without calling a
 model:
 
@@ -113,9 +125,7 @@ tm ask --offline --query "项目画布" --scope wiki
 ```
 
 Offline ask only returns local evidence from SQLite and Markdown. It does not
-call an AI model and does not generate a final natural-language answer. The full
-TigerMemory Wiki Admin path is LLM-first; offline ask is a fallback and release
-smoke, not the main product experience.
+call an AI model and does not generate a final natural-language answer.
 
 Start the local dashboard:
 

@@ -213,21 +213,55 @@ def cmd_profile(args: argparse.Namespace) -> int:
 
 
 def _mask_env_presence(name: str) -> dict[str, object]:
-    value = os.environ.get(name, "")
+    value = _llm_env_value(name)
     return {
         "name": name,
         "configured": bool(value.strip()),
     }
 
 
+def _llm_env_path() -> pathlib.Path:
+    override = os.environ.get("TIGERMEMORY_OPENMEMORY_ENV", "").strip()
+    if override:
+        return pathlib.Path(override).expanduser().resolve()
+    return REPO_ROOT / "runtime" / "openmemory" / ".env"
+
+
+def _llm_env_file_values() -> dict[str, str]:
+    env_path = _llm_env_path()
+    if not env_path.exists():
+        return {}
+    values: dict[str, str] = {}
+    try:
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            raw = line.strip()
+            if not raw or raw.startswith("#") or "=" not in raw:
+                continue
+            key, value = raw.split("=", 1)
+            key = key.strip()
+            if not key:
+                continue
+            values[key] = value.strip().strip('"').strip("'")
+    except OSError:
+        return {}
+    return values
+
+
+def _llm_env_value(name: str, default: str = "") -> str:
+    shell_value = os.environ.get(name, "").strip()
+    if shell_value:
+        return shell_value
+    return _llm_env_file_values().get(name, default)
+
+
 def _llm_status_payload() -> dict[str, object]:
-    deepseek_base = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-    deepseek_model = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
-    deepseek_admin_model = os.environ.get("DEEPSEEK_ADMIN_MODEL", "deepseek-v4-pro")
-    openai_base = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
-    openai_model = os.environ.get("OPENAI_MODEL", "")
-    deepseek_configured = bool(os.environ.get("DEEPSEEK_API_KEY", "").strip())
-    openai_configured = bool(os.environ.get("OPENAI_API_KEY", "").strip())
+    deepseek_base = _llm_env_value("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    deepseek_model = _llm_env_value("DEEPSEEK_MODEL", "deepseek-v4-flash")
+    deepseek_admin_model = _llm_env_value("DEEPSEEK_ADMIN_MODEL", "deepseek-v4-pro")
+    openai_base = _llm_env_value("OPENAI_BASE_URL") or _llm_env_value("OPENAI_API_BASE", "https://api.openai.com/v1")
+    openai_model = _llm_env_value("OPENAI_MODEL", "")
+    deepseek_configured = bool(_llm_env_value("DEEPSEEK_API_KEY").strip())
+    openai_configured = bool(_llm_env_value("OPENAI_API_KEY").strip())
     return {
         "ok": True,
         "schema": "tigermemory-llm-status-v1",
@@ -662,14 +696,15 @@ def _ask_evidence_from_wiki(results: list[dict], limit: int) -> list[dict]:
             "title": item.get("title"),
             "snippet": item.get("snippet"),
             "score": item.get("score"),
+            "summary": item.get("summary"),
+            "tags": item.get("tags"),
+            "key_facts": item.get("key_facts"),
+            "aliases": item.get("aliases"),
         })
     return out
 
 
 def cmd_ask(args: argparse.Namespace) -> int:
-    if not args.offline:
-        print("tm ask currently supports --offline only; use it to return local evidence without AI summary.", file=sys.stderr)
-        return 2
     if args.db:
         os.environ["TIGERMEMORY_LOCAL_DB"] = args.db
     os.environ["TIGERMEMORY_PROFILE"] = "local"
@@ -682,22 +717,45 @@ def cmd_ask(args: argparse.Namespace) -> int:
         if args.scope in {"memory", "all"}:
             memory_payload = json.loads(tm_core.mem0_search(args.query, args.size))
         if args.scope in {"wiki", "all"}:
-            wiki_results = tm_core.search_wiki(args.query, size=args.size, include_sources=True)
+            if args.offline:
+                wiki_results = tm_core.search_wiki(args.query, size=args.size, include_sources=True)
+            else:
+                wiki_results = tm_core.search_wiki_hybrid(args.query, size=args.size, include_sources=True)
         evidence = [
             *_ask_evidence_from_memory(memory_payload, args.size),
             *_ask_evidence_from_wiki(wiki_results, args.size),
         ]
+        if args.offline:
+            print(json.dumps({
+                "query": args.query,
+                "scope": args.scope,
+                "offline": True,
+                "answer": "离线模式只返回本地依据，不生成 AI 总结。",
+                "memory": memory_payload,
+                "wiki": {
+                    "count": len(wiki_results),
+                    "items": wiki_results,
+                    "results": wiki_results,
+                    "search_backend": "wiki_lexical",
+                },
+                "evidence": evidence[: max(1, args.size) * 2],
+            }, ensure_ascii=False))
+            return 0
+        answer = tm_core.answer_from_public_evidence(
+            args.query,
+            evidence[: max(1, args.size) * 2],
+            timeout=args.timeout,
+        )
         print(json.dumps({
-            "query": args.query,
+            **answer,
             "scope": args.scope,
-            "offline": True,
-            "answer": "离线模式只返回本地依据，不生成 AI 总结。",
+            "offline": False,
             "memory": memory_payload,
             "wiki": {
                 "count": len(wiki_results),
                 "items": wiki_results,
                 "results": wiki_results,
-                "search_backend": "wiki_lexical",
+                "search_backend": "wiki_hybrid",
             },
             "evidence": evidence[: max(1, args.size) * 2],
         }, ensure_ascii=False))
@@ -890,12 +948,13 @@ def build_parser() -> argparse.ArgumentParser:
     search_p.add_argument("--db", default=None)
     search_p.set_defaults(func=cmd_search)
 
-    ask_p = sub.add_parser("ask", help="answer from local evidence; offline mode does not call an AI model")
+    ask_p = sub.add_parser("ask", help="answer from local evidence with the configured LLM; --offline returns evidence only")
     ask_p.add_argument("--query", required=True)
     ask_p.add_argument("--size", type=int, default=5)
     ask_p.add_argument("--scope", choices=["memory", "wiki", "all"], default="all", help="default: all")
     ask_p.add_argument("--db", default=None)
-    ask_p.add_argument("--offline", action="store_true", help="required: return evidence only, without AI summary")
+    ask_p.add_argument("--offline", action="store_true", help="return evidence only, without AI summary")
+    ask_p.add_argument("--timeout", type=int, default=60)
     ask_p.set_defaults(func=cmd_ask)
 
     verify_p = sub.add_parser("verify", help="verify a memory id")

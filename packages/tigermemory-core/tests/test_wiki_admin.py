@@ -19,6 +19,8 @@ def test_propose_wiki_admin_page_normalizes_deepseek_json(monkeypatch) -> None:
             "rationale": "Stable enough for wiki.",
             "confidence": "88.7",
             "aliases": ["starter admin"],
+            "tags": ["wiki-admin", "public-answer"],
+            "key_facts": ["Admin proposals carry searchable metadata."],
             "evidence_refs": ["unit-test-source"],
         }
 
@@ -35,7 +37,13 @@ def test_propose_wiki_admin_page_normalizes_deepseek_json(monkeypatch) -> None:
     assert result["should_write"] is True
     assert result["target_path"] == "wiki/systems/starter-admin.md"
     assert result["confidence"] == 88
+    assert result["tags"] == ["wiki-admin", "public-answer"]
+    assert result["key_facts"] == ["Admin proposals carry searchable metadata."]
     assert result["user_review_required"] is True
+    assert 'summary: "A short durable summary."' in result["wiki_markdown"]
+    assert "tags:" in result["wiki_markdown"]
+    assert "key_facts:" in result["wiki_markdown"]
+    assert "## 关键事实" in result["wiki_markdown"]
     assert "## 摘要" in result["wiki_markdown"]
     assert "## 来源" in result["wiki_markdown"]
     assert "unit-test-source" in result["wiki_markdown"]

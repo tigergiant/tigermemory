@@ -202,6 +202,29 @@ def test_llm_status_reports_provider_presence_without_secret(monkeypatch, capsys
     assert "sk-test-secret-value" not in json.dumps(payload)
 
 
+def test_llm_status_reads_runtime_env_without_secret(tmp_path, monkeypatch, capsys) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "DEEPSEEK_API_KEY=sk-runtime-secret\n"
+        "DEEPSEEK_MODEL=deepseek-v4-flash\n"
+        "DEEPSEEK_ADMIN_MODEL=deepseek-v4-pro\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_MODEL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_ADMIN_MODEL", raising=False)
+    monkeypatch.setenv("TIGERMEMORY_OPENMEMORY_ENV", str(env_path))
+
+    assert tigermemory_cli.main(["llm", "status", "--json"]) == 0
+
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    assert payload["llm_configured"] is True
+    assert payload["providers"][0]["api_key"] == {"name": "DEEPSEEK_API_KEY", "configured": True}
+    assert payload["role_models"]["wiki_admin"]["model"] == "deepseek-v4-pro"
+    assert "sk-runtime-secret" not in out
+
+
 def test_llm_guide_points_to_deepseek(capsys) -> None:
     assert tigermemory_cli.main(["llm", "guide"]) == 0
 
@@ -292,6 +315,76 @@ def test_admin_approve_refuses_existing_target_without_force(tmp_path, monkeypat
     err = capsys.readouterr().err
     assert "target exists" in err
     assert target.read_text(encoding="utf-8") == "# Existing\n"
+
+
+def test_ask_online_uses_public_answer_flow(monkeypatch, capsys) -> None:
+    fake_core = types.ModuleType("tigermemory_core")
+    calls: dict[str, object] = {}
+
+    def fake_mem0_search(query, size):
+        calls["memory_query"] = query
+        return json.dumps({"count": 1, "items": [{"id": "mem-1", "text": "Memory evidence", "topic": "systems"}]})
+
+    def fake_search_wiki_hybrid(query, size, include_sources=True):
+        calls["wiki_query"] = query
+        return [{
+            "path": "wiki/systems/public-answer.md",
+            "title": "Public Answer",
+            "snippet": "Wiki evidence",
+            "summary": "Answer summary",
+            "tags": ["ask"],
+            "key_facts": ["tm ask can answer with sources."],
+        }]
+
+    def fake_answer(query, evidence, timeout):
+        calls["answer_query"] = query
+        calls["evidence"] = evidence
+        calls["timeout"] = timeout
+        return {
+            "schema": "tigermemory-public-answer-v1",
+            "query": query,
+            "answer": "Online answer [W1].",
+            "claims": [],
+            "citations": [{"id": "W1", "source": "wiki", "path": "wiki/systems/public-answer.md"}],
+            "confidence": 90,
+            "insufficient_evidence": False,
+            "model": "deepseek-v4-pro",
+        }
+
+    fake_core.mem0_search = fake_mem0_search
+    fake_core.search_wiki_hybrid = fake_search_wiki_hybrid
+    fake_core.answer_from_public_evidence = fake_answer
+    monkeypatch.setitem(sys.modules, "tigermemory_core", fake_core)
+
+    assert tigermemory_cli.main(["ask", "--query", "can public ask answer", "--timeout", "7"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["offline"] is False
+    assert payload["answer"] == "Online answer [W1]."
+    assert payload["wiki"]["search_backend"] == "wiki_hybrid"
+    assert payload["evidence"][1]["key_facts"] == ["tm ask can answer with sources."]
+    assert calls["timeout"] == 7
+
+
+def test_ask_offline_keeps_evidence_only(monkeypatch, capsys) -> None:
+    fake_core = types.ModuleType("tigermemory_core")
+
+    fake_core.mem0_search = lambda query, size: json.dumps({"count": 0, "items": [], "results": []})
+    fake_core.search_wiki = lambda query, size, include_sources=True: [{
+        "path": "wiki/systems/public-answer.md",
+        "title": "Public Answer",
+        "snippet": "Wiki evidence",
+    }]
+    fake_core.search_wiki_hybrid = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("hybrid should not run offline"))
+    fake_core.answer_from_public_evidence = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("answer should not run offline"))
+    monkeypatch.setitem(sys.modules, "tigermemory_core", fake_core)
+
+    assert tigermemory_cli.main(["ask", "--offline", "--query", "evidence only"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["offline"] is True
+    assert payload["answer"] == "离线模式只返回本地依据，不生成 AI 总结。"
+    assert payload["wiki"]["search_backend"] == "wiki_lexical"
 
 
 def test_dashboard_defaults_to_public_quickstart_port(monkeypatch) -> None:
