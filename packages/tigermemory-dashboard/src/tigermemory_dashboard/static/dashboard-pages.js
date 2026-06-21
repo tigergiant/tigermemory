@@ -15,6 +15,32 @@
     toastTimer: null,
     currentStep: 0,
     selectedDepth: 'A',
+    depthPreviews: {
+      A: {
+        name: 'A 极简',
+        chip: '一句话',
+        answer: '可以。先打开运行检查，看到服务正常就能用。',
+        note: '适合只想快速知道“能不能继续”的时候。'
+      },
+      B: {
+        name: 'B 简短',
+        chip: '结论 + 类比',
+        answer: '可以用了。你可以把它理解成一份会被 AI 读取的本地说明书；先看运行检查，状态正常就可以继续。',
+        note: '适合刚上手，想听人话解释，但不想看太多细节。'
+      },
+      C: {
+        name: 'C 工程',
+        chip: '结论 + 证据',
+        answer: '可以。当前控制台能打开，新手引导、运行检查和本地搜索都在同一个入口里。建议下一步先配置 LLM，再试一次本地问答。',
+        note: '适合日常开发和排障，需要知道依据、路径和下一步。'
+      },
+      D: {
+        name: 'D 全套',
+        chip: '验收清单',
+        answer: '可以，但建议按顺序验收：1. 运行检查没有红色错误；2. AI 连接显示模型已配置；3. 本地搜索能命中规则页；4. 离线问答能返回证据。哪一步失败，就先保留错误信息再排查。',
+        note: '适合审核、复盘、交接，或者你希望 AI 把判断过程说完整。'
+      }
+    },
 
     i18n(key, fallback, vars = {}) {
       return window.tmI18n ? window.tmI18n.t(key, fallback, vars) : fallback;
@@ -124,6 +150,21 @@
     renderDepthChoices(root = document) {
       root.querySelectorAll('[data-start-depth]').forEach(button => {
         button.classList.toggle('active', button.dataset.startDepth === this.selectedDepth);
+      });
+      this.updateDepthPreview(root);
+    },
+
+    updateDepthPreview(root = document) {
+      const preview = this.depthPreviews[this.selectedDepth] || this.depthPreviews.A;
+      const fields = {
+        'depth-preview-name': preview.name,
+        'depth-preview-chip': preview.chip,
+        'depth-preview-answer': preview.answer,
+        'depth-preview-note': preview.note
+      };
+      Object.entries(fields).forEach(([id, text]) => {
+        const element = root.getElementById ? root.getElementById(id) : document.getElementById(id);
+        if (element) element.textContent = text;
       });
     },
 

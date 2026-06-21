@@ -78,9 +78,15 @@ def test_start_static_uses_install_success_intro_and_public_commands() -> None:
     assert "高级版 / hybrid" in html
     assert "data-start-depth=\"A\"" in html
     assert "data-start-depth=\"D\"" in html
-    assert "DEEPSEEK_API_KEY" in pathlib.Path(
+    assert "depth-preview-answer" in html
+    assert "depth-preview-note" in html
+    pages_js = pathlib.Path(
         "packages/tigermemory-dashboard/src/tigermemory_dashboard/static/dashboard-pages.js"
     ).read_text(encoding="utf-8")
+    assert "depthPreviews" in pages_js
+    assert "D 全套" in pages_js
+    assert "验收清单" in pages_js
+    assert "DEEPSEEK_API_KEY" in pages_js
     assert 'tm search --scope wiki --query "agent behavior rules"' in html
     assert 'tm ask --offline --query "agent behavior rules" --scope wiki' in html
     assert "项目画布" not in html
