@@ -37,24 +37,40 @@
     },
     depthPreviews: {
       A: {
+        nameKey: 'start.depth.preview.a.name',
+        chipKey: 'start.depth.preview.a.chip',
+        answerKey: 'start.depth.preview.a.answer',
+        noteKey: 'start.depth.preview.a.note',
         name: 'A 极简',
         chip: '一句话',
         answer: '可以。先打开运行检查，看到服务正常就能用。',
         note: '适合只想快速知道“能不能继续”的时候。'
       },
       B: {
+        nameKey: 'start.depth.preview.b.name',
+        chipKey: 'start.depth.preview.b.chip',
+        answerKey: 'start.depth.preview.b.answer',
+        noteKey: 'start.depth.preview.b.note',
         name: 'B 简短',
         chip: '结论 + 类比',
         answer: '可以用了。你可以把它理解成一份会被 AI 读取的本地说明书；先看运行检查，状态正常就可以继续。',
         note: '适合刚上手，想听人话解释，但不想看太多细节。'
       },
       C: {
+        nameKey: 'start.depth.preview.c.name',
+        chipKey: 'start.depth.preview.c.chip',
+        answerKey: 'start.depth.preview.c.answer',
+        noteKey: 'start.depth.preview.c.note',
         name: 'C 工程',
         chip: '结论 + 证据',
         answer: '可以。当前控制台能打开，新手引导、运行检查和本地搜索都在同一个入口里。建议下一步先配置 LLM，再试一次本地问答。',
         note: '适合日常开发和排障，需要知道依据、路径和下一步。'
       },
       D: {
+        nameKey: 'start.depth.preview.d.name',
+        chipKey: 'start.depth.preview.d.chip',
+        answerKey: 'start.depth.preview.d.answer',
+        noteKey: 'start.depth.preview.d.note',
         name: 'D 全套',
         chip: '验收清单',
         answer: '可以，但建议按顺序验收：1. 运行检查没有红色错误；2. AI 连接显示模型已配置；3. 本地搜索能命中规则页；4. 离线问答能返回证据。哪一步失败，就先保留错误信息再排查。',
@@ -89,6 +105,7 @@
       this.renderLlmStatus(root);
       this.renderAgentConnectStatus(root);
       this.updateLlmCommand();
+      document.addEventListener('tm-lang-change', () => this.refreshLocalizedUi(root), {signal: this.abortController.signal});
       if (window.lucide) window.lucide.createIcons();
     },
 
@@ -115,6 +132,9 @@
         dot.addEventListener('click', () => this.showStep(Number(dot.dataset.stepDot || 0)), {signal: this.abortController.signal});
         dot.style.cursor = 'pointer';
       });
+      root.querySelectorAll('[data-step-jump]').forEach(button => {
+        button.addEventListener('click', () => this.showStep(Number(button.dataset.stepJump || 0)), {signal: this.abortController.signal});
+      });
       const saveDepth = document.getElementById('save-start-depth');
       if (saveDepth) saveDepth.addEventListener('click', () => this.saveDepth(), {signal: this.abortController.signal});
       ['llm-api-key', 'llm-base-url', 'llm-model', 'llm-admin-model'].forEach(id => {
@@ -139,6 +159,15 @@
       this.showStep(0);
     },
 
+    refreshLocalizedUi(root = document) {
+      this.renderDepthChoices(root);
+      this.applyLlmProviderDefaults(false);
+      this.renderLlmStatus(root);
+      this.renderAgentConnectStatus(root);
+      this.updateLlmCommand();
+      this.showStep(this.currentStep || 0);
+    },
+
     bindDepthChoices(root = document) {
       root.querySelectorAll('[data-start-depth]').forEach(button => {
         button.addEventListener('click', () => {
@@ -159,6 +188,10 @@
       });
       document.querySelectorAll('[data-step-dot]').forEach(dot => {
         dot.classList.toggle('active', Number(dot.dataset.stepDot || 0) === nextIndex);
+      });
+      document.querySelectorAll('[data-step-jump]').forEach(button => {
+        button.classList.toggle('active', Number(button.dataset.stepJump || 0) === nextIndex);
+        button.setAttribute('aria-current', Number(button.dataset.stepJump || 0) === nextIndex ? 'step' : 'false');
       });
       const label = document.getElementById('start-step-label');
       if (label) label.textContent = String(nextIndex + 1);
@@ -191,10 +224,10 @@
     updateDepthPreview(root = document) {
       const preview = this.depthPreviews[this.selectedDepth] || this.depthPreviews.A;
       const fields = {
-        'depth-preview-name': preview.name,
-        'depth-preview-chip': preview.chip,
-        'depth-preview-answer': preview.answer,
-        'depth-preview-note': preview.note
+        'depth-preview-name': this.i18n(preview.nameKey, preview.name),
+        'depth-preview-chip': this.i18n(preview.chipKey, preview.chip),
+        'depth-preview-answer': this.i18n(preview.answerKey, preview.answer),
+        'depth-preview-note': this.i18n(preview.noteKey, preview.note)
       };
       Object.entries(fields).forEach(([id, text]) => {
         const element = root.getElementById ? root.getElementById(id) : document.getElementById(id);
@@ -383,8 +416,8 @@
         if (state === 'available') return this.i18n('start.agent.status.available', '可配置');
         if (state === 'protected') return this.i18n('start.agent.status.protected', '源仓保护');
         if (state === 'blocked') return this.i18n('start.agent.status.blocked', '需高级配置');
-        if (state === 'missing_block') return this.i18n('start.agent.status.missing_block', '默认模板可写入');
-        if (state === 'missing') return this.i18n('start.agent.status.missing', '默认模板可生成');
+        if (state === 'missing_block') return this.i18n('start.agent.status.missing_block', '内置模板，可一键写入');
+        if (state === 'missing') return this.i18n('start.agent.status.missing', '内置模板，可生成');
         return state || this.i18n('start.agent.status.unknown', '待检查');
       };
       list.innerHTML = targets.map(item => `
@@ -394,6 +427,10 @@
             <span class="rounded-full border border-current/30 px-2 py-0.5 text-xs">${esc(statusText(item.status))}</span>
           </div>
           <div class="mt-1 text-xs leading-5 opacity-80">${esc(this.agentTargetSummary(item))}</div>
+          <div class="mt-2 flex flex-wrap items-center gap-2 text-[0.68rem] font-bold opacity-75">
+            <span class="rounded-full border border-current/25 px-2 py-0.5">${esc(this.i18n('start.agent.template_badge', '内置默认模板'))}</span>
+            ${item.rel_path ? `<span class="truncate rounded-full border border-current/25 px-2 py-0.5">${esc(item.rel_path)}</span>` : ''}
+          </div>
         </div>
       `).join('') || `<div class="rounded-lg border border-[#d2b56b] bg-[#fffaf0] px-3 py-2 text-sm text-[#8a6b1f]">${esc(this.i18n('start.agent.empty', '暂时读不到接入状态。'))}</div>`;
     },

@@ -128,7 +128,7 @@ def test_start_onboarding_i18n_covers_agent_connect_and_english() -> None:
         assert key in en
         assert zh[key] != en[key]
 
-    assert en["start.agent.status.missing_block"] == "Built-in template ready"
+    assert en["start.agent.status.missing_block"] == "Built-in template, one-click write"
     assert "built-in default templates" in en["start.agent.template_note"]
     assert "TigerMemory 已经内置" in zh["start.agent.copy"]
 

@@ -26,6 +26,7 @@
       border-radius: 8px;
       background: rgba(251, 248, 241, 0.9);
       box-shadow: 0 24px 70px rgba(56, 45, 24, 0.12);
+      backdrop-filter: blur(18px);
     }
     .onboarding-frame::before {
       content: "";
@@ -74,7 +75,7 @@
     }
     .onboarding-title {
       margin-top: 0.9rem;
-      font-size: clamp(1.55rem, 2.65vw, 2.55rem);
+      font-size: clamp(1.45rem, 2.15vw, 2.12rem);
       line-height: 1.14;
       font-weight: 800;
       letter-spacing: 0;
@@ -197,6 +198,66 @@
       width: 2rem;
       background: #c8a560;
     }
+    .step-rail {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 0.5rem;
+      border-bottom: 1px solid #e6dfcc;
+      padding: 0.75rem 1.25rem;
+    }
+    .step-button {
+      min-width: 0;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 0.55rem 0.65rem;
+      text-align: left;
+      color: #6d6256;
+      background: rgba(255, 252, 245, 0.54);
+      transition: border-color 180ms ease, background 180ms ease, color 180ms ease, transform 180ms ease;
+    }
+    .step-button:hover {
+      transform: translateY(-1px);
+      border-color: rgba(200, 165, 96, 0.68);
+      background: rgba(255, 250, 240, 0.9);
+    }
+    .step-button.active {
+      color: #1f1d1b;
+      border-color: rgba(200, 165, 96, 0.9);
+      background: rgba(240, 221, 177, 0.56);
+    }
+    .step-index {
+      display: inline-grid;
+      width: 1.35rem;
+      height: 1.35rem;
+      place-items: center;
+      border-radius: 999px;
+      background: rgba(201, 191, 159, 0.26);
+      font-size: 0.72rem;
+      font-weight: 900;
+    }
+    .step-button.active .step-index {
+      color: #fffaf0;
+      background: #c8a560;
+    }
+    .step-label {
+      display: block;
+      margin-top: 0.32rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 0.78rem;
+      font-weight: 800;
+    }
+    @media (max-width: 980px) {
+      .step-rail {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+    }
+    @media (max-width: 620px) {
+      .step-rail {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
     .wizard-nav-button {
       border-radius: 8px;
       border: 1px solid #c9bf9f;
@@ -250,14 +311,24 @@
             <span class="progress-dot" data-step-dot="3"></span>
             <span class="progress-dot" data-step-dot="4"></span>
             <span class="progress-dot" data-step-dot="5"></span>
+            <span class="progress-dot" data-step-dot="6"></span>
           </div>
           <span class="text-sm font-semibold text-[#8a8275]"><span id="start-step-label">1</span> / 7</span>
         </div>
         <div class="flex flex-wrap items-center gap-2 text-xs text-[#8a8275]">
           <span class="rounded-full border border-[#c9bf9f] bg-[#f0e9d8] px-3 py-1"><span data-i18n="start.profile.label">当前模式：</span><b id="start-profile">-</b></span>
-          <span class="rounded-full border border-[#c9bf9f] bg-[#f0e9d8] px-3 py-1">本地证据优先</span>
+          <span class="rounded-full border border-[#c9bf9f] bg-[#f0e9d8] px-3 py-1" data-i18n="start.local_evidence_first">本地证据优先</span>
         </div>
       </div>
+      <nav class="step-rail relative z-10" aria-label="新手引导步骤">
+        <button type="button" class="step-button active" data-step-jump="0"><span class="step-index">1</span><span class="step-label" data-i18n="start.step.name.0">认识</span></button>
+        <button type="button" class="step-button" data-step-jump="1"><span class="step-index">2</span><span class="step-label" data-i18n="start.step.name.1">模式</span></button>
+        <button type="button" class="step-button" data-step-jump="2"><span class="step-index">3</span><span class="step-label" data-i18n="start.step.name.2">回复</span></button>
+        <button type="button" class="step-button" data-step-jump="3"><span class="step-index">4</span><span class="step-label" data-i18n="start.step.name.3">模型</span></button>
+        <button type="button" class="step-button" data-step-jump="4"><span class="step-index">5</span><span class="step-label" data-i18n="start.step.name.4">Agent</span></button>
+        <button type="button" class="step-button" data-step-jump="5"><span class="step-index">6</span><span class="step-label" data-i18n="start.step.name.5">页面</span></button>
+        <button type="button" class="step-button" data-step-jump="6"><span class="step-index">7</span><span class="step-label" data-i18n="start.step.name.6">完成</span></button>
+      </nav>
 
       <div class="onboarding-track relative z-10">
         <article class="onboarding-slide active" data-onboarding-slide="0">
@@ -271,14 +342,14 @@
             </div>
           </div>
           <div class="onboarding-visual" aria-hidden="true">
-            <div class="signal-card one"><b>知识库</b><br>长期知识、规则、项目说明</div>
-            <div class="signal-card two"><b>AI 助手</b><br>先读规则，再行动</div>
-            <div class="signal-card three"><b>证据</b><br>先查清楚，再回答</div>
-            <div class="signal-card four"><b>你</b><br>保留最终控制权</div>
+            <div class="signal-card one"><b data-i18n="start.visual.knowledge">知识库</b><br><span data-i18n="start.visual.knowledge_desc">长期知识、规则、项目说明</span></div>
+            <div class="signal-card two"><b data-i18n="start.visual.agent">AI 助手</b><br><span data-i18n="start.visual.agent_desc">先读规则，再行动</span></div>
+            <div class="signal-card three"><b data-i18n="start.visual.evidence">证据</b><br><span data-i18n="start.visual.evidence_desc">先查清楚，再回答</span></div>
+            <div class="signal-card four"><b data-i18n="start.visual.you">你</b><br><span data-i18n="start.visual.you_desc">保留最终控制权</span></div>
             <div class="memory-device">
               <div class="text-xs text-[#c8a560]">TigerMemory</div>
-              <div class="mt-2 text-2xl font-black">你的本地记忆库</div>
-              <div class="mt-3 text-sm leading-6 text-[#f0e9d8]">Wiki + 证据 + 你自己的模型</div>
+              <div class="mt-2 text-2xl font-black" data-i18n="start.visual.local_memory">你的本地记忆库</div>
+              <div class="mt-3 text-sm leading-6 text-[#f0e9d8]" data-i18n="start.visual.local_memory_desc">Wiki + 证据 + 你自己的模型</div>
               <div class="bar"></div>
             </div>
           </div>
