@@ -19,6 +19,7 @@ from __future__ import annotations
 import importlib
 import pathlib
 import re
+import subprocess
 import sys
 
 import pytest
@@ -135,6 +136,22 @@ def test_entry_point_imports_bootstrap_before_packages(entry_point):
             f"bootstrap at offset {bootstrap_match.start()} and first package import "
             f"at offset {pkg_import_match.start()}."
         )
+
+
+def test_tm_review_ui_script_mode_reaches_dashboard_main():
+    result = subprocess.run(
+        [sys.executable, str(TOOLS_DIR / "tm_review_ui.py"), "--help"],
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=15,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Run tigermemory Memory Ops dashboard" in result.stdout
+    assert "--port" in result.stdout
 
 
 @pytest.mark.parametrize(
