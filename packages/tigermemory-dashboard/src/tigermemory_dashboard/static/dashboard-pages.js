@@ -23,6 +23,7 @@
         baseUrl: 'https://api.deepseek.com/v1/chat/completions',
         model: 'deepseek-v4-flash',
         adminModel: 'deepseek-v4-pro',
+        helpKey: 'start.llm.deepseek.help',
         help: '推荐给大多数用户。日常模型负责问答和路由；管理模型负责整理 Wiki 和生成待审核提案。'
       },
       openai_compatible: {
@@ -30,6 +31,7 @@
         baseUrl: 'https://api.openai.com/v1/chat/completions',
         model: 'gpt-4o-mini',
         adminModel: 'gpt-4o-mini',
+        helpKey: 'start.llm.openai_compatible.help',
         help: '适合已经有 OpenAI-compatible 网关的高级用户。Anthropic 原生接口暂不承诺，需通过已验证的 OpenAI-compatible 网关接入。'
       }
     },
@@ -168,13 +170,13 @@
       });
       const help = document.getElementById('onboarding-step-help');
       const helps = [
-        '先用一分钟认识 TigerMemory。',
-        '从普通版开始，后面再升级。',
-        '选一个你喜欢的回答风格。',
-        '生成本机 LLM 配置命令，密钥不上传。',
-        '把项目规则交给你的 AI 工具。',
-        '了解常用页面分别做什么。',
-        '跑通一次，就可以开始用了。'
+        this.i18n('start.step.help.0', '先用一分钟认识 TigerMemory。'),
+        this.i18n('start.step.help.1', '从普通版开始，后面再升级。'),
+        this.i18n('start.step.help.2', '选一个你喜欢的回答风格。'),
+        this.i18n('start.step.help.3', '保存本机 LLM 配置，密钥不上传。'),
+        this.i18n('start.step.help.4', '把项目规则交给你的 AI 工具。'),
+        this.i18n('start.step.help.5', '了解常用页面分别做什么。'),
+        this.i18n('start.step.help.6', '跑通一次，就可以开始用了。')
       ];
       if (help) help.textContent = helps[nextIndex] || '';
     },
@@ -209,9 +211,9 @@
           signal: this.abortController.signal
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        this.toast(`已保存回复风格：${this.selectedDepth}`);
+        this.toast(this.i18n('start.depth.saved', `已保存回复风格：${this.selectedDepth}`, {depth: this.selectedDepth}));
       } catch (error) {
-        this.toast(`保存失败：${error.message || error}`, false);
+        this.toast(this.i18n('start.save_failed', `保存失败：${error.message || error}`, {error: error.message || error}), false);
       }
     },
 
@@ -256,7 +258,7 @@
       const key = document.getElementById('llm-api-key');
       if (key) key.placeholder = provider === 'deepseek' ? 'sk-...' : 'provider API key';
       const help = document.getElementById('llm-provider-help');
-      if (help) help.textContent = defaults.help;
+      if (help) help.textContent = this.i18n(defaults.helpKey, defaults.help);
       this.updateLlmCommand();
     },
 
@@ -302,8 +304,8 @@
       statusEl.classList.toggle('border-[#d2b56b]', !configured);
       statusEl.classList.toggle('text-[#8a6b1f]', !configured);
       statusEl.textContent = message || (configured
-        ? `已接入 TigerMemory：${label} / ${model}`
-        : '尚未接入模型。填写 API Key 后点“保存并接入 TigerMemory”。');
+        ? this.i18n('start.llm.status.connected', `已接入 TigerMemory：${label} / ${model}`, {provider: label, model})
+        : this.i18n('start.llm.status.missing', '尚未接入模型。填写 API Key 后点“保存并接入 TigerMemory”。'));
     },
 
     async saveLlmConfig() {
@@ -319,9 +321,9 @@
       try {
         if (button) {
           button.disabled = true;
-          button.textContent = '正在保存...';
+          button.textContent = this.i18n('start.llm.saving_button', '正在保存...');
         }
-        this.renderLlmStatus(document, '正在保存到本机 TigerMemory 配置...');
+        this.renderLlmStatus(document, this.i18n('start.llm.saving_status', '正在保存到本机 TigerMemory 配置...'));
         const response = await fetch('/api/start/llm-config', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
@@ -334,15 +336,15 @@
         if (apiInput) apiInput.value = '';
         this.applyLlmProviderFromStatus();
         this.updateLlmCommand();
-        this.renderLlmStatus(document, result.message || '已保存到本机 TigerMemory 配置');
-        this.toast('模型配置已保存，TigerMemory 可以直接读取。');
+        this.renderLlmStatus(document, result.message || this.i18n('start.llm.saved_status', '已保存到本机 TigerMemory 配置'));
+        this.toast(this.i18n('start.llm.saved_toast', '模型配置已保存，TigerMemory 可以直接读取。'));
       } catch (error) {
-        this.renderLlmStatus(document, `保存失败：${error.message || error}`);
-        this.toast(`保存失败：${error.message || error}`, false);
+        this.renderLlmStatus(document, this.i18n('start.save_failed', `保存失败：${error.message || error}`, {error: error.message || error}));
+        this.toast(this.i18n('start.save_failed', `保存失败：${error.message || error}`, {error: error.message || error}), false);
       } finally {
         if (button) {
           button.disabled = false;
-          button.textContent = '保存并接入 TigerMemory';
+          button.textContent = this.i18n('start.llm.save_button', '保存并接入 TigerMemory');
         }
       }
     },
@@ -365,7 +367,11 @@
       const missing = Number(status.missing_count || targets.filter(item => ['missing', 'missing_block'].includes(item.status)).length || 0);
       const blocked = Number(status.blocked_count || targets.filter(item => item.status === 'blocked').length || 0);
       const protectedCount = targets.filter(item => item.status === 'protected').length;
-      summary.textContent = message || `项目规则 ${configured} 项已就绪，${missing} 项可一键应用，${blocked} 项需高级配置，${protectedCount} 项受源仓保护。`;
+      summary.textContent = message || this.i18n(
+        'start.agent.summary',
+        `项目规则 ${configured} 项已就绪，${missing} 项默认模板可一键写入，${blocked} 项需高级配置，${protectedCount} 项受源仓保护。`,
+        {configured, missing, blocked, protected: protectedCount}
+      );
       const statusClass = state => {
         if (state === 'ok' || state === 'available') return 'border-[#a0b889] bg-[#dde8ce] text-[#52733a]';
         if (state === 'protected') return 'border-[#d8cfba] bg-[#f7f3ea] text-[#5d554b]';
@@ -373,23 +379,23 @@
         return 'border-[#d2b56b] bg-[#fffaf0] text-[#8a6b1f]';
       };
       const statusText = state => {
-        if (state === 'ok') return '已就绪';
-        if (state === 'available') return '可配置';
-        if (state === 'protected') return '源仓保护';
-        if (state === 'blocked') return '暂不可自动配置';
-        if (state === 'missing_block') return '待写入规则';
-        if (state === 'missing') return '待准备模板';
-        return state || '待检查';
+        if (state === 'ok') return this.i18n('start.agent.status.ok', '已就绪');
+        if (state === 'available') return this.i18n('start.agent.status.available', '可配置');
+        if (state === 'protected') return this.i18n('start.agent.status.protected', '源仓保护');
+        if (state === 'blocked') return this.i18n('start.agent.status.blocked', '需高级配置');
+        if (state === 'missing_block') return this.i18n('start.agent.status.missing_block', '默认模板可写入');
+        if (state === 'missing') return this.i18n('start.agent.status.missing', '默认模板可生成');
+        return state || this.i18n('start.agent.status.unknown', '待检查');
       };
       list.innerHTML = targets.map(item => `
         <div class="rounded-lg border ${statusClass(item.status)} px-3 py-2">
           <div class="flex items-center justify-between gap-3">
-            <b>${esc(item.label_cn || item.target || item.target_id)}</b>
+            <b>${esc(this.agentTargetLabel(item))}</b>
             <span class="rounded-full border border-current/30 px-2 py-0.5 text-xs">${esc(statusText(item.status))}</span>
           </div>
-          <div class="mt-1 text-xs leading-5 opacity-80">${esc(item.summary_cn || item.reason || item.rel_path || '')}</div>
+          <div class="mt-1 text-xs leading-5 opacity-80">${esc(this.agentTargetSummary(item))}</div>
         </div>
-      `).join('') || '<div class="rounded-lg border border-[#d2b56b] bg-[#fffaf0] px-3 py-2 text-sm text-[#8a6b1f]">暂时读不到接入状态。</div>';
+      `).join('') || `<div class="rounded-lg border border-[#d2b56b] bg-[#fffaf0] px-3 py-2 text-sm text-[#8a6b1f]">${esc(this.i18n('start.agent.empty', '暂时读不到接入状态。'))}</div>`;
     },
 
     async refreshAgentConnectStatus(message = '') {
@@ -401,14 +407,40 @@
       return result;
     },
 
+    agentTargetLabel(item) {
+      const id = item.target_id || item.target || '';
+      const fallbacks = {
+        'root-agents': item.label_cn || 'Codex / 通用 Agent 规则',
+        'root-claude': item.label_cn || 'Claude Code 项目规则',
+        'cursor-rule': item.label_cn || 'Cursor 项目规则',
+        'hooks-readme': item.label_cn || 'Hooks 模板说明',
+        'pre-tool-use-example': item.label_cn || 'PreToolUse 示例',
+        'mcp-command': item.label_cn || 'MCP 服务端'
+      };
+      return this.i18n(`start.agent.target.${id}.label`, fallbacks[id] || item.label_cn || item.target || item.target_id || '');
+    },
+
+    agentTargetSummary(item) {
+      const id = item.target_id || item.target || '';
+      const fallbacks = {
+        'root-agents': item.summary_cn || item.reason || item.rel_path || '',
+        'root-claude': item.summary_cn || item.reason || item.rel_path || '',
+        'cursor-rule': item.summary_cn || item.reason || item.rel_path || '',
+        'hooks-readme': item.summary_cn || item.reason || item.rel_path || '',
+        'pre-tool-use-example': item.summary_cn || item.reason || item.rel_path || '',
+        'mcp-command': item.summary_cn || item.reason || item.rel_path || ''
+      };
+      return this.i18n(`start.agent.target.${id}.summary`, fallbacks[id] || item.summary_cn || item.reason || item.rel_path || '');
+    },
+
     async applyAgentConnect() {
       const button = document.getElementById('apply-agent-connect');
       try {
         if (button) {
           button.disabled = true;
-          button.textContent = '正在应用...';
+          button.textContent = this.i18n('start.agent.applying_button', '正在应用...');
         }
-        this.renderAgentConnectStatus(document, '正在写入项目级 AI 规则，不会修改全局配置...');
+        this.renderAgentConnectStatus(document, this.i18n('start.agent.applying_status', '正在写入项目级 AI 规则，不会修改全局配置...'));
         const response = await fetch('/api/start/agent-connect/apply', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
@@ -417,15 +449,15 @@
         });
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || (result.errors || []).join('; ') || `HTTP ${response.status}`);
-        await this.refreshAgentConnectStatus('项目级 AI 规则已经写入。MCP 如果仍显示不可配置，说明本机还没有公开版 MCP 命令。');
-        this.toast('AI 工具项目规则已准备好。');
+        await this.refreshAgentConnectStatus(this.i18n('start.agent.applied_status', '项目级 AI 规则已经写入。MCP 如果仍显示需高级配置，说明本机还没有公开版 MCP 命令。'));
+        this.toast(this.i18n('start.agent.applied_toast', 'AI 工具项目规则已准备好。'));
       } catch (error) {
-        this.renderAgentConnectStatus(document, `接入失败：${error.message || error}`);
-        this.toast(`接入失败：${error.message || error}`, false);
+        this.renderAgentConnectStatus(document, this.i18n('start.agent.apply_failed', `接入失败：${error.message || error}`, {error: error.message || error}));
+        this.toast(this.i18n('start.agent.apply_failed', `接入失败：${error.message || error}`, {error: error.message || error}), false);
       } finally {
         if (button) {
           button.disabled = false;
-          button.textContent = '应用项目级规则';
+          button.textContent = this.i18n('start.agent.apply_button', '应用项目级规则');
         }
       }
     },

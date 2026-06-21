@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import pathlib
 import os
 import sys
@@ -99,6 +100,37 @@ def test_start_static_uses_install_success_intro_and_public_commands() -> None:
     assert 'tm ask --offline --query "agent behavior rules" --scope wiki' in html
     assert "项目画布" not in html
     assert "hello local memory" not in html
+
+
+def test_start_onboarding_i18n_covers_agent_connect_and_english() -> None:
+    data = json.loads(
+        pathlib.Path("packages/tigermemory-dashboard/src/tigermemory_dashboard/static/i18n.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    zh = data["zh"]
+    en = data["en"]
+
+    required = [
+        "start.welcome.title",
+        "start.mode.title",
+        "start.depth.title",
+        "start.llm.title",
+        "start.agent.title",
+        "start.dashboard.onboarding_title",
+        "start.finish.title",
+        "start.agent.status.missing_block",
+        "start.agent.target.root-agents.label",
+        "start.agent.target.pre-tool-use-example.summary",
+    ]
+    for key in required:
+        assert key in zh
+        assert key in en
+        assert zh[key] != en[key]
+
+    assert en["start.agent.status.missing_block"] == "Built-in template ready"
+    assert "built-in default templates" in en["start.agent.template_note"]
+    assert "TigerMemory 已经内置" in zh["start.agent.copy"]
 
 
 def test_start_shell_includes_preferences(monkeypatch, tmp_path) -> None:

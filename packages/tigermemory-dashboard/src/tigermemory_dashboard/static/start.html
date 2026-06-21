@@ -407,11 +407,12 @@
         <article class="onboarding-slide" data-onboarding-slide="4">
           <div>
             <div class="onboarding-kicker"><i data-lucide="bot" class="h-4 w-4"></i> 连接 AI 工具</div>
-            <h2 class="onboarding-title">让你的 AI 知道怎么使用 TigerMemory</h2>
-            <p class="onboarding-copy">这一步会把项目级规则写进当前资料库：AI 会先查本地证据、用提案写 Wiki、把最终批准权留给你。它不会改你的全局 Codex、Claude 或 Cursor 配置。</p>
+            <h2 class="onboarding-title">把默认规则交给你的 AI</h2>
+            <p class="onboarding-copy">TigerMemory 已经内置了 Codex、Claude Code、Cursor 和 hooks 的项目模板。点击下面的按钮，只是把这些默认模板写进当前项目；它不会改你的全局 Codex、Claude 或 Cursor 配置。</p>
             <div class="mt-5 grid gap-3">
               <div class="rounded-lg border border-[#d2b56b] bg-[#fffaf0] px-3 py-2 text-sm text-[#8a6b1f]" id="agent-connect-summary">正在读取 AI 接入状态...</div>
-              <button type="button" class="wizard-nav-button primary w-fit" id="apply-agent-connect">应用项目级规则</button>
+              <div class="rounded-lg border border-[#e2d6b7] bg-[#fffaf0] px-3 py-2 text-xs leading-5 text-[#8a8275]">这些是现成默认模板，不需要你手写。写入后，AI 会先查本地证据、用提案写 Wiki、把最终批准权留给你。</div>
+              <button type="button" class="wizard-nav-button primary w-fit" id="apply-agent-connect">写入默认项目规则</button>
               <button type="button" class="copy-command text-left" data-copy-command="tm agent status">tm agent status</button>
             </div>
           </div>
