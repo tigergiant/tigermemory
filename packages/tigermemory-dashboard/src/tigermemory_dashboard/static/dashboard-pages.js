@@ -15,6 +15,7 @@
     toastTimer: null,
     currentStep: 0,
     selectedDepth: 'A',
+    llmStatus: null,
     depthPreviews: {
       A: {
         name: 'A 极简',
@@ -53,6 +54,7 @@
       if (profile) profile.textContent = data && data.profile ? data.profile : 'local';
       const prefs = data && data.preferences ? data.preferences : {};
       this.selectedDepth = prefs.communication_depth || 'A';
+      this.llmStatus = data && data.llm_status ? data.llm_status : null;
       const refresh = document.getElementById('last-refresh');
       if (refresh) {
         refresh.textContent = '开始';
@@ -64,6 +66,7 @@
       this.bindOnboarding(root);
       this.bindDepthChoices(root);
       this.renderDepthChoices(root);
+      this.renderLlmStatus(root);
       this.updateLlmCommand();
       if (window.lucide) window.lucide.createIcons();
     },
@@ -99,6 +102,8 @@
       });
       const copyLlm = document.getElementById('copy-llm-command');
       if (copyLlm) copyLlm.addEventListener('click', () => this.copyGeneratedLlmCommand(), {signal: this.abortController.signal});
+      const saveLlm = document.getElementById('save-llm-config');
+      if (saveLlm) saveLlm.addEventListener('click', () => this.saveLlmConfig(), {signal: this.abortController.signal});
       const finish = document.getElementById('finish-onboarding');
       if (finish) finish.addEventListener('click', () => {
         try { localStorage.setItem('tigermemory_onboarding_done', 'true'); } catch (_error) {}
@@ -190,7 +195,7 @@
 
     buildLlmCommand() {
       const key = this.shellQuote(document.getElementById('llm-api-key')?.value, '<your_deepseek_api_key>');
-      const base = this.shellQuote(document.getElementById('llm-base-url')?.value, 'https://api.deepseek.com');
+      const base = this.shellQuote(document.getElementById('llm-base-url')?.value, 'https://api.deepseek.com/v1/chat/completions');
       const model = this.shellQuote(document.getElementById('llm-model')?.value, 'deepseek-v4-flash');
       return [
         `setx DEEPSEEK_API_KEY "${key}"`,
@@ -206,6 +211,64 @@
       const command = this.buildLlmCommand();
       if (preview) preview.textContent = command;
       if (copy) copy.setAttribute('data-copy-command', command);
+    },
+
+    renderLlmStatus(root = document, message = '') {
+      const statusEl = root.getElementById ? root.getElementById('llm-config-status') : document.getElementById('llm-config-status');
+      if (!statusEl) return;
+      const configured = Boolean(this.llmStatus && this.llmStatus.llm_configured);
+      const deepseek = this.llmStatus && Array.isArray(this.llmStatus.providers)
+        ? this.llmStatus.providers.find(provider => provider.id === 'deepseek')
+        : null;
+      const model = deepseek && deepseek.model ? deepseek.model : 'deepseek-v4-flash';
+      statusEl.classList.toggle('bg-[#dde8ce]', configured);
+      statusEl.classList.toggle('border-[#a0b889]', configured);
+      statusEl.classList.toggle('text-[#52733a]', configured);
+      statusEl.classList.toggle('bg-[#fffaf0]', !configured);
+      statusEl.classList.toggle('border-[#d2b56b]', !configured);
+      statusEl.classList.toggle('text-[#8a6b1f]', !configured);
+      statusEl.textContent = message || (configured
+        ? `已接入 TigerMemory：DeepSeek / ${model}`
+        : '尚未接入模型。填写 API Key 后点“保存并接入 TigerMemory”。');
+    },
+
+    async saveLlmConfig() {
+      const button = document.getElementById('save-llm-config');
+      const apiInput = document.getElementById('llm-api-key');
+      const payload = {
+        provider: 'deepseek',
+        api_key: apiInput ? apiInput.value : '',
+        base_url: document.getElementById('llm-base-url')?.value || 'https://api.deepseek.com/v1/chat/completions',
+        model: document.getElementById('llm-model')?.value || 'deepseek-v4-flash'
+      };
+      try {
+        if (button) {
+          button.disabled = true;
+          button.textContent = '正在保存...';
+        }
+        this.renderLlmStatus(document, '正在保存到本机 TigerMemory 配置...');
+        const response = await fetch('/api/start/llm-config', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+          signal: this.abortController.signal
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+        this.llmStatus = result.llm_status || null;
+        if (apiInput) apiInput.value = '';
+        this.updateLlmCommand();
+        this.renderLlmStatus(document, result.message || '已保存到本机 TigerMemory 配置');
+        this.toast('模型配置已保存，TigerMemory 可以直接读取。');
+      } catch (error) {
+        this.renderLlmStatus(document, `保存失败：${error.message || error}`);
+        this.toast(`保存失败：${error.message || error}`, false);
+      } finally {
+        if (button) {
+          button.disabled = false;
+          button.textContent = '保存并接入 TigerMemory';
+        }
+      }
     },
 
     async copyGeneratedLlmCommand() {

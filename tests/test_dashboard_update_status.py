@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pathlib
+import os
 import sys
 import types
 
@@ -73,7 +74,9 @@ def test_start_static_uses_install_success_intro_and_public_commands() -> None:
 
     assert "欢迎来到 TigerMemory" in html
     assert html.count("data-onboarding-slide") == 6
-    assert "API Key 不会上传到 TigerMemory" in html
+    assert "API Key 只会保存到本机 runtime 配置" in html
+    assert "保存并接入 TigerMemory" in html
+    assert "llm-config-status" in html
     assert "普通版 / local" in html
     assert "高级版 / hybrid" in html
     assert "data-start-depth=\"A\"" in html
@@ -87,6 +90,7 @@ def test_start_static_uses_install_success_intro_and_public_commands() -> None:
     assert "D 全套" in pages_js
     assert "验收清单" in pages_js
     assert "DEEPSEEK_API_KEY" in pages_js
+    assert "/api/start/llm-config" in pages_js
     assert 'tm search --scope wiki --query "agent behavior rules"' in html
     assert 'tm ask --offline --query "agent behavior rules" --scope wiki' in html
     assert "项目画布" not in html
@@ -99,6 +103,89 @@ def test_start_shell_includes_preferences(monkeypatch, tmp_path) -> None:
     payload = server._start_shell()
 
     assert payload["preferences"]["communication_depth"]
+    assert "llm_status" in payload
+
+
+def test_start_llm_config_writes_runtime_env_without_echoing_secret(monkeypatch, tmp_path) -> None:
+    env_path = tmp_path / "runtime" / "openmemory" / ".env"
+    monkeypatch.setenv("TIGERMEMORY_OPENMEMORY_ENV", str(env_path))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_BASE_URL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_MODEL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_ADMIN_MODEL", raising=False)
+    keys = ["DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL", "DEEPSEEK_ADMIN_MODEL"]
+
+    try:
+        result = server.save_start_llm_config(
+            server.StartLlmConfigRequest(
+                api_key="sk-test-secret",
+                base_url="https://api.deepseek.com/v1/chat/completions",
+                model="deepseek-v4-flash",
+            )
+        )
+
+        assert result["ok"] is True
+        assert result["llm_status"]["llm_configured"] is True
+        assert result["llm_status"]["providers"][0]["api_key"]["configured"] is True
+        assert "sk-test-secret" not in str(result)
+        assert "DEEPSEEK_API_KEY=sk-test-secret" in env_path.read_text(encoding="utf-8")
+        assert "DEEPSEEK_BASE_URL=https://api.deepseek.com/v1/chat/completions" in env_path.read_text(encoding="utf-8")
+        assert "DEEPSEEK_MODEL=deepseek-v4-flash" in env_path.read_text(encoding="utf-8")
+    finally:
+        for key in keys:
+            os.environ.pop(key, None)
+
+
+def test_start_llm_config_route_writes_runtime_env_without_echoing_secret(monkeypatch, tmp_path) -> None:
+    env_path = tmp_path / "runtime" / "openmemory" / ".env"
+    monkeypatch.setenv("TIGERMEMORY_OPENMEMORY_ENV", str(env_path))
+    monkeypatch.setattr(server, "SESSION_FILE", tmp_path / "session.json")
+    keys = ["DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL", "DEEPSEEK_ADMIN_MODEL"]
+    for key in keys:
+        monkeypatch.delenv(key, raising=False)
+
+    try:
+        client = TestClient(server.app)
+        client.get("/", headers=HOST, follow_redirects=False)
+
+        response = client.post(
+            "/api/start/llm-config",
+            headers=HOST,
+            json={
+                "provider": "deepseek",
+                "api_key": "sk-route-secret",
+                "base_url": "https://api.deepseek.com/v1/chat/completions",
+                "model": "deepseek-v4-flash",
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ok"] is True
+        assert payload["llm_status"]["llm_configured"] is True
+        assert "sk-route-secret" not in str(payload)
+        assert "DEEPSEEK_API_KEY=sk-route-secret" in env_path.read_text(encoding="utf-8")
+    finally:
+        for key in keys:
+            os.environ.pop(key, None)
+
+
+def test_start_llm_config_rejects_unsafe_remote_http(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("TIGERMEMORY_OPENMEMORY_ENV", str(tmp_path / ".env"))
+    monkeypatch.delenv("TM_ALLOW_UNSECURE_HTTP", raising=False)
+
+    try:
+        server.save_start_llm_config(
+            server.StartLlmConfigRequest(
+                api_key="sk-test-secret",
+                base_url="http://example.com/v1/chat/completions",
+                model="deepseek-v4-flash",
+            )
+        )
+    except (RuntimeError, ValueError) as exc:
+        assert "Bearer Guard" in str(exc) or "传输安全" in str(exc)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("unsafe remote HTTP endpoint should be rejected")
 
 
 def test_daily_review_missing_private_digest_uses_empty_public_fallback(monkeypatch, tmp_path) -> None:

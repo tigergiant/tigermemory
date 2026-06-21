@@ -33,6 +33,7 @@ except ImportError:  # pragma: no cover - installed package mode
     _bootstrap_paths = None
 
 import tigermemory_core as tm_core
+from tigermemory_core import llm_status as tm_llm_status
 from tigermemory_core import runtime_events as tm_runtime_events
 from tigermemory_core.roots import resolve_app_root
 
@@ -209,6 +210,14 @@ class BatchInboxActionRequest(BaseModel):
 class PreferenceUpdateRequest(BaseModel):
     preferences: dict[str, Any]
     propose_wiki: bool = False
+
+
+class StartLlmConfigRequest(BaseModel):
+    provider: str = "deepseek"
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    admin_model: Optional[str] = None
 
 
 def today() -> str:
@@ -4066,6 +4075,79 @@ def update_user_preferences(updates: dict[str, Any], *, propose_wiki: bool = Fal
     return {**result, "wiki_proposal": proposal}
 
 
+def _clean_llm_env_value(value: str | None, *, field: str) -> str:
+    text = (value or "").strip()
+    if "\n" in text or "\r" in text or "\x00" in text:
+        raise ValueError(f"{field} contains unsupported characters")
+    return text
+
+
+def _write_runtime_env_updates(path: pathlib.Path, updates: dict[str, str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    written: set[str] = set()
+    output: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            output.append(line)
+            continue
+        key, _value = line.split("=", 1)
+        normalized = key.strip()
+        if normalized in updates:
+            output.append(f"{normalized}={updates[normalized]}")
+            written.add(normalized)
+        else:
+            output.append(line)
+    if output and output[-1].strip():
+        output.append("")
+    for key, value in updates.items():
+        if key not in written:
+            output.append(f"{key}={value}")
+    path.write_text("\n".join(output).rstrip() + "\n", encoding="utf-8")
+
+
+def save_start_llm_config(req: StartLlmConfigRequest) -> dict[str, Any]:
+    provider = (req.provider or "deepseek").strip().lower()
+    if provider != "deepseek":
+        raise ValueError("current starter onboarding supports DeepSeek first; OpenAI-compatible providers can use tm llm guide for now")
+
+    env_path = tm_llm_status.llm_env_path(REPO_ROOT)
+    existing = tm_llm_status.llm_env_file_values(REPO_ROOT)
+    api_key = _clean_llm_env_value(req.api_key, field="api_key")
+    base_url = _clean_llm_env_value(req.base_url, field="base_url") or tm_core.DEFAULT_DEEPSEEK_ENDPOINT
+    model = _clean_llm_env_value(req.model, field="model") or tm_core.DEFAULT_DEEPSEEK_MODEL
+    admin_model = _clean_llm_env_value(req.admin_model, field="admin_model") or existing.get(
+        "DEEPSEEK_ADMIN_MODEL",
+        tm_core.DEFAULT_DEEPSEEK_ADMIN_MODEL,
+    )
+
+    has_existing_key = bool(os.environ.get("DEEPSEEK_API_KEY", "").strip() or existing.get("DEEPSEEK_API_KEY", "").strip())
+    if not api_key and not has_existing_key:
+        raise ValueError("请先填写 DeepSeek API Key")
+    tm_core.check_transport_security(base_url)
+
+    updates = {
+        "DEEPSEEK_BASE_URL": base_url,
+        "DEEPSEEK_MODEL": model,
+        "DEEPSEEK_ADMIN_MODEL": admin_model,
+    }
+    if api_key:
+        updates["DEEPSEEK_API_KEY"] = api_key
+
+    _write_runtime_env_updates(env_path, updates)
+    for key, value in updates.items():
+        os.environ[key] = value
+    status = tm_llm_status.llm_status_payload(REPO_ROOT)
+    return {
+        "ok": True,
+        "provider": provider,
+        "env_path": _relpath(env_path),
+        "llm_status": status,
+        "message": "已保存到本机 TigerMemory 配置",
+    }
+
+
 def _render_template(template_name: str, replacements: dict[str, str]) -> str:
     path = STATIC_DIR / template_name
     html = path.read_text(encoding="utf-8")
@@ -4122,6 +4204,7 @@ def _start_shell() -> dict[str, Any]:
         "ok": True,
         "profile": tm_core.tigermemory_profile(),
         "preferences": preferences,
+        "llm_status": tm_llm_status.llm_status_payload(REPO_ROOT),
         "generated_at": dt.datetime.now(tm_core.TZ_CN).isoformat(),
         "commands": [
             {"label": "初始化本地模式", "command": "tm init"},
@@ -4626,6 +4709,22 @@ async def api_get_preferences():
 async def api_update_preferences(req: PreferenceUpdateRequest):
     try:
         return update_user_preferences(req.preferences, propose_wiki=req.propose_wiki)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.get("/api/start/llm-status")
+async def api_start_llm_status():
+    try:
+        return await run_in_threadpool(tm_llm_status.llm_status_payload, REPO_ROOT)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/api/start/llm-config")
+async def api_start_llm_config(req: StartLlmConfigRequest):
+    try:
+        return await run_in_threadpool(save_start_llm_config, req)
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 

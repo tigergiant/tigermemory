@@ -47,7 +47,7 @@ def mask_env_presence(repo_root: pathlib.Path, name: str) -> dict[str, object]:
 
 
 def llm_status_payload(repo_root: pathlib.Path) -> dict[str, Any]:
-    deepseek_base = llm_env_value(repo_root, "DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    deepseek_base = llm_env_value(repo_root, "DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1/chat/completions")
     deepseek_model = llm_env_value(repo_root, "DEEPSEEK_MODEL", "deepseek-v4-flash")
     deepseek_admin_model = llm_env_value(repo_root, "DEEPSEEK_ADMIN_MODEL", "deepseek-v4-pro")
     openai_base = (

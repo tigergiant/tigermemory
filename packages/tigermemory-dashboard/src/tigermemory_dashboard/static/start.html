@@ -366,16 +366,20 @@
           <div>
             <div class="onboarding-kicker"><i data-lucide="key-round" class="h-4 w-4"></i> 连接 LLM</div>
             <h2 class="onboarding-title">连接一个你自己的模型</h2>
-            <p class="onboarding-copy">推荐先用 DeepSeek。API Key 不会上传到 TigerMemory，也不会写进 Git；这一页只帮你生成本机配置命令，复制到 PowerShell 运行就好。</p>
+            <p class="onboarding-copy">推荐先用 DeepSeek。API Key 只会保存到本机 runtime 配置，不上传，也不会写进 Git；保存后 TigerMemory 就能直接读取这组模型配置。</p>
             <div class="mt-5 grid gap-3">
+              <div class="rounded-lg border border-[#d2b56b] bg-[#fffaf0] px-3 py-2 text-sm text-[#8a6b1f]" id="llm-config-status">正在读取模型连接状态...</div>
               <label class="text-sm font-bold text-[#4a443d]">API Key</label>
               <input id="llm-api-key" class="wizard-input" type="password" autocomplete="off" placeholder="sk-...">
-              <label class="text-sm font-bold text-[#4a443d]">Base URL</label>
-              <input id="llm-base-url" class="wizard-input" value="https://api.deepseek.com">
+              <label class="text-sm font-bold text-[#4a443d]">接口地址</label>
+              <input id="llm-base-url" class="wizard-input" value="https://api.deepseek.com/v1/chat/completions">
               <label class="text-sm font-bold text-[#4a443d]">日常模型</label>
               <input id="llm-model" class="wizard-input" value="deepseek-v4-flash">
               <pre class="wizard-command" id="llm-command-preview"></pre>
-              <button type="button" class="wizard-nav-button primary" id="copy-llm-command">复制配置命令</button>
+              <div class="flex flex-wrap gap-3">
+                <button type="button" class="wizard-nav-button primary" id="save-llm-config">保存并接入 TigerMemory</button>
+                <button type="button" class="wizard-nav-button" id="copy-llm-command">复制手动配置命令</button>
+              </div>
             </div>
           </div>
           <div class="onboarding-visual p-5">
