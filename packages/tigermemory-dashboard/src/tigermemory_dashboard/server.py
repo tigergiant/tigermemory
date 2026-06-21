@@ -47,6 +47,7 @@ def _optional_import(name: str):
 
 tm_agent_doctor = _optional_import("tm_agent_doctor")
 tm_answer_trace = _optional_import("tm_answer_trace")
+tm_agent_connect = _optional_import("tigermemory_config.agent_connect")
 tm_cron_apply = _optional_import("tm_cron_apply")
 tm_dashboard_prefs = _optional_import("tm_dashboard_prefs")
 tm_memory_ops = _optional_import("tm_memory_ops")
@@ -218,6 +219,11 @@ class StartLlmConfigRequest(BaseModel):
     base_url: Optional[str] = None
     model: Optional[str] = None
     admin_model: Optional[str] = None
+
+
+class StartAgentConnectRequest(BaseModel):
+    targets: list[str] = ["codex", "claude-code", "cursor", "hooks"]
+    dry_run: bool = False
 
 
 def today() -> str:
@@ -4148,6 +4154,29 @@ def save_start_llm_config(req: StartLlmConfigRequest) -> dict[str, Any]:
     }
 
 
+def _agent_connect_status_payload() -> dict[str, Any]:
+    if tm_agent_connect is None:
+        return {
+            "ok": False,
+            "action": "status",
+            "error": "tigermemory_config.agent_connect is not installed",
+            "targets": [],
+        }
+    return tm_agent_connect.status_agent_connect(repo_root=REPO_ROOT)
+
+
+def apply_start_agent_connect(req: StartAgentConnectRequest) -> dict[str, Any]:
+    if tm_agent_connect is None:
+        return {"ok": False, "error": "tigermemory_config.agent_connect is not installed", "targets": []}
+    targets = req.targets or ["codex", "claude-code", "cursor", "hooks"]
+    return tm_agent_connect.apply_agent_connect(
+        targets,
+        yes=True,
+        dry_run=bool(req.dry_run),
+        repo_root=REPO_ROOT,
+    )
+
+
 def _render_template(template_name: str, replacements: dict[str, str]) -> str:
     path = STATIC_DIR / template_name
     html = path.read_text(encoding="utf-8")
@@ -4205,10 +4234,12 @@ def _start_shell() -> dict[str, Any]:
         "profile": tm_core.tigermemory_profile(),
         "preferences": preferences,
         "llm_status": tm_llm_status.llm_status_payload(REPO_ROOT),
+        "agent_connect": _agent_connect_status_payload(),
         "generated_at": dt.datetime.now(tm_core.TZ_CN).isoformat(),
         "commands": [
             {"label": "初始化本地模式", "command": "tm init"},
             {"label": "查看当前模式", "command": "tm profile show"},
+            {"label": "检查 AI 接入", "command": "tm agent status"},
             {"label": "搜索入门规则", "command": 'tm search --scope wiki --query "agent behavior rules"'},
             {"label": "离线查看证据", "command": 'tm ask --offline --query "agent behavior rules" --scope wiki'},
             {"label": "打开控制台", "command": "tm dashboard"},
@@ -4727,6 +4758,22 @@ async def api_start_llm_config(req: StartLlmConfigRequest):
         return await run_in_threadpool(save_start_llm_config, req)
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
+
+
+@app.get("/api/start/agent-connect/status")
+async def api_start_agent_connect_status():
+    try:
+        return await run_in_threadpool(_agent_connect_status_payload)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "targets": []}
+
+
+@app.post("/api/start/agent-connect/apply")
+async def api_start_agent_connect_apply(req: StartAgentConnectRequest):
+    try:
+        return await run_in_threadpool(apply_start_agent_connect, req)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "targets": []}
 
 
 # =====================================================================

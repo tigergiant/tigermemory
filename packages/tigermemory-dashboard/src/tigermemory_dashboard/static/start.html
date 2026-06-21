@@ -251,7 +251,7 @@
             <span class="progress-dot" data-step-dot="4"></span>
             <span class="progress-dot" data-step-dot="5"></span>
           </div>
-          <span class="text-sm font-semibold text-[#8a8275]"><span id="start-step-label">1</span> / 6</span>
+          <span class="text-sm font-semibold text-[#8a8275]"><span id="start-step-label">1</span> / 7</span>
         </div>
         <div class="flex flex-wrap items-center gap-2 text-xs text-[#8a8275]">
           <span class="rounded-full border border-[#c9bf9f] bg-[#f0e9d8] px-3 py-1"><span data-i18n="start.profile.label">当前模式：</span><b id="start-profile">-</b></span>
@@ -398,6 +398,24 @@
 
         <article class="onboarding-slide" data-onboarding-slide="4">
           <div>
+            <div class="onboarding-kicker"><i data-lucide="bot" class="h-4 w-4"></i> 连接 AI 工具</div>
+            <h2 class="onboarding-title">让你的 AI 知道怎么使用 TigerMemory</h2>
+            <p class="onboarding-copy">这一步会把项目级规则写进当前资料库：AI 会先查本地证据、用提案写 Wiki、把最终批准权留给你。它不会改你的全局 Codex、Claude 或 Cursor 配置。</p>
+            <div class="mt-5 grid gap-3">
+              <div class="rounded-lg border border-[#d2b56b] bg-[#fffaf0] px-3 py-2 text-sm text-[#8a6b1f]" id="agent-connect-summary">正在读取 AI 接入状态...</div>
+              <button type="button" class="wizard-nav-button primary w-fit" id="apply-agent-connect">应用项目级规则</button>
+              <button type="button" class="copy-command text-left" data-copy-command="tm agent status">tm agent status</button>
+            </div>
+          </div>
+          <div class="onboarding-visual p-5">
+            <div class="grid h-full content-center gap-3" id="agent-connect-list">
+              <div class="wizard-card">正在检查 AGENTS、CLAUDE、Cursor 规则和 Hooks 模板...</div>
+            </div>
+          </div>
+        </article>
+
+        <article class="onboarding-slide" data-onboarding-slide="5">
+          <div>
             <div class="onboarding-kicker"><i data-lucide="layout-dashboard" class="h-4 w-4"></i> 认识控制台</div>
             <h2 class="onboarding-title">先认识几个常用入口</h2>
             <p class="onboarding-copy">刚开始只看运行检查、AI 连接和偏好设置就够了。待确认、记忆质量和项目进展，会在你持续使用后慢慢派上用场。</p>
@@ -414,7 +432,7 @@
           </div>
         </article>
 
-        <article class="onboarding-slide" data-onboarding-slide="5">
+        <article class="onboarding-slide" data-onboarding-slide="6">
           <div>
             <div class="onboarding-kicker"><i data-lucide="check-circle-2" class="h-4 w-4"></i> 准备开始</div>
             <h2 class="onboarding-title">最后，试一次完整流程</h2>
@@ -422,6 +440,7 @@
             <div class="mt-5 grid gap-2">
               <button type="button" class="copy-command" data-copy-command="tm init">tm init</button>
               <button type="button" class="copy-command" data-copy-command="tm profile show">tm profile show</button>
+              <button type="button" class="copy-command" data-copy-command="tm agent status">tm agent status</button>
               <button type="button" class="copy-command" data-copy-command='tm search --scope wiki --query "agent behavior rules"'>tm search --scope wiki --query "agent behavior rules"</button>
               <button type="button" class="copy-command" data-copy-command='tm ask --offline --query "agent behavior rules" --scope wiki'>tm ask --offline --query "agent behavior rules" --scope wiki</button>
             </div>

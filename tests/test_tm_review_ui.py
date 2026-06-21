@@ -1052,10 +1052,53 @@ def test_start_route_returns_beginner_shell(tmp_path, monkeypatch):
     assert response.headers["Cache-Control"].startswith("no-store")
     assert 'body data-page="start"' in response.text
     assert "tm ask --offline" in response.text
+    assert "tm agent status" in response.text
+    assert "apply-agent-connect" in response.text
     assert "data-copy-command" in response.text
     assert "window.tmPages.start.init" in response.text
     assert "/static/dashboard-common.js" in response.text
     assert "/static/dashboard-pages.js" in response.text
+
+
+def test_start_agent_connect_status_api(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    import tigermemory_dashboard.server as dashboard_server
+
+    monkeypatch.setattr(dashboard_server, "REPO_ROOT", tmp_path)
+    (tmp_path / "wiki" / "systems").mkdir(parents=True)
+    (tmp_path / "tigermemory_cli.py").write_text("# cli\n", encoding="utf-8")
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.get("/api/start/agent-connect/status", headers=HOST)
+    data = response.json()
+
+    assert response.status_code == 200
+    assert data["action"] == "status"
+    assert any(row["target"] == "codex" for row in data["targets"])
+
+
+def test_start_agent_connect_apply_api_writes_project_rules(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    import tigermemory_dashboard.server as dashboard_server
+
+    monkeypatch.setattr(dashboard_server, "REPO_ROOT", tmp_path)
+    (tmp_path / "wiki" / "systems").mkdir(parents=True)
+    (tmp_path / "tigermemory_cli.py").write_text("# cli\n", encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text("# Existing\n", encoding="utf-8")
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.post(
+        "/api/start/agent-connect/apply",
+        headers=HOST,
+        json={"targets": ["codex"], "dry_run": False},
+    )
+    data = response.json()
+
+    assert response.status_code == 200
+    assert data["ok"] is True
+    assert "tigermemory-agent-connect:start target=codex" in (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
 
 
 def test_start_page_i18n_keys_are_complete():

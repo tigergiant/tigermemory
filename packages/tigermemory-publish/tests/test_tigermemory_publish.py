@@ -176,14 +176,16 @@ def _build_fake_repo(root: pathlib.Path) -> None:
             path.write_text("# Third-Party Notices\n\nTailwind CSS — MIT\n", encoding="utf-8")
         elif dst == ".codex/config.toml.example":
             path.write_text(
-                "[mcp_servers.tigermemory]\n"
-                "command = \"tm-mcp\"\n"
-                "args = [\"--role=reader\", \"--tool-profile=memory\"]\n",
+                "# tm agent status\n"
+                "# [mcp_servers.tigermemory]\n"
+                "# command = \"tm-mcp\"\n"
+                "# args = [\"--role=reader\", \"--tool-profile=memory\"]\n",
                 encoding="utf-8",
             )
         elif dst == "docs/advanced-agent-setup.md":
             path.write_text(
                 "# Advanced Agent Setup\n\n"
+                "`tm agent status` checks project agent rules.\n"
                 "`tm admin approve` is the human boundary.\n"
                 "Use --role=reader and --tool-profile=memory first.\n",
                 encoding="utf-8",
@@ -191,6 +193,7 @@ def _build_fake_repo(root: pathlib.Path) -> None:
         elif dst == "docs/connect-your-ai-tools.md":
             path.write_text(
                 "# Connect Your AI Tools\n\n"
+                "Run `tm agent apply --yes` before advanced MCP.\n"
                 "Use --role=reader and --tool-profile=memory for MCP examples.\n",
                 encoding="utf-8",
             )
@@ -376,10 +379,13 @@ def test_public_templates_document_source_first_update_install() -> None:
     assert "tm admin propose" in index
     assert "py -m pip install -e ." not in index
     assert "route, source references, sensitivity, stability, and evidence quality" in agents
+    assert "tm agent apply" in connect
+    assert "tm agent status" in advanced
     assert "--role=reader" in connect
     assert "--tool-profile=memory" in advanced
     assert "tm admin approve` is the human boundary" in advanced
-    assert "command = \"tm-mcp\"" in codex_config
+    assert "tm agent status" in codex_config
+    assert "# command = \"tm-mcp\"" in codex_config
     assert "--role=reader" in codex_config
     assert "--tool-profile=memory" in codex_config
 

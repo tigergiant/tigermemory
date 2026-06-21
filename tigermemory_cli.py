@@ -667,6 +667,32 @@ def cmd_publish(args: argparse.Namespace) -> int:
     return 2
 
 
+def cmd_agent(args: argparse.Namespace) -> int:
+    try:
+        from tigermemory_config import agent_connect
+    except Exception as exc:
+        print(f"tm agent requires tigermemory_config.agent_connect: {exc}", file=sys.stderr)
+        return 2
+    forwarded: list[str] = [args.agent_command]
+    for target in getattr(args, "target", None) or []:
+        forwarded.extend(["--target", target])
+    if getattr(args, "repo_root", None):
+        forwarded.extend(["--repo-root", str(args.repo_root)])
+    if getattr(args, "backup_root", None):
+        forwarded.extend(["--backup-root", str(args.backup_root)])
+    if getattr(args, "snapshot_id", None):
+        forwarded.extend(["--snapshot-id", str(args.snapshot_id)])
+    if getattr(args, "client", None):
+        forwarded.extend(["--client", str(args.client)])
+    if getattr(args, "yes", False):
+        forwarded.append("--yes")
+    if getattr(args, "dry_run", False):
+        forwarded.append("--dry-run")
+    if getattr(args, "json", False):
+        forwarded.append("--json")
+    return agent_connect.main(forwarded)
+
+
 def cmd_lessons(args: argparse.Namespace) -> int:
     return _run_python("tools/tm_lessons.py", args.args)
 
@@ -1013,6 +1039,32 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_p = sub.add_parser("doctor", help="run agent doctor")
     doctor_p.add_argument("args", nargs=argparse.REMAINDER)
     doctor_p.set_defaults(func=cmd_doctor)
+
+    agent_p = sub.add_parser("agent", help="connect AI tools to this TigerMemory project")
+    agent_sub = agent_p.add_subparsers(dest="agent_command", required=True)
+    for name in ("plan", "status", "apply"):
+        p = agent_sub.add_parser(name)
+        p.add_argument("--target", action="append", choices=["codex", "claude-code", "cursor", "hooks", "mcp", "all"], default=None)
+        p.add_argument("--repo-root", type=pathlib.Path, default=None)
+        p.add_argument("--json", action="store_true")
+        if name == "apply":
+            p.add_argument("--yes", action="store_true")
+            p.add_argument("--dry-run", action="store_true")
+            p.add_argument("--backup-root", type=pathlib.Path, default=None)
+        p.set_defaults(func=cmd_agent)
+    agent_rollback = agent_sub.add_parser("rollback")
+    agent_rollback.add_argument("--snapshot-id", required=True)
+    agent_rollback.add_argument("--target", action="append", choices=["codex", "claude-code", "cursor", "hooks", "mcp", "all"], default=None)
+    agent_rollback.add_argument("--repo-root", type=pathlib.Path, default=None)
+    agent_rollback.add_argument("--backup-root", type=pathlib.Path, default=None)
+    agent_rollback.add_argument("--yes", action="store_true")
+    agent_rollback.add_argument("--dry-run", action="store_true")
+    agent_rollback.add_argument("--json", action="store_true")
+    agent_rollback.set_defaults(func=cmd_agent)
+    agent_print = agent_sub.add_parser("print-config", help="print optional MCP config only")
+    agent_print.add_argument("--client", choices=["codex", "claude-code", "claude-desktop", "cursor", "json"], default="codex")
+    agent_print.add_argument("--json", action="store_true")
+    agent_print.set_defaults(func=cmd_agent)
 
     publish_p = sub.add_parser("publish", help="maintainer-only public export/audit command")
     publish_p.add_argument("args", nargs=argparse.REMAINDER)

@@ -16,6 +16,7 @@
     currentStep: 0,
     selectedDepth: 'A',
     llmStatus: null,
+    agentConnectStatus: null,
     depthPreviews: {
       A: {
         name: 'A 极简',
@@ -55,6 +56,7 @@
       const prefs = data && data.preferences ? data.preferences : {};
       this.selectedDepth = prefs.communication_depth || 'A';
       this.llmStatus = data && data.llm_status ? data.llm_status : null;
+      this.agentConnectStatus = data && data.agent_connect ? data.agent_connect : null;
       const refresh = document.getElementById('last-refresh');
       if (refresh) {
         refresh.textContent = '开始';
@@ -67,6 +69,7 @@
       this.bindDepthChoices(root);
       this.renderDepthChoices(root);
       this.renderLlmStatus(root);
+      this.renderAgentConnectStatus(root);
       this.updateLlmCommand();
       if (window.lucide) window.lucide.createIcons();
     },
@@ -104,6 +107,8 @@
       if (copyLlm) copyLlm.addEventListener('click', () => this.copyGeneratedLlmCommand(), {signal: this.abortController.signal});
       const saveLlm = document.getElementById('save-llm-config');
       if (saveLlm) saveLlm.addEventListener('click', () => this.saveLlmConfig(), {signal: this.abortController.signal});
+      const applyAgent = document.getElementById('apply-agent-connect');
+      if (applyAgent) applyAgent.addEventListener('click', () => this.applyAgentConnect(), {signal: this.abortController.signal});
       const finish = document.getElementById('finish-onboarding');
       if (finish) finish.addEventListener('click', () => {
         try { localStorage.setItem('tigermemory_onboarding_done', 'true'); } catch (_error) {}
@@ -146,6 +151,7 @@
         '从普通版开始，后面再升级。',
         '选一个你喜欢的回答风格。',
         '生成本机 LLM 配置命令，密钥不上传。',
+        '把项目规则交给你的 AI 工具。',
         '了解常用页面分别做什么。',
         '跑通一次，就可以开始用了。'
       ];
@@ -275,6 +281,83 @@
       this.updateLlmCommand();
       const button = document.getElementById('copy-llm-command');
       if (button) await this.copyCommand(button);
+    },
+
+    renderAgentConnectStatus(root = document, message = '') {
+      const summary = root.getElementById ? root.getElementById('agent-connect-summary') : document.getElementById('agent-connect-summary');
+      const list = root.getElementById ? root.getElementById('agent-connect-list') : document.getElementById('agent-connect-list');
+      if (!summary || !list) return;
+      const c = window.tmDashboard || {};
+      const esc = c.esc || (value => String(value ?? '').replace(/[&<>"']/g, chr => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[chr])));
+      const status = this.agentConnectStatus || {};
+      const targets = Array.isArray(status.targets) ? status.targets : [];
+      const configured = Number(status.configured_count || targets.filter(item => ['ok', 'available'].includes(item.status)).length || 0);
+      const missing = Number(status.missing_count || targets.filter(item => ['missing', 'missing_block'].includes(item.status)).length || 0);
+      const blocked = Number(status.blocked_count || targets.filter(item => item.status === 'blocked').length || 0);
+      const protectedCount = targets.filter(item => item.status === 'protected').length;
+      summary.textContent = message || `项目规则 ${configured} 项已就绪，${missing} 项可一键应用，${blocked} 项需高级配置，${protectedCount} 项受源仓保护。`;
+      const statusClass = state => {
+        if (state === 'ok' || state === 'available') return 'border-[#a0b889] bg-[#dde8ce] text-[#52733a]';
+        if (state === 'protected') return 'border-[#d8cfba] bg-[#f7f3ea] text-[#5d554b]';
+        if (state === 'blocked') return 'border-[#d49a91] bg-[#f0d6d2] text-[#8a3527]';
+        return 'border-[#d2b56b] bg-[#fffaf0] text-[#8a6b1f]';
+      };
+      const statusText = state => {
+        if (state === 'ok') return '已就绪';
+        if (state === 'available') return '可配置';
+        if (state === 'protected') return '源仓保护';
+        if (state === 'blocked') return '暂不可自动配置';
+        if (state === 'missing_block') return '待写入规则';
+        if (state === 'missing') return '待准备模板';
+        return state || '待检查';
+      };
+      list.innerHTML = targets.map(item => `
+        <div class="rounded-lg border ${statusClass(item.status)} px-3 py-2">
+          <div class="flex items-center justify-between gap-3">
+            <b>${esc(item.label_cn || item.target || item.target_id)}</b>
+            <span class="rounded-full border border-current/30 px-2 py-0.5 text-xs">${esc(statusText(item.status))}</span>
+          </div>
+          <div class="mt-1 text-xs leading-5 opacity-80">${esc(item.summary_cn || item.reason || item.rel_path || '')}</div>
+        </div>
+      `).join('') || '<div class="rounded-lg border border-[#d2b56b] bg-[#fffaf0] px-3 py-2 text-sm text-[#8a6b1f]">暂时读不到接入状态。</div>';
+    },
+
+    async refreshAgentConnectStatus(message = '') {
+      const response = await fetch('/api/start/agent-connect/status', {signal: this.abortController.signal});
+      const result = await response.json();
+      if (!response.ok || !result) throw new Error(result.error || `HTTP ${response.status}`);
+      this.agentConnectStatus = result;
+      this.renderAgentConnectStatus(document, message);
+      return result;
+    },
+
+    async applyAgentConnect() {
+      const button = document.getElementById('apply-agent-connect');
+      try {
+        if (button) {
+          button.disabled = true;
+          button.textContent = '正在应用...';
+        }
+        this.renderAgentConnectStatus(document, '正在写入项目级 AI 规则，不会修改全局配置...');
+        const response = await fetch('/api/start/agent-connect/apply', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({targets: ['codex', 'claude-code', 'cursor', 'hooks'], dry_run: false}),
+          signal: this.abortController.signal
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || (result.errors || []).join('; ') || `HTTP ${response.status}`);
+        await this.refreshAgentConnectStatus('项目级 AI 规则已经写入。MCP 如果仍显示不可配置，说明本机还没有公开版 MCP 命令。');
+        this.toast('AI 工具项目规则已准备好。');
+      } catch (error) {
+        this.renderAgentConnectStatus(document, `接入失败：${error.message || error}`);
+        this.toast(`接入失败：${error.message || error}`, false);
+      } finally {
+        if (button) {
+          button.disabled = false;
+          button.textContent = '应用项目级规则';
+        }
+      }
     },
 
     async copyCommand(button) {

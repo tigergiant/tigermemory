@@ -282,6 +282,10 @@ def main(argv: list[str] | None = None) -> int:
         from . import manager
 
         return manager.main(argv[1:])
+    if argv and argv[0] == "agent":
+        from . import agent_connect
+
+        return agent_connect.main(argv[1:])
     if argv and argv[0] == "explain":
         return _cmd_explain(argv[1:])
     return _cmd_explain(argv)

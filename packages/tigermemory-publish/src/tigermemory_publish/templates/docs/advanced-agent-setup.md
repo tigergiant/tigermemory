@@ -13,7 +13,8 @@ evidence source while keeping durable writes under human control.
 
 1. **Read-only search**
    - Allow `tm ask` and `tm search`.
-   - Keep MCP role as `reader`.
+   - Run `tm agent status` first.
+   - Run `tm agent apply --yes` to install project-local rules.
    - Verify answers cite local evidence.
 2. **Proposal drafting**
    - Allow `tm admin propose`.
@@ -29,7 +30,14 @@ evidence source while keeping durable writes under human control.
 
 ## MCP Defaults
 
-Use reader mode first:
+MCP is optional and should only be enabled after a real MCP command is installed.
+Check first:
+
+```powershell
+tm agent print-config --client codex --json
+```
+
+If it reports `ok: true`, use reader mode first:
 
 ```json
 {
@@ -42,9 +50,9 @@ Use reader mode first:
 }
 ```
 
-The `tm-mcp` command is an adapter example. If your installation uses a
-different MCP server command, keep the same permission shape: reader role,
-memory-focused tool profile, no automatic approval.
+If your installation uses a different MCP server command, keep the same
+permission shape: reader role, memory-focused tool profile, no automatic
+approval.
 
 ## Hook Defaults
 

@@ -7,10 +7,12 @@ Wiki changes.
 ## Recommended Flow
 
 1. Install TigerMemory and configure your LLM provider.
-2. Ask the AI to read `README.md`, `AGENTS.md`, and this file.
-3. Let the AI use `tm ask` and `tm search` for evidence.
-4. Let the AI use `tm admin propose` for drafts.
-5. Approve with `tm admin approve` yourself after checking the proposal.
+2. Run `tm agent status` to see which project-level AI rules are already in place.
+3. Run `tm agent apply --yes` to install AGENTS / Claude / Cursor project rules.
+4. Ask the AI to read `README.md`, `AGENTS.md`, and this file.
+5. Let the AI use `tm ask` and `tm search` for evidence.
+6. Let the AI use `tm admin propose` for drafts.
+7. Approve with `tm admin approve` yourself after checking the proposal.
 
 ## Tool Permissions
 
@@ -27,9 +29,11 @@ Use this default split:
 
 ## Codex
 
-Start without MCP first:
+Start with project rules first:
 
 ```powershell
+tm agent status
+tm agent apply --target codex --yes
 tm ask --query "what rules should my AI assistant follow?" --scope wiki
 tm admin guide
 ```
@@ -58,6 +62,8 @@ pages or proposal files, then approve changes locally yourself.
 ## Safety Rules
 
 - Do not connect an AI tool with write access on the first day.
+- Do not paste MCP examples until `tm agent print-config --client codex` reports
+  that a local MCP command is available.
 - Do not expose API keys, cookies, passwords, private keys, identity numbers, or
   personal records.
 - Do not treat a model answer as durable truth. It needs local evidence and
