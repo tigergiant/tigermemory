@@ -183,9 +183,9 @@ def _build_fake_repo(root: pathlib.Path) -> None:
                 "tm = 'tigermemory_cli:main'\n",
                 encoding="utf-8",
             )
-        elif dst == "wiki/operations/project-canvas.md":
+        elif dst.startswith("wiki/"):
             path.write_text(
-                "---\npublic: true\n---\n\n```mermaid\nstateDiagram-v2\n    [*] --> P0_Setup: done\n```\n",
+                "---\npublic: true\n---\n\n# Public starter page\n\nSafe public starter content.\n",
                 encoding="utf-8",
             )
         else:
@@ -346,15 +346,12 @@ def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
     assert "packages/tigermemory-dashboard/src" in plan["whole_dirs"]
     assert "packages/tigermemory-publish/src" in plan["whole_dirs"]
     assert "schemas" in plan["whole_dirs"]
-    assert plan["mapped_files"] == [
-        "packages/tigermemory-publish/src/tigermemory_publish/templates/AGENTS.md=>AGENTS.md",
-        "packages/tigermemory-publish/src/tigermemory_publish/templates/LICENSE=>LICENSE",
-        "packages/tigermemory-publish/src/tigermemory_publish/templates/README.md=>README.md",
-        "packages/tigermemory-publish/src/tigermemory_publish/templates/THIRD_PARTY_NOTICES.md=>THIRD_PARTY_NOTICES.md",
-        "packages/tigermemory-publish/src/tigermemory_publish/templates/index.md=>index.md",
-        "packages/tigermemory-publish/src/tigermemory_publish/templates/pyproject.toml=>pyproject.toml",
-        "packages/tigermemory-publish/src/tigermemory_publish/templates/wiki/operations/project-canvas.md=>wiki/operations/project-canvas.md",
-    ]
+    assert plan["mapped_files"] == sorted(
+        f"{src}=>{dst}" for src, dst in tigermemory_publish.PUBLISH_MAPPED_FILES
+    )
+    assert any("=>wiki/projects/" in item for item in plan["mapped_files"])
+    assert any("=>docs/provider-compatibility.md" in item for item in plan["mapped_files"])
+    assert not any("wiki/operations/project-canvas.md" in item for item in plan["mapped_files"])
     assert "tools/tm_io.py" in plan["tool_files"]
     assert "tools/tm_review_ui.py" not in plan["tool_files"]
     assert "tools/tm_review_tools.py" not in plan["tool_files"]
@@ -426,19 +423,45 @@ def test_public_pyproject_package_roots_match_modules() -> None:
     assert not existing_private_roots.intersection(where)
 
 
+def test_public_pyproject_packages_public_templates() -> None:
+    repo_root = pathlib.Path(__file__).resolve().parents[3]
+    template = repo_root / "packages" / "tigermemory-publish" / "src" / "tigermemory_publish" / "templates" / "pyproject.toml"
+    data = tomllib.loads(template.read_text(encoding="utf-8"))
+    package_data = data["tool"]["setuptools"]["package-data"]["tigermemory_publish"]
+
+    assert "templates/docs/*.md" in package_data
+    assert "templates/wiki/*/*.md" in package_data
+    assert "templates/wiki/operations/*.md" not in package_data
+
+
 def test_module_summary_exposes_private_package_single_source() -> None:
     summary = tigermemory_publish.module_summary()
 
     assert summary["private_package_names"] == list(tigermemory_publish.PRIVATE_PACKAGE_NAMES)
-    assert summary["private_excluded_wiki_partitions"] == ["person", "investment"]
+    assert summary["private_excluded_wiki_partitions"] == [
+        "person",
+        "investment",
+        "brand",
+        "operations",
+        "production",
+        "self-evolution",
+    ]
     assert {"tigerledger", "tigermemory_eval", "tigermemory_minimax"}.issubset(
         set(tigermemory_publish.PRIVATE_PACKAGE_NAMES)
     )
 
 
 def test_private_excluded_wiki_partitions_are_manifest_owned() -> None:
-    assert tigermemory_publish.EXCLUDED_WIKI_PARTITIONS == ("person", "investment")
-    assert tigermemory_publish.private_excluded_wiki_partitions() == ("person", "investment")
+    expected = (
+        "person",
+        "investment",
+        "brand",
+        "operations",
+        "production",
+        "self-evolution",
+    )
+    assert tigermemory_publish.EXCLUDED_WIKI_PARTITIONS == expected
+    assert tigermemory_publish.private_excluded_wiki_partitions() == expected
 
 
 def test_public_packages_do_not_import_private_packages() -> None:
@@ -781,11 +804,10 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     assert "Internal; open-source release pending" not in public_pyproject
     assert (dest / "LICENSE").read_text(encoding="utf-8").startswith("AGPL-3.0-or-later")
     assert "Tailwind CSS" in (dest / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
-    public_canvas = (dest / "wiki" / "operations" / "project-canvas.md").read_text(encoding="utf-8")
-    assert "stateDiagram-v2" in public_canvas
-    assert "TigerMemory 当前项目拓扑" not in public_canvas
-    assert "Expense Tracker" not in public_canvas
-    assert "TradingAgents" not in public_canvas
+    assert not (dest / "wiki" / "operations" / "project-canvas.md").exists()
+    starter_page = (dest / "wiki" / "projects" / "getting-started-with-ai-brain.md").read_text(encoding="utf-8")
+    assert "Public starter page" in starter_page
+    assert (dest / "docs" / "provider-compatibility.md").is_file()
     assert not (dest / "tools" / "tm_dummy.py").exists()
     assert (dest / "tools" / "tm_io.py").is_file()
     assert not (dest / "tools" / "tm_review_ui.py").exists()

@@ -69,9 +69,19 @@ When acting as the TigerMemory Wiki Admin:
 - Generate reviewable proposals before changing long-term Wiki facts.
 - Use `tm admin propose` to draft into `runtime/tigermemory/admin-proposals/`;
   only `tm admin approve` may write the generated page to `wiki/`.
+- Use the public starter taxonomy:
+  - `projects`: active projects with goals and next steps.
+  - `areas`: long-running responsibilities and habits.
+  - `resources`: references, tutorials, and reusable notes.
+  - `decisions`: durable decisions with rationale.
+  - `journal`: dated reviews and recent progress.
+  - `systems`: tool setup, agent behavior rules, and workflows.
+  - `archive`: completed or outdated material kept for context.
 - Include source paths or evidence snippets when answering.
 - Keep private data, person notes, investment data, runtime env files, and
   review archives out of public snapshots.
+- Reject secrets, passwords, API tokens, private keys, identity numbers, and
+  raw private personal records instead of storing them in the Wiki.
 
 `tm publish` is not part of the normal public runtime workflow. It is a
 maintainer-only snapshot/export command and must not read a user's personal

@@ -4239,14 +4239,15 @@ SUGGEST_PATCH_MAX_SUMMARY_CHARS = 6000    # cap input summary
 SUGGEST_PATCH_DEFAULT_MAX = 5
 SUGGEST_PATCH_TYPES = {"append", "update_section", "new_section"}
 
-WIKI_ADMIN_PUBLIC_PARTITIONS = {
-    "brand",
-    "investment",
-    "operations",
-    "production",
+WIKI_ADMIN_PUBLIC_PARTITIONS = (
+    "projects",
+    "areas",
+    "resources",
+    "decisions",
+    "journal",
     "systems",
-    "self-evolution",
-}
+    "archive",
+)
 
 WIKI_ADMIN_PROPOSAL_PROMPT = """你是 TigerMemory 公开版的 Wiki Admin。
 
@@ -4257,8 +4258,18 @@ WIKI_ADMIN_PROPOSAL_PROMPT = """你是 TigerMemory 公开版的 Wiki Admin。
 2. 不要声称已经写入长期 Wiki；你只是在生成草案。
 3. 不要编造来源。资料里没有来源时，在 sources 里写 "user-provided text"。
 4. 不要包含密钥、token、密码、身份证、银行卡、家庭住址等敏感信息。
-5. 不要写 person/private 页面；涉及个人隐私时 should_write=false。
-6. 内容必须区分已验证、推断、待确认；没有证据的结论放入待确认。
+5. 只面向个人知识库公开分类：projects、areas、resources、decisions、journal、systems、archive。
+6. 不要写 person/private、investment、brand、production、operations、self-evolution 页面；涉及个人隐私或投资/医疗/财务敏感建议时 should_write=false。
+7. 内容必须区分已验证、推断、待确认；没有证据的结论放入待确认。
+
+分类建议：
+- projects：有明确目标、交付物或阶段的项目。
+- areas：长期维护的责任领域、习惯、健康、学习、家庭、工作等。
+- resources：资料、教程、参考链接、模板、方法库。
+- decisions：已做出的决定、取舍、原因和影响。
+- journal：日记、周回顾、阶段复盘、时间线记录。
+- systems：工具设置、Agent 行为规则、工作流、自动化说明。
+- archive：过期、完成或暂不维护但仍需保留的材料。
 
 输出 JSON 格式：
 {
@@ -4539,7 +4550,6 @@ def propose_wiki_admin_page(
     never commits. Callers must put the payload through an explicit human review
     step before writing the generated markdown to disk.
     """
-    validate_partition(partition)
     if partition not in WIKI_ADMIN_PUBLIC_PARTITIONS:
         raise ValueError(f"partition '{partition}' is not supported by the public Wiki Admin proposal flow")
     source_text = str(text or "").strip()

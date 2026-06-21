@@ -13,6 +13,56 @@ from pathlib import Path
 
 MappedFile = tuple[str, str]
 
+PUBLIC_STARTER_WIKI_PARTITIONS: tuple[str, ...] = (
+    "projects",
+    "areas",
+    "resources",
+    "decisions",
+    "journal",
+    "systems",
+    "archive",
+)
+
+PUBLIC_STARTER_WIKI_TEMPLATE_FILES: tuple[MappedFile, ...] = (
+    (
+        "packages/tigermemory-publish/src/tigermemory_publish/templates/wiki/projects/getting-started-with-ai-brain.md",
+        "wiki/projects/getting-started-with-ai-brain.md",
+    ),
+    (
+        "packages/tigermemory-publish/src/tigermemory_publish/templates/wiki/areas/personal-knowledge-system.md",
+        "wiki/areas/personal-knowledge-system.md",
+    ),
+    (
+        "packages/tigermemory-publish/src/tigermemory_publish/templates/wiki/resources/how-to-write-good-notes.md",
+        "wiki/resources/how-to-write-good-notes.md",
+    ),
+    (
+        "packages/tigermemory-publish/src/tigermemory_publish/templates/wiki/decisions/why-deepseek-is-default.md",
+        "wiki/decisions/why-deepseek-is-default.md",
+    ),
+    (
+        "packages/tigermemory-publish/src/tigermemory_publish/templates/wiki/journal/first-week-review.md",
+        "wiki/journal/first-week-review.md",
+    ),
+    (
+        "packages/tigermemory-publish/src/tigermemory_publish/templates/wiki/systems/agent-behavior-rules.md",
+        "wiki/systems/agent-behavior-rules.md",
+    ),
+    (
+        "packages/tigermemory-publish/src/tigermemory_publish/templates/wiki/archive/README.md",
+        "wiki/archive/README.md",
+    ),
+)
+
+PRIVATE_DOGFOOD_WIKI_PARTITIONS: tuple[str, ...] = (
+    "person",
+    "investment",
+    "brand",
+    "operations",
+    "production",
+    "self-evolution",
+)
+
 @dataclass(frozen=True)
 class PublishModule:
     id: str
@@ -119,6 +169,10 @@ PUBLIC_MODULES: tuple[PublishModule, ...] = (
             ),
             ("packages/tigermemory-publish/src/tigermemory_publish/templates/pyproject.toml", "pyproject.toml"),
             ("packages/tigermemory-publish/src/tigermemory_publish/templates/README.md", "README.md"),
+            (
+                "packages/tigermemory-publish/src/tigermemory_publish/templates/docs/provider-compatibility.md",
+                "docs/provider-compatibility.md",
+            ),
         ),
         tool_files=("tools/tm_publish.py",),
         checks=(
@@ -128,21 +182,10 @@ PUBLIC_MODULES: tuple[PublishModule, ...] = (
     ),
     PublishModule(
         id="public-wiki-seed",
-        description="Starter public wiki canvas and public markdown partitions.",
+        description="Beginner public wiki seed pages and personal knowledge partitions.",
         stability="core",
-        mapped_files=(
-            (
-                "packages/tigermemory-publish/src/tigermemory_publish/templates/wiki/operations/project-canvas.md",
-                "wiki/operations/project-canvas.md",
-            ),
-        ),
-        wiki_partitions=(
-            "brand",
-            "operations",
-            "production",
-            "self-evolution",
-            "systems",
-        ),
+        mapped_files=PUBLIC_STARTER_WIKI_TEMPLATE_FILES,
+        wiki_partitions=PUBLIC_STARTER_WIKI_PARTITIONS,
         checks=("tests/test_public_boundary.py",),
     ),
 )
@@ -153,7 +196,7 @@ PRIVATE_EXCLUDED_MODULES: tuple[PublishModule, ...] = (
         id="private-dogfood",
         description="TigerMemory's local dogfood governance, supervisor, OpenClaw, investment, person, runtime, and review data.",
         stability="private-excluded",
-        excluded_wiki_partitions=("person", "investment"),
+        excluded_wiki_partitions=PRIVATE_DOGFOOD_WIKI_PARTITIONS,
         private_package_names=(
             "tigerledger",
             "tigermemory_eval",
@@ -355,7 +398,7 @@ def validate_public_boundaries(project_root: str | Path, module_id: str | None =
             parts = set(path.parts)
             if ".tmp" in parts or "review-artifacts" in parts:
                 violations.append({"kind": "forbidden_path", "module": module.id, "path": rel})
-            if path.parts[:2] in (("wiki", "person"), ("wiki", "investment")):
+            if len(path.parts) >= 2 and path.parts[0] == "wiki" and path.parts[1] in private_wiki:
                 violations.append({"kind": "private_wiki_path", "module": module.id, "path": rel})
             if "runtime" in parts and not rel.endswith(".example"):
                 violations.append({"kind": "runtime_non_template", "module": module.id, "path": rel})

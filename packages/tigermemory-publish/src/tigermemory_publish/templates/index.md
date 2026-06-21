@@ -20,7 +20,13 @@ Admin experience.
 
 ## Included Areas
 
-- `wiki/operations/project-canvas.md` — public starter project canvas.
+- `wiki/projects/` — active projects with goals and next steps.
+- `wiki/areas/` — long-running responsibilities and habits.
+- `wiki/resources/` — references, tutorials, and reusable notes.
+- `wiki/decisions/` — durable decisions with rationale.
+- `wiki/journal/` — dated reviews and recent progress.
+- `wiki/systems/` — tool setup, agent behavior rules, and workflows.
+- `wiki/archive/` — completed or outdated material kept for context.
 - `tools/` — allowlisted local tools needed by the basic workflow.
 - `packages/` — Python packages used by the `tm` CLI.
 - `runtime/**/*.example` — safe configuration templates only.

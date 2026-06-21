@@ -76,6 +76,30 @@ def test_propose_wiki_admin_page_uses_admin_model_env(monkeypatch, tmp_path) -> 
     assert result["target_path"] == "wiki/systems/admin-env.md"
 
 
+def test_propose_wiki_admin_page_accepts_public_starter_partition(monkeypatch) -> None:
+    monkeypatch.setattr(
+        tm_core,
+        "_call_deepseek_json",
+        lambda *_args, **_kwargs: (True, {
+            "should_write": True,
+            "title": "First Project",
+            "slug": "first-project",
+            "summary": "A public starter project summary.",
+            "body_markdown": "## 摘要\n\nA starter project note.",
+            "rationale": "Stable enough for wiki.",
+            "confidence": 81,
+        }),
+    )
+
+    result = tm_core.propose_wiki_admin_page(
+        "This source material is long enough and stable enough for a project proposal.",
+        partition="projects",
+        title="First Project",
+    )
+
+    assert result["target_path"] == "wiki/projects/first-project.md"
+
+
 def test_propose_wiki_admin_page_keeps_rejected_proposal_reviewable(monkeypatch) -> None:
     monkeypatch.setattr(
         tm_core,
@@ -106,6 +130,26 @@ def test_propose_wiki_admin_page_blocks_person_partition() -> None:
             partition="person",
             title="Private Person",
         )
+
+
+def test_propose_wiki_admin_page_blocks_private_dogfood_partition_before_llm(monkeypatch) -> None:
+    called = False
+
+    def fake_call(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return True, {}
+
+    monkeypatch.setattr(tm_core, "_call_deepseek_json", fake_call)
+
+    with pytest.raises(ValueError, match="not supported"):
+        tm_core.propose_wiki_admin_page(
+            "This source material is long enough for a proposal.",
+            partition="investment",
+            title="Private Investment",
+        )
+
+    assert called is False
 
 
 def test_propose_wiki_admin_page_blocks_obvious_secret_before_llm(monkeypatch) -> None:

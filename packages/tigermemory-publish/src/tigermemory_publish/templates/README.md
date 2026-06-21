@@ -78,7 +78,7 @@ human approval.
 Draft a reviewable Wiki proposal with the LLM Admin flow:
 
 ```powershell
-Get-Content .\notes.md | tm admin propose --partition systems --title "My Notes"
+Get-Content .\notes.md | tm admin propose --partition projects --title "My Notes"
 tm admin list
 tm admin show "<proposal-id>"
 tm admin approve "<proposal-id>"
@@ -99,16 +99,16 @@ tm verify --id "<id printed by write-memory>" --terms "hello local"
 Search the Markdown Wiki as part of the same basic mode:
 
 ```powershell
-tm search --scope wiki --query "project canvas"
+tm search --scope wiki --query "AI brain starter"
 tm search --scope all --query "local memory"
-tm search --scope wiki --query "项目画布"
+tm search --scope wiki --query "agent behavior rules"
 ```
 
 Ask a source-grounded natural-language question with the configured LLM:
 
 ```powershell
-tm ask --query "what do we know about project canvas?" --scope all
-tm ask --query "项目画布是什么？" --scope wiki
+tm ask --query "what do we know about the AI brain starter?" --scope all
+tm ask --query "what rules should my AI assistant follow?" --scope wiki
 ```
 
 `tm ask` retrieves local memory and Wiki evidence first, then asks the configured
@@ -126,6 +126,11 @@ tm ask --offline --query "项目画布" --scope wiki
 
 Offline ask only returns local evidence from SQLite and Markdown. It does not
 call an AI model and does not generate a final natural-language answer.
+
+The public starter Wiki uses seven beginner-friendly partitions:
+`projects`, `areas`, `resources`, `decisions`, `journal`, `systems`, and
+`archive`. Keep private people, health, finance, and secrets out of the public
+Wiki; use private local files or a separate secured workspace for those topics.
 
 Start the local dashboard:
 
@@ -157,6 +162,11 @@ The public snapshot promises an LLM-first starter with a local evidence
 fallback before any advanced integrations. The stable contract for CLI
 commands, JSON fields, profile behavior, optional services, and release gates is documented in
 `wiki/systems/public-core-contract.md`.
+
+Provider behavior and overclaim boundaries are documented in
+`docs/provider-compatibility.md`. The starter recommends DeepSeek first; other
+providers should be treated as supported only after their request/response shape
+has been tested.
 
 ## Public Core vs Your Data
 

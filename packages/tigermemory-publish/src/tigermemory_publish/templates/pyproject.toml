@@ -48,4 +48,4 @@ where = [
 
 [tool.setuptools.package-data]
 tigermemory_dashboard = ["static/**/*"]
-tigermemory_publish = ["templates/*", "templates/wiki/operations/*.md"]
+tigermemory_publish = ["templates/*", "templates/docs/*.md", "templates/wiki/*/*.md"]

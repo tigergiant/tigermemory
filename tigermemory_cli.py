@@ -14,7 +14,15 @@ import sys
 
 
 PROFILE_VALUES = {"local", "hybrid"}
-ADMIN_PARTITIONS = ("brand", "investment", "operations", "production", "systems", "self-evolution")
+ADMIN_PARTITIONS = (
+    "projects",
+    "areas",
+    "resources",
+    "decisions",
+    "journal",
+    "systems",
+    "archive",
+)
 ADMIN_PROPOSAL_SCHEMA = "tigermemory-admin-proposal-v1"
 ADMIN_PROPOSAL_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 PASSTHROUGH_COMMANDS = {
@@ -25,12 +33,14 @@ PASSTHROUGH_COMMANDS = {
 }
 
 try:
+    from tigermemory_core import WIKI_ADMIN_PUBLIC_PARTITIONS
     from tigermemory_core.llm_status import llm_status_payload
     from tigermemory_core.roots import (
         resolve_app_root,
         resolve_instance_root,
         subprocess_root_env,
     )
+    ADMIN_PARTITIONS = tuple(WIKI_ADMIN_PUBLIC_PARTITIONS)
 except Exception:
     llm_status_payload = None
     resolve_app_root = None
@@ -447,7 +457,8 @@ def _admin_print_or_json(payload: dict | list[dict], *, as_json: bool) -> None:
 def cmd_admin(args: argparse.Namespace) -> int:
     if args.admin_command == "guide":
         print("purpose=LLM Wiki Admin proposal workflow")
-        print("propose=cat notes.md | tm admin propose --partition systems --title \"My Notes\"")
+        print("propose=cat notes.md | tm admin propose --partition projects --title \"My Notes\"")
+        print("partitions=projects,areas,resources,decisions,journal,systems,archive")
         print("review=tm admin list; tm admin show <proposal-id>")
         print("approve=tm admin approve <proposal-id>")
         print("safety=propose only writes runtime proposals; approve is the explicit user action that writes wiki")

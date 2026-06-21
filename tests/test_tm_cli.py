@@ -8,6 +8,8 @@ import subprocess
 import sys
 import types
 
+import pytest
+
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -242,6 +244,8 @@ def test_admin_guide_explains_proposal_first_flow(capsys) -> None:
 
     out = capsys.readouterr().out
     assert "propose=" in out
+    assert "--partition projects" in out
+    assert "partitions=projects,areas,resources,decisions,journal,systems,archive" in out
     assert "approve=" in out
     assert "propose only writes runtime proposals" in out
 
@@ -292,6 +296,13 @@ def test_admin_propose_and_approve_roundtrip(tmp_path, monkeypatch, capsys) -> N
     assert "Admin summary" in page.read_text(encoding="utf-8")
     stored = json.loads((tmp_path / "runtime" / "tigermemory" / "admin-proposals" / f"{proposal_id}.json").read_text(encoding="utf-8"))
     assert stored["status"] == "approved"
+
+
+def test_admin_propose_rejects_private_dogfood_partition() -> None:
+    with pytest.raises(SystemExit) as exc:
+        tigermemory_cli.main(["admin", "propose", "--partition", "investment", "--title", "Private"])
+
+    assert exc.value.code == 2
 
 
 def test_admin_approve_refuses_existing_target_without_force(tmp_path, monkeypatch, capsys) -> None:
@@ -984,7 +995,7 @@ def test_published_snapshot_cli_detects_root_without_env(tmp_path) -> None:
     assert memory_id in memory.stdout
 
     wiki = subprocess.run(
-        [sys.executable, "-m", "tigermemory_cli", "search", "--scope", "wiki", "--query", "Project Canvas", "--size", "3"],
+        [sys.executable, "-m", "tigermemory_cli", "search", "--scope", "wiki", "--query", "AI brain starter", "--size", "3"],
         cwd=snapshot,
         capture_output=True,
         text=True,
@@ -995,7 +1006,7 @@ def test_published_snapshot_cli_detects_root_without_env(tmp_path) -> None:
     )
     assert wiki.returncode == 0, wiki.stderr
     wiki_payload = json.loads(wiki.stdout)
-    assert wiki_payload["results"][0]["path"] == "wiki/operations/project-canvas.md"
+    assert wiki_payload["results"][0]["path"] == "wiki/projects/getting-started-with-ai-brain.md"
 
     dashboard_help = subprocess.run(
         [sys.executable, "-m", "tigermemory_cli", "dashboard", "--help"],
@@ -1011,7 +1022,7 @@ def test_published_snapshot_cli_detects_root_without_env(tmp_path) -> None:
     assert "default: 9777" in dashboard_help.stdout
 
     wiki_cn = subprocess.run(
-        [sys.executable, "-m", "tigermemory_cli", "search", "--scope", "wiki", "--query", "项目画布", "--size", "3"],
+        [sys.executable, "-m", "tigermemory_cli", "search", "--scope", "wiki", "--query", "Agent Behavior Rules", "--size", "3"],
         cwd=snapshot,
         capture_output=True,
         text=True,
@@ -1022,7 +1033,7 @@ def test_published_snapshot_cli_detects_root_without_env(tmp_path) -> None:
     )
     assert wiki_cn.returncode == 0, wiki_cn.stderr
     wiki_cn_payload = json.loads(wiki_cn.stdout)
-    assert wiki_cn_payload["results"][0]["path"] == "wiki/operations/project-canvas.md"
+    assert wiki_cn_payload["results"][0]["path"] == "wiki/systems/agent-behavior-rules.md"
 
     ask = subprocess.run(
         [
@@ -1059,7 +1070,7 @@ def test_published_snapshot_cli_detects_root_without_env(tmp_path) -> None:
             "--scope",
             "wiki",
             "--query",
-            "项目画布",
+            "Agent Behavior Rules",
         ],
         cwd=snapshot,
         capture_output=True,
@@ -1072,7 +1083,7 @@ def test_published_snapshot_cli_detects_root_without_env(tmp_path) -> None:
     assert ask_wiki_cn.returncode == 0, ask_wiki_cn.stderr
     ask_wiki_cn_payload = json.loads(ask_wiki_cn.stdout)
     assert ask_wiki_cn_payload["offline"] is True
-    assert ask_wiki_cn_payload["wiki"]["results"][0]["path"] == "wiki/operations/project-canvas.md"
+    assert ask_wiki_cn_payload["wiki"]["results"][0]["path"] == "wiki/systems/agent-behavior-rules.md"
 
 
 def test_publish_is_maintainer_only_when_app_tools_are_missing(tmp_path, monkeypatch, capsys) -> None:

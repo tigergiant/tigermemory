@@ -25,6 +25,8 @@ from .modules import (
     PRIVATE_EXCLUDED_MODULES,
     PRIVATE_PACKAGE_NAMES,
     PUBLIC_MODULES,
+    PUBLIC_STARTER_WIKI_PARTITIONS,
+    PUBLIC_STARTER_WIKI_TEMPLATE_FILES,
     module_details,
     validate_module_checks,
     validate_public_boundaries,
