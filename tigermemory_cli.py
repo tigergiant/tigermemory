@@ -11,6 +11,9 @@ import pathlib
 import re
 import subprocess
 import sys
+import threading
+import time
+import webbrowser
 
 
 PROFILE_VALUES = {"local", "hybrid"}
@@ -88,6 +91,45 @@ def _detect_repo_root() -> pathlib.Path:
 
 
 REPO_ROOT = _detect_repo_root()
+
+
+def _dashboard_start_url(port: int = 9777) -> str:
+    return f"http://127.0.0.1:{port}/start"
+
+
+def _open_dashboard_start_later(url: str, delay_seconds: float = 0.8) -> None:
+    def _open() -> None:
+        time.sleep(delay_seconds)
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
+
+    threading.Thread(target=_open, name="tigermemory-dashboard-open", daemon=True).start()
+
+
+def _root_hint(extra: str | None = None) -> dict[str, object]:
+    expected = REPO_ROOT / "wiki" / "systems" / "agent-behavior-rules.md"
+    hint: dict[str, object] = {
+        "message": extra or "No local evidence matched. Check that you are running tm inside the intended TigerMemory checkout or set TIGERMEMORY_INSTANCE_ROOT.",
+        "root": str(REPO_ROOT),
+        "cwd": str(pathlib.Path.cwd().resolve()),
+        "expected_starter_page": str(expected),
+        "expected_starter_page_exists": expected.is_file(),
+        "next": [
+            "tm profile show",
+            'tm search --scope wiki --query "agent behavior rules"',
+            f"tm dashboard  # then open {_dashboard_start_url()}",
+        ],
+    }
+    return hint
+
+
+def _memory_count(payload: dict) -> int:
+    try:
+        return int(payload.get("count") or len(payload.get("items") or payload.get("results") or []))
+    except Exception:
+        return 0
 
 
 def _package_src_paths() -> list[str]:
@@ -179,6 +221,9 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"profile={args.profile}")
     else:
         print("profile=unchanged")
+    print("next=tm dashboard")
+    print(f"start_url={_dashboard_start_url()}")
+    print("guide=Open the start page for setup, system overview, and first commands.")
     return 0
 
 
@@ -197,9 +242,12 @@ def cmd_profile(args: argparse.Namespace) -> int:
     if args.profile_command == "show":
         effective, env_value, file_value = _effective_profile()
         print(f"effective={effective}")
+        print(f"root={REPO_ROOT}")
+        print(f"cwd={pathlib.Path.cwd().resolve()}")
         print(f"env={env_value or ''}")
         print(f"file={file_value or ''}")
         print(f"path={_profile_path()}")
+        print(f"dashboard={_dashboard_start_url()}")
         return 0
     if args.profile_command == "guide":
         effective, _env_value, _file_value = _effective_profile()
@@ -662,15 +710,18 @@ def cmd_search(args: argparse.Namespace) -> int:
             return 0
         wiki_results = tm_core.search_wiki_hybrid(args.query, size=args.size)
         if args.scope == "wiki":
-            print(json.dumps({
+            payload = {
                 "count": len(wiki_results),
                 "results": wiki_results,
                 "items": wiki_results,
                 "search_backend": "wiki_hybrid",
-            }, ensure_ascii=False))
+            }
+            if not wiki_results:
+                payload["hint"] = _root_hint("No Wiki result matched. If you just installed TigerMemory, verify you are in the starter checkout and that starter Wiki pages exist.")
+            print(json.dumps(payload, ensure_ascii=False))
             return 0
         memory_payload = json.loads(tm_core.mem0_search(args.query, args.size))
-        print(json.dumps({
+        payload = {
             "query": args.query,
             "scope": "all",
             "memory": memory_payload,
@@ -680,7 +731,10 @@ def cmd_search(args: argparse.Namespace) -> int:
                 "items": wiki_results,
                 "search_backend": "wiki_hybrid",
             },
-        }, ensure_ascii=False))
+        }
+        if _memory_count(memory_payload) == 0 and not wiki_results:
+            payload["hint"] = _root_hint("No memory or Wiki result matched. This often means the command is running from the wrong checkout or the starter Wiki has not been initialized.")
+        print(json.dumps(payload, ensure_ascii=False))
         return 0
     except ValueError as e:
         print(str(e), file=sys.stderr)
@@ -747,7 +801,7 @@ def cmd_ask(args: argparse.Namespace) -> int:
             *_ask_evidence_from_wiki(wiki_results, args.size),
         ]
         if args.offline:
-            print(json.dumps({
+            payload = {
                 "query": args.query,
                 "scope": args.scope,
                 "offline": True,
@@ -760,14 +814,17 @@ def cmd_ask(args: argparse.Namespace) -> int:
                     "search_backend": "wiki_lexical",
                 },
                 "evidence": evidence[: max(1, args.size) * 2],
-            }, ensure_ascii=False))
+            }
+            if not evidence:
+                payload["hint"] = _root_hint("Offline ask found no local evidence. Check the TigerMemory root directory, then open the dashboard start page for the first-run guide.")
+            print(json.dumps(payload, ensure_ascii=False))
             return 0
         answer = tm_core.answer_from_public_evidence(
             args.query,
             evidence[: max(1, args.size) * 2],
             timeout=args.timeout,
         )
-        print(json.dumps({
+        payload = {
             **answer,
             "scope": args.scope,
             "offline": False,
@@ -779,7 +836,10 @@ def cmd_ask(args: argparse.Namespace) -> int:
                 "search_backend": "wiki_hybrid",
             },
             "evidence": evidence[: max(1, args.size) * 2],
-        }, ensure_ascii=False))
+        }
+        if not evidence:
+            payload["hint"] = _root_hint("The answer path found no local evidence. Check the TigerMemory root directory before treating this as a knowledge miss.")
+        print(json.dumps(payload, ensure_ascii=False))
         return 0
     except ValueError as e:
         print(str(e), file=sys.stderr)
@@ -865,14 +925,28 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
         forwarded.extend(["--host", args.host])
     if args.port is not None:
         forwarded.extend(["--port", str(args.port)])
+    start_url = _dashboard_start_url(args.port or 9777)
     tool_script = REPO_ROOT / "tools" / "tm_review_ui.py"
     if tool_script.is_file():
+        print(f"dashboard_url={start_url}")
+        if not getattr(args, "no_open", False):
+            print("browser=opening")
+            _open_dashboard_start_later(start_url)
+        else:
+            print("browser=disabled")
         return _run_python(str(tool_script), forwarded)
     try:
         import tigermemory_dashboard
     except ModuleNotFoundError:
+        print(f"dashboard_url={start_url}")
+        if getattr(args, "no_open", False):
+            print("browser=disabled")
+        else:
+            print("browser=opening")
         return _run_python(str(tool_script), forwarded)
     if hasattr(tigermemory_dashboard, "main"):
+        if getattr(args, "no_open", False):
+            forwarded.append("--no-open")
         return tigermemory_dashboard.main(forwarded)
     print("tm dashboard requires tigermemory_dashboard.main", file=sys.stderr)
     return 2
@@ -1004,6 +1078,7 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard_p = sub.add_parser("dashboard", help="start dashboard server")
     dashboard_p.add_argument("--host", default=None, help="bind host; default is the dashboard server's local host")
     dashboard_p.add_argument("--port", type=int, default=9777, help="bind port for public quick start; default: 9777")
+    dashboard_p.add_argument("--no-open", action="store_true", help="start the dashboard without opening the browser")
     dashboard_p.set_defaults(func=cmd_dashboard)
 
     return parser

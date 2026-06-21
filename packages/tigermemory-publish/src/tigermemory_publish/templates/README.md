@@ -51,6 +51,7 @@ Run these commands from this repository checkout:
 py -m pip install -e .
 tm init
 tm profile show
+tm dashboard
 tm llm guide
 tm llm status
 tm admin guide
@@ -67,6 +68,10 @@ Expected profile after `tm init`:
 effective=local
 ```
 
+`tm dashboard` starts the local web console and opens the beginner start page.
+If your browser does not open automatically, open `http://127.0.0.1:9777/start`
+manually.
+
 `tm llm status` does not call the model and does not print secrets. It only
 checks whether provider environment variables are present. For the recommended
 DeepSeek path, set `DEEPSEEK_API_KEY`; optionally set `DEEPSEEK_BASE_URL` and
@@ -82,14 +87,16 @@ any advanced services:
 
 1. Install from this checkout with `py -m pip install -e .`.
 2. Run `tm init`, then confirm `tm profile show` prints `effective=local`.
-3. Set `DEEPSEEK_API_KEY` for the recommended OpenAI-compatible provider.
-4. Run `tm llm status`; it should show that provider settings exist without
+3. Run `tm dashboard`; the browser should open the start page with the first
+   commands and basic setup links.
+4. Set `DEEPSEEK_API_KEY` for the recommended OpenAI-compatible provider.
+5. Run `tm llm status`; it should show that provider settings exist without
    printing your key.
-5. Run `tm admin guide` and read the partition guide before writing anything.
-6. Put a short note in `notes.md`, then run `tm admin propose`.
-7. Inspect the proposal with `tm admin show "<proposal-id>"`.
-8. Approve only after checking the suggested partition and target path.
-9. Ask `tm ask --query "what did I just add?" --scope wiki` to verify the page
+6. Run `tm admin guide` and read the partition guide before writing anything.
+7. Put a short note in `notes.md`, then run `tm admin propose`.
+8. Inspect the proposal with `tm admin show "<proposal-id>"`.
+9. Approve only after checking the suggested partition and target path.
+10. Ask `tm ask --query "what did I just add?" --scope wiki` to verify the page
    can be found with citations.
 
 Draft a reviewable Wiki proposal with the LLM Admin flow:
@@ -155,8 +162,9 @@ Start the local dashboard:
 tm dashboard
 ```
 
-Then open `http://127.0.0.1:9777/start` for the beginner start page, or
-`http://127.0.0.1:9777/health` for system checks.
+This opens `http://127.0.0.1:9777/start` for the beginner start page. Use
+`tm dashboard --no-open` when you want to start the server without opening a
+browser. `http://127.0.0.1:9777/health` remains the system-check page.
 
 ## Which Mode Should I Use?
 

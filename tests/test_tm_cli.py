@@ -174,6 +174,16 @@ def test_init_creates_local_runtime_dirs(tmp_path, monkeypatch) -> None:
     )
 
 
+def test_init_prints_dashboard_start_page(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(tigermemory_cli, "REPO_ROOT", tmp_path)
+
+    assert tigermemory_cli.main(["init"]) == 0
+
+    out = capsys.readouterr().out
+    assert "next=tm dashboard" in out
+    assert "start_url=http://127.0.0.1:9777/start" in out
+
+
 def test_init_accepts_explicit_hybrid_profile(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(tigermemory_cli, "REPO_ROOT", tmp_path)
 
@@ -452,6 +462,43 @@ def test_ask_offline_keeps_evidence_only(monkeypatch, capsys) -> None:
     assert payload["wiki"]["search_backend"] == "wiki_lexical"
 
 
+def test_ask_offline_empty_result_includes_root_hint(tmp_path, monkeypatch, capsys) -> None:
+    fake_core = types.ModuleType("tigermemory_core")
+
+    fake_core.mem0_search = lambda query, size: json.dumps({"count": 0, "items": [], "results": []})
+    fake_core.search_wiki = lambda query, size, include_sources=True: []
+    fake_core.search_wiki_hybrid = lambda *_args, **_kwargs: []
+    fake_core.answer_from_public_evidence = lambda *_args, **_kwargs: {}
+    monkeypatch.setitem(sys.modules, "tigermemory_core", fake_core)
+    monkeypatch.setattr(tigermemory_cli, "REPO_ROOT", tmp_path)
+
+    assert tigermemory_cli.main(["ask", "--offline", "--scope", "wiki", "--query", "missing"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["evidence"] == []
+    assert payload["hint"]["root"] == str(tmp_path)
+    assert payload["hint"]["expected_starter_page_exists"] is False
+    assert 'tm search --scope wiki --query "agent behavior rules"' in payload["hint"]["next"]
+
+
+def test_search_wiki_empty_result_includes_root_hint(tmp_path, monkeypatch, capsys) -> None:
+    fake_core = types.ModuleType("tigermemory_core")
+
+    fake_core.search_wiki_hybrid = lambda query, size: []
+    fake_core.mem0_search = lambda query, size: json.dumps({"count": 0, "items": [], "results": []})
+    monkeypatch.setitem(sys.modules, "tigermemory_core", fake_core)
+    monkeypatch.setattr(tigermemory_cli, "REPO_ROOT", tmp_path)
+
+    assert tigermemory_cli.main(["search", "--scope", "wiki", "--query", "missing"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["count"] == 0
+    assert payload["hint"]["cwd"]
+    assert payload["hint"]["expected_starter_page"].endswith("wiki\\systems\\agent-behavior-rules.md") or payload[
+        "hint"
+    ]["expected_starter_page"].endswith("wiki/systems/agent-behavior-rules.md")
+
+
 def test_dashboard_defaults_to_public_quickstart_port(monkeypatch) -> None:
     calls: list[tuple[str, list[str]]] = []
 
@@ -460,6 +507,7 @@ def test_dashboard_defaults_to_public_quickstart_port(monkeypatch) -> None:
         return 0
 
     monkeypatch.setattr(tigermemory_cli, "_run_python", fake_run)
+    monkeypatch.setattr(tigermemory_cli, "_open_dashboard_start_later", lambda *_args, **_kwargs: None)
 
     assert tigermemory_cli.main(["dashboard"]) == 0
 
@@ -474,10 +522,33 @@ def test_dashboard_accepts_explicit_private_service_port(monkeypatch) -> None:
         return 0
 
     monkeypatch.setattr(tigermemory_cli, "_run_python", fake_run)
+    monkeypatch.setattr(tigermemory_cli, "_open_dashboard_start_later", lambda *_args, **_kwargs: None)
 
     assert tigermemory_cli.main(["dashboard", "--host", "127.0.0.1", "--port", "1998"]) == 0
 
     assert calls == [(str(REPO_ROOT / "tools" / "tm_review_ui.py"), ["--host", "127.0.0.1", "--port", "1998"])]
+
+
+def test_dashboard_no_open_does_not_forward_private_script_flag(monkeypatch, capsys) -> None:
+    calls: list[tuple[str, list[str]]] = []
+
+    def fake_run(rel_path: str, args: list[str], cwd: pathlib.Path | None = None) -> int:
+        calls.append((rel_path, args))
+        return 0
+
+    monkeypatch.setattr(tigermemory_cli, "_run_python", fake_run)
+    monkeypatch.setattr(
+        tigermemory_cli,
+        "_open_dashboard_start_later",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("browser should not open")),
+    )
+
+    assert tigermemory_cli.main(["dashboard", "--no-open"]) == 0
+
+    out = capsys.readouterr().out
+    assert "dashboard_url=http://127.0.0.1:9777/start" in out
+    assert "browser=disabled" in out
+    assert calls == [(str(REPO_ROOT / "tools" / "tm_review_ui.py"), ["--port", "9777"])]
 
 
 def test_cli_module_help_smoke() -> None:

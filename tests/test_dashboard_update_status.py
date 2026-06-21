@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import pathlib
+import sys
+import types
 
 from fastapi.testclient import TestClient
 
@@ -54,14 +56,63 @@ def test_dashboard_static_surfaces_public_ask_llm_status() -> None:
     assert "tm ask --offline" in script
 
 
-def test_dashboard_fast_agent_doctor_includes_public_ask_llm(monkeypatch) -> None:
-    monkeypatch.setattr(server, "_dashboard_worktree_check", lambda: {"name": "worktree", "status": "ok", "ok": True})
-    monkeypatch.setattr(server.tm_agent_doctor, "check_tm_http", lambda timeout=0.3: {"name": "tm_http", "status": "ok", "ok": True})
-    monkeypatch.setattr(server.tm_agent_doctor, "check_mem0", lambda timeout=0.5: {"name": "mem0_api", "status": "ok", "ok": True})
+def test_start_shell_uses_public_starter_commands() -> None:
+    payload = server._start_shell()
+    commands = [item["command"] for item in payload["commands"]]
+
+    assert 'tm search --scope wiki --query "agent behavior rules"' in commands
+    assert 'tm ask --offline --query "agent behavior rules" --scope wiki' in commands
+    assert all("项目画布" not in command for command in commands)
+    assert all("hello local memory" not in command for command in commands)
+
+
+def test_start_static_uses_install_success_intro_and_public_commands() -> None:
+    html = pathlib.Path(
+        "packages/tigermemory-dashboard/src/tigermemory_dashboard/static/start.html"
+    ).read_text(encoding="utf-8")
+
+    assert "控制台已经启动" in html
+    assert 'tm search --scope wiki --query "agent behavior rules"' in html
+    assert 'tm ask --offline --query "agent behavior rules" --scope wiki' in html
+    assert "项目画布" not in html
+    assert "hello local memory" not in html
+
+
+def test_dashboard_main_no_open_prints_start_url_without_browser(monkeypatch, capsys) -> None:
+    calls = []
+    fake_uvicorn = types.SimpleNamespace(run=lambda app, host, port: calls.append((host, port)))
+
+    monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
+    monkeypatch.setattr(server, "register_dashboard_bind_host", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(server, "start_idle_watcher", lambda: True)
+    monkeypatch.setattr(server, "start_quality_cache_warmer", lambda: True)
     monkeypatch.setattr(
-        server.tm_agent_doctor,
-        "check_public_ask_llm",
-        lambda: {
+        server.webbrowser,
+        "open",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("browser should not open")),
+    )
+
+    assert server.main(["--port", "2000", "--no-open"]) == 0
+
+    out = capsys.readouterr().out
+    assert "dashboard_url=http://127.0.0.1:2000/start" in out
+    assert "browser=disabled" in out
+    assert calls == [("127.0.0.1", 2000)]
+
+
+def test_quality_cache_warmer_skips_when_private_reflection_module_missing(monkeypatch) -> None:
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(server, "_dashboard_background_enabled", lambda: True)
+    monkeypatch.setattr(server, "tm_memory_reflection", None)
+
+    assert server.start_quality_cache_warmer(interval_seconds=5) is False
+
+
+def test_dashboard_fast_agent_doctor_includes_public_ask_llm(monkeypatch) -> None:
+    fake_agent_doctor = types.SimpleNamespace(
+        check_tm_http=lambda timeout=0.3: {"name": "tm_http", "status": "ok", "ok": True},
+        check_mem0=lambda timeout=0.5: {"name": "mem0_api", "status": "ok", "ok": True},
+        check_public_ask_llm=lambda: {
             "name": "public_ask_llm",
             "status": "ok",
             "ok": True,
@@ -69,6 +120,8 @@ def test_dashboard_fast_agent_doctor_includes_public_ask_llm(monkeypatch) -> Non
             "routine_model": "deepseek-v4-flash",
         },
     )
+    monkeypatch.setattr(server, "tm_agent_doctor", fake_agent_doctor)
+    monkeypatch.setattr(server, "_dashboard_worktree_check", lambda: {"name": "worktree", "status": "ok", "ok": True})
 
     report = server._dashboard_fast_agent_doctor()
 

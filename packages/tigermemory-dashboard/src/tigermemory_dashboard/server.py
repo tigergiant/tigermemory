@@ -24,6 +24,7 @@ import re
 import types
 import urllib.parse
 import urllib.request
+import webbrowser
 from typing import Any, Optional
 
 try:
@@ -4118,8 +4119,8 @@ def _start_shell() -> dict[str, Any]:
         "commands": [
             {"label": "初始化本地模式", "command": "tm init"},
             {"label": "查看当前模式", "command": "tm profile show"},
-            {"label": "搜索本地记忆", "command": 'tm search --query "hello local memory" --size 5'},
-            {"label": "离线查看证据", "command": 'tm ask --offline --query "项目画布" --scope wiki'},
+            {"label": "搜索入门规则", "command": 'tm search --scope wiki --query "agent behavior rules"'},
+            {"label": "离线查看证据", "command": 'tm ask --offline --query "agent behavior rules" --scope wiki'},
             {"label": "打开控制台", "command": "tm dashboard"},
         ],
     }
@@ -4960,6 +4961,8 @@ def start_quality_cache_warmer(interval_seconds: float | None = None) -> bool:
     global _QUALITY_CACHE_WARMER_STARTED
     if os.getenv("PYTEST_CURRENT_TEST") or not _dashboard_background_enabled():
         return False
+    if tm_memory_reflection is None or not hasattr(tm_memory_reflection, "audit_inbox"):
+        return False
     interval = max(5.0, float(interval_seconds or QUALITY_CACHE_WARM_INTERVAL))
     with _QUALITY_CACHE_WARMER_LOCK:
         if _QUALITY_CACHE_WARMER_STARTED:
@@ -5017,6 +5020,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run tigermemory Memory Ops dashboard")
     parser.add_argument("--host", default=HOST)
     parser.add_argument("--port", type=int, default=PORT)
+    parser.add_argument("--no-open", action="store_true", help="start the dashboard without opening the browser")
     args = parser.parse_args(argv)
     if args.host not in {"127.0.0.1", "localhost", "0.0.0.0"}:
         print("dashboard only binds 127.0.0.1/localhost/0.0.0.0", file=sys.stderr)
@@ -5026,6 +5030,22 @@ def main(argv: list[str] | None = None) -> int:
     register_dashboard_bind_host(args.host, args.port)
     start_idle_watcher()
     start_quality_cache_warmer()
+    open_host = "127.0.0.1" if args.host == "0.0.0.0" else args.host
+    start_url = f"http://{open_host}:{args.port}/start"
+    print(f"dashboard_url={start_url}")
+    if args.no_open:
+        print("browser=disabled")
+    else:
+        print("browser=opening")
+
+        def open_start_page() -> None:
+            time.sleep(0.8)
+            try:
+                webbrowser.open(start_url)
+            except Exception:
+                pass
+
+        threading.Thread(target=open_start_page, daemon=True, name="dashboard-start-opener").start()
     uvicorn.run(app, host=args.host, port=args.port)
     return 0
 
