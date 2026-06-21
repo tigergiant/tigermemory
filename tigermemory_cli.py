@@ -317,18 +317,23 @@ def _llm_env_value(name: str, default: str = "") -> str:
 def _llm_status_payload() -> dict[str, object]:
     if llm_status_payload is not None:
         return llm_status_payload(REPO_ROOT)
-    deepseek_base = _llm_env_value("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    raw_provider = _llm_env_value("TIGERMEMORY_LLM_PROVIDER", "deepseek").strip().lower()
+    effective_provider = raw_provider if raw_provider in {"deepseek", "openai_compatible"} else "deepseek"
+    deepseek_base = _llm_env_value("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1/chat/completions")
     deepseek_model = _llm_env_value("DEEPSEEK_MODEL", "deepseek-v4-flash")
     deepseek_admin_model = _llm_env_value("DEEPSEEK_ADMIN_MODEL", "deepseek-v4-pro")
-    openai_base = _llm_env_value("OPENAI_BASE_URL") or _llm_env_value("OPENAI_API_BASE", "https://api.openai.com/v1")
+    openai_base = _llm_env_value("OPENAI_BASE_URL") or _llm_env_value("OPENAI_API_BASE", "https://api.openai.com/v1/chat/completions")
     openai_model = _llm_env_value("OPENAI_MODEL", "")
-    deepseek_configured = bool(_llm_env_value("DEEPSEEK_API_KEY").strip())
-    openai_configured = bool(_llm_env_value("OPENAI_API_KEY").strip())
+    chat_configured = bool(_llm_env_value("DEEPSEEK_API_KEY").strip())
+    legacy_openai_configured = bool(_llm_env_value("OPENAI_API_KEY").strip())
+    deepseek_configured = chat_configured and effective_provider == "deepseek"
+    openai_configured = (chat_configured and effective_provider == "openai_compatible") or legacy_openai_configured
     return {
         "ok": True,
         "schema": "tigermemory-llm-status-v1",
         "recommended_provider": "deepseek",
-        "llm_configured": deepseek_configured or openai_configured,
+        "effective_provider": effective_provider,
+        "llm_configured": chat_configured or legacy_openai_configured,
         "providers": [
             {
                 "id": "deepseek",
@@ -343,11 +348,13 @@ def _llm_status_payload() -> dict[str, object]:
             {
                 "id": "openai_compatible",
                 "configured": openai_configured,
-                "api_key": _mask_env_presence("OPENAI_API_KEY"),
-                "base_url": openai_base,
-                "model": openai_model,
+                "api_key": _mask_env_presence("DEEPSEEK_API_KEY" if effective_provider == "openai_compatible" else "OPENAI_API_KEY"),
+                "base_url": deepseek_base if effective_provider == "openai_compatible" else openai_base,
+                "model": deepseek_model if effective_provider == "openai_compatible" else openai_model,
+                "admin_model": deepseek_admin_model if effective_provider == "openai_compatible" else "",
                 "openai_compatible": True,
                 "recommended": False,
+                "uses_chat_completions_slot": effective_provider == "openai_compatible",
             },
         ],
         "role_models": {
@@ -376,6 +383,7 @@ def cmd_llm(args: argparse.Namespace) -> int:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return 0
         print(f"recommended_provider={payload['recommended_provider']}")
+        print(f"effective_provider={payload.get('effective_provider', 'deepseek')}")
         print(f"llm_configured={str(bool(payload['llm_configured'])).lower()}")
         for provider in payload["providers"]:
             print(
@@ -397,8 +405,8 @@ def cmd_llm(args: argparse.Namespace) -> int:
         print("default_model=deepseek-v4-flash")
         print("wiki_admin_model=deepseek-v4-pro")
         print("roles=DEEPSEEK_MODEL for routine JSON/routing; DEEPSEEK_ADMIN_MODEL for tm admin propose")
-        print("optional=DEEPSEEK_BASE_URL,DEEPSEEK_MODEL,DEEPSEEK_ADMIN_MODEL")
-        print("compatible=OPENAI_API_KEY,OPENAI_BASE_URL,OPENAI_MODEL")
+        print("optional=TIGERMEMORY_LLM_PROVIDER,DEEPSEEK_BASE_URL,DEEPSEEK_MODEL,DEEPSEEK_ADMIN_MODEL")
+        print("compatible=openai_compatible providers use the same chat-completions slot; set TIGERMEMORY_LLM_PROVIDER=openai_compatible")
         print("verify=tm llm status --json")
         print("fallback=tm ask --offline returns local evidence only")
         print("security=keys stay in your shell or local runtime env; do not commit them")

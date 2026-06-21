@@ -17,6 +17,22 @@
     selectedDepth: 'A',
     llmStatus: null,
     agentConnectStatus: null,
+    llmProviderDefaults: {
+      deepseek: {
+        label: 'DeepSeek',
+        baseUrl: 'https://api.deepseek.com/v1/chat/completions',
+        model: 'deepseek-v4-flash',
+        adminModel: 'deepseek-v4-pro',
+        help: '推荐给大多数用户。日常模型负责问答和路由；管理模型负责整理 Wiki 和生成待审核提案。'
+      },
+      openai_compatible: {
+        label: 'OpenAI-compatible',
+        baseUrl: 'https://api.openai.com/v1/chat/completions',
+        model: 'gpt-4o-mini',
+        adminModel: 'gpt-4o-mini',
+        help: '适合已经有 OpenAI-compatible 网关的高级用户。Anthropic 原生接口暂不承诺，需通过已验证的 OpenAI-compatible 网关接入。'
+      }
+    },
     depthPreviews: {
       A: {
         name: 'A 极简',
@@ -99,10 +115,15 @@
       });
       const saveDepth = document.getElementById('save-start-depth');
       if (saveDepth) saveDepth.addEventListener('click', () => this.saveDepth(), {signal: this.abortController.signal});
-      ['llm-api-key', 'llm-base-url', 'llm-model'].forEach(id => {
+      ['llm-api-key', 'llm-base-url', 'llm-model', 'llm-admin-model'].forEach(id => {
         const input = document.getElementById(id);
         if (input) input.addEventListener('input', () => this.updateLlmCommand(), {signal: this.abortController.signal});
       });
+      const provider = document.getElementById('llm-provider');
+      if (provider) {
+        provider.addEventListener('change', () => this.applyLlmProviderDefaults(true), {signal: this.abortController.signal});
+        this.applyLlmProviderFromStatus();
+      }
       const copyLlm = document.getElementById('copy-llm-command');
       if (copyLlm) copyLlm.addEventListener('click', () => this.copyGeneratedLlmCommand(), {signal: this.abortController.signal});
       const saveLlm = document.getElementById('save-llm-config');
@@ -200,15 +221,61 @@
     },
 
     buildLlmCommand() {
-      const key = this.shellQuote(document.getElementById('llm-api-key')?.value, '<your_deepseek_api_key>');
-      const base = this.shellQuote(document.getElementById('llm-base-url')?.value, 'https://api.deepseek.com/v1/chat/completions');
-      const model = this.shellQuote(document.getElementById('llm-model')?.value, 'deepseek-v4-flash');
+      const provider = this.currentLlmProvider();
+      const defaults = this.llmProviderDefaults[provider] || this.llmProviderDefaults.deepseek;
+      const keyPlaceholder = provider === 'deepseek' ? '<your_deepseek_api_key>' : '<your_provider_api_key>';
+      const key = this.shellQuote(document.getElementById('llm-api-key')?.value, keyPlaceholder);
+      const base = this.shellQuote(document.getElementById('llm-base-url')?.value, defaults.baseUrl);
+      const model = this.shellQuote(document.getElementById('llm-model')?.value, defaults.model);
+      const adminModel = this.shellQuote(document.getElementById('llm-admin-model')?.value, defaults.adminModel);
       return [
+        `setx TIGERMEMORY_LLM_PROVIDER "${provider}"`,
         `setx DEEPSEEK_API_KEY "${key}"`,
         `setx DEEPSEEK_BASE_URL "${base}"`,
         `setx DEEPSEEK_MODEL "${model}"`,
+        `setx DEEPSEEK_ADMIN_MODEL "${adminModel}"`,
         'tm llm status'
       ].join('\n');
+    },
+
+    currentLlmProvider() {
+      const value = document.getElementById('llm-provider')?.value || 'deepseek';
+      return this.llmProviderDefaults[value] ? value : 'deepseek';
+    },
+
+    applyLlmProviderDefaults(force = false) {
+      const provider = this.currentLlmProvider();
+      const defaults = this.llmProviderDefaults[provider] || this.llmProviderDefaults.deepseek;
+      const setIfBlank = (id, value) => {
+        const input = document.getElementById(id);
+        if (input && (force || !String(input.value || '').trim())) input.value = value;
+      };
+      setIfBlank('llm-base-url', defaults.baseUrl);
+      setIfBlank('llm-model', defaults.model);
+      setIfBlank('llm-admin-model', defaults.adminModel);
+      const key = document.getElementById('llm-api-key');
+      if (key) key.placeholder = provider === 'deepseek' ? 'sk-...' : 'provider API key';
+      const help = document.getElementById('llm-provider-help');
+      if (help) help.textContent = defaults.help;
+      this.updateLlmCommand();
+    },
+
+    applyLlmProviderFromStatus() {
+      const providerId = this.llmStatus && this.llmStatus.effective_provider ? this.llmStatus.effective_provider : 'deepseek';
+      const provider = this.llmProviderDefaults[providerId] ? providerId : 'deepseek';
+      const select = document.getElementById('llm-provider');
+      if (select) select.value = provider;
+      const providers = this.llmStatus && Array.isArray(this.llmStatus.providers) ? this.llmStatus.providers : [];
+      const configured = providers.find(item => item.id === provider);
+      if (configured) {
+        const base = document.getElementById('llm-base-url');
+        const model = document.getElementById('llm-model');
+        const admin = document.getElementById('llm-admin-model');
+        if (base && configured.base_url) base.value = configured.base_url;
+        if (model && configured.model) model.value = configured.model;
+        if (admin && configured.admin_model) admin.value = configured.admin_model;
+      }
+      this.applyLlmProviderDefaults(false);
     },
 
     updateLlmCommand() {
@@ -224,9 +291,10 @@
       if (!statusEl) return;
       const configured = Boolean(this.llmStatus && this.llmStatus.llm_configured);
       const deepseek = this.llmStatus && Array.isArray(this.llmStatus.providers)
-        ? this.llmStatus.providers.find(provider => provider.id === 'deepseek')
+        ? this.llmStatus.providers.find(provider => provider.id === (this.llmStatus.effective_provider || 'deepseek'))
         : null;
       const model = deepseek && deepseek.model ? deepseek.model : 'deepseek-v4-flash';
+      const label = this.llmProviderDefaults[this.llmStatus?.effective_provider || 'deepseek']?.label || 'DeepSeek';
       statusEl.classList.toggle('bg-[#dde8ce]', configured);
       statusEl.classList.toggle('border-[#a0b889]', configured);
       statusEl.classList.toggle('text-[#52733a]', configured);
@@ -234,7 +302,7 @@
       statusEl.classList.toggle('border-[#d2b56b]', !configured);
       statusEl.classList.toggle('text-[#8a6b1f]', !configured);
       statusEl.textContent = message || (configured
-        ? `已接入 TigerMemory：DeepSeek / ${model}`
+        ? `已接入 TigerMemory：${label} / ${model}`
         : '尚未接入模型。填写 API Key 后点“保存并接入 TigerMemory”。');
     },
 
@@ -242,10 +310,11 @@
       const button = document.getElementById('save-llm-config');
       const apiInput = document.getElementById('llm-api-key');
       const payload = {
-        provider: 'deepseek',
+        provider: this.currentLlmProvider(),
         api_key: apiInput ? apiInput.value : '',
-        base_url: document.getElementById('llm-base-url')?.value || 'https://api.deepseek.com/v1/chat/completions',
-        model: document.getElementById('llm-model')?.value || 'deepseek-v4-flash'
+        base_url: document.getElementById('llm-base-url')?.value || this.llmProviderDefaults[this.currentLlmProvider()].baseUrl,
+        model: document.getElementById('llm-model')?.value || this.llmProviderDefaults[this.currentLlmProvider()].model,
+        admin_model: document.getElementById('llm-admin-model')?.value || this.llmProviderDefaults[this.currentLlmProvider()].adminModel
       };
       try {
         if (button) {
@@ -263,6 +332,7 @@
         if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
         this.llmStatus = result.llm_status || null;
         if (apiInput) apiInput.value = '';
+        this.applyLlmProviderFromStatus();
         this.updateLlmCommand();
         this.renderLlmStatus(document, result.message || '已保存到本机 TigerMemory 配置');
         this.toast('模型配置已保存，TigerMemory 可以直接读取。');

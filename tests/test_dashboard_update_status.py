@@ -73,10 +73,13 @@ def test_start_static_uses_install_success_intro_and_public_commands() -> None:
     ).read_text(encoding="utf-8")
 
     assert "欢迎来到 TigerMemory" in html
-    assert html.count("data-onboarding-slide") == 6
+    assert html.count("data-onboarding-slide") == 7
     assert "API Key 只会保存到本机 runtime 配置" in html
     assert "保存并接入 TigerMemory" in html
     assert "llm-config-status" in html
+    assert "llm-provider" in html
+    assert "OpenAI-compatible" in html
+    assert "llm-admin-model" in html
     assert "普通版 / local" in html
     assert "高级版 / hybrid" in html
     assert "data-start-depth=\"A\"" in html
@@ -90,6 +93,7 @@ def test_start_static_uses_install_success_intro_and_public_commands() -> None:
     assert "D 全套" in pages_js
     assert "验收清单" in pages_js
     assert "DEEPSEEK_API_KEY" in pages_js
+    assert "TIGERMEMORY_LLM_PROVIDER" in pages_js
     assert "/api/start/llm-config" in pages_js
     assert 'tm search --scope wiki --query "agent behavior rules"' in html
     assert 'tm ask --offline --query "agent behavior rules" --scope wiki' in html
@@ -113,7 +117,7 @@ def test_start_llm_config_writes_runtime_env_without_echoing_secret(monkeypatch,
     monkeypatch.delenv("DEEPSEEK_BASE_URL", raising=False)
     monkeypatch.delenv("DEEPSEEK_MODEL", raising=False)
     monkeypatch.delenv("DEEPSEEK_ADMIN_MODEL", raising=False)
-    keys = ["DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL", "DEEPSEEK_ADMIN_MODEL"]
+    keys = ["TIGERMEMORY_LLM_PROVIDER", "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL", "DEEPSEEK_ADMIN_MODEL"]
 
     try:
         result = server.save_start_llm_config(
@@ -126,11 +130,53 @@ def test_start_llm_config_writes_runtime_env_without_echoing_secret(monkeypatch,
 
         assert result["ok"] is True
         assert result["llm_status"]["llm_configured"] is True
+        assert result["llm_status"]["effective_provider"] == "deepseek"
         assert result["llm_status"]["providers"][0]["api_key"]["configured"] is True
         assert "sk-test-secret" not in str(result)
+        assert "TIGERMEMORY_LLM_PROVIDER=deepseek" in env_path.read_text(encoding="utf-8")
         assert "DEEPSEEK_API_KEY=sk-test-secret" in env_path.read_text(encoding="utf-8")
         assert "DEEPSEEK_BASE_URL=https://api.deepseek.com/v1/chat/completions" in env_path.read_text(encoding="utf-8")
         assert "DEEPSEEK_MODEL=deepseek-v4-flash" in env_path.read_text(encoding="utf-8")
+    finally:
+        for key in keys:
+            os.environ.pop(key, None)
+
+
+def test_start_llm_config_supports_openai_compatible_without_duplicate_secret(monkeypatch, tmp_path) -> None:
+    env_path = tmp_path / "runtime" / "openmemory" / ".env"
+    monkeypatch.setenv("TIGERMEMORY_OPENMEMORY_ENV", str(env_path))
+    keys = [
+        "TIGERMEMORY_LLM_PROVIDER",
+        "DEEPSEEK_API_KEY",
+        "DEEPSEEK_BASE_URL",
+        "DEEPSEEK_MODEL",
+        "DEEPSEEK_ADMIN_MODEL",
+        "OPENAI_API_KEY",
+    ]
+    for key in keys:
+        monkeypatch.delenv(key, raising=False)
+
+    try:
+        result = server.save_start_llm_config(
+            server.StartLlmConfigRequest(
+                provider="openai_compatible",
+                api_key="sk-openai-compatible-secret",
+                base_url="https://api.example.com/v1/chat/completions",
+                model="gpt-compatible-mini",
+            )
+        )
+
+        text = env_path.read_text(encoding="utf-8")
+        assert result["ok"] is True
+        assert result["llm_status"]["effective_provider"] == "openai_compatible"
+        assert result["llm_status"]["providers"][1]["configured"] is True
+        assert "sk-openai-compatible-secret" not in str(result)
+        assert "TIGERMEMORY_LLM_PROVIDER=openai_compatible" in text
+        assert "DEEPSEEK_API_KEY=sk-openai-compatible-secret" in text
+        assert "DEEPSEEK_BASE_URL=https://api.example.com/v1/chat/completions" in text
+        assert "DEEPSEEK_MODEL=gpt-compatible-mini" in text
+        assert "DEEPSEEK_ADMIN_MODEL=gpt-compatible-mini" in text
+        assert "OPENAI_API_KEY=" not in text
     finally:
         for key in keys:
             os.environ.pop(key, None)
@@ -140,7 +186,7 @@ def test_start_llm_config_route_writes_runtime_env_without_echoing_secret(monkey
     env_path = tmp_path / "runtime" / "openmemory" / ".env"
     monkeypatch.setenv("TIGERMEMORY_OPENMEMORY_ENV", str(env_path))
     monkeypatch.setattr(server, "SESSION_FILE", tmp_path / "session.json")
-    keys = ["DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL", "DEEPSEEK_ADMIN_MODEL"]
+    keys = ["TIGERMEMORY_LLM_PROVIDER", "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL", "DEEPSEEK_ADMIN_MODEL"]
     for key in keys:
         monkeypatch.delenv(key, raising=False)
 

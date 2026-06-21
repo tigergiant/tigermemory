@@ -74,15 +74,16 @@ and the main dashboard pages. If your browser does not open automatically, open
 `http://127.0.0.1:9777/start` manually.
 
 The setup wizard can save the recommended DeepSeek settings directly into the
-local TigerMemory runtime config. The API key is stored under `runtime/`, is not
-committed to Git, and is not printed back by the dashboard. `tm llm status` does
-not call the model and does not print secrets; it only checks whether provider
-settings exist. Command-line environment variables such as `DEEPSEEK_API_KEY`,
-`DEEPSEEK_BASE_URL`, and `DEEPSEEK_MODEL` are still supported as an advanced
-fallback. Routine JSON/routing work defaults to `deepseek-v4-flash`. The
-reviewable Wiki Admin proposal flow defaults to `deepseek-v4-pro` through
-`DEEPSEEK_ADMIN_MODEL`, because those drafts become long-term knowledge after
-human approval.
+local TigerMemory runtime config. Advanced users can choose an OpenAI-compatible
+chat-completions endpoint from the same screen. The API key is stored under
+`runtime/`, is not committed to Git, and is not printed back by the dashboard.
+`tm llm status` does not call the model and does not print secrets; it only
+checks whether provider settings exist. Command-line environment variables such
+as `TIGERMEMORY_LLM_PROVIDER`, `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and
+`DEEPSEEK_MODEL` are still supported as an advanced fallback. Routine
+JSON/routing work defaults to `deepseek-v4-flash`. The reviewable Wiki Admin
+proposal flow defaults to `deepseek-v4-pro` through `DEEPSEEK_ADMIN_MODEL`,
+because those drafts become long-term knowledge after human approval.
 
 ## 15-Minute First Run
 
@@ -92,7 +93,8 @@ any advanced services:
 1. Install from this checkout with `py -m pip install -e .`.
 2. Run `tm init`, then confirm `tm profile show` prints `effective=local`.
 3. Run `tm dashboard`; the browser should open the guided setup wizard.
-4. On the LLM setup step, paste your DeepSeek API key and click
+4. On the LLM setup step, choose DeepSeek or OpenAI-compatible, paste your API
+   key, and click
    `Save and connect TigerMemory`.
 5. Run `tm llm status`; it should show that provider settings exist without
    printing your key.

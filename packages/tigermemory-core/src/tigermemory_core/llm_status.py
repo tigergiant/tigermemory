@@ -47,21 +47,26 @@ def mask_env_presence(repo_root: pathlib.Path, name: str) -> dict[str, object]:
 
 
 def llm_status_payload(repo_root: pathlib.Path) -> dict[str, Any]:
+    raw_provider = llm_env_value(repo_root, "TIGERMEMORY_LLM_PROVIDER", "deepseek").strip().lower()
+    effective_provider = raw_provider if raw_provider in {"deepseek", "openai_compatible"} else "deepseek"
     deepseek_base = llm_env_value(repo_root, "DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1/chat/completions")
     deepseek_model = llm_env_value(repo_root, "DEEPSEEK_MODEL", "deepseek-v4-flash")
     deepseek_admin_model = llm_env_value(repo_root, "DEEPSEEK_ADMIN_MODEL", "deepseek-v4-pro")
     openai_base = (
         llm_env_value(repo_root, "OPENAI_BASE_URL")
-        or llm_env_value(repo_root, "OPENAI_API_BASE", "https://api.openai.com/v1")
+        or llm_env_value(repo_root, "OPENAI_API_BASE", "https://api.openai.com/v1/chat/completions")
     )
     openai_model = llm_env_value(repo_root, "OPENAI_MODEL", "")
-    deepseek_configured = bool(llm_env_value(repo_root, "DEEPSEEK_API_KEY").strip())
-    openai_configured = bool(llm_env_value(repo_root, "OPENAI_API_KEY").strip())
+    chat_configured = bool(llm_env_value(repo_root, "DEEPSEEK_API_KEY").strip())
+    legacy_openai_configured = bool(llm_env_value(repo_root, "OPENAI_API_KEY").strip())
+    deepseek_configured = chat_configured and effective_provider == "deepseek"
+    openai_configured = (chat_configured and effective_provider == "openai_compatible") or legacy_openai_configured
     return {
         "ok": True,
         "schema": "tigermemory-llm-status-v1",
         "recommended_provider": "deepseek",
-        "llm_configured": deepseek_configured or openai_configured,
+        "effective_provider": effective_provider,
+        "llm_configured": chat_configured or legacy_openai_configured,
         "providers": [
             {
                 "id": "deepseek",
@@ -76,11 +81,16 @@ def llm_status_payload(repo_root: pathlib.Path) -> dict[str, Any]:
             {
                 "id": "openai_compatible",
                 "configured": openai_configured,
-                "api_key": mask_env_presence(repo_root, "OPENAI_API_KEY"),
-                "base_url": openai_base,
-                "model": openai_model,
+                "api_key": mask_env_presence(
+                    repo_root,
+                    "DEEPSEEK_API_KEY" if effective_provider == "openai_compatible" else "OPENAI_API_KEY",
+                ),
+                "base_url": deepseek_base if effective_provider == "openai_compatible" else openai_base,
+                "model": deepseek_model if effective_provider == "openai_compatible" else openai_model,
+                "admin_model": deepseek_admin_model if effective_provider == "openai_compatible" else "",
                 "openai_compatible": True,
                 "recommended": False,
+                "uses_chat_completions_slot": effective_provider == "openai_compatible",
             },
         ],
         "role_models": {

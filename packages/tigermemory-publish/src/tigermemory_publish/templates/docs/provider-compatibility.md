@@ -6,6 +6,7 @@ chat-completions style interface.
 
 ## Supported Starter Path
 
+- `TIGERMEMORY_LLM_PROVIDER=deepseek`
 - `DEEPSEEK_API_KEY`
 - Optional `DEEPSEEK_BASE_URL`
 - Optional `DEEPSEEK_MODEL`
@@ -14,6 +15,21 @@ chat-completions style interface.
 Routine routing and JSON tasks should prefer a low-cost model such as
 `deepseek-v4-flash`. Durable Wiki Admin proposal drafts should prefer a stronger
 model such as `deepseek-v4-pro`.
+
+## Advanced OpenAI-Compatible Path
+
+The setup wizard also supports `TIGERMEMORY_LLM_PROVIDER=openai_compatible`.
+TigerMemory still writes the effective chat-completions endpoint into the same
+runtime slot (`DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`) because
+the current public engine calls one OpenAI-style chat-completions adapter. This
+keeps the runtime path simple and avoids duplicating secrets under multiple env
+names.
+
+Use a full chat-completions URL such as:
+
+```text
+https://api.example.com/v1/chat/completions
+```
 
 ## Compatibility Boundary
 

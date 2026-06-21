@@ -4115,25 +4115,39 @@ def _write_runtime_env_updates(path: pathlib.Path, updates: dict[str, str]) -> N
 
 def save_start_llm_config(req: StartLlmConfigRequest) -> dict[str, Any]:
     provider = (req.provider or "deepseek").strip().lower()
-    if provider != "deepseek":
-        raise ValueError("current starter onboarding supports DeepSeek first; OpenAI-compatible providers can use tm llm guide for now")
+    provider_aliases = {
+        "deepseek": "deepseek",
+        "openai": "openai_compatible",
+        "openai-compatible": "openai_compatible",
+        "openai_compatible": "openai_compatible",
+    }
+    provider = provider_aliases.get(provider, "")
+    if provider not in {"deepseek", "openai_compatible"}:
+        raise ValueError("请选择 DeepSeek 或 OpenAI-compatible provider")
 
     env_path = tm_llm_status.llm_env_path(REPO_ROOT)
     existing = tm_llm_status.llm_env_file_values(REPO_ROOT)
     api_key = _clean_llm_env_value(req.api_key, field="api_key")
-    base_url = _clean_llm_env_value(req.base_url, field="base_url") or tm_core.DEFAULT_DEEPSEEK_ENDPOINT
-    model = _clean_llm_env_value(req.model, field="model") or tm_core.DEFAULT_DEEPSEEK_MODEL
-    admin_model = _clean_llm_env_value(req.admin_model, field="admin_model") or existing.get(
-        "DEEPSEEK_ADMIN_MODEL",
-        tm_core.DEFAULT_DEEPSEEK_ADMIN_MODEL,
-    )
+    default_base = tm_core.DEFAULT_DEEPSEEK_ENDPOINT if provider == "deepseek" else "https://api.openai.com/v1/chat/completions"
+    default_model = tm_core.DEFAULT_DEEPSEEK_MODEL if provider == "deepseek" else "gpt-4o-mini"
+    default_admin_model = tm_core.DEFAULT_DEEPSEEK_ADMIN_MODEL if provider == "deepseek" else default_model
+    base_url = _clean_llm_env_value(req.base_url, field="base_url") or default_base
+    model = _clean_llm_env_value(req.model, field="model") or default_model
+    requested_admin_model = _clean_llm_env_value(req.admin_model, field="admin_model")
+    if requested_admin_model:
+        admin_model = requested_admin_model
+    elif provider == "deepseek":
+        admin_model = existing.get("DEEPSEEK_ADMIN_MODEL", default_admin_model)
+    else:
+        admin_model = model
 
     has_existing_key = bool(os.environ.get("DEEPSEEK_API_KEY", "").strip() or existing.get("DEEPSEEK_API_KEY", "").strip())
     if not api_key and not has_existing_key:
-        raise ValueError("请先填写 DeepSeek API Key")
+        raise ValueError("请先填写 API Key")
     tm_core.check_transport_security(base_url)
 
     updates = {
+        "TIGERMEMORY_LLM_PROVIDER": provider,
         "DEEPSEEK_BASE_URL": base_url,
         "DEEPSEEK_MODEL": model,
         "DEEPSEEK_ADMIN_MODEL": admin_model,

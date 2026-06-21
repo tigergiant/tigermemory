@@ -225,6 +225,7 @@ def test_llm_status_reports_provider_presence_without_secret(monkeypatch, capsys
     payload = json.loads(capsys.readouterr().out)
     assert payload["schema"] == "tigermemory-llm-status-v1"
     assert payload["recommended_provider"] == "deepseek"
+    assert payload["effective_provider"] == "deepseek"
     assert payload["llm_configured"] is True
     deepseek = payload["providers"][0]
     assert deepseek["id"] == "deepseek"
@@ -260,6 +261,41 @@ def test_llm_status_reads_runtime_env_without_secret(tmp_path, monkeypatch, caps
     assert "sk-runtime-secret" not in out
 
 
+def test_llm_status_reports_openai_compatible_effective_provider(tmp_path, monkeypatch, capsys) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "TIGERMEMORY_LLM_PROVIDER=openai_compatible\n"
+        "DEEPSEEK_API_KEY=sk-compatible-secret\n"
+        "DEEPSEEK_BASE_URL=https://api.example.com/v1/chat/completions\n"
+        "DEEPSEEK_MODEL=gpt-compatible-mini\n"
+        "DEEPSEEK_ADMIN_MODEL=gpt-compatible-admin\n",
+        encoding="utf-8",
+    )
+    for key in (
+        "TIGERMEMORY_LLM_PROVIDER",
+        "DEEPSEEK_API_KEY",
+        "DEEPSEEK_BASE_URL",
+        "DEEPSEEK_MODEL",
+        "DEEPSEEK_ADMIN_MODEL",
+        "OPENAI_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("TIGERMEMORY_OPENMEMORY_ENV", str(env_path))
+
+    assert tigermemory_cli.main(["llm", "status", "--json"]) == 0
+
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    assert payload["effective_provider"] == "openai_compatible"
+    assert payload["providers"][0]["configured"] is False
+    assert payload["providers"][1]["configured"] is True
+    assert payload["providers"][1]["api_key"] == {"name": "DEEPSEEK_API_KEY", "configured": True}
+    assert payload["providers"][1]["base_url"] == "https://api.example.com/v1/chat/completions"
+    assert payload["providers"][1]["model"] == "gpt-compatible-mini"
+    assert payload["providers"][1]["admin_model"] == "gpt-compatible-admin"
+    assert "sk-compatible-secret" not in out
+
+
 def test_llm_guide_points_to_deepseek(capsys) -> None:
     assert tigermemory_cli.main(["llm", "guide"]) == 0
 
@@ -269,6 +305,7 @@ def test_llm_guide_points_to_deepseek(capsys) -> None:
     assert "default_model=deepseek-v4-flash" in out
     assert "wiki_admin_model=deepseek-v4-pro" in out
     assert "DEEPSEEK_ADMIN_MODEL" in out
+    assert "TIGERMEMORY_LLM_PROVIDER=openai_compatible" in out
     assert "fallback=tm ask --offline returns local evidence only" in out
 
 

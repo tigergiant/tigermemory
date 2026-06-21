@@ -369,12 +369,20 @@
             <p class="onboarding-copy">推荐先用 DeepSeek。API Key 只会保存到本机 runtime 配置，不上传，也不会写进 Git；保存后 TigerMemory 就能直接读取这组模型配置。</p>
             <div class="mt-5 grid gap-3">
               <div class="rounded-lg border border-[#d2b56b] bg-[#fffaf0] px-3 py-2 text-sm text-[#8a6b1f]" id="llm-config-status">正在读取模型连接状态...</div>
+              <label class="text-sm font-bold text-[#4a443d]">模型服务</label>
+              <select id="llm-provider" class="wizard-input">
+                <option value="deepseek">DeepSeek（推荐）</option>
+                <option value="openai_compatible">OpenAI-compatible（高级）</option>
+              </select>
               <label class="text-sm font-bold text-[#4a443d]">API Key</label>
               <input id="llm-api-key" class="wizard-input" type="password" autocomplete="off" placeholder="sk-...">
               <label class="text-sm font-bold text-[#4a443d]">接口地址</label>
               <input id="llm-base-url" class="wizard-input" value="https://api.deepseek.com/v1/chat/completions">
               <label class="text-sm font-bold text-[#4a443d]">日常模型</label>
               <input id="llm-model" class="wizard-input" value="deepseek-v4-flash">
+              <label class="text-sm font-bold text-[#4a443d]">管理模型</label>
+              <input id="llm-admin-model" class="wizard-input" value="deepseek-v4-pro">
+              <p class="text-xs leading-5 text-[#8a8275]" id="llm-provider-help">日常模型负责问答和路由；管理模型负责整理 Wiki 和生成待审核提案。Anthropic 原生接口暂不承诺，需通过已验证的 OpenAI-compatible 网关接入。</p>
               <pre class="wizard-command" id="llm-command-preview"></pre>
               <div class="flex flex-wrap gap-3">
                 <button type="button" class="wizard-nav-button primary" id="save-llm-config">保存并接入 TigerMemory</button>

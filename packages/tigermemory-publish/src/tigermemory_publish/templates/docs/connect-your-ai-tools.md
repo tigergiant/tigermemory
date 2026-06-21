@@ -6,7 +6,9 @@ Wiki changes.
 
 ## Recommended Flow
 
-1. Install TigerMemory and configure your LLM provider.
+1. Install TigerMemory and configure your LLM provider in the `/start` setup
+   wizard. DeepSeek is recommended; OpenAI-compatible endpoints are available
+   for advanced users.
 2. Run `tm agent status` to see which project-level AI rules are already in place.
 3. Run `tm agent apply --yes` to install AGENTS / Claude / Cursor project rules.
 4. Ask the AI to read `README.md`, `AGENTS.md`, and this file.
