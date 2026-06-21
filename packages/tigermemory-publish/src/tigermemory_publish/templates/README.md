@@ -68,9 +68,10 @@ Expected profile after `tm init`:
 effective=local
 ```
 
-`tm dashboard` starts the local web console and opens the beginner start page.
-If your browser does not open automatically, open `http://127.0.0.1:9777/start`
-manually.
+`tm dashboard` starts the local web console and opens the beginner setup
+wizard. It walks through local vs hybrid mode, reply style, LLM provider setup,
+and the main dashboard pages. If your browser does not open automatically, open
+`http://127.0.0.1:9777/start` manually.
 
 `tm llm status` does not call the model and does not print secrets. It only
 checks whether provider environment variables are present. For the recommended
@@ -87,8 +88,7 @@ any advanced services:
 
 1. Install from this checkout with `py -m pip install -e .`.
 2. Run `tm init`, then confirm `tm profile show` prints `effective=local`.
-3. Run `tm dashboard`; the browser should open the start page with the first
-   commands and basic setup links.
+3. Run `tm dashboard`; the browser should open the guided setup wizard.
 4. Set `DEEPSEEK_API_KEY` for the recommended OpenAI-compatible provider.
 5. Run `tm llm status`; it should show that provider settings exist without
    printing your key.
@@ -162,7 +162,7 @@ Start the local dashboard:
 tm dashboard
 ```
 
-This opens `http://127.0.0.1:9777/start` for the beginner start page. Use
+This opens `http://127.0.0.1:9777/start` for the beginner setup wizard. Use
 `tm dashboard --no-open` when you want to start the server without opening a
 browser. `http://127.0.0.1:9777/health` remains the system-check page.
 

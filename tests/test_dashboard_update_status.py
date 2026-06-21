@@ -71,11 +71,43 @@ def test_start_static_uses_install_success_intro_and_public_commands() -> None:
         "packages/tigermemory-dashboard/src/tigermemory_dashboard/static/start.html"
     ).read_text(encoding="utf-8")
 
-    assert "控制台已经启动" in html
+    assert "把 AI 的长期记忆放回自己手里" in html
+    assert html.count("data-onboarding-slide") == 6
+    assert "API Key 不会上传到 TigerMemory" in html
+    assert "普通版 / local" in html
+    assert "高级版 / hybrid" in html
+    assert "data-start-depth=\"A\"" in html
+    assert "data-start-depth=\"D\"" in html
+    assert "DEEPSEEK_API_KEY" in pathlib.Path(
+        "packages/tigermemory-dashboard/src/tigermemory_dashboard/static/dashboard-pages.js"
+    ).read_text(encoding="utf-8")
     assert 'tm search --scope wiki --query "agent behavior rules"' in html
     assert 'tm ask --offline --query "agent behavior rules" --scope wiki' in html
     assert "项目画布" not in html
     assert "hello local memory" not in html
+
+
+def test_start_shell_includes_preferences(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(server, "PREFS_DB", tmp_path / "prefs.sqlite")
+
+    payload = server._start_shell()
+
+    assert payload["preferences"]["communication_depth"]
+
+
+def test_daily_review_missing_private_digest_uses_empty_public_fallback(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(server, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(server, "tm_memory_reflection", None)
+    monkeypatch.setattr(server, "_worktree_dirty_state", lambda: {"dirty": False})
+    monkeypatch.setattr(server, "_mem0_payload", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(server, "_run_cache_get", lambda *_args, **_kwargs: (None, None))
+    monkeypatch.setattr(server, "_run_cache_set", lambda *_args, **_kwargs: None)
+
+    payload = server.daily_review_data("2099-01-01")
+
+    assert payload["fallback"] is True
+    assert payload["inbox_rows"] == []
+    assert payload["hidden_inbox_rows"] == []
 
 
 def test_dashboard_main_no_open_prints_start_url_without_browser(monkeypatch, capsys) -> None:

@@ -1846,6 +1846,8 @@ def _coerce_route_flags(value: Any) -> list[str]:
 
 
 def _audit_inbox_records(date: str, *, fast: bool = False) -> list[Any]:
+    if tm_memory_reflection is None or not hasattr(tm_memory_reflection, "audit_inbox"):
+        return []
     return list(tm_memory_reflection.audit_inbox(
         date=date,
         inbox_dir=REPO_ROOT / "inbox",
@@ -4112,9 +4114,14 @@ def _render_self_evolution_page(data: dict[str, Any]) -> str:
 
 
 def _start_shell() -> dict[str, Any]:
+    try:
+        preferences = get_user_preferences().get("preferences", {})
+    except Exception:
+        preferences = {"communication_depth": "A"}
     return {
         "ok": True,
         "profile": tm_core.tigermemory_profile(),
+        "preferences": preferences,
         "generated_at": dt.datetime.now(tm_core.TZ_CN).isoformat(),
         "commands": [
             {"label": "初始化本地模式", "command": "tm init"},

@@ -13,6 +13,8 @@
   window.tmPages.start = {
     abortController: null,
     toastTimer: null,
+    currentStep: 0,
+    selectedDepth: 'A',
 
     i18n(key, fallback, vars = {}) {
       return window.tmI18n ? window.tmI18n.t(key, fallback, vars) : fallback;
@@ -23,6 +25,8 @@
       this.abortController = new AbortController();
       const profile = document.getElementById('start-profile');
       if (profile) profile.textContent = data && data.profile ? data.profile : 'local';
+      const prefs = data && data.preferences ? data.preferences : {};
+      this.selectedDepth = prefs.communication_depth || 'A';
       const refresh = document.getElementById('last-refresh');
       if (refresh) {
         refresh.textContent = '开始';
@@ -31,6 +35,10 @@
       root.querySelectorAll('[data-copy-command]').forEach(button => {
         button.addEventListener('click', () => this.copyCommand(button), {signal: this.abortController.signal});
       });
+      this.bindOnboarding(root);
+      this.bindDepthChoices(root);
+      this.renderDepthChoices(root);
+      this.updateLlmCommand();
       if (window.lucide) window.lucide.createIcons();
     },
 
@@ -43,6 +51,126 @@
         clearTimeout(this.toastTimer);
         this.toastTimer = null;
       }
+      this.currentStep = 0;
+    },
+
+    bindOnboarding(root) {
+      root.querySelectorAll('[data-onboarding-next]').forEach(button => {
+        button.addEventListener('click', () => this.showStep(this.currentStep + 1), {signal: this.abortController.signal});
+      });
+      root.querySelectorAll('[data-onboarding-prev]').forEach(button => {
+        button.addEventListener('click', () => this.showStep(this.currentStep - 1), {signal: this.abortController.signal});
+      });
+      root.querySelectorAll('[data-step-dot]').forEach(dot => {
+        dot.addEventListener('click', () => this.showStep(Number(dot.dataset.stepDot || 0)), {signal: this.abortController.signal});
+        dot.style.cursor = 'pointer';
+      });
+      const saveDepth = document.getElementById('save-start-depth');
+      if (saveDepth) saveDepth.addEventListener('click', () => this.saveDepth(), {signal: this.abortController.signal});
+      ['llm-api-key', 'llm-base-url', 'llm-model'].forEach(id => {
+        const input = document.getElementById(id);
+        if (input) input.addEventListener('input', () => this.updateLlmCommand(), {signal: this.abortController.signal});
+      });
+      const copyLlm = document.getElementById('copy-llm-command');
+      if (copyLlm) copyLlm.addEventListener('click', () => this.copyGeneratedLlmCommand(), {signal: this.abortController.signal});
+      const finish = document.getElementById('finish-onboarding');
+      if (finish) finish.addEventListener('click', () => {
+        try { localStorage.setItem('tigermemory_onboarding_done', 'true'); } catch (_error) {}
+      }, {signal: this.abortController.signal});
+      this.showStep(0);
+    },
+
+    bindDepthChoices(root = document) {
+      root.querySelectorAll('[data-start-depth]').forEach(button => {
+        button.addEventListener('click', () => {
+          this.selectedDepth = button.dataset.startDepth || 'A';
+          this.renderDepthChoices(root);
+        }, {signal: this.abortController.signal});
+      });
+    },
+
+    showStep(index) {
+      const slides = Array.from(document.querySelectorAll('[data-onboarding-slide]'));
+      if (!slides.length) return;
+      const nextIndex = Math.max(0, Math.min(slides.length - 1, index));
+      this.currentStep = nextIndex;
+      slides.forEach((slide, idx) => {
+        slide.classList.toggle('active', idx === nextIndex);
+        slide.setAttribute('aria-hidden', idx === nextIndex ? 'false' : 'true');
+      });
+      document.querySelectorAll('[data-step-dot]').forEach(dot => {
+        dot.classList.toggle('active', Number(dot.dataset.stepDot || 0) === nextIndex);
+      });
+      const label = document.getElementById('start-step-label');
+      if (label) label.textContent = String(nextIndex + 1);
+      const prev = document.querySelector('[data-onboarding-prev]');
+      if (prev) prev.disabled = nextIndex === 0;
+      const nextButtons = document.querySelectorAll('[data-onboarding-next]');
+      nextButtons.forEach(button => {
+        button.disabled = nextIndex === slides.length - 1 && !button.closest('[data-onboarding-slide]');
+      });
+      const help = document.getElementById('onboarding-step-help');
+      const helps = [
+        '先了解 TigerMemory 是什么。',
+        '普通版先跑通，高级版以后再开。',
+        '保存 agent 的回复详细程度。',
+        '生成本机 LLM 配置命令，不上传密钥。',
+        '认识每个页面负责什么。',
+        '复制最小闭环命令，开始使用。'
+      ];
+      if (help) help.textContent = helps[nextIndex] || '';
+    },
+
+    renderDepthChoices(root = document) {
+      root.querySelectorAll('[data-start-depth]').forEach(button => {
+        button.classList.toggle('active', button.dataset.startDepth === this.selectedDepth);
+      });
+    },
+
+    async saveDepth() {
+      try {
+        const response = await fetch('/api/settings/preferences', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({preferences: {communication_depth: this.selectedDepth}, propose_wiki: false}),
+          signal: this.abortController.signal
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        this.toast(`已保存回复风格：${this.selectedDepth}`);
+      } catch (error) {
+        this.toast(`保存失败：${error.message || error}`, false);
+      }
+    },
+
+    shellQuote(value, placeholder) {
+      const text = String(value || '').trim() || placeholder;
+      return text.replace(/"/g, '\\"');
+    },
+
+    buildLlmCommand() {
+      const key = this.shellQuote(document.getElementById('llm-api-key')?.value, '<your_deepseek_api_key>');
+      const base = this.shellQuote(document.getElementById('llm-base-url')?.value, 'https://api.deepseek.com');
+      const model = this.shellQuote(document.getElementById('llm-model')?.value, 'deepseek-v4-flash');
+      return [
+        `setx DEEPSEEK_API_KEY "${key}"`,
+        `setx DEEPSEEK_BASE_URL "${base}"`,
+        `setx DEEPSEEK_MODEL "${model}"`,
+        'tm llm status'
+      ].join('\n');
+    },
+
+    updateLlmCommand() {
+      const preview = document.getElementById('llm-command-preview');
+      const copy = document.getElementById('copy-llm-command');
+      const command = this.buildLlmCommand();
+      if (preview) preview.textContent = command;
+      if (copy) copy.setAttribute('data-copy-command', command);
+    },
+
+    async copyGeneratedLlmCommand() {
+      this.updateLlmCommand();
+      const button = document.getElementById('copy-llm-command');
+      if (button) await this.copyCommand(button);
     },
 
     async copyCommand(button) {
