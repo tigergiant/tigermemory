@@ -55,10 +55,11 @@ tm_memory_reflection = _optional_import("tm_memory_reflection")
 tm_route_events = _optional_import("tm_route_events")
 tm_review_tools = _optional_import("tm_review_tools")
 tm_self_evolution = _optional_import("tm_self_evolution")
+tm_tigerledger_review = _optional_import("tigerledger.review_server")
 tm_update = _optional_import("tigermemory_update")
 
 try:
-    from fastapi import FastAPI, Query, Request
+    from fastapi import Body, FastAPI, HTTPException, Query, Request
     from fastapi.concurrency import run_in_threadpool
     from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
     from pydantic import BaseModel
@@ -85,7 +86,7 @@ DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 INBOX_ROUTE_FILE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-\d{4}-[a-z0-9_-]+\.md$")
 WRITE_ACTION_LOCK = threading.Lock()
 PUBLIC_PATHS = {"/healthz", "/manifest.webmanifest", "/service-worker.js", "/offline.html", "/sw-reset", "/favicon.ico"}
-PAGE_PREFIXES = ("/start", "/digest", "/daily", "/review", "/health", "/quality", "/settings", "/agent-tools", "/canvas", "/self-evolution", "/sw-reset")
+PAGE_PREFIXES = ("/start", "/digest", "/daily", "/review", "/ledger", "/health", "/quality", "/settings", "/agent-tools", "/canvas", "/self-evolution", "/sw-reset")
 DEFAULT_ALLOWED_HOSTS = {
     "127.0.0.1",
     "127.0.0.1:9777",
@@ -4228,6 +4229,16 @@ def _render_settings_page(data: dict[str, Any]) -> str:
     return _render_template("settings.html", {"__SETTINGS_JSON__": payload})
 
 
+def _render_ledger_page() -> str:
+    return _render_template("ledger.html", {})
+
+
+def _require_tigerledger_review():
+    if tm_tigerledger_review is None:
+        raise HTTPException(status_code=503, detail="TigerLedger review module is not installed")
+    return tm_tigerledger_review
+
+
 def _render_canvas_page(data: dict[str, Any]) -> str:
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     return _render_template("canvas.html", {"__CANVAS_JSON__": payload})
@@ -4579,6 +4590,80 @@ async def start_page():
 @app.get("/review")
 async def review_page():
     return _no_store(HTMLResponse(_template()))
+
+
+@app.get("/ledger")
+async def ledger_page():
+    return _no_store(HTMLResponse(_render_ledger_page()))
+
+
+@app.get("/api/ledger/health")
+async def api_ledger_health():
+    module = _require_tigerledger_review()
+    return await run_in_threadpool(module.health)
+
+
+@app.get("/api/ledger/review/summary")
+async def api_ledger_review_summary(month: str | None = None):
+    module = _require_tigerledger_review()
+    return await run_in_threadpool(module.review_summary, month)
+
+
+@app.get("/api/ledger/review/entries")
+async def api_ledger_review_entries(
+    month: str | None = None,
+    status: str = Query("pending", pattern="^(pending|approved|skipped|deleted|all)$"),
+    kind: str | None = Query(None, pattern="^(expense|income)$"),
+    category: str | None = None,
+    source_agent: str | None = None,
+    q: str | None = None,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    module = _require_tigerledger_review()
+    return await run_in_threadpool(
+        module.review_entries,
+        month=month,
+        status=status,
+        kind=kind,
+        category=category,
+        source_agent=source_agent,
+        q=q,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@app.post("/api/ledger/review/entries/{entry_id}/approve")
+async def api_ledger_approve_entry(entry_id: int):
+    module = _require_tigerledger_review()
+    return await run_in_threadpool(module.approve_entry, entry_id)
+
+
+@app.post("/api/ledger/review/entries/{entry_id}/skip")
+async def api_ledger_skip_entry(entry_id: int, payload: dict[str, Any] | None = Body(default=None)):
+    module = _require_tigerledger_review()
+    try:
+        req = module.EntrySkipRequest(**(payload or {}))
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return await run_in_threadpool(module.skip_entry, entry_id, req)
+
+
+@app.post("/api/ledger/review/entries/{entry_id}/restore")
+async def api_ledger_restore_entry(entry_id: int):
+    module = _require_tigerledger_review()
+    return await run_in_threadpool(module.restore_entry, entry_id)
+
+
+@app.post("/api/ledger/review/entries/{entry_id}/edit")
+async def api_ledger_edit_entry(entry_id: int, payload: dict[str, Any] | None = Body(default=None)):
+    module = _require_tigerledger_review()
+    try:
+        req = module.EntryUpdateRequest(**(payload or {}))
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return await run_in_threadpool(module.edit_entry, entry_id, req)
 
 
 @app.get("/api/health/summary")

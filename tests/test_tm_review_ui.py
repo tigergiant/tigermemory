@@ -977,7 +977,8 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v63" in response.text
+    assert "tigermemory-memory-ops-v64" in response.text
+    assert "'/ledger'" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -1023,7 +1024,7 @@ def test_dashboard_shell_pages_are_no_store(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     client.get("/", headers=HOST, follow_redirects=False)
 
-    for path in ["/start", "/review", "/health", "/quality", "/canvas", "/settings"]:
+    for path in ["/start", "/review", "/ledger", "/health", "/quality", "/canvas", "/settings"]:
         response = client.get(path, headers=HOST)
         assert response.status_code == 200
         assert response.headers["Cache-Control"].startswith("no-store")
@@ -1039,6 +1040,52 @@ def test_review_route_returns_page_shell_not_bare_json(tmp_path, monkeypatch):
     assert "text/html" in response.headers["content-type"]
     assert "<body" in response.text
     assert "detail" not in response.text[:120]
+
+
+def test_ledger_route_is_dashboard_module_and_delegates_api(tmp_path, monkeypatch):
+    ledger = tm_review_ui.tm_tigerledger_review
+    assert ledger is not None
+    db_path = tmp_path / "ledger.sqlite"
+    monkeypatch.setattr(ledger.core, "DB_PATH", db_path)
+    monkeypatch.setattr(ledger.core, "DATA_DIR", tmp_path)
+    client = _client(tmp_path, monkeypatch)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    page = client.get("/ledger", headers=HOST)
+
+    assert page.status_code == 200
+    assert 'body data-page="ledger"' in page.text
+    assert 'data-target-page="ledger"' in page.text
+    assert "/static/dashboard-common.js" in page.text
+    assert "/api/ledger/review" in page.text
+    assert "记账审批" in page.text
+
+    result = ledger.core.expense_write(
+        action="record",
+        kind="expense",
+        amount=28.5,
+        category="餐饮",
+        occurred_at="2026-06-20T12:00:00+08:00",
+        merchant="测试餐厅",
+        note="午饭",
+        payment_method="支付宝",
+        tags=["alipay"],
+        source_agent="expense-import-test",
+        source_text="fixture",
+    )
+    assert result["ok"] is True
+    row_id = int(result["id"])
+
+    summary = client.get("/api/ledger/review/summary?month=2026-06", headers=HOST)
+    entries = client.get("/api/ledger/review/entries?month=2026-06&status=pending", headers=HOST)
+    approved = client.post(f"/api/ledger/review/entries/{row_id}/approve", headers=HOST)
+
+    assert summary.status_code == 200
+    assert summary.json()["status_counts"]["pending"] == 1
+    assert entries.status_code == 200
+    assert entries.json()["rows"][0]["id"] == row_id
+    assert approved.status_code == 200
+    assert approved.json()["entry"]["review_status"] == "approved"
 
 
 def test_start_route_returns_beginner_shell(tmp_path, monkeypatch):
@@ -1608,6 +1655,7 @@ def test_dashboard_pages_share_identical_header(tmp_path, monkeypatch):
 
     responses = {
         "daily": client.get("/digest/2026-05-21", headers=HOST),
+        "ledger": client.get("/ledger", headers=HOST),
         "health": client.get("/health", headers=HOST),
         "quality": client.get("/quality", headers=HOST),
         "agent-tools": client.get("/agent-tools", headers=HOST),
