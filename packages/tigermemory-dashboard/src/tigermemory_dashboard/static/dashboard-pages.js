@@ -111,12 +111,12 @@
       });
       const help = document.getElementById('onboarding-step-help');
       const helps = [
-        '先了解 TigerMemory 是什么。',
-        '普通版先跑通，高级版以后再开。',
-        '保存 agent 的回复详细程度。',
-        '生成本机 LLM 配置命令，不上传密钥。',
-        '认识每个页面负责什么。',
-        '复制最小闭环命令，开始使用。'
+        '先用一分钟认识 TigerMemory。',
+        '从普通版开始，后面再升级。',
+        '选一个你喜欢的回答风格。',
+        '生成本机 LLM 配置命令，密钥不上传。',
+        '了解常用页面分别做什么。',
+        '跑通一次，就可以开始用了。'
       ];
       if (help) help.textContent = helps[nextIndex] || '';
     },

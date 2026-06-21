@@ -74,9 +74,9 @@
     }
     .onboarding-title {
       margin-top: 0.9rem;
-      font-size: clamp(2rem, 4.4vw, 4.6rem);
-      line-height: 0.96;
-      font-weight: 900;
+      font-size: clamp(1.55rem, 2.65vw, 2.55rem);
+      line-height: 1.14;
+      font-weight: 800;
       letter-spacing: 0;
       color: #1f1d1b;
     }
@@ -263,22 +263,22 @@
         <article class="onboarding-slide active" data-onboarding-slide="0">
           <div>
             <div class="onboarding-kicker"><i data-lucide="sparkles" class="h-4 w-4"></i> 欢迎使用</div>
-            <h1 class="onboarding-title">把 AI 的长期记忆放回自己手里。</h1>
-            <p class="onboarding-copy">TigerMemory 用 Markdown、Git、本地 SQLite 和你自己的 LLM 组成个人 AI 大脑。它不是再给你一个聊天窗口，而是帮你的 agent 有稳定规则、可查证据和可共同维护的 Wiki。</p>
+            <h1 class="onboarding-title">欢迎来到 TigerMemory</h1>
+            <p class="onboarding-copy">接下来几步会帮你把本地资料、使用规则和问答入口连起来。先不用理解所有概念，跟着完成设置，就能让你的 AI 助手开始有自己的长期记忆。</p>
             <div class="mt-6 flex flex-wrap gap-3">
               <button type="button" class="wizard-nav-button primary" data-onboarding-next>开始设置</button>
               <a class="wizard-nav-button" href="/health">先看运行检查</a>
             </div>
           </div>
           <div class="onboarding-visual" aria-hidden="true">
-            <div class="signal-card one"><b>Wiki</b><br>长期知识、规则、项目说明</div>
-            <div class="signal-card two"><b>Agent</b><br>读取规则后再行动</div>
-            <div class="signal-card three"><b>Evidence</b><br>先找证据，再回答</div>
-            <div class="signal-card four"><b>Human</b><br>你保留最终控制权</div>
+            <div class="signal-card one"><b>知识库</b><br>长期知识、规则、项目说明</div>
+            <div class="signal-card two"><b>AI 助手</b><br>先读规则，再行动</div>
+            <div class="signal-card three"><b>证据</b><br>先查清楚，再回答</div>
+            <div class="signal-card four"><b>你</b><br>保留最终控制权</div>
             <div class="memory-device">
-              <div class="text-xs text-[#c8a560]">TigerMemory Core</div>
-              <div class="mt-2 text-2xl font-black">Local AI Brain</div>
-              <div class="mt-3 text-sm leading-6 text-[#f0e9d8]">Markdown + Git + SQLite + LLM</div>
+              <div class="text-xs text-[#c8a560]">TigerMemory</div>
+              <div class="mt-2 text-2xl font-black">你的本地记忆库</div>
+              <div class="mt-3 text-sm leading-6 text-[#f0e9d8]">Wiki + 证据 + 你自己的模型</div>
               <div class="bar"></div>
             </div>
           </div>
@@ -287,8 +287,8 @@
         <article class="onboarding-slide" data-onboarding-slide="1">
           <div>
             <div class="onboarding-kicker"><i data-lucide="layers-3" class="h-4 w-4"></i> 选择运行方式</div>
-            <h2 class="onboarding-title">先用普通版，懂了再开高级版。</h2>
-            <p class="onboarding-copy">普通版已经能写 Wiki、搜索证据、离线问答和连接 LLM。高级版适合多设备、多 agent、实时记忆服务和更复杂的 MCP 工作流。</p>
+            <h2 class="onboarding-title">先从普通版开始</h2>
+            <p class="onboarding-copy">普通版已经能管理 Wiki、查本地证据、连接 LLM。等你用顺了，再打开多设备、实时记忆和更多工具连接也不晚。</p>
             <div class="choice-grid">
               <div class="wizard-card">
                 <div class="text-lg font-black text-[#1f1d1b]">普通版 / local</div>
@@ -296,7 +296,7 @@
               </div>
               <div class="wizard-card">
                 <div class="text-lg font-black text-[#1f1d1b]">高级版 / hybrid</div>
-                <p class="mt-2 text-sm leading-6 text-[#4a443d]">接入 OpenMemory、MCP、多 IDE 和远程网关。等普通版跑顺后再升级。</p>
+                <p class="mt-2 text-sm leading-6 text-[#4a443d]">接入实时记忆、MCP、多 IDE 和远程网关。适合已经想把记忆系统接进日常工作的人。</p>
               </div>
             </div>
           </div>
@@ -305,7 +305,7 @@
               <div class="wizard-card bg-[#dde8ce]">
                 <div class="text-sm font-bold text-[#52733a]">现在推荐</div>
                 <div class="mt-1 text-2xl font-black">local + LLM</div>
-                <div class="mt-2 text-sm text-[#4a443d]">最少依赖，最快体验 TigerMemory 的核心价值。</div>
+                <div class="mt-2 text-sm text-[#4a443d]">依赖最少，适合第一次安装和试用。</div>
               </div>
               <div class="wizard-card">
                 <div class="text-sm font-bold text-[#678696]">以后扩展</div>
@@ -319,8 +319,8 @@
         <article class="onboarding-slide" data-onboarding-slide="2">
           <div>
             <div class="onboarding-kicker"><i data-lucide="sliders-horizontal" class="h-4 w-4"></i> 设置回复风格</div>
-            <h2 class="onboarding-title">让 agent 用你听得懂的方式说话。</h2>
-            <p class="onboarding-copy">这个设置会保存到本机 dashboard 偏好里。你可以从极简解释开始，熟悉后再切到工程细节。</p>
+            <h2 class="onboarding-title">选择你喜欢的回答方式</h2>
+            <p class="onboarding-copy">有些时候你只想要一句结论，有些时候你需要路径、证据和排查过程。先选一个默认风格，以后随时可以改。</p>
             <div class="choice-grid" id="start-depth-grid">
               <button type="button" class="depth-choice" data-start-depth="A">
                 <div class="font-black">A 极简</div>
@@ -361,8 +361,8 @@
         <article class="onboarding-slide" data-onboarding-slide="3">
           <div>
             <div class="onboarding-kicker"><i data-lucide="key-round" class="h-4 w-4"></i> 连接 LLM</div>
-            <h2 class="onboarding-title">推荐先接 DeepSeek。</h2>
-            <p class="onboarding-copy">API Key 不会上传到 TigerMemory，也不会写进 Git。本页只在浏览器里帮你生成本机环境变量命令；复制后在 PowerShell 运行即可。</p>
+            <h2 class="onboarding-title">连接一个你自己的模型</h2>
+            <p class="onboarding-copy">推荐先用 DeepSeek。API Key 不会上传到 TigerMemory，也不会写进 Git；这一页只帮你生成本机配置命令，复制到 PowerShell 运行就好。</p>
             <div class="mt-5 grid gap-3">
               <label class="text-sm font-bold text-[#4a443d]">API Key</label>
               <input id="llm-api-key" class="wizard-input" type="password" autocomplete="off" placeholder="sk-...">
@@ -391,8 +391,8 @@
         <article class="onboarding-slide" data-onboarding-slide="4">
           <div>
             <div class="onboarding-kicker"><i data-lucide="layout-dashboard" class="h-4 w-4"></i> 认识控制台</div>
-            <h2 class="onboarding-title">每个页面只解决一类问题。</h2>
-            <p class="onboarding-copy">第一次使用只需要看运行检查、AI 连接和偏好设置。待确认、记忆质量和项目进展会随着你持续使用而更有价值。</p>
+            <h2 class="onboarding-title">先认识几个常用入口</h2>
+            <p class="onboarding-copy">刚开始只看运行检查、AI 连接和偏好设置就够了。待确认、记忆质量和项目进展，会在你持续使用后慢慢派上用场。</p>
           </div>
           <div class="onboarding-visual p-5">
             <div class="grid gap-3 sm:grid-cols-2">
@@ -409,8 +409,8 @@
         <article class="onboarding-slide" data-onboarding-slide="5">
           <div>
             <div class="onboarding-kicker"><i data-lucide="check-circle-2" class="h-4 w-4"></i> 准备开始</div>
-            <h2 class="onboarding-title">先跑一遍最小闭环。</h2>
-            <p class="onboarding-copy">这几条命令能验证本地资料库、搜索、离线问答和 dashboard 都能用。确认跑通后，再开始让 AI 管理你的 Wiki。</p>
+            <h2 class="onboarding-title">最后，试一次完整流程</h2>
+            <p class="onboarding-copy">下面几条命令会检查本地资料库、搜索、离线问答和控制台。都能跑通，就说明 TigerMemory 已经准备好了。</p>
             <div class="mt-5 grid gap-2">
               <button type="button" class="copy-command" data-copy-command="tm init">tm init</button>
               <button type="button" class="copy-command" data-copy-command="tm profile show">tm profile show</button>
@@ -425,10 +425,10 @@
           <div class="onboarding-visual p-5">
             <div class="grid h-full content-center gap-3">
               <div class="wizard-card bg-[#dde8ce]">
-                <div class="text-2xl font-black">安装成功后你应该知道：</div>
+                <div class="text-xl font-black">安装成功后，先记住这几件事：</div>
                 <ul class="mt-3 space-y-2 text-sm leading-6 text-[#4a443d]">
                   <li>普通版已经可用，不需要先装 Docker。</li>
-                  <li>LLM 是核心能力，推荐先接 DeepSeek。</li>
+                  <li>接上 LLM 以后，整理和问答会更顺手；推荐先用 DeepSeek。</li>
                   <li>长期知识进入 Wiki，临时证据先走待确认。</li>
                   <li>所有关键操作都应该能被 Git 和页面证据复查。</li>
                 </ul>

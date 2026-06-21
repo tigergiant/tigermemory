@@ -71,7 +71,7 @@ def test_start_static_uses_install_success_intro_and_public_commands() -> None:
         "packages/tigermemory-dashboard/src/tigermemory_dashboard/static/start.html"
     ).read_text(encoding="utf-8")
 
-    assert "把 AI 的长期记忆放回自己手里" in html
+    assert "欢迎来到 TigerMemory" in html
     assert html.count("data-onboarding-slide") == 6
     assert "API Key 不会上传到 TigerMemory" in html
     assert "普通版 / local" in html
