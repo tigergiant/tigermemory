@@ -1,0 +1,12 @@
+# TigerMemory Codex MCP example
+#
+# This is an advanced optional template. The public quickstart does not require
+# MCP. Copy into your Codex config only after installing a TigerMemory MCP
+# adapter that exposes a `tm-mcp` command.
+#
+# Keep the default role read-only. Do not enable writer tools for a beginner
+# setup.
+
+[mcp_servers.tigermemory]
+command = "tm-mcp"
+args = ["--role=reader", "--tool-profile=memory"]

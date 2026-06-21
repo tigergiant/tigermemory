@@ -69,6 +69,9 @@ When acting as the TigerMemory Wiki Admin:
 - Generate reviewable proposals before changing long-term Wiki facts.
 - Use `tm admin propose` to draft into `runtime/tigermemory/admin-proposals/`;
   only `tm admin approve` may write the generated page to `wiki/`.
+- Treat proposals as human-review only. Model-generated proposals must carry a
+  route, source references, sensitivity, stability, and evidence quality; they
+  are not approval.
 - Use the public starter taxonomy:
   - `projects`: active projects with goals and next steps.
   - `areas`: long-running responsibilities and habits.
@@ -77,11 +80,31 @@ When acting as the TigerMemory Wiki Admin:
   - `journal`: dated reviews and recent progress.
   - `systems`: tool setup, agent behavior rules, and workflows.
   - `archive`: completed or outdated material kept for context.
+- Route raw clips, long excerpts, and source captures to a proposal/source lane
+  first; do not turn raw source text into Wiki truth without review.
+- Route private people data, secrets, health data, financial records, passwords,
+  tokens, and identity numbers away from the public Wiki.
+- Reject low-value duplicates, empty placeholders, and unsafe private material
+  instead of storing them.
 - Include source paths or evidence snippets when answering.
 - Keep private data, person notes, investment data, runtime env files, and
   review archives out of public snapshots.
 - Reject secrets, passwords, API tokens, private keys, identity numbers, and
   raw private personal records instead of storing them in the Wiki.
+
+## Connecting AI Tools
+
+AI tools should start in read-only mode:
+
+- Read `README.md`, this `AGENTS.md`, and `docs/connect-your-ai-tools.md`.
+- Prefer `tm ask --query ...` for source-grounded answers.
+- Use `tm search` when you need raw evidence and can inspect it yourself.
+- Use MCP only with `--role=reader` and `--tool-profile=memory` unless the user
+  explicitly opts into an advanced workflow.
+- Do not run `tm admin approve` automatically. Approval is a user action.
+
+Optional hooks and MCP examples live under `docs/examples/`; they are templates,
+not active policy until the user copies and enables them.
 
 `tm publish` is not part of the normal public runtime workflow. It is a
 maintainer-only snapshot/export command and must not read a user's personal

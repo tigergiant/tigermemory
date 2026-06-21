@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tigermemory": {
+      "command": "tm-mcp",
+      "args": ["--role=reader", "--tool-profile=memory"]
+    }
+  }
+}

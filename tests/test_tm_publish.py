@@ -176,6 +176,37 @@ def _build_fake_repo(root: pathlib.Path) -> None:
             path.write_text("AGPL-3.0-or-later\n", encoding="utf-8")
         elif dst == "THIRD_PARTY_NOTICES.md":
             path.write_text("# Third-Party Notices\n\nTailwind CSS — MIT\n", encoding="utf-8")
+        elif dst == ".codex/config.toml.example":
+            path.write_text(
+                "[mcp_servers.tigermemory]\n"
+                "command = \"tm-mcp\"\n"
+                "args = [\"--role=reader\", \"--tool-profile=memory\"]\n",
+                encoding="utf-8",
+            )
+        elif dst == "docs/advanced-agent-setup.md":
+            path.write_text(
+                "# Advanced Agent Setup\n\n"
+                "`tm admin approve` is the human boundary.\n"
+                "Use --role=reader and --tool-profile=memory first.\n",
+                encoding="utf-8",
+            )
+        elif dst == "docs/connect-your-ai-tools.md":
+            path.write_text(
+                "# Connect Your AI Tools\n\n"
+                "Use --role=reader and --tool-profile=memory for MCP examples.\n",
+                encoding="utf-8",
+            )
+        elif dst == "docs/examples/mcp/tigermemory-reader.mcp.json":
+            path.write_text(
+                '{"mcpServers":{"tigermemory":{"command":"tm-mcp","args":["--role=reader","--tool-profile=memory"]}}}\n',
+                encoding="utf-8",
+            )
+        elif dst.startswith("docs/examples/hooks/"):
+            path.write_text(
+                "# TigerMemory example hook\n"
+                "Write-Error \"TigerMemory: tm admin approve is human-only.\"\n",
+                encoding="utf-8",
+            )
         elif dst == "pyproject.toml":
             path.write_text(
                 "[project]\n"

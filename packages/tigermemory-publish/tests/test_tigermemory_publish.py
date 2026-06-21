@@ -174,6 +174,37 @@ def _build_fake_repo(root: pathlib.Path) -> None:
             path.write_text("AGPL-3.0-or-later\n", encoding="utf-8")
         elif dst == "THIRD_PARTY_NOTICES.md":
             path.write_text("# Third-Party Notices\n\nTailwind CSS — MIT\n", encoding="utf-8")
+        elif dst == ".codex/config.toml.example":
+            path.write_text(
+                "[mcp_servers.tigermemory]\n"
+                "command = \"tm-mcp\"\n"
+                "args = [\"--role=reader\", \"--tool-profile=memory\"]\n",
+                encoding="utf-8",
+            )
+        elif dst == "docs/advanced-agent-setup.md":
+            path.write_text(
+                "# Advanced Agent Setup\n\n"
+                "`tm admin approve` is the human boundary.\n"
+                "Use --role=reader and --tool-profile=memory first.\n",
+                encoding="utf-8",
+            )
+        elif dst == "docs/connect-your-ai-tools.md":
+            path.write_text(
+                "# Connect Your AI Tools\n\n"
+                "Use --role=reader and --tool-profile=memory for MCP examples.\n",
+                encoding="utf-8",
+            )
+        elif dst == "docs/examples/mcp/tigermemory-reader.mcp.json":
+            path.write_text(
+                '{"mcpServers":{"tigermemory":{"command":"tm-mcp","args":["--role=reader","--tool-profile=memory"]}}}\n',
+                encoding="utf-8",
+            )
+        elif dst.startswith("docs/examples/hooks/"):
+            path.write_text(
+                "# TigerMemory example hook\n"
+                "Write-Error \"TigerMemory: tm admin approve is human-only.\"\n",
+                encoding="utf-8",
+            )
         elif dst == "pyproject.toml":
             path.write_text(
                 "[project]\n"
@@ -325,9 +356,15 @@ def test_public_templates_document_source_first_update_install() -> None:
     templates = pathlib.Path(tigermemory_publish.__file__).resolve().parent / "templates"
     readme = (templates / "README.md").read_text(encoding="utf-8")
     index = (templates / "index.md").read_text(encoding="utf-8")
+    agents = (templates / "AGENTS.md").read_text(encoding="utf-8")
+    connect = (templates / "docs" / "connect-your-ai-tools.md").read_text(encoding="utf-8")
+    advanced = (templates / "docs" / "advanced-agent-setup.md").read_text(encoding="utf-8")
+    codex_config = (templates / ".codex" / "config.toml.example").read_text(encoding="utf-8")
 
     assert "py -m pip install ." in readme
     assert "py -m pip install -e ." in readme
+    assert "15-Minute First Run" in readme
+    assert "项目画布" not in readme
     assert "tm update status" in readme
     assert "tm admin guide" in readme
     assert "tm admin propose" in readme
@@ -335,7 +372,16 @@ def test_public_templates_document_source_first_update_install() -> None:
     assert "git reset --hard" in readme
     assert "py -m pip install ." in index
     assert "tm admin guide" in index
+    assert "Where Notes Go" in index
+    assert "tm admin propose" in index
     assert "py -m pip install -e ." not in index
+    assert "route, source references, sensitivity, stability, and evidence quality" in agents
+    assert "--role=reader" in connect
+    assert "--tool-profile=memory" in advanced
+    assert "tm admin approve` is the human boundary" in advanced
+    assert "command = \"tm-mcp\"" in codex_config
+    assert "--role=reader" in codex_config
+    assert "--tool-profile=memory" in codex_config
 
 
 def test_collect_publish_plan_default_private(tmp_path: pathlib.Path) -> None:
@@ -430,6 +476,9 @@ def test_public_pyproject_packages_public_templates() -> None:
     package_data = data["tool"]["setuptools"]["package-data"]["tigermemory_publish"]
 
     assert "templates/docs/*.md" in package_data
+    assert "templates/.codex/*" in package_data
+    assert "templates/docs/examples/hooks/*" in package_data
+    assert "templates/docs/examples/mcp/*" in package_data
     assert "templates/wiki/*/*.md" in package_data
     assert "templates/wiki/operations/*.md" not in package_data
 
@@ -798,6 +847,15 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     assert "tm ask --offline" in (dest / "AGENTS.md").read_text(encoding="utf-8")
     assert "tm llm status" in (dest / "index.md").read_text(encoding="utf-8")
     assert "tm ask --offline" in (dest / "index.md").read_text(encoding="utf-8")
+    assert (dest / "CLAUDE.md").is_file()
+    assert (dest / ".codex" / "config.toml.example").is_file()
+    assert "--role=reader" in (dest / ".codex" / "config.toml.example").read_text(encoding="utf-8")
+    assert (dest / "docs" / "advanced-agent-setup.md").is_file()
+    assert (dest / "docs" / "connect-your-ai-tools.md").is_file()
+    assert (dest / "docs" / "examples" / "mcp" / "tigermemory-reader.mcp.json").is_file()
+    assert (dest / "docs" / "examples" / "hooks" / "pre_tool_use.example.ps1").is_file()
+    assert (dest / "docs" / "examples" / "hooks" / "post_tool_use.example.ps1").is_file()
+    assert "tm admin approve" in (dest / "docs" / "examples" / "hooks" / "pre_tool_use.example.ps1").read_text(encoding="utf-8")
     public_pyproject = (dest / "pyproject.toml").read_text(encoding="utf-8")
     assert "AGPL-3.0-or-later" in public_pyproject
     assert "tm = 'tigermemory_cli:main'" in public_pyproject

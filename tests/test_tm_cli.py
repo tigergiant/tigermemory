@@ -17,6 +17,29 @@ sys.path.insert(0, str(REPO_ROOT))
 import tigermemory_cli
 
 
+def _admin_route(target_path: str = "wiki/systems/starter-admin.md") -> dict[str, object]:
+    return {
+        "schema": "tigermemory-route-proposal-v1",
+        "input_kind": "manual_note",
+        "primary_route": "wiki",
+        "proposed_partition": target_path.split("/", 2)[1],
+        "target_path": target_path,
+        "source_refs": [{"kind": "stdin", "sha256_12": "unit"}],
+        "title": "Starter Admin",
+        "summary": "Admin summary",
+        "reason": "Useful durable note.",
+        "stability": "durable",
+        "sensitivity": "low",
+        "evidence_quality": "sufficient",
+        "external_llm_allowed": True,
+        "redaction_required": False,
+        "missing_evidence": [],
+        "rejection_code": None,
+        "human_review_required": True,
+        "auto_write_allowed": False,
+    }
+
+
 def _cli_subprocess_env(root: pathlib.Path) -> dict[str, str]:
     package_paths = [
         str(REPO_ROOT),
@@ -253,10 +276,12 @@ def test_admin_guide_explains_proposal_first_flow(capsys) -> None:
 def test_admin_propose_and_approve_roundtrip(tmp_path, monkeypatch, capsys) -> None:
     fake_core = types.ModuleType("tigermemory_core")
 
-    def fake_propose_wiki_admin_page(text, *, partition, title, source, timeout):
+    def fake_propose_wiki_admin_page(text, *, partition, title, source, source_refs, input_kind, timeout):
         assert "source material" in text
         assert partition == "systems"
         assert title == "Starter Admin"
+        assert source_refs[0]["kind"] == "stdin"
+        assert input_kind == "manual_note"
         return {
             "schema": "tigermemory-admin-proposal-v1",
             "should_write": True,
@@ -268,7 +293,14 @@ def test_admin_propose_and_approve_roundtrip(tmp_path, monkeypatch, capsys) -> N
             "summary": "Admin summary",
             "rationale": "Useful durable note.",
             "confidence": 91,
+            "source_refs": source_refs,
             "evidence_refs": [source],
+            "route": _admin_route(),
+            "primary_route": "wiki",
+            "sensitivity": "low",
+            "stability": "durable",
+            "evidence_quality": "sufficient",
+            "auto_write_allowed": False,
             "wiki_markdown": "---\nowner: human\nstatus: active\nupdated: 2026-06-20\n---\n\n# Starter Admin\n\n## 摘要\n\nAdmin summary.\n\n## 来源\n\n- stdin\n",
             "user_review_required": True,
         }
@@ -317,6 +349,7 @@ def test_admin_approve_refuses_existing_target_without_force(tmp_path, monkeypat
         "should_write": True,
         "title": "Existing",
         "target_path": "wiki/systems/existing.md",
+        "route": _admin_route("wiki/systems/existing.md"),
         "wiki_markdown": "---\nowner: human\nstatus: active\nupdated: 2026-06-20\n---\n\n# Existing\n\n## 摘要\n\nNew.\n\n## 来源\n\n- test\n",
     }
     tigermemory_cli._admin_write_proposal(proposal)
@@ -326,6 +359,27 @@ def test_admin_approve_refuses_existing_target_without_force(tmp_path, monkeypat
     err = capsys.readouterr().err
     assert "target exists" in err
     assert target.read_text(encoding="utf-8") == "# Existing\n"
+
+
+def test_admin_approve_refuses_private_dogfood_target(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(tigermemory_cli, "REPO_ROOT", tmp_path)
+    proposal = {
+        "schema": "tigermemory-admin-proposal-v1",
+        "id": "unit-private-target",
+        "status": "pending",
+        "should_write": True,
+        "title": "Private Target",
+        "target_path": "wiki/investment/private.md",
+        "route": _admin_route("wiki/investment/private.md"),
+        "wiki_markdown": "---\nowner: human\nstatus: active\nupdated: 2026-06-20\n---\n\n# Private Target\n\n## 摘要\n\nNo.\n\n## 来源\n\n- test\n",
+    }
+    tigermemory_cli._admin_write_proposal(proposal)
+
+    assert tigermemory_cli.main(["admin", "approve", "unit-private-target"]) == 2
+
+    err = capsys.readouterr().err
+    assert "not supported" in err
+    assert not (tmp_path / "wiki" / "investment" / "private.md").exists()
 
 
 def test_ask_online_uses_public_answer_flow(monkeypatch, capsys) -> None:

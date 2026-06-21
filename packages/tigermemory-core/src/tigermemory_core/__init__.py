@@ -4249,6 +4249,24 @@ WIKI_ADMIN_PUBLIC_PARTITIONS = (
     "archive",
 )
 
+WIKI_ADMIN_ROUTE_SCHEMA = "tigermemory-route-proposal-v1"
+WIKI_ADMIN_PRIMARY_ROUTES = {
+    "wiki",
+    "sources_raw",
+    "inbox_proposal",
+    "private_lane",
+    "discard_reject",
+}
+WIKI_ADMIN_STABILITY_BY_PARTITION = {
+    "projects": "working",
+    "areas": "durable",
+    "resources": "durable",
+    "decisions": "durable",
+    "journal": "working",
+    "systems": "durable",
+    "archive": "durable",
+}
+
 WIKI_ADMIN_PROPOSAL_PROMPT = """你是 TigerMemory 公开版的 Wiki Admin。
 
 任务：把用户提供的资料整理成一个“待用户审批”的 Markdown Wiki 页面草案。
@@ -4283,7 +4301,9 @@ WIKI_ADMIN_PROPOSAL_PROMPT = """你是 TigerMemory 公开版的 Wiki Admin。
   "aliases": ["可选别名"],
   "tags": ["可选标签，短词"],
   "key_facts": ["可选关键事实，每条一句话"],
-  "evidence_refs": ["来源或证据"]
+  "evidence_refs": ["来源或证据"],
+  "stability": "ephemeral|working|durable",
+  "evidence_quality": "raw|partial|sufficient|conflicting"
 }
 
 如果不适合写入 Wiki，输出：
@@ -4451,6 +4471,11 @@ _ADMIN_BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{24,}")
 _ADMIN_SECRET_ASSIGNMENT_RE = re.compile(
     r"(?i)\b(api[_-]?key|secret|token|password|passwd)\b\s*[:=]\s*['\"]?([^\s'\"`]{12,})"
 )
+_ADMIN_CN_ID_RE = re.compile(
+    r"(?<!\d)[1-9]\d{5}(?:18|19|20)\d{2}"
+    r"(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx](?!\d)"
+)
+_ADMIN_CN_PHONE_RE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
 
 
 def _admin_yaml_quote(value: str) -> str:
@@ -4501,6 +4526,90 @@ def _admin_confidence(value: Any) -> int:
     return max(0, min(100, number))
 
 
+def _admin_choice(value: Any, allowed: set[str], fallback: str) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in allowed else fallback
+
+
+def _admin_source_refs(source: str, source_refs: Any = None) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    if isinstance(source_refs, list):
+        for item in source_refs:
+            if not isinstance(item, dict):
+                continue
+            entry: dict[str, str] = {}
+            for key in ("kind", "path", "sha256_12", "url", "label"):
+                value = str(item.get(key) or "").strip()
+                if value:
+                    entry[key] = value[:500]
+            if entry:
+                out.append(entry)
+            if len(out) >= 8:
+                break
+    if not out:
+        text = str(source or "user-provided text").strip() or "user-provided text"
+        out.append({"kind": "source_ref", "label": text[:500]})
+    return out
+
+
+def _admin_input_kind(source_refs: list[dict[str, str]], explicit: Any = None) -> str:
+    value = str(explicit or "").strip()
+    if value in {"chat_note", "meeting_note", "web_clip", "file_excerpt", "manual_note"}:
+        return value
+    kinds = {entry.get("kind", "") for entry in source_refs}
+    if "file" in kinds:
+        return "file_excerpt"
+    if "url" in kinds or "web" in kinds:
+        return "web_clip"
+    if "stdin" in kinds:
+        return "manual_note"
+    return "manual_note"
+
+
+def _admin_route_payload(
+    *,
+    partition: str,
+    should_write: bool,
+    title: str,
+    summary: str,
+    rationale: str,
+    target_path: str | None,
+    source_refs: list[dict[str, str]],
+    input_kind: str,
+    stability: str,
+    sensitivity: str,
+    evidence_quality: str,
+    primary_route: str | None = None,
+    rejection_code: str | None = None,
+    external_llm_allowed: bool = True,
+) -> dict[str, Any]:
+    route = primary_route
+    if not route:
+        route = "wiki" if should_write else "inbox_proposal"
+    route = _admin_choice(route, WIKI_ADMIN_PRIMARY_ROUTES, "inbox_proposal")
+    proposed_partition = partition if should_write and route == "wiki" else None
+    return {
+        "schema": WIKI_ADMIN_ROUTE_SCHEMA,
+        "input_kind": input_kind,
+        "primary_route": route,
+        "proposed_partition": proposed_partition,
+        "target_path": target_path if route == "wiki" else None,
+        "source_refs": source_refs,
+        "title": title,
+        "summary": summary,
+        "reason": rationale[:500],
+        "stability": stability,
+        "sensitivity": sensitivity,
+        "evidence_quality": evidence_quality,
+        "external_llm_allowed": external_llm_allowed,
+        "redaction_required": sensitivity in {"medium", "high", "restricted"},
+        "missing_evidence": [] if evidence_quality in {"sufficient", "partial"} else ["review source evidence"],
+        "rejection_code": rejection_code,
+        "human_review_required": True,
+        "auto_write_allowed": False,
+    }
+
+
 def _admin_body_with_required_sections(
     body: str,
     summary: str,
@@ -4533,6 +4642,10 @@ def _admin_secret_like_reason(text: str) -> str | None:
         return "bearer_token"
     if _ADMIN_SECRET_ASSIGNMENT_RE.search(text):
         return "secret_assignment"
+    if _ADMIN_CN_ID_RE.search(text):
+        return "identity_number"
+    if _ADMIN_CN_PHONE_RE.search(text):
+        return "phone_number"
     return None
 
 
@@ -4542,6 +4655,8 @@ def propose_wiki_admin_page(
     partition: str,
     title: str = "",
     source: str = "user-provided text",
+    source_refs: list[dict[str, Any]] | None = None,
+    input_kind: str | None = None,
     timeout: int = REFINE_DEFAULT_TIMEOUT,
 ) -> dict[str, Any]:
     """Use the configured DeepSeek-compatible LLM to draft a reviewable wiki page proposal.
@@ -4557,9 +4672,11 @@ def propose_wiki_admin_page(
         raise ValueError("proposal source text must be at least 20 characters")
     secret_reason = _admin_secret_like_reason(source_text)
     if secret_reason:
-        raise ValueError(f"proposal source text appears to contain {secret_reason}; remove secrets before calling an online LLM")
+        raise ValueError(f"proposal source text appears to contain {secret_reason}; remove secrets or private data before calling an online LLM")
 
     fallback_title = _admin_clean_title(title, "TigerMemory Wiki Admin Proposal")
+    normalized_source_refs = _admin_source_refs(source, source_refs)
+    normalized_input_kind = _admin_input_kind(normalized_source_refs, input_kind)
     user_msg = (
         f"target_partition: {partition}\n"
         f"preferred_title: {fallback_title}\n"
@@ -4582,6 +4699,24 @@ def propose_wiki_admin_page(
         raise RuntimeError("malformed Wiki Admin proposal response")
     if parsed.get("should_write") is False:
         rationale = str(parsed.get("rationale") or "model judged this source unsuitable for wiki")
+        evidence_refs = _admin_string_list(parsed.get("evidence_refs"))
+        evidence_quality = _admin_choice(parsed.get("evidence_quality"), {"raw", "partial", "sufficient", "conflicting"}, "partial")
+        stability = _admin_choice(parsed.get("stability"), {"ephemeral", "working", "durable"}, "working")
+        route = _admin_route_payload(
+            partition=partition,
+            should_write=False,
+            title=fallback_title,
+            summary="",
+            rationale=rationale,
+            target_path=None,
+            source_refs=normalized_source_refs,
+            input_kind=normalized_input_kind,
+            stability=stability,
+            sensitivity="low",
+            evidence_quality=evidence_quality,
+            primary_route="inbox_proposal",
+            rejection_code="model_rejected",
+        )
         return {
             "schema": "tigermemory-admin-proposal-v1",
             "should_write": False,
@@ -4589,7 +4724,14 @@ def propose_wiki_admin_page(
             "title": fallback_title,
             "rationale": rationale[:500],
             "confidence": _admin_confidence(parsed.get("confidence")),
-            "evidence_refs": _admin_string_list(parsed.get("evidence_refs")),
+            "source_refs": normalized_source_refs,
+            "evidence_refs": evidence_refs,
+            "route": route,
+            "primary_route": route["primary_route"],
+            "sensitivity": route["sensitivity"],
+            "stability": route["stability"],
+            "evidence_quality": route["evidence_quality"],
+            "auto_write_allowed": False,
             "user_review_required": True,
         }
 
@@ -4601,6 +4743,30 @@ def propose_wiki_admin_page(
     key_facts = _admin_string_list(parsed.get("key_facts"), limit=8)
     slug = _admin_slug(str(parsed.get("slug") or ""), fallback_seed=f"{proposal_title} {source_text[:200]}")
     target_path = f"wiki/{partition}/{slug}.md"
+    stability = _admin_choice(
+        parsed.get("stability"),
+        {"ephemeral", "working", "durable"},
+        WIKI_ADMIN_STABILITY_BY_PARTITION.get(partition, "working"),
+    )
+    evidence_quality = _admin_choice(
+        parsed.get("evidence_quality"),
+        {"raw", "partial", "sufficient", "conflicting"},
+        "sufficient" if evidence_refs else "partial",
+    )
+    route = _admin_route_payload(
+        partition=partition,
+        should_write=True,
+        title=proposal_title,
+        summary=summary,
+        rationale=str(parsed.get("rationale") or "").strip(),
+        target_path=target_path,
+        source_refs=normalized_source_refs,
+        input_kind=normalized_input_kind,
+        stability=stability,
+        sensitivity="low",
+        evidence_quality=evidence_quality,
+        primary_route="wiki",
+    )
     body = _admin_body_with_required_sections(str(parsed.get("body_markdown") or ""), summary, evidence_refs, key_facts)
     fm_lines = [
         "owner: human",
@@ -4635,7 +4801,14 @@ def propose_wiki_admin_page(
         "aliases": aliases,
         "tags": tags,
         "key_facts": key_facts,
+        "source_refs": normalized_source_refs,
         "evidence_refs": evidence_refs or [source or "user-provided text"],
+        "route": route,
+        "primary_route": route["primary_route"],
+        "sensitivity": route["sensitivity"],
+        "stability": route["stability"],
+        "evidence_quality": route["evidence_quality"],
+        "auto_write_allowed": False,
         "wiki_markdown": wiki_markdown,
         "user_review_required": True,
     }

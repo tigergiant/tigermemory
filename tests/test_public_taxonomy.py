@@ -69,3 +69,37 @@ def test_provider_docs_do_not_overclaim_anthropic_native_support() -> None:
     ]
     assert all(claim not in texts for claim in forbidden_claims)
     assert "anthropic-native apis are not claimed" in texts
+
+
+def test_public_templates_are_starter_not_private_project_canvas() -> None:
+    template_root = Path("packages/tigermemory-publish/src/tigermemory_publish/templates")
+    texts = "\n".join(
+        [
+            (template_root / "README.md").read_text(encoding="utf-8"),
+            (template_root / "index.md").read_text(encoding="utf-8"),
+        ]
+    )
+
+    assert "项目画布" not in texts
+    assert "Where Notes Go" in texts
+    assert "15-Minute First Run" in texts
+
+
+def test_public_agent_templates_default_to_reader_only() -> None:
+    template_root = Path("packages/tigermemory-publish/src/tigermemory_publish/templates")
+    codex_config = (template_root / ".codex" / "config.toml.example").read_text(encoding="utf-8")
+    mcp_json = (template_root / "docs" / "examples" / "mcp" / "tigermemory-reader.mcp.json").read_text(
+        encoding="utf-8"
+    )
+    hook_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((template_root / "docs" / "examples" / "hooks").glob("*.ps1"))
+    )
+
+    assert "--role=reader" in codex_config
+    assert "--tool-profile=memory" in codex_config
+    assert "--role=reader" in mcp_json
+    assert "--tool-profile=memory" in mcp_json
+    assert "tm admin approve is human-only" in hook_text
+    assert "api_key" not in hook_text.lower()
+    assert "bearer" not in hook_text.lower()

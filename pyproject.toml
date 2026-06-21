@@ -49,4 +49,11 @@ where = [
 ]
 
 [tool.setuptools.package-data]
-tigermemory_publish = ["templates/*", "templates/wiki/operations/*.md"]
+tigermemory_publish = [
+  "templates/*",
+  "templates/.codex/*",
+  "templates/docs/*.md",
+  "templates/docs/examples/hooks/*",
+  "templates/docs/examples/mcp/*",
+  "templates/wiki/*/*.md",
+]

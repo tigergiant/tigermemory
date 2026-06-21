@@ -161,17 +161,42 @@ PUBLIC_MODULES: tuple[PublishModule, ...] = (
         package_roots=("packages/tigermemory-publish/src",),
         mapped_files=(
             ("packages/tigermemory-publish/src/tigermemory_publish/templates/AGENTS.md", "AGENTS.md"),
+            ("packages/tigermemory-publish/src/tigermemory_publish/templates/CLAUDE.md", "CLAUDE.md"),
             ("packages/tigermemory-publish/src/tigermemory_publish/templates/index.md", "index.md"),
             ("packages/tigermemory-publish/src/tigermemory_publish/templates/LICENSE", "LICENSE"),
             (
                 "packages/tigermemory-publish/src/tigermemory_publish/templates/THIRD_PARTY_NOTICES.md",
                 "THIRD_PARTY_NOTICES.md",
             ),
+            (
+                "packages/tigermemory-publish/src/tigermemory_publish/templates/.codex/config.toml.example",
+                ".codex/config.toml.example",
+            ),
             ("packages/tigermemory-publish/src/tigermemory_publish/templates/pyproject.toml", "pyproject.toml"),
             ("packages/tigermemory-publish/src/tigermemory_publish/templates/README.md", "README.md"),
             (
+                "packages/tigermemory-publish/src/tigermemory_publish/templates/docs/advanced-agent-setup.md",
+                "docs/advanced-agent-setup.md",
+            ),
+            (
+                "packages/tigermemory-publish/src/tigermemory_publish/templates/docs/connect-your-ai-tools.md",
+                "docs/connect-your-ai-tools.md",
+            ),
+            (
                 "packages/tigermemory-publish/src/tigermemory_publish/templates/docs/provider-compatibility.md",
                 "docs/provider-compatibility.md",
+            ),
+            (
+                "packages/tigermemory-publish/src/tigermemory_publish/templates/docs/examples/hooks/pre_tool_use.example.ps1",
+                "docs/examples/hooks/pre_tool_use.example.ps1",
+            ),
+            (
+                "packages/tigermemory-publish/src/tigermemory_publish/templates/docs/examples/hooks/post_tool_use.example.ps1",
+                "docs/examples/hooks/post_tool_use.example.ps1",
+            ),
+            (
+                "packages/tigermemory-publish/src/tigermemory_publish/templates/docs/examples/mcp/tigermemory-reader.mcp.json",
+                "docs/examples/mcp/tigermemory-reader.mcp.json",
             ),
         ),
         tool_files=("tools/tm_publish.py",),

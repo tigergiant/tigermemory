@@ -75,6 +75,23 @@ The reviewable Wiki Admin proposal flow defaults to `deepseek-v4-pro` through
 `DEEPSEEK_ADMIN_MODEL`, because those drafts become long-term knowledge after
 human approval.
 
+## 15-Minute First Run
+
+Use this first-run path when you want to see the full AI Wiki Admin loop without
+any advanced services:
+
+1. Install from this checkout with `py -m pip install -e .`.
+2. Run `tm init`, then confirm `tm profile show` prints `effective=local`.
+3. Set `DEEPSEEK_API_KEY` for the recommended OpenAI-compatible provider.
+4. Run `tm llm status`; it should show that provider settings exist without
+   printing your key.
+5. Run `tm admin guide` and read the partition guide before writing anything.
+6. Put a short note in `notes.md`, then run `tm admin propose`.
+7. Inspect the proposal with `tm admin show "<proposal-id>"`.
+8. Approve only after checking the suggested partition and target path.
+9. Ask `tm ask --query "what did I just add?" --scope wiki` to verify the page
+   can be found with citations.
+
 Draft a reviewable Wiki proposal with the LLM Admin flow:
 
 ```powershell
@@ -121,7 +138,7 @@ model:
 
 ```powershell
 tm ask --offline --query "local memory" --scope all
-tm ask --offline --query "项目画布" --scope wiki
+tm ask --offline --query "agent behavior rules" --scope wiki
 ```
 
 Offline ask only returns local evidence from SQLite and Markdown. It does not
@@ -234,7 +251,8 @@ The public snapshot is assembled from declared public modules:
 - `public-dashboard`: local dashboard package and static assets; private
   review/promote tools are not shipped in public core.
 - `public-publish`: snapshot builder, audit, and release templates.
-- `public-wiki-seed`: starter project canvas and public wiki pages.
+- `public-wiki-seed`: seven beginner starter Wiki pages and the public
+  personal-knowledge taxonomy.
 
 Private dogfood modules and optional hybrid integrations are intentionally not
 part of the basic public snapshot.

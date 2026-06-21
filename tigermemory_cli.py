@@ -423,10 +423,14 @@ def _admin_write_proposal(data: dict) -> pathlib.Path:
 def _admin_target_path(data: dict) -> pathlib.Path:
     target = str(data.get("target_path") or "")
     normalized = target.replace("\\", "/").strip("/")
-    if not normalized.startswith("wiki/") or "/../" in f"/{normalized}/":
+    parts = normalized.split("/")
+    if len(parts) < 3 or parts[0] != "wiki" or "/../" in f"/{normalized}/":
         raise ValueError("proposal target_path must stay under wiki/")
-    if normalized.startswith("wiki/person/"):
-        raise ValueError("person pages are not supported by the public Wiki Admin flow")
+    if parts[1] not in ADMIN_PARTITIONS:
+        raise ValueError(f"proposal target partition is not supported by the public Wiki Admin flow: {parts[1]}")
+    route = data.get("route") if isinstance(data.get("route"), dict) else {}
+    if route.get("auto_write_allowed") is not False:
+        raise ValueError("proposal route must be human-review only with auto_write_allowed=false")
     path = (REPO_ROOT / normalized).resolve()
     root = REPO_ROOT.resolve()
     if root not in [path.parent, *path.parents]:
@@ -477,6 +481,8 @@ def cmd_admin(args: argparse.Namespace) -> int:
                 partition=args.partition,
                 title=args.title,
                 source=str(source.get("path") or source.get("kind") or "stdin"),
+                source_refs=[source],
+                input_kind="file_excerpt" if source.get("kind") == "file" else "manual_note",
                 timeout=args.timeout,
             )
         except ValueError as e:

@@ -28,7 +28,14 @@ test = ["pytest>=7"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-tigermemory_publish = ["templates/*.md"]
+tigermemory_publish = [
+  "templates/*",
+  "templates/.codex/*",
+  "templates/docs/*.md",
+  "templates/docs/examples/hooks/*",
+  "templates/docs/examples/mcp/*",
+  "templates/wiki/*/*.md",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
