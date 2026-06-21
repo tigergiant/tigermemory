@@ -29,6 +29,9 @@ from typing import Iterable
 from zoneinfo import ZoneInfo
 
 def _detect_repo_root() -> pathlib.Path:
+    explicit = os.environ.get("TIGERMEMORY_INSTANCE_ROOT")
+    if explicit:
+        return pathlib.Path(explicit).resolve()
     explicit = os.environ.get("TIGERMEMORY_ROOT")
     if explicit:
         return pathlib.Path(explicit).resolve()
@@ -46,13 +49,16 @@ def _detect_repo_root() -> pathlib.Path:
 
 REPO_ROOT = _detect_repo_root()
 
-SOURCE_PATHS = [
+OPTIONAL_SOURCE_PATHS = [
     "AGENTS.md",
+]
+REQUIRED_SOURCE_PATHS = [
     "wiki/systems/tigermemory-agent-access.md",
     "wiki/systems/agent-write-toolkit.md",
     "wiki/self-evolution/lessons/index.md",
     "wiki/systems/services-inventory.md",
 ]
+SOURCE_PATHS = OPTIONAL_SOURCE_PATHS + REQUIRED_SOURCE_PATHS
 SNAPSHOT_PAGE = "wiki/systems/agent-onboarding.md"
 AGENT_CONTEXT_PACK = "runtime/agent-context/latest.json"
 SNAPSHOT_PAGE_REQUIRED_PHRASES = [
@@ -338,7 +344,7 @@ def compile_snapshot(depth: str = "5min") -> str:
 
     # Fail early if required sources are missing. The current renderer is
     # deterministic, but these reads keep the output grounded in repo truth.
-    for rel in SOURCE_PATHS:
+    for rel in REQUIRED_SOURCE_PATHS:
         _read_source(rel)
 
     lessons = load_lessons()
@@ -384,7 +390,7 @@ def cmd_check(_args: argparse.Namespace) -> int:
     import subprocess
 
     all_ok = True
-    tracked_paths = SOURCE_PATHS + [SNAPSHOT_PAGE]
+    tracked_paths = REQUIRED_SOURCE_PATHS + [SNAPSHOT_PAGE]
     for rel in tracked_paths:
         path = REPO_ROOT / rel
         if not path.exists():
@@ -401,6 +407,20 @@ def cmd_check(_args: argparse.Namespace) -> int:
         except subprocess.CalledProcessError:
             print(f"UNTRACKED {rel}", file=sys.stderr)
             all_ok = False
+    for rel in OPTIONAL_SOURCE_PATHS:
+        path = REPO_ROOT / rel
+        if not path.exists():
+            print(f"OPTIONAL_MISSING {rel}")
+            continue
+        try:
+            subprocess.check_output(
+                ["git", "ls-files", "--error-unmatch", rel],
+                cwd=REPO_ROOT,
+                stderr=subprocess.STDOUT,
+            )
+            print(f"OK      {rel}")
+        except subprocess.CalledProcessError:
+            print(f"OPTIONAL_UNTRACKED {rel}")
     snapshot_text = _read_source(SNAPSHOT_PAGE) if (REPO_ROOT / SNAPSHOT_PAGE).exists() else ""
     for phrase in SNAPSHOT_PAGE_REQUIRED_PHRASES:
         if phrase not in snapshot_text:

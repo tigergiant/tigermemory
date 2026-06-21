@@ -188,10 +188,20 @@ def test_cmd_check_exits_zero_and_lists_sources():
 
     args = argparse.Namespace()
     rc = tm_persona.cmd_check(args)
-    # In a clean git checkout all SOURCE_PATHS should be tracked
+    # In a true-split checkout, required sources stay tracked; local AGENTS.md
+    # can be private instance data and ignored by Git.
     assert rc == 0, f"cmd_check returned {rc}; expected 0 in tracked repo"
 
 
 def test_snapshot_page_required_phrases_are_declared():
     assert tm_persona.SNAPSHOT_PAGE == "wiki/systems/agent-onboarding.md"
     assert "继续开发条件" in tm_persona.SNAPSHOT_PAGE_REQUIRED_PHRASES
+
+
+def test_detect_repo_root_prefers_instance_root(tmp_path, monkeypatch):
+    instance_root = tmp_path / "instance"
+    legacy_root = tmp_path / "legacy"
+    monkeypatch.setenv("TIGERMEMORY_INSTANCE_ROOT", str(instance_root))
+    monkeypatch.setenv("TIGERMEMORY_ROOT", str(legacy_root))
+
+    assert tm_persona._detect_repo_root() == instance_root.resolve()

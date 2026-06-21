@@ -194,7 +194,8 @@ def test_cmd_check_exits_zero_and_lists_sources():
 
     args = argparse.Namespace()
     rc = tigermemory_persona.cmd_check(args)
-    # In a clean git checkout all SOURCE_PATHS should be tracked
+    # In a true-split checkout, required sources stay tracked; local AGENTS.md
+    # can be private instance data and ignored by Git.
     assert rc == 0, f"cmd_check returned {rc}; expected 0 in tracked repo"
 
 
@@ -207,6 +208,15 @@ def test_detect_repo_root_honors_env(tmp_path, monkeypatch):
     monkeypatch.setenv("TIGERMEMORY_ROOT", str(tmp_path))
 
     assert tigermemory_persona._detect_repo_root() == tmp_path.resolve()
+
+
+def test_detect_repo_root_prefers_instance_root(tmp_path, monkeypatch):
+    instance_root = tmp_path / "instance"
+    legacy_root = tmp_path / "legacy"
+    monkeypatch.setenv("TIGERMEMORY_INSTANCE_ROOT", str(instance_root))
+    monkeypatch.setenv("TIGERMEMORY_ROOT", str(legacy_root))
+
+    assert tigermemory_persona._detect_repo_root() == instance_root.resolve()
 
 
 def test_detect_repo_root_accepts_git_file_worktree(tmp_path, monkeypatch):
