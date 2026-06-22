@@ -4237,91 +4237,114 @@ def save_start_llm_config(req: StartLlmConfigRequest) -> dict[str, Any]:
     }
 
 
+def _agent_software(
+    id: str,
+    label: str,
+    *,
+    support: str = "planned",
+    target: str = "",
+    commands: tuple[str, ...] = (),
+    paths: tuple[tuple[str, ...], ...] = (),
+    glob_paths: tuple[tuple[str, ...], ...] = (),
+) -> dict[str, Any]:
+    return {
+        "id": id,
+        "label": label,
+        "support": support,
+        "target": target,
+        "commands": commands,
+        "paths": paths,
+        "glob_paths": glob_paths,
+    }
+
+
 AGENT_SOFTWARE_CATALOG: tuple[dict[str, Any], ...] = (
-    {
-        "id": "codex",
-        "label": "Codex",
-        "support": "supported",
-        "target": "codex",
-        "commands": ("codex",),
-        "paths": (("USERPROFILE", ".codex"), ("APPDATA", "npm", "codex.cmd")),
-    },
-    {
-        "id": "claude-code",
-        "label": "Claude Code",
-        "support": "supported",
-        "target": "claude-code",
-        "commands": ("claude",),
-        "paths": (
+    # TigerMemory one-click project-rule targets.
+    _agent_software(
+        "codex",
+        "Codex",
+        support="supported",
+        target="codex",
+        commands=("codex",),
+        paths=(("USERPROFILE", ".codex"), ("APPDATA", "npm", "codex.cmd")),
+    ),
+    _agent_software(
+        "claude-code",
+        "Claude Code",
+        support="supported",
+        target="claude-code",
+        commands=("claude",),
+        paths=(
             ("USERPROFILE", ".claude"),
             ("LOCALAPPDATA", "ClaudeCodeOfficial"),
             ("APPDATA", "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"),
         ),
-    },
-    {
-        "id": "cursor",
-        "label": "Cursor",
-        "support": "supported",
-        "target": "cursor",
-        "commands": (),
-        "paths": (("APPDATA", "Cursor"), ("LOCALAPPDATA", "Programs", "Cursor", "Cursor.exe"), ("USERPROFILE", ".cursor")),
-    },
-    {
-        "id": "gemini",
-        "label": "Gemini CLI",
-        "support": "planned",
-        "target": "",
-        "commands": ("gemini",),
-        "paths": (("USERPROFILE", ".gemini"), ("APPDATA", "npm", "gemini.cmd")),
-    },
-    {
-        "id": "antigravity",
-        "label": "Antigravity",
-        "support": "planned",
-        "target": "",
-        "commands": (),
-        "paths": (("USERPROFILE", ".gemini", "antigravity"), ("APPDATA", "Antigravity"), ("LOCALAPPDATA", "Antigravity")),
-    },
-    {
-        "id": "windsurf",
-        "label": "Windsurf",
-        "support": "planned",
-        "target": "",
-        "commands": (),
-        "paths": (("APPDATA", "Windsurf"), ("LOCALAPPDATA", "Programs", "Windsurf"), ("USERPROFILE", ".codeium")),
-    },
-    {
-        "id": "opencode",
-        "label": "OpenCode",
-        "support": "planned",
-        "target": "",
-        "commands": ("opencode",),
-        "paths": (("USERPROFILE", ".opencode"), ("APPDATA", "opencode"), ("LOCALAPPDATA", "opencode")),
-    },
-    {
-        "id": "resonmix",
-        "label": "Resonmix",
-        "support": "planned",
-        "target": "",
-        "commands": (),
-        "paths": (("APPDATA", "Resonmix"), ("LOCALAPPDATA", "Resonmix"), ("USERPROFILE", ".resonmix")),
-    },
-    {
-        "id": "trae",
-        "label": "Trae",
-        "support": "planned",
-        "target": "",
-        "commands": (),
-        "paths": (("APPDATA", "Trae"), ("LOCALAPPDATA", "Programs", "Trae"), ("USERPROFILE", ".trae")),
-    },
-    {
-        "id": "zcode",
-        "label": "Zcode",
-        "support": "planned",
-        "target": "",
-        "commands": (),
-        "paths": (("APPDATA", "Zcode"), ("LOCALAPPDATA", "Programs", "Zcode"), ("USERPROFILE", ".zcode")),
-    },
+    ),
+    _agent_software(
+        "cursor",
+        "Cursor",
+        support="supported",
+        target="cursor",
+        paths=(("APPDATA", "Cursor"), ("LOCALAPPDATA", "Programs", "Cursor", "Cursor.exe"), ("USERPROFILE", ".cursor")),
+    ),
+    # AI-native IDEs and coding agents.
+    _agent_software("gemini", "Gemini CLI", commands=("gemini",), paths=(("USERPROFILE", ".gemini"), ("APPDATA", "npm", "gemini.cmd"))),
+    _agent_software("antigravity", "Antigravity", paths=(("USERPROFILE", ".gemini", "antigravity"), ("APPDATA", "Antigravity"), ("LOCALAPPDATA", "Antigravity"))),
+    _agent_software("windsurf", "Windsurf", paths=(("APPDATA", "Windsurf"), ("LOCALAPPDATA", "Programs", "Windsurf"), ("USERPROFILE", ".codeium"))),
+    _agent_software("opencode", "OpenCode", commands=("opencode",), paths=(("USERPROFILE", ".opencode"), ("APPDATA", "opencode"), ("LOCALAPPDATA", "opencode"))),
+    _agent_software("resonmix", "Resonmix", paths=(("APPDATA", "Resonmix"), ("LOCALAPPDATA", "Resonmix"), ("USERPROFILE", ".resonmix"))),
+    _agent_software("trae", "Trae", paths=(("APPDATA", "Trae"), ("LOCALAPPDATA", "Programs", "Trae"), ("USERPROFILE", ".trae"))),
+    _agent_software("zcode", "Zcode", paths=(("APPDATA", "Zcode"), ("LOCALAPPDATA", "Programs", "Zcode"), ("USERPROFILE", ".zcode"))),
+    _agent_software("zed", "Zed", commands=("zed",), paths=(("APPDATA", "Zed"), ("LOCALAPPDATA", "Programs", "Zed"), ("USERPROFILE", ".zed"))),
+    _agent_software("qoder", "Qoder", commands=("qoder",), paths=(("APPDATA", "Qoder"), ("LOCALAPPDATA", "Programs", "Qoder"), ("USERPROFILE", ".qoder"))),
+    _agent_software("kiro", "Kiro", commands=("kiro",), paths=(("APPDATA", "Kiro"), ("LOCALAPPDATA", "Programs", "Kiro"), ("USERPROFILE", ".kiro"))),
+    _agent_software("augment-code", "Augment Code", paths=(("APPDATA", "Augment"), ("USERPROFILE", ".augment")), glob_paths=(("USERPROFILE", ".vscode", "extensions", "augment*.vscode-augment-*"),)),
+    _agent_software("devin", "Devin", paths=(("APPDATA", "Devin"), ("LOCALAPPDATA", "Programs", "Devin"), ("USERPROFILE", ".devin"))),
+    _agent_software("replit-agent", "Replit Agent", commands=("replit",), paths=(("APPDATA", "Replit"), ("USERPROFILE", ".replit"))),
+    # Open-source and terminal coding agents.
+    _agent_software("aider", "Aider", commands=("aider",), paths=(("USERPROFILE", ".aider.conf.yml"), ("USERPROFILE", ".aider.model.settings.yml"))),
+    _agent_software("qwen-code", "Qwen Code", commands=("qwen", "qwen-code"), paths=(("USERPROFILE", ".qwen"), ("APPDATA", "npm", "qwen.cmd"))),
+    _agent_software("goose", "Goose", commands=("goose",), paths=(("USERPROFILE", ".config", "goose"), ("APPDATA", "goose"))),
+    _agent_software("openhands", "OpenHands", commands=("openhands",), paths=(("USERPROFILE", ".openhands"), ("APPDATA", "OpenHands"))),
+    # Mainstream IDEs and editors.
+    _agent_software("vscode", "Visual Studio Code", commands=("code",), paths=(("APPDATA", "Code"), ("LOCALAPPDATA", "Programs", "Microsoft VS Code", "Code.exe"), ("USERPROFILE", ".vscode"))),
+    _agent_software("vscode-insiders", "Visual Studio Code Insiders", commands=("code-insiders",), paths=(("APPDATA", "Code - Insiders"), ("LOCALAPPDATA", "Programs", "Microsoft VS Code Insiders", "Code - Insiders.exe"), ("USERPROFILE", ".vscode-insiders"))),
+    _agent_software("visual-studio", "Visual Studio", commands=("devenv",), paths=(("ProgramFiles", "Microsoft Visual Studio"), ("ProgramFiles(x86)", "Microsoft Visual Studio"))),
+    _agent_software("jetbrains-toolbox", "JetBrains Toolbox", paths=(("APPDATA", "JetBrains", "Toolbox"), ("LOCALAPPDATA", "JetBrains", "Toolbox"))),
+    _agent_software("intellij-idea", "IntelliJ IDEA", glob_paths=(("APPDATA", "JetBrains", "IntelliJIdea*"), ("LOCALAPPDATA", "JetBrains", "IntelliJIdea*"))),
+    _agent_software("pycharm", "PyCharm", glob_paths=(("APPDATA", "JetBrains", "PyCharm*"), ("LOCALAPPDATA", "JetBrains", "PyCharm*"))),
+    _agent_software("webstorm", "WebStorm", glob_paths=(("APPDATA", "JetBrains", "WebStorm*"), ("LOCALAPPDATA", "JetBrains", "WebStorm*"))),
+    _agent_software("goland", "GoLand", glob_paths=(("APPDATA", "JetBrains", "GoLand*"), ("LOCALAPPDATA", "JetBrains", "GoLand*"))),
+    _agent_software("clion", "CLion", glob_paths=(("APPDATA", "JetBrains", "CLion*"), ("LOCALAPPDATA", "JetBrains", "CLion*"))),
+    _agent_software("rider", "Rider", glob_paths=(("APPDATA", "JetBrains", "Rider*"), ("LOCALAPPDATA", "JetBrains", "Rider*"))),
+    _agent_software("phpstorm", "PhpStorm", glob_paths=(("APPDATA", "JetBrains", "PhpStorm*"), ("LOCALAPPDATA", "JetBrains", "PhpStorm*"))),
+    _agent_software("rustrover", "RustRover", glob_paths=(("APPDATA", "JetBrains", "RustRover*"), ("LOCALAPPDATA", "JetBrains", "RustRover*"))),
+    _agent_software("android-studio", "Android Studio", commands=("studio",), paths=(("ProgramFiles", "Android", "Android Studio")), glob_paths=(("APPDATA", "Google", "AndroidStudio*"), ("LOCALAPPDATA", "Google", "AndroidStudio*"))),
+    _agent_software("xcode", "Xcode", commands=("xcodebuild",)),
+    _agent_software("eclipse", "Eclipse", commands=("eclipse",), paths=(("USERPROFILE", "eclipse"), ("APPDATA", "Eclipse"))),
+    _agent_software("netbeans", "NetBeans", commands=("netbeans",), paths=(("APPDATA", "NetBeans"),), glob_paths=(("ProgramFiles", "NetBeans*"),)),
+    _agent_software("sublime-text", "Sublime Text", commands=("subl",), paths=(("APPDATA", "Sublime Text"), ("ProgramFiles", "Sublime Text"))),
+    _agent_software("notepadpp", "Notepad++", paths=(("APPDATA", "Notepad++"), ("ProgramFiles", "Notepad++"))),
+    _agent_software("vim", "Vim", commands=("vim", "gvim"), paths=(("ProgramFiles", "Vim"), ("USERPROFILE", "vimfiles"))),
+    _agent_software("neovim", "Neovim", commands=("nvim",), paths=(("LOCALAPPDATA", "nvim"), ("LOCALAPPDATA", "Programs", "Neovim"))),
+    _agent_software("emacs", "Emacs", commands=("emacs",), paths=(("USERPROFILE", ".emacs.d"), ("APPDATA", ".emacs.d"))),
+    _agent_software("vscodium", "VSCodium", commands=("codium",), paths=(("APPDATA", "VSCodium"), ("LOCALAPPDATA", "Programs", "VSCodium"))),
+    _agent_software("rstudio", "RStudio", commands=("rstudio",), paths=(("APPDATA", "RStudio"), ("ProgramFiles", "RStudio"))),
+    _agent_software("jupyter", "Jupyter", commands=("jupyter", "jupyter-lab", "jupyter-notebook"), paths=(("USERPROFILE", ".jupyter"),)),
+    # Editor extensions and domestic AI coding assistants.
+    _agent_software("github-copilot", "GitHub Copilot", glob_paths=(("USERPROFILE", ".vscode", "extensions", "github.copilot-*"), ("USERPROFILE", ".cursor", "extensions", "github.copilot-*"))),
+    _agent_software("continue-dev", "Continue", glob_paths=(("USERPROFILE", ".vscode", "extensions", "continue.continue-*"), ("USERPROFILE", ".cursor", "extensions", "continue.continue-*"))),
+    _agent_software("cline", "Cline", glob_paths=(("USERPROFILE", ".vscode", "extensions", "cline.cline-*"), ("USERPROFILE", ".vscode", "extensions", "saoudrizwan.claude-dev-*"), ("USERPROFILE", ".cursor", "extensions", "cline.cline-*"))),
+    _agent_software("roo-code", "Roo Code", glob_paths=(("USERPROFILE", ".vscode", "extensions", "rooveterinaryinc.roo-cline-*"), ("USERPROFILE", ".cursor", "extensions", "rooveterinaryinc.roo-cline-*"))),
+    _agent_software("kilo-code", "Kilo Code", glob_paths=(("USERPROFILE", ".vscode", "extensions", "kilocode.kilo-code-*"), ("USERPROFILE", ".cursor", "extensions", "kilocode.kilo-code-*"))),
+    _agent_software("sourcegraph-cody", "Sourcegraph Cody", glob_paths=(("USERPROFILE", ".vscode", "extensions", "sourcegraph.cody-ai-*"), ("USERPROFILE", ".cursor", "extensions", "sourcegraph.cody-ai-*"))),
+    _agent_software("tabnine", "Tabnine", glob_paths=(("USERPROFILE", ".vscode", "extensions", "tabnine.tabnine-vscode-*"), ("USERPROFILE", ".cursor", "extensions", "tabnine.tabnine-vscode-*"))),
+    _agent_software("codeium", "Codeium", paths=(("USERPROFILE", ".codeium"),), glob_paths=(("USERPROFILE", ".vscode", "extensions", "codeium.codeium-*"), ("USERPROFILE", ".cursor", "extensions", "codeium.codeium-*"))),
+    _agent_software("tongyi-lingma", "Tongyi Lingma", commands=("lingma",), paths=(("APPDATA", "Lingma"), ("USERPROFILE", ".lingma")), glob_paths=(("USERPROFILE", ".vscode", "extensions", "*lingma*"), ("USERPROFILE", ".cursor", "extensions", "*lingma*"))),
+    _agent_software("baidu-comate", "Baidu Comate", paths=(("APPDATA", "BaiduComate"), ("USERPROFILE", ".comate")), glob_paths=(("USERPROFILE", ".vscode", "extensions", "*comate*"), ("USERPROFILE", ".cursor", "extensions", "*comate*"))),
+    _agent_software("tencent-codebuddy", "Tencent CodeBuddy", commands=("codebuddy",), paths=(("APPDATA", "CodeBuddy"), ("USERPROFILE", ".codebuddy")), glob_paths=(("USERPROFILE", ".vscode", "extensions", "*codebuddy*"), ("USERPROFILE", ".cursor", "extensions", "*codebuddy*"))),
+    _agent_software("codegeex", "CodeGeeX", paths=(("APPDATA", "CodeGeeX"), ("USERPROFILE", ".codegeex")), glob_paths=(("USERPROFILE", ".vscode", "extensions", "*codegeex*"), ("USERPROFILE", ".cursor", "extensions", "*codegeex*"))),
+    _agent_software("huawei-codearts", "Huawei CodeArts", paths=(("APPDATA", "CodeArts"), ("USERPROFILE", ".codearts"), ("ProgramFiles", "Huawei", "CodeArts IDE"))),
 )
 
 
@@ -4332,6 +4355,16 @@ def _agent_scan_path(parts: tuple[str, ...]) -> pathlib.Path | None:
     if not base:
         return None
     return pathlib.Path(base).joinpath(*parts[1:])
+
+
+def _agent_scan_glob(parts: tuple[str, ...]) -> list[pathlib.Path]:
+    candidate = _agent_scan_path(parts)
+    if candidate is None:
+        return []
+    parent = candidate.parent
+    if not parent.exists():
+        return []
+    return sorted(parent.glob(candidate.name))[:3]
 
 
 def _scan_installed_agent_software() -> dict[str, Any]:
@@ -4345,6 +4378,11 @@ def _scan_installed_agent_software() -> dict[str, Any]:
             candidate = _agent_scan_path(tuple(path_parts))
             if candidate and candidate.exists():
                 signals.append(str(candidate))
+        for glob_parts in item.get("glob_paths", ()):
+            for candidate in _agent_scan_glob(tuple(glob_parts)):
+                signals.append(str(candidate))
+                if len(signals) >= 3:
+                    break
         installed = bool(signals)
         rows.append(
             {

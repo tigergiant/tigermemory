@@ -1121,12 +1121,22 @@ def test_start_agent_connect_status_api(tmp_path, monkeypatch):
     home = tmp_path / "home"
     appdata = tmp_path / "appdata"
     localappdata = tmp_path / "localappdata"
+    programfiles = tmp_path / "programfiles"
+    programfiles_x86 = tmp_path / "programfiles_x86"
     (home / ".codex").mkdir(parents=True)
+    (home / ".vscode" / "extensions" / "github.copilot-1.0.0").mkdir(parents=True)
+    (home / ".vscode" / "extensions" / "continue.continue-1.0.0").mkdir(parents=True)
     (appdata / "Trae").mkdir(parents=True)
-    localappdata.mkdir()
+    (appdata / "JetBrains" / "Toolbox").mkdir(parents=True)
+    (appdata / "CodeGeeX").mkdir(parents=True)
+    (localappdata / "Programs" / "Microsoft VS Code").mkdir(parents=True)
+    (localappdata / "Programs" / "Microsoft VS Code" / "Code.exe").write_text("", encoding="utf-8")
+    localappdata.mkdir(exist_ok=True)
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("APPDATA", str(appdata))
     monkeypatch.setenv("LOCALAPPDATA", str(localappdata))
+    monkeypatch.setenv("ProgramFiles", str(programfiles))
+    monkeypatch.setenv("ProgramFiles(x86)", str(programfiles_x86))
     monkeypatch.setenv("PATH", "")
     (tmp_path / "wiki" / "systems").mkdir(parents=True)
     (tmp_path / "tigermemory_cli.py").write_text("# cli\n", encoding="utf-8")
@@ -1140,12 +1150,51 @@ def test_start_agent_connect_status_api(tmp_path, monkeypatch):
     assert data["action"] == "status"
     assert any(row["target"] == "codex" for row in data["targets"])
     installed = {row["id"]: row for row in data["installed_agents"]}
-    assert {"codex", "claude-code", "gemini", "antigravity", "windsurf", "cursor", "opencode", "resonmix", "trae", "zcode"} <= set(installed)
+    expected_ids = {
+        "codex",
+        "claude-code",
+        "gemini",
+        "antigravity",
+        "windsurf",
+        "cursor",
+        "opencode",
+        "resonmix",
+        "trae",
+        "zcode",
+        "vscode",
+        "visual-studio",
+        "jetbrains-toolbox",
+        "intellij-idea",
+        "pycharm",
+        "android-studio",
+        "eclipse",
+        "notepadpp",
+        "zed",
+        "qoder",
+        "kiro",
+        "aider",
+        "qwen-code",
+        "github-copilot",
+        "continue-dev",
+        "cline",
+        "roo-code",
+        "tongyi-lingma",
+        "baidu-comate",
+        "tencent-codebuddy",
+        "codegeex",
+        "huawei-codearts",
+    }
+    assert expected_ids <= set(installed)
     assert installed["codex"]["installed"] is True
     assert installed["codex"]["support"] == "supported"
     assert installed["trae"]["installed"] is True
     assert installed["trae"]["support"] == "planned"
-    assert data["software_scan"]["installed_count"] == 2
+    assert installed["vscode"]["installed"] is True
+    assert installed["jetbrains-toolbox"]["installed"] is True
+    assert installed["github-copilot"]["installed"] is True
+    assert installed["continue-dev"]["installed"] is True
+    assert installed["codegeex"]["installed"] is True
+    assert data["software_scan"]["installed_count"] == 7
 
 
 def test_start_agent_connect_apply_api_writes_project_rules(tmp_path, monkeypatch):
