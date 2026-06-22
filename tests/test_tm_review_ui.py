@@ -5,6 +5,7 @@ import pathlib
 import sys
 import builtins
 import datetime as dt
+from html.parser import HTMLParser
 
 from fastapi.testclient import TestClient
 
@@ -1164,6 +1165,46 @@ def test_start_page_i18n_keys_are_complete():
     assert keys
     assert sorted(keys - set(data["zh"])) == []
     assert sorted(keys - set(data["en"])) == []
+
+
+class _OnboardingVisualI18nAudit(HTMLParser):
+    VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stack: list[dict[str, bool]] = []
+        self.unbound_cjk: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:  # type: ignore[no-untyped-def]
+        attr = dict(attrs)
+        parent = self.stack[-1] if self.stack else {"target_slide": False, "visual": False, "i18n": False}
+        class_names = set(str(attr.get("class", "")).split())
+        slide = str(attr.get("data-onboarding-slide", ""))
+        target_slide = parent["target_slide"] or slide in {"3", "4", "5", "6"}
+        visual = parent["visual"] or ("onboarding-visual" in class_names and target_slide)
+        i18n = parent["i18n"] or bool(attr.get("data-i18n"))
+        if tag not in self.VOID_TAGS:
+            self.stack.append({"target_slide": target_slide, "visual": visual, "i18n": i18n})
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.stack:
+            self.stack.pop()
+
+    def handle_data(self, data: str) -> None:
+        if not self.stack:
+            return
+        current = self.stack[-1]
+        text = data.strip()
+        if current["target_slide"] and current["visual"] and text and any("\u3400" <= char <= "\u9fff" for char in text) and not current["i18n"]:
+            self.unbound_cjk.append(text)
+
+
+def test_start_late_slide_visual_text_is_i18n_bound():
+    html = (tm_review_ui.STATIC_DIR / "start.html").read_text(encoding="utf-8")
+    audit = _OnboardingVisualI18nAudit()
+    audit.feed(html)
+
+    assert audit.unbound_cjk == []
 
 
 def test_start_dynamic_onboarding_i18n_keys_are_complete():

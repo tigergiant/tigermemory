@@ -508,29 +508,29 @@
 
         <article class="onboarding-slide" data-onboarding-slide="3">
           <div>
-            <div class="onboarding-kicker"><i data-lucide="key-round" class="h-4 w-4"></i> 连接 LLM</div>
-            <h2 class="onboarding-title">连接一个你自己的模型</h2>
-            <p class="onboarding-copy">推荐先用 DeepSeek。API Key 只会保存到本机 runtime 配置，不上传，也不会写进 Git；保存后 TigerMemory 就能直接读取这组模型配置。</p>
+            <div class="onboarding-kicker"><i data-lucide="key-round" class="h-4 w-4"></i> <span data-i18n="start.llm.kicker">连接 LLM</span></div>
+            <h2 class="onboarding-title" data-i18n="start.llm.title">连接一个你自己的模型</h2>
+            <p class="onboarding-copy" data-i18n="start.llm.copy">推荐先用 DeepSeek。API Key 只会保存到本机 runtime 配置，不上传，也不会写进 Git；保存后 TigerMemory 就能直接读取这组模型配置。</p>
             <div class="mt-5 grid gap-3">
-              <div class="rounded-lg border border-[#d2b56b] bg-[#fffaf0] px-3 py-2 text-sm text-[#8a6b1f]" id="llm-config-status">正在读取模型连接状态...</div>
-              <label class="text-sm font-bold text-[#4a443d]">模型服务</label>
+              <div class="rounded-lg border border-[#d2b56b] bg-[#fffaf0] px-3 py-2 text-sm text-[#8a6b1f]" id="llm-config-status" data-i18n="start.llm.status_loading">正在读取模型连接状态...</div>
+              <label class="text-sm font-bold text-[#4a443d]" data-i18n="start.llm.provider_label">模型服务</label>
               <select id="llm-provider" class="wizard-input">
-                <option value="deepseek">DeepSeek（推荐）</option>
-                <option value="openai_compatible">OpenAI-compatible（高级）</option>
+                <option value="deepseek" data-i18n="start.llm.deepseek_option">DeepSeek（推荐）</option>
+                <option value="openai_compatible" data-i18n="start.llm.openai_option">OpenAI-compatible（高级）</option>
               </select>
-              <label class="text-sm font-bold text-[#4a443d]">API Key</label>
+              <label class="text-sm font-bold text-[#4a443d]" data-i18n="start.llm.api_key_label">API Key</label>
               <input id="llm-api-key" class="wizard-input" type="password" autocomplete="off" placeholder="sk-...">
-              <label class="text-sm font-bold text-[#4a443d]">接口地址</label>
+              <label class="text-sm font-bold text-[#4a443d]" data-i18n="start.llm.base_url_label">接口地址</label>
               <input id="llm-base-url" class="wizard-input" value="https://api.deepseek.com/v1/chat/completions">
-              <label class="text-sm font-bold text-[#4a443d]">日常模型</label>
+              <label class="text-sm font-bold text-[#4a443d]" data-i18n="start.llm.routine_model_label">日常模型</label>
               <input id="llm-model" class="wizard-input" value="deepseek-v4-flash">
-              <label class="text-sm font-bold text-[#4a443d]">管理模型</label>
+              <label class="text-sm font-bold text-[#4a443d]" data-i18n="start.llm.admin_model_label">管理模型</label>
               <input id="llm-admin-model" class="wizard-input" value="deepseek-v4-pro">
-              <p class="text-xs leading-5 text-[#8a8275]" id="llm-provider-help">日常模型负责问答和路由；管理模型负责整理 Wiki 和生成待审核提案。Anthropic 原生接口暂不承诺，需通过已验证的 OpenAI-compatible 网关接入。</p>
+              <p class="text-xs leading-5 text-[#8a8275]" id="llm-provider-help" data-i18n="start.llm.deepseek.help">日常模型负责问答和路由；管理模型负责整理 Wiki 和生成待审核提案。</p>
               <pre class="wizard-command" id="llm-command-preview"></pre>
               <div class="flex flex-wrap gap-3">
-                <button type="button" class="wizard-nav-button primary" id="save-llm-config">保存并接入 TigerMemory</button>
-                <button type="button" class="wizard-nav-button" id="copy-llm-command">复制手动配置命令</button>
+                <button type="button" class="wizard-nav-button primary" id="save-llm-config" data-i18n="start.llm.save_button">保存并接入 TigerMemory</button>
+                <button type="button" class="wizard-nav-button" id="copy-llm-command" data-i18n="start.llm.copy_command">复制手动配置命令</button>
               </div>
             </div>
           </div>
@@ -563,13 +563,13 @@
 
         <article class="onboarding-slide" data-onboarding-slide="4">
           <div>
-            <div class="onboarding-kicker"><i data-lucide="bot" class="h-4 w-4"></i> 连接 AI 工具</div>
-            <h2 class="onboarding-title">把默认规则交给你的 AI</h2>
-            <p class="onboarding-copy">TigerMemory 已经内置了 Codex、Claude Code、Cursor 和 hooks 的项目模板。点击下面的按钮，只是把这些默认模板写进当前项目；它不会改你的全局 Codex、Claude 或 Cursor 配置。</p>
+            <div class="onboarding-kicker"><i data-lucide="bot" class="h-4 w-4"></i> <span data-i18n="start.agent.kicker">连接 AI 工具</span></div>
+            <h2 class="onboarding-title" data-i18n="start.agent.title">把默认规则交给你的 AI</h2>
+            <p class="onboarding-copy" data-i18n="start.agent.copy">TigerMemory 已经内置了 Codex、Claude Code、Cursor 和 hooks 的项目模板。点击下面的按钮，只是把这些默认模板写进当前项目；它不会改你的全局 Codex、Claude 或 Cursor 配置。</p>
             <div class="mt-5 grid gap-3">
-              <div class="rounded-lg border border-[#d2b56b] bg-[#fffaf0] px-3 py-2 text-sm text-[#8a6b1f]" id="agent-connect-summary">正在读取 AI 接入状态...</div>
-              <div class="rounded-lg border border-[#e2d6b7] bg-[#fffaf0] px-3 py-2 text-xs leading-5 text-[#8a8275]">这些是现成默认模板，不需要你手写。写入后，AI 会先查本地证据、用提案写 Wiki、把最终批准权留给你。</div>
-              <button type="button" class="wizard-nav-button primary w-fit" id="apply-agent-connect">写入默认项目规则</button>
+              <div class="rounded-lg border border-[#d2b56b] bg-[#fffaf0] px-3 py-2 text-sm text-[#8a6b1f]" id="agent-connect-summary" data-i18n="start.agent.status_loading">正在读取 AI 接入状态...</div>
+              <div class="rounded-lg border border-[#e2d6b7] bg-[#fffaf0] px-3 py-2 text-xs leading-5 text-[#8a8275]" data-i18n="start.agent.template_note">这些是现成默认模板，不需要你手写。写入后，AI 会先查本地证据、用提案写 Wiki、把最终批准权留给你。</div>
+              <button type="button" class="wizard-nav-button primary w-fit" id="apply-agent-connect" data-i18n="start.agent.apply_button">写入默认项目规则</button>
               <button type="button" class="copy-command text-left" data-copy-command="tm agent status">tm agent status</button>
             </div>
           </div>
@@ -584,7 +584,7 @@
                   <span class="status-pill" id="agent-preview-state">-</span>
                 </div>
                 <div class="grid gap-3" id="agent-connect-list">
-                  <div class="wizard-card">正在检查 AGENTS、CLAUDE、Cursor 规则和 Hooks 模板...</div>
+                  <div class="wizard-card" data-i18n="start.agent.loading_card">正在检查 AGENTS、CLAUDE、Cursor 规则和 Hooks 模板...</div>
                 </div>
               </div>
             </div>
@@ -593,27 +593,27 @@
 
         <article class="onboarding-slide" data-onboarding-slide="5">
           <div>
-            <div class="onboarding-kicker"><i data-lucide="layout-dashboard" class="h-4 w-4"></i> 认识控制台</div>
-            <h2 class="onboarding-title">先认识几个常用入口</h2>
-            <p class="onboarding-copy">刚开始只看运行检查、AI 连接和偏好设置就够了。待确认、记忆质量和项目进展，会在你持续使用后慢慢派上用场。</p>
+            <div class="onboarding-kicker"><i data-lucide="layout-dashboard" class="h-4 w-4"></i> <span data-i18n="start.dashboard.kicker">认识控制台</span></div>
+            <h2 class="onboarding-title" data-i18n="start.dashboard.onboarding_title">先认识几个常用入口</h2>
+            <p class="onboarding-copy" data-i18n="start.dashboard.onboarding_copy">刚开始只看运行检查、AI 连接和偏好设置就够了。待确认、记忆质量和项目进展，会在你持续使用后慢慢派上用场。</p>
           </div>
           <div class="onboarding-visual p-5">
             <div class="grid gap-3 sm:grid-cols-2">
-              <a class="page-link-card" href="/health"><b>运行检查</b><br><span class="text-sm text-[#8a8275]">确认本机能不能正常工作。</span></a>
-              <a class="page-link-card" href="/agent-tools"><b>AI 连接</b><br><span class="text-sm text-[#8a8275]">检查 IDE / MCP 接入。</span></a>
-              <a class="page-link-card" href="/settings"><b>偏好设置</b><br><span class="text-sm text-[#8a8275]">调整回复详细程度。</span></a>
-              <a class="page-link-card" href="/quality"><b>记忆质量</b><br><span class="text-sm text-[#8a8275]">看问答、分流和失败情况。</span></a>
-              <a class="page-link-card" href="/canvas"><b>项目进展</b><br><span class="text-sm text-[#8a8275]">了解 Wiki 里的项目地图。</span></a>
-              <a class="page-link-card" href="/digest"><b>今日待确认</b><br><span class="text-sm text-[#8a8275]">有待审内容后再处理。</span></a>
+              <a class="page-link-card" href="/health"><b data-i18n="start.dashboard.health_title">运行检查</b><br><span class="text-sm text-[#8a8275]" data-i18n="start.dashboard.health_desc">确认本机能不能正常工作。</span></a>
+              <a class="page-link-card" href="/agent-tools"><b data-i18n="start.dashboard.agent_title">AI 连接</b><br><span class="text-sm text-[#8a8275]" data-i18n="start.dashboard.agent_desc">检查 IDE / MCP 接入。</span></a>
+              <a class="page-link-card" href="/settings"><b data-i18n="start.dashboard.settings_title">偏好设置</b><br><span class="text-sm text-[#8a8275]" data-i18n="start.dashboard.settings_desc">调整回复详细程度。</span></a>
+              <a class="page-link-card" href="/quality"><b data-i18n="start.dashboard.quality_title">记忆质量</b><br><span class="text-sm text-[#8a8275]" data-i18n="start.dashboard.quality_desc">看问答、分流和失败情况。</span></a>
+              <a class="page-link-card" href="/canvas"><b data-i18n="start.dashboard.canvas_title">项目进展</b><br><span class="text-sm text-[#8a8275]" data-i18n="start.dashboard.canvas_desc">了解 Wiki 里的项目地图。</span></a>
+              <a class="page-link-card" href="/digest"><b data-i18n="start.dashboard.digest_title">今日待确认</b><br><span class="text-sm text-[#8a8275]" data-i18n="start.dashboard.digest_desc">有待审内容后再处理。</span></a>
             </div>
           </div>
         </article>
 
         <article class="onboarding-slide" data-onboarding-slide="6">
           <div>
-            <div class="onboarding-kicker"><i data-lucide="check-circle-2" class="h-4 w-4"></i> 准备开始</div>
-            <h2 class="onboarding-title">最后，试一次完整流程</h2>
-            <p class="onboarding-copy">下面几条命令会检查本地资料库、搜索、离线问答和控制台。都能跑通，就说明 TigerMemory 已经准备好了。</p>
+            <div class="onboarding-kicker"><i data-lucide="check-circle-2" class="h-4 w-4"></i> <span data-i18n="start.finish.kicker">准备开始</span></div>
+            <h2 class="onboarding-title" data-i18n="start.finish.title">最后，试一次完整流程</h2>
+            <p class="onboarding-copy" data-i18n="start.finish.copy">下面几条命令会检查本地资料库、搜索、离线问答和控制台。都能跑通，就说明 TigerMemory 已经准备好了。</p>
             <div class="mt-5 grid gap-2">
               <button type="button" class="copy-command" data-copy-command="tm init">tm init</button>
               <button type="button" class="copy-command" data-copy-command="tm profile show">tm profile show</button>
@@ -622,8 +622,8 @@
               <button type="button" class="copy-command" data-copy-command='tm ask --offline --query "agent behavior rules" --scope wiki'>tm ask --offline --query "agent behavior rules" --scope wiki</button>
             </div>
             <div class="mt-6 flex flex-wrap gap-3">
-              <a class="wizard-nav-button primary" href="/health" id="finish-onboarding">完成并进入运行检查</a>
-              <a class="wizard-nav-button" href="/agent-tools">查看 AI 连接</a>
+              <a class="wizard-nav-button primary" href="/health" id="finish-onboarding" data-i18n="start.finish.enter_health">完成并进入运行检查</a>
+              <a class="wizard-nav-button" href="/agent-tools" data-i18n="start.finish.view_agent">查看 AI 连接</a>
             </div>
           </div>
           <div class="onboarding-visual p-5">
