@@ -603,7 +603,6 @@ body.tm-is-updating main {
   .dashboard-motif,
   .stripe-motif,
   .tm-card-busy::after,
-  .tm-action-queue,
   .tm-action-queue__pulse,
   .tm-action-queue__bar span,
   .tm-action-queue__bar span::after,
@@ -617,6 +616,11 @@ body.tm-is-updating main {
     transition: none !important;
     opacity: 1 !important;
     transform: none !important;
+  }
+
+  .tm-action-queue {
+    animation: none !important;
+    transition: none !important;
   }
 
   body.tm-page-ready main {

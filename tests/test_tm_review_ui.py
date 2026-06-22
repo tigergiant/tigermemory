@@ -1695,6 +1695,13 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     common_js = (tm_review_ui.STATIC_DIR / "dashboard-common.js").read_text(encoding="utf-8")
     assert "window.tmDashboardRouter" in common_js
     assert "path === '/start'" in common_js
+    assert "FULL_DOCUMENT_ROUTES = new Set(['/start'])" in common_js
+    assert "syncDocumentTitle(doc)" in common_js
+    assert "currentTitle.removeAttribute(attr.name)" in common_js
+    assert "nextTitle.attributes" in common_js
+    assert "isFullDocumentRoute(url)" in common_js
+    assert "document.body.dataset.page === 'start'" in common_js
+    assert "window.location.reload()" in common_js
     assert "tmDashboardRouter = {" in common_js
     assert "navigateTo(" in common_js
     assert "window.history.pushState" in common_js
@@ -3605,6 +3612,9 @@ def test_dashboard_action_controls_and_toast_static_guards():
     assert "actionTimeoutMs(action, count = 1)" in pages_js
     assert "45000 + itemCount * 30000" in pages_js
     assert "this.actionTimeoutMs(action, paths.length)" in pages_js
+    assert "this.closeWikiModal()" in pages_js
+    assert "resetActionQueueDock()" in pages_js
+    assert "dock.classList.remove('tm-action-queue--active', 'tm-action-queue--failed')" in pages_js
     assert "/api/inbox/batch-action" in pages_js
     assert "processWriteQueue" in pages_js
     assert "处理队列" in pages_js
@@ -3614,6 +3624,9 @@ def test_dashboard_action_controls_and_toast_static_guards():
     assert 'id="action-queue"' in review_html
     assert 'id="wiki-modal-title"' in review_html
     assert "tm-action-queue:hover" in style_css
+    reduced_motion = style_css.split("@media (prefers-reduced-motion: reduce)", 1)[1]
+    assert ".tm-action-queue,\n" not in reduced_motion
+    assert ".tm-action-queue {\n    animation: none !important;\n    transition: none !important;\n  }" in reduced_motion
     assert "tmBusySheen" in style_css
     assert "tmQueueSheen" in style_css
     assert "tmQueueBar" not in style_css

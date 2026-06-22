@@ -838,6 +838,8 @@
         clearTimeout(this.queueTimer);
         this.queueTimer = null;
       }
+      this.closeWikiModal();
+      this.resetActionQueueDock();
       if (this.fetchDigestAbortController) {
         this.fetchDigestAbortController.abort();
         this.fetchDigestAbortController = null;
@@ -1749,6 +1751,18 @@
         wikiModal.classList.remove('flex');
       }
       this.wikiModalState = null;
+    },
+
+    resetActionQueueDock() {
+      const dock = document.getElementById('action-queue');
+      if (dock) {
+        dock.classList.add('hidden');
+        dock.classList.remove('tm-action-queue--active', 'tm-action-queue--failed');
+      }
+      const summary = document.getElementById('action-queue-summary');
+      if (summary) summary.innerHTML = '';
+      const list = document.getElementById('action-queue-list');
+      if (list) list.innerHTML = '';
     },
 
     openWikiProposalBatchModal(rows, cards) {

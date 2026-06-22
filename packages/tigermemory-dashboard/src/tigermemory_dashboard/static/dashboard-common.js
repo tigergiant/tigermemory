@@ -4,6 +4,22 @@
  */
 
 (() => {
+  const FULL_DOCUMENT_ROUTES = new Set(['/start']);
+
+  function syncDocumentTitle(doc) {
+    const nextTitle = doc.querySelector('title');
+    if (!nextTitle) return;
+    let currentTitle = document.querySelector('title');
+    if (!currentTitle) {
+      currentTitle = document.createElement('title');
+      document.head.appendChild(currentTitle);
+    }
+    Array.from(currentTitle.attributes).forEach(attr => currentTitle.removeAttribute(attr.name));
+    Array.from(nextTitle.attributes).forEach(attr => currentTitle.setAttribute(attr.name, attr.value));
+    currentTitle.textContent = nextTitle.textContent || '';
+    document.title = currentTitle.textContent || document.title;
+  }
+
   function esc(value) {
     return String(value ?? '').replace(/[&<>"']/g, ch => ({
       '&': '&amp;',
@@ -192,6 +208,16 @@
         return false;
       }
     },
+    isFullDocumentRoute(url) {
+      try {
+        const parsed = new URL(url, window.location.href);
+        return FULL_DOCUMENT_ROUTES.has(parsed.pathname) ||
+               FULL_DOCUMENT_ROUTES.has(window.location.pathname) ||
+               document.body.dataset.page === 'start';
+      } catch (e) {
+        return false;
+      }
+    },
     getController(key) {
       if (!key) return null;
       const camelKey = key.replace(/-([a-z])/g, (g) => g[1].toUpperCase());
@@ -207,12 +233,17 @@
       const url = anchor.getAttribute('href');
       if (!url) return;
       if (this.isDashboardRoute(url)) {
+        if (this.isFullDocumentRoute(url)) return;
         e.preventDefault();
         this.navigateTo(url, true);
       }
     },
     handlePopState(e) {
       const url = window.location.pathname + window.location.search;
+      if (this.isFullDocumentRoute(url)) {
+        window.location.reload();
+        return;
+      }
       this.navigateTo(url, false);
     },
     markRefreshSuccess(cacheKey, state = {}) {
@@ -328,9 +359,7 @@
         window.history.pushState(null, '', url);
       }
 
-      if (doc.title) {
-        document.title = doc.title;
-      }
+      syncDocumentTitle(doc);
 
       document.body.dataset.page = newBody.dataset.page || '';
 
@@ -384,6 +413,10 @@
 
       if (window.tmI18n) {
         window.tmI18n.apply(document);
+        const titleNode = document.querySelector('title');
+        if (titleNode && titleNode.textContent) {
+          document.title = titleNode.textContent;
+        }
       }
 
       void document.body.offsetWidth;
@@ -445,6 +478,10 @@
       }
     },
     async navigateTo(url, pushState = true) {
+      if (this.isFullDocumentRoute(url)) {
+        window.location.href = new URL(url, window.location.href).href;
+        return;
+      }
       if (this.fetchAbortController) {
         this.fetchAbortController.abort();
       }
