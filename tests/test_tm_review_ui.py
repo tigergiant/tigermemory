@@ -1107,6 +1107,7 @@ def test_start_route_returns_beginner_shell(tmp_path, monkeypatch):
     assert 'id="agent-preview-title"' in response.text
     assert 'id="finish-readiness-list"' in response.text
     assert "data-copy-command" in response.text
+    assert "tmPanelRise" in response.text
     assert "window.tmPages.start.init" in response.text
     assert "/static/dashboard-common.js" in response.text
     assert "/static/dashboard-pages.js" in response.text
@@ -1240,6 +1241,22 @@ def test_start_dynamic_onboarding_i18n_keys_are_complete():
     assert all(key in js or key.startswith("start.step.name.") for key in required)
     assert sorted(required - set(data["zh"])) == []
     assert sorted(required - set(data["en"])) == []
+
+
+def test_start_page_supports_direct_step_preview_and_motion_fallback():
+    html = (tm_review_ui.STATIC_DIR / "start.html").read_text(encoding="utf-8")
+    js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
+
+    assert "initialStepFromUrl" in js
+    assert "tm-i18n-ready" in js
+    assert "searchParams.set('step'" in js
+    assert "dataset.stepCurrent" in js
+    assert "dataset.startStep" in js
+    assert "tmPanelRise" in html
+    assert "tmElementRise" in html
+    assert "tmSoftSweep" in html
+    assert "prefers-reduced-motion: reduce" in html
+    assert ".onboarding-slide > *" in html
 
 
 def test_i18n_missing_keys_keep_html_fallback_text():

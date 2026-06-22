@@ -106,6 +106,7 @@
       this.renderAgentConnectStatus(root);
       this.renderFinishReadiness(root);
       this.updateLlmCommand();
+      document.addEventListener('tm-i18n-ready', () => this.refreshLocalizedUi(root), {signal: this.abortController.signal});
       document.addEventListener('tm-lang-change', () => this.refreshLocalizedUi(root), {signal: this.abortController.signal});
       if (window.lucide) window.lucide.createIcons();
     },
@@ -157,7 +158,7 @@
       if (finish) finish.addEventListener('click', () => {
         try { localStorage.setItem('tigermemory_onboarding_done', 'true'); } catch (_error) {}
       }, {signal: this.abortController.signal});
-      this.showStep(0);
+      this.showStep(this.initialStepFromUrl(), {syncUrl: this.hasStepQuery()});
     },
 
     refreshLocalizedUi(root = document) {
@@ -179,11 +180,42 @@
       });
     },
 
-    showStep(index) {
+    hasStepQuery() {
+      try {
+        return new URLSearchParams(window.location.search).has('step');
+      } catch (_error) {
+        return false;
+      }
+    },
+
+    initialStepFromUrl() {
+      try {
+        const raw = new URLSearchParams(window.location.search).get('step');
+        if (!raw) return 0;
+        const value = Number(raw);
+        if (!Number.isFinite(value)) return 0;
+        return Math.max(0, Math.trunc(value) - 1);
+      } catch (_error) {
+        return 0;
+      }
+    },
+
+    syncStepUrl(index) {
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set('step', String(index + 1));
+        window.history.replaceState({}, '', url);
+      } catch (_error) {}
+    },
+
+    showStep(index, options = {}) {
       const slides = Array.from(document.querySelectorAll('[data-onboarding-slide]'));
       if (!slides.length) return;
       const nextIndex = Math.max(0, Math.min(slides.length - 1, index));
       this.currentStep = nextIndex;
+      const frame = document.querySelector('.onboarding-frame');
+      if (frame) frame.dataset.stepCurrent = String(nextIndex + 1);
+      if (document.body) document.body.dataset.startStep = String(nextIndex + 1);
       slides.forEach((slide, idx) => {
         slide.classList.toggle('active', idx === nextIndex);
         slide.setAttribute('aria-hidden', idx === nextIndex ? 'false' : 'true');
@@ -199,6 +231,7 @@
       if (label) label.textContent = String(nextIndex + 1);
       const prev = document.querySelector('[data-onboarding-prev]');
       if (prev) prev.disabled = nextIndex === 0;
+      if (options.syncUrl !== false) this.syncStepUrl(nextIndex);
       const nextButtons = document.querySelectorAll('[data-onboarding-next]');
       nextButtons.forEach(button => {
         button.disabled = nextIndex === slides.length - 1 && !button.closest('[data-onboarding-slide]');

@@ -21,6 +21,7 @@
     }
     .onboarding-frame {
       position: relative;
+      isolation: isolate;
       overflow: hidden;
       border: 1px solid rgba(201, 191, 159, 0.78);
       border-radius: 8px;
@@ -51,8 +52,18 @@
       padding: 2rem;
       animation: tmSlideIn 420ms ease both;
     }
+    .onboarding-slide > * {
+      opacity: 0;
+      transform: translateY(0.7rem);
+    }
     .onboarding-slide.active {
       display: grid;
+    }
+    .onboarding-slide.active > * {
+      animation: tmPanelRise 520ms cubic-bezier(.2,.78,.23,1) both;
+    }
+    .onboarding-slide.active > *:nth-child(2) {
+      animation-delay: 80ms;
     }
     @media (max-width: 900px) {
       .onboarding-slide {
@@ -98,6 +109,18 @@
         repeating-linear-gradient(90deg, rgba(201, 191, 159, 0.16) 0 1px, transparent 1px 48px),
         repeating-linear-gradient(0deg, rgba(201, 191, 159, 0.12) 0 1px, transparent 1px 48px);
       overflow: hidden;
+    }
+    .onboarding-visual::before {
+      content: "";
+      position: absolute;
+      inset: -35% -55%;
+      pointer-events: none;
+      background: linear-gradient(110deg, transparent 35%, rgba(255, 255, 255, 0.34) 48%, transparent 60%);
+      opacity: 0;
+      transform: translateX(-18%);
+    }
+    .onboarding-slide.active .onboarding-visual::before {
+      animation: tmSoftSweep 1100ms ease-out 180ms both;
     }
     .memory-device {
       position: absolute;
@@ -152,6 +175,24 @@
       text-align: left;
       transition: transform 180ms ease, border-color 180ms ease, background 180ms ease, box-shadow 180ms ease;
     }
+    .onboarding-slide.active .wizard-card,
+    .onboarding-slide.active .depth-choice,
+    .onboarding-slide.active .page-link-card,
+    .onboarding-slide.active .live-panel {
+      animation: tmElementRise 440ms cubic-bezier(.2,.78,.23,1) both;
+    }
+    .onboarding-slide.active .wizard-card:nth-child(2),
+    .onboarding-slide.active .depth-choice:nth-child(2),
+    .onboarding-slide.active .page-link-card:nth-child(2),
+    .onboarding-slide.active .status-row:nth-child(2) {
+      animation-delay: 80ms;
+    }
+    .onboarding-slide.active .wizard-card:nth-child(3),
+    .onboarding-slide.active .depth-choice:nth-child(3),
+    .onboarding-slide.active .page-link-card:nth-child(3),
+    .onboarding-slide.active .status-row:nth-child(3) {
+      animation-delay: 130ms;
+    }
     .wizard-card:hover,
     .depth-choice:hover,
     .page-link-card:hover {
@@ -175,6 +216,9 @@
     .wizard-input:focus {
       border-color: #678696;
       box-shadow: 0 0 0 3px rgba(103, 134, 150, 0.18);
+    }
+    .wizard-input:hover {
+      border-color: rgba(103, 134, 150, 0.74);
     }
     .wizard-command {
       border-radius: 8px;
@@ -252,11 +296,12 @@
       height: 0.58rem;
       border-radius: 999px;
       background: rgba(138, 130, 117, 0.28);
-      transition: width 180ms ease, background 180ms ease;
+      transition: width 180ms ease, background 180ms ease, box-shadow 180ms ease;
     }
     .progress-dot.active {
       width: 2rem;
       background: #c8a560;
+      box-shadow: 0 0 0 4px rgba(200, 165, 96, 0.14);
     }
     .step-rail {
       display: grid;
@@ -267,6 +312,8 @@
     }
     .step-button {
       min-width: 0;
+      position: relative;
+      overflow: hidden;
       border: 1px solid transparent;
       border-radius: 8px;
       padding: 0.55rem 0.65rem;
@@ -275,15 +322,36 @@
       background: rgba(255, 252, 245, 0.54);
       transition: border-color 180ms ease, background 180ms ease, color 180ms ease, transform 180ms ease;
     }
+    .step-button::after {
+      content: "";
+      position: absolute;
+      left: 0.65rem;
+      right: 0.65rem;
+      bottom: 0.35rem;
+      height: 2px;
+      border-radius: 999px;
+      background: #c8a560;
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform 180ms ease;
+    }
     .step-button:hover {
       transform: translateY(-1px);
       border-color: rgba(200, 165, 96, 0.68);
       background: rgba(255, 250, 240, 0.9);
     }
+    .step-button:focus-visible,
+    .wizard-nav-button:focus-visible {
+      outline: 3px solid rgba(103, 134, 150, 0.26);
+      outline-offset: 2px;
+    }
     .step-button.active {
       color: #1f1d1b;
       border-color: rgba(200, 165, 96, 0.9);
       background: rgba(240, 221, 177, 0.56);
+    }
+    .step-button.active::after {
+      transform: scaleX(1);
     }
     .step-index {
       display: inline-grid;
@@ -326,10 +394,20 @@
       font-weight: 800;
       color: #1f1d1b;
       background: #f0e9d8;
+      transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease, background 180ms ease;
     }
     .wizard-nav-button.primary {
       border-color: #c8a560;
       background: #c8a560;
+    }
+    .wizard-nav-button:hover:not(:disabled) {
+      transform: translateY(-1px);
+      border-color: #c8a560;
+      box-shadow: 0 12px 26px rgba(56, 45, 24, 0.12);
+    }
+    .wizard-nav-button:active:not(:disabled) {
+      transform: translateY(0);
+      box-shadow: 0 6px 16px rgba(56, 45, 24, 0.1);
     }
     .wizard-nav-button:disabled {
       opacity: 0.42;
@@ -338,6 +416,19 @@
     @keyframes tmSlideIn {
       from { opacity: 0; transform: translateX(1.5rem); }
       to { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes tmPanelRise {
+      from { opacity: 0; transform: translateY(0.7rem); filter: blur(3px); }
+      to { opacity: 1; transform: translateY(0); filter: blur(0); }
+    }
+    @keyframes tmElementRise {
+      from { opacity: 0; transform: translateY(0.45rem); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes tmSoftSweep {
+      0% { opacity: 0; transform: translateX(-18%); }
+      20% { opacity: 0.82; }
+      100% { opacity: 0; transform: translateX(18%); }
     }
     @keyframes tmFloat {
       0%, 100% { transform: translate(-50%, -50%) translateY(0); }
@@ -360,8 +451,18 @@
       .memory-device,
       .signal-card,
       .memory-device .bar,
-      .success-orb {
+      .success-orb,
+      .onboarding-slide.active > *,
+      .onboarding-slide.active .wizard-card,
+      .onboarding-slide.active .depth-choice,
+      .onboarding-slide.active .page-link-card,
+      .onboarding-slide.active .live-panel,
+      .onboarding-slide.active .onboarding-visual::before {
         animation: none;
+      }
+      .onboarding-slide > * {
+        opacity: 1;
+        transform: none;
       }
     }
   </style>
