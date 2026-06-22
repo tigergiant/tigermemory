@@ -979,8 +979,8 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v64" in response.text
-    assert "'/ledger'" in response.text
+    assert "tigermemory-memory-ops-v74" in response.text
+    assert "'/digest'" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
     assert "url.pathname.startsWith('/digest')" in response.text
@@ -1708,6 +1708,18 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "cache: {" in common_js
     assert "clearCache(" in common_js
     assert "updateRefreshIndicator(" in common_js
+    assert "PREFETCH_ROUTES = ['/digest', '/canvas']" in common_js
+    assert "scheduleIdlePrefetch(" in common_js
+    assert "prefetchDashboardRoutes(" in common_js
+    assert "PREFETCH_TIMEOUT_MS = 20000" in common_js
+    assert "X-TigerMemory-Prefetch" in common_js
+
+    server_content = pathlib.Path(tm_review_ui.__file__).read_text(encoding="utf-8")
+    assert "DASHBOARD_PAGE_CACHE_TTL" in server_content
+    assert "CRON_INTAKE_CACHE_TTL" in server_content
+    assert "cached_cron_intake_data(" in server_content
+    assert "page:digest:" in server_content
+    assert "page:canvas:" in server_content
     assert "fetchBackground(" in common_js
     assert "tm-lang-change" in common_js
     assert "urlObj.pathname + urlObj.search" in common_js

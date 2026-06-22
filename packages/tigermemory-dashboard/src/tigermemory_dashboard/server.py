@@ -140,6 +140,8 @@ API_CACHE_TTL = 30.0
 CANVAS_CACHE_TTL = 25.0
 CANVAS_CANDIDATE_CACHE_TTL = 60.0
 SELF_EVOLUTION_CACHE_TTL = 300.0
+DASHBOARD_PAGE_CACHE_TTL = float(os.getenv("TM_DASHBOARD_PAGE_CACHE_TTL", "45"))
+CRON_INTAKE_CACHE_TTL = float(os.getenv("TM_DASHBOARD_CRON_INTAKE_CACHE_TTL", "30"))
 QUALITY_CACHE_WARM_INTERVAL = float(os.getenv("TM_DASHBOARD_QUALITY_WARM_INTERVAL", "20"))
 MEM0_DASHBOARD_CACHE_TTL = float(os.getenv("TM_DASHBOARD_MEM0_CACHE_TTL", "60"))
 MEM0_DASHBOARD_STALE_TTL = float(os.getenv("TM_DASHBOARD_MEM0_STALE_TTL", "900"))
@@ -2287,6 +2289,28 @@ def cron_intake_data(date: str) -> dict[str, Any]:
         operations_dir=REPO_ROOT / "wiki" / "operations",
         codex_home=codex_home,
     )
+
+
+def cached_cron_intake_data(date: str) -> dict[str, Any]:
+    if not DATE_RE.fullmatch(date):
+        raise ValueError("date must be YYYY-MM-DD")
+    codex_home = pathlib.Path(os.getenv("CODEX_HOME", str(pathlib.Path.home() / ".codex")))
+    cache_key = f"api:cron-intake:{date}:{REPO_ROOT}:{codex_home}"
+    cached, _ = _run_cache_get(cache_key, CRON_INTAKE_CACHE_TTL)
+    if cached:
+        return cached
+
+    payload = cron_intake_data(date)
+    _run_cache_set(
+        cache_key,
+        payload,
+        source="cron-intake",
+        source_path=str(REPO_ROOT / "wiki" / "operations"),
+        source_hash="",
+        source_updated_at="",
+        ttl_seconds=CRON_INTAKE_CACHE_TTL,
+    )
+    return payload
 
 
 def available_digest_dates() -> list[str]:
@@ -4552,14 +4576,41 @@ def _digest_shell(date: str) -> dict[str, Any]:
     }
 
 
-def _render_digest_page(date: str) -> HTMLResponse:
+def _render_digest_page_html(date: str) -> str:
     data = json.dumps(daily_review_data(date), ensure_ascii=False).replace("</", "<\\/")
     try:
-        intake = cron_intake_data(date)
+        intake = cached_cron_intake_data(date)
     except Exception as exc:
-        intake = {"status": "error", "date": date, "summary": "cron 承接卡读取失败", "warnings": [str(exc)], "reports": [], "action_items": []}
+        intake = {
+            "status": "error",
+            "date": date,
+            "summary": "cron 承接卡读取失败",
+            "warnings": [str(exc)],
+            "reports": [],
+            "action_items": [],
+        }
     intake_data = json.dumps(intake, ensure_ascii=False).replace("</", "<\\/")
-    html = _template().replace("__DIGEST_JSON__", data).replace("__CRON_INTAKE_JSON__", intake_data)
+    return _template().replace("__DIGEST_JSON__", data).replace("__CRON_INTAKE_JSON__", intake_data)
+
+
+def _render_digest_page(date: str) -> HTMLResponse:
+    digest_path = REPO_ROOT / "wiki" / "operations" / f"daily-memory-digest-{date}.md"
+    _, source_hash = _file_signature(digest_path) if digest_path.exists() else (None, "missing")
+    cache_key = f"page:digest:{date}:{source_hash}"
+    cached, _ = _run_cache_get(cache_key, DASHBOARD_PAGE_CACHE_TTL)
+    if cached and cached.get("html"):
+        return _no_store(HTMLResponse(cached["html"]))
+
+    html = _render_digest_page_html(date)
+    _run_cache_set(
+        cache_key,
+        {"html": html},
+        source="digest-page",
+        source_path=str(digest_path),
+        source_hash=source_hash,
+        source_updated_at="",
+        ttl_seconds=DASHBOARD_PAGE_CACHE_TTL,
+    )
     return _no_store(HTMLResponse(html))
 
 
@@ -5329,7 +5380,26 @@ async def quality_page():
 
 @app.get("/canvas")
 async def canvas_page():
-    return _no_store(HTMLResponse(_render_canvas_page(_load_canvas_payload())))
+    if CANVAS_SOURCE_PATH.exists():
+        _, source_hash = _file_signature(CANVAS_SOURCE_PATH)
+    else:
+        source_hash = "missing"
+    cache_key = f"page:canvas:{source_hash}"
+    cached, _ = _run_cache_get(cache_key, DASHBOARD_PAGE_CACHE_TTL)
+    if cached and cached.get("html"):
+        return _no_store(HTMLResponse(cached["html"]))
+
+    html = _render_canvas_page(_load_canvas_payload())
+    _run_cache_set(
+        cache_key,
+        {"html": html},
+        source="canvas-page",
+        source_path=str(CANVAS_SOURCE_PATH),
+        source_hash=source_hash,
+        source_updated_at="",
+        ttl_seconds=DASHBOARD_PAGE_CACHE_TTL,
+    )
+    return _no_store(HTMLResponse(html))
 
 
 @app.get("/api/canvas")
@@ -5364,7 +5434,7 @@ async def api_digest(date: str):
 @app.get("/api/cron/intake/{date}")
 async def api_cron_intake(date: str):
     try:
-        intake = await run_in_threadpool(cron_intake_data, date)
+        intake = await run_in_threadpool(cached_cron_intake_data, date)
         return _no_store(JSONResponse({"ok": True, "intake": intake}))
     except Exception as exc:
         return _no_store(JSONResponse({"ok": False, "error": str(exc)}, status_code=400))

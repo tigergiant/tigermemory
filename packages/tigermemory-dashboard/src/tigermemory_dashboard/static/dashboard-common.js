@@ -116,8 +116,11 @@
     ['/quality', 3000, true],
     ['/canvas', 60000, false],
     ['/self-evolution', 8000, true],
-    ['/digest', 8000, true]
+    ['/digest', 30000, true]
   ];
+  const PREFETCH_ROUTES = ['/digest', '/canvas'];
+  const PREFETCH_DELAY_MS = 1200;
+  const PREFETCH_TIMEOUT_MS = 20000;
 
   function cacheStrategy(pathname) {
     const route = CACHE_STRATEGY.find(([routePath]) => pathname === routePath || pathname.startsWith(`${routePath}/`));
@@ -174,17 +177,27 @@
     pageRefreshState: {},
     requestId: 0,
     cache: {},
+    prefetchTimerId: null,
+    prefetchIdleId: null,
+    prefetchInFlight: new Set(),
     init() {
       document.addEventListener('click', this.handleClick.bind(this));
       window.addEventListener('popstate', this.handlePopState.bind(this));
       document.addEventListener('tm-lang-change', () => {
         this.clearCache();
+        this.scheduleIdlePrefetch(800);
         requestAnimationFrame(() => {
           setTimeout(() => updateNavHighlight(), 30);
         });
       });
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          this.scheduleIdlePrefetch(600);
+        }
+      });
       window.addEventListener('resize', () => updateNavHighlight());
       requestAnimationFrame(() => updateNavHighlight());
+      this.scheduleIdlePrefetch();
     },
     clearCache() {
       this.pageRefreshState = {};
@@ -279,6 +292,77 @@
       if (!cached || !Number.isFinite(cached.timestamp)) return false;
       if (policy.ttlMs <= 0) return false;
       return Date.now() - cached.timestamp < policy.ttlMs;
+    },
+
+    canPrefetchDashboardRoutes() {
+      if (document.visibilityState && document.visibilityState !== 'visible') return false;
+      if (navigator.connection && navigator.connection.saveData) return false;
+      return true;
+    },
+
+    scheduleIdlePrefetch(delayMs = PREFETCH_DELAY_MS) {
+      if (!this.canPrefetchDashboardRoutes()) return;
+      if (this.prefetchTimerId) {
+        clearTimeout(this.prefetchTimerId);
+      }
+      this.prefetchTimerId = setTimeout(() => {
+        this.prefetchTimerId = null;
+        const run = () => {
+          this.prefetchIdleId = null;
+          this.prefetchDashboardRoutes().catch(err => {
+            console.warn('Dashboard prefetch failed:', err);
+          });
+        };
+        if ('requestIdleCallback' in window) {
+          this.prefetchIdleId = window.requestIdleCallback(run, { timeout: 4000 });
+        } else {
+          this.prefetchIdleId = setTimeout(run, 250);
+        }
+      }, delayMs);
+    },
+
+    async prefetchDashboardRoutes() {
+      if (!this.canPrefetchDashboardRoutes()) return;
+      for (const route of PREFETCH_ROUTES) {
+        await this.prefetchRoute(route);
+      }
+    },
+
+    async prefetchRoute(route) {
+      const urlObj = new URL(route, window.location.href);
+      const cacheKey = urlObj.pathname + urlObj.search;
+      const currentKey = window.location.pathname + window.location.search;
+      if (currentKey === cacheKey) return;
+      if (this.shouldUseCache(cacheKey, this.cache[cacheKey])) return;
+      if (this.prefetchInFlight.has(cacheKey)) return;
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), PREFETCH_TIMEOUT_MS);
+      this.prefetchInFlight.add(cacheKey);
+      try {
+        const response = await fetch(urlObj.href, {
+          signal: controller.signal,
+          cache: 'default',
+          headers: { 'X-TigerMemory-Prefetch': '1' }
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const htmlText = await response.text();
+        this.cache[cacheKey] = {
+          htmlText,
+          timestamp: Date.now(),
+          source: 'prefetch'
+        };
+        this.markRefreshSuccess(cacheKey, { source: 'prefetch' });
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.warn(`Dashboard route prefetch failed for ${cacheKey}:`, err);
+        }
+      } finally {
+        clearTimeout(timeoutId);
+        this.prefetchInFlight.delete(cacheKey);
+      }
     },
 
     updateRefreshIndicator(cacheKey, cached, refreshing, options = {}) {
@@ -520,6 +604,7 @@
           this.renderHTML(cached.htmlText, url, pushState, true);
           this.updateRefreshIndicator(cacheKey, true, false, { isStale: false });
           this.markRefreshSuccess(cacheKey, { timestamp: cached.timestamp, source: 'cache' });
+          this.scheduleIdlePrefetch(800);
           return;
         } catch (err) {
           console.error('Failed to render from cache, falling back to network:', err);
@@ -548,6 +633,7 @@
 
         this.renderHTML(htmlText, url, pushState, true);
         this.updateRefreshIndicator(cacheKey, false, false);
+        this.scheduleIdlePrefetch(800);
       } catch (err) {
         if (err.name === 'AbortError') {
           return;
