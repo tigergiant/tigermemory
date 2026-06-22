@@ -39,14 +39,17 @@
         linear-gradient(300deg, rgba(103, 134, 150, 0.12), transparent 36%);
     }
     .onboarding-track {
-      min-height: 38rem;
+      min-height: 34rem;
       position: relative;
+      overflow-x: hidden;
     }
     .onboarding-slide {
       display: none;
-      min-height: 38rem;
+      min-height: 34rem;
+      box-sizing: border-box;
+      width: 100%;
       grid-template-columns: minmax(0, 0.95fr) minmax(21rem, 1.05fr);
-      gap: 2rem;
+      gap: 1.5rem;
       align-items: center;
       position: relative;
       padding: 2rem;
@@ -220,6 +223,37 @@
     .wizard-input:hover {
       border-color: rgba(103, 134, 150, 0.74);
     }
+    .wizard-field-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.72rem 0.9rem;
+    }
+    .wizard-field {
+      display: grid;
+      gap: 0.35rem;
+    }
+    .wizard-field.wide {
+      grid-column: 1 / -1;
+    }
+    .wizard-field label {
+      font-size: 0.86rem;
+      font-weight: 800;
+      color: #4a443d;
+    }
+    .wizard-details {
+      border: 1px solid rgba(201, 191, 159, 0.82);
+      border-radius: 8px;
+      background: rgba(255, 252, 245, 0.78);
+    }
+    .wizard-details summary {
+      cursor: pointer;
+      padding: 0.72rem 0.85rem;
+      color: #8a6b1f;
+      font-weight: 900;
+    }
+    .wizard-details[open] summary {
+      border-bottom: 1px solid rgba(226, 214, 183, 0.82);
+    }
     .wizard-command {
       border-radius: 8px;
       border: 1px solid rgba(201, 191, 159, 0.82);
@@ -230,6 +264,22 @@
       overflow: auto;
       font-size: 0.78rem;
       line-height: 1.7;
+    }
+    .agent-software-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.6rem;
+    }
+    .agent-software-card {
+      border-radius: 8px;
+      border: 1px solid rgba(201, 191, 159, 0.78);
+      background: rgba(255, 252, 245, 0.82);
+      padding: 0.72rem;
+      min-width: 0;
+    }
+    .agent-software-card b {
+      display: block;
+      white-space: normal;
     }
     .live-panel {
       border: 1px solid rgba(201, 191, 159, 0.78);
@@ -384,6 +434,96 @@
     @media (max-width: 620px) {
       .step-rail {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .wizard-field-grid,
+      .agent-software-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    @media (max-height: 820px) and (min-width: 901px) {
+      .onboarding-shell {
+        align-items: start;
+        padding-top: 1rem;
+      }
+      .onboarding-frame {
+        display: flex;
+        flex-direction: column;
+        max-height: calc(100vh - 5.8rem);
+      }
+      .onboarding-track {
+        flex: 1 1 auto;
+        overflow-x: hidden;
+        overflow-y: auto;
+      }
+      .onboarding-footer {
+        flex: none;
+      }
+      .onboarding-track,
+      .onboarding-slide {
+        min-height: 0;
+      }
+      .step-rail {
+        display: none;
+      }
+      .onboarding-slide {
+        align-items: start;
+        gap: 0.85rem;
+        padding: 0.95rem 1.35rem;
+      }
+      .onboarding-title {
+        margin-top: 0.45rem;
+        font-size: 1.5rem;
+        line-height: 1.16;
+      }
+      .onboarding-copy {
+        margin-top: 0.5rem;
+        font-size: 0.95rem;
+        line-height: 1.55;
+        display: -webkit-box;
+        overflow: hidden;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+      }
+      .onboarding-visual {
+        min-height: 19rem;
+      }
+      .live-panel {
+        padding: 0.85rem;
+      }
+      .wizard-field-grid {
+        gap: 0.52rem 0.72rem;
+      }
+      .wizard-field label {
+        margin-bottom: 0.26rem;
+        font-size: 0.72rem;
+      }
+      .status-row {
+        padding: 0.5rem 0;
+      }
+      .wizard-card,
+      .depth-choice,
+      .page-link-card,
+      .agent-software-card {
+        padding: 0.72rem;
+      }
+      .wizard-input {
+        padding: 0.52rem 0.68rem;
+      }
+      .wizard-details {
+        display: none;
+      }
+      .agent-software-grid {
+        max-height: 12rem;
+        overflow: auto;
+      }
+      .agent-software-card .mt-1 {
+        display: none;
+      }
+      .wizard-nav-button {
+        padding: 0.58rem 0.82rem;
+      }
+      #llm-provider-help {
+        display: none;
       }
     }
     .wizard-nav-button {
@@ -612,27 +752,44 @@
             <div class="onboarding-kicker"><i data-lucide="key-round" class="h-4 w-4"></i> <span data-i18n="start.llm.kicker">连接 LLM</span></div>
             <h2 class="onboarding-title" data-i18n="start.llm.title">连接一个你自己的模型</h2>
             <p class="onboarding-copy" data-i18n="start.llm.copy">推荐先用 DeepSeek。API Key 只会保存到本机 runtime 配置，不上传，也不会写进 Git；保存后 TigerMemory 就能直接读取这组模型配置。</p>
-            <div class="mt-5 grid gap-3">
+            <div class="mt-4 grid gap-3">
               <div class="rounded-lg border border-[#d2b56b] bg-[#fffaf0] px-3 py-2 text-sm text-[#8a6b1f]" id="llm-config-status" data-i18n="start.llm.status_loading">正在读取模型连接状态...</div>
-              <label class="text-sm font-bold text-[#4a443d]" data-i18n="start.llm.provider_label">模型服务</label>
-              <select id="llm-provider" class="wizard-input">
-                <option value="deepseek" data-i18n="start.llm.deepseek_option">DeepSeek（推荐）</option>
-                <option value="openai_compatible" data-i18n="start.llm.openai_option">OpenAI-compatible（高级）</option>
-              </select>
-              <label class="text-sm font-bold text-[#4a443d]" data-i18n="start.llm.api_key_label">API Key</label>
-              <input id="llm-api-key" class="wizard-input" type="password" autocomplete="off" placeholder="sk-...">
-              <label class="text-sm font-bold text-[#4a443d]" data-i18n="start.llm.base_url_label">接口地址</label>
-              <input id="llm-base-url" class="wizard-input" value="https://api.deepseek.com/v1/chat/completions">
-              <label class="text-sm font-bold text-[#4a443d]" data-i18n="start.llm.routine_model_label">日常模型</label>
-              <input id="llm-model" class="wizard-input" value="deepseek-v4-flash">
-              <label class="text-sm font-bold text-[#4a443d]" data-i18n="start.llm.admin_model_label">管理模型</label>
-              <input id="llm-admin-model" class="wizard-input" value="deepseek-v4-pro">
-              <p class="text-xs leading-5 text-[#8a8275]" id="llm-provider-help" data-i18n="start.llm.deepseek.help">日常模型负责问答和路由；管理模型负责整理 Wiki 和生成待审核提案。</p>
-              <pre class="wizard-command" id="llm-command-preview"></pre>
+              <div class="wizard-field-grid">
+                <div class="wizard-field">
+                  <label for="llm-provider" data-i18n="start.llm.provider_label">模型服务</label>
+                  <select id="llm-provider" class="wizard-input">
+                    <option value="deepseek" data-i18n="start.llm.deepseek_option">DeepSeek（推荐）</option>
+                    <option value="openai_compatible" data-i18n="start.llm.openai_option">OpenAI-compatible（高级）</option>
+                  </select>
+                </div>
+                <div class="wizard-field">
+                  <label for="llm-api-key" data-i18n="start.llm.api_key_label">API Key</label>
+                  <input id="llm-api-key" class="wizard-input" type="password" autocomplete="off" placeholder="sk-...">
+                </div>
+                <div class="wizard-field wide">
+                  <label for="llm-base-url" data-i18n="start.llm.base_url_label">接口地址</label>
+                  <input id="llm-base-url" class="wizard-input" value="https://api.deepseek.com/v1/chat/completions">
+                </div>
+                <div class="wizard-field">
+                  <label for="llm-model" data-i18n="start.llm.routine_model_label">日常模型</label>
+                  <input id="llm-model" class="wizard-input" value="deepseek-v4-flash">
+                </div>
+                <div class="wizard-field">
+                  <label for="llm-admin-model" data-i18n="start.llm.admin_model_label">管理模型</label>
+                  <input id="llm-admin-model" class="wizard-input" value="deepseek-v4-pro">
+                </div>
+              </div>
               <div class="flex flex-wrap gap-3">
                 <button type="button" class="wizard-nav-button primary" id="save-llm-config" data-i18n="start.llm.save_button">保存并接入 TigerMemory</button>
-                <button type="button" class="wizard-nav-button" id="copy-llm-command" data-i18n="start.llm.copy_command">复制手动配置命令</button>
               </div>
+              <p class="text-xs leading-5 text-[#8a8275]" id="llm-provider-help" data-i18n="start.llm.deepseek.help">日常模型负责问答和路由；管理模型负责整理 Wiki 和生成待审核提案。</p>
+              <details class="wizard-details">
+                <summary data-i18n="start.llm.manual_summary">高级：查看手动配置命令</summary>
+                <div class="grid gap-3 p-3">
+                  <pre class="wizard-command" id="llm-command-preview"></pre>
+                  <button type="button" class="wizard-nav-button w-fit" id="copy-llm-command" data-i18n="start.llm.copy_command">复制手动配置命令</button>
+                </div>
+              </details>
             </div>
           </div>
           <div class="onboarding-visual p-5">
@@ -667,11 +824,13 @@
             <div class="onboarding-kicker"><i data-lucide="bot" class="h-4 w-4"></i> <span data-i18n="start.agent.kicker">连接 AI 工具</span></div>
             <h2 class="onboarding-title" data-i18n="start.agent.title">把默认规则交给你的 AI</h2>
             <p class="onboarding-copy" data-i18n="start.agent.copy">TigerMemory 已经内置了 Codex、Claude Code、Cursor 和 hooks 的项目模板。点击下面的按钮，只是把这些默认模板写进当前项目；它不会改你的全局 Codex、Claude 或 Cursor 配置。</p>
-            <div class="mt-5 grid gap-3">
+            <div class="mt-4 grid gap-3">
               <div class="rounded-lg border border-[#d2b56b] bg-[#fffaf0] px-3 py-2 text-sm text-[#8a6b1f]" id="agent-connect-summary" data-i18n="start.agent.status_loading">正在读取 AI 接入状态...</div>
               <div class="rounded-lg border border-[#e2d6b7] bg-[#fffaf0] px-3 py-2 text-xs leading-5 text-[#8a8275]" data-i18n="start.agent.template_note">这些是现成默认模板，不需要你手写。写入后，AI 会先查本地证据、用提案写 Wiki、把最终批准权留给你。</div>
-              <button type="button" class="wizard-nav-button primary w-fit" id="apply-agent-connect" data-i18n="start.agent.apply_button">写入默认项目规则</button>
-              <button type="button" class="copy-command text-left" data-copy-command="tm agent status">tm agent status</button>
+              <div class="flex flex-wrap gap-3">
+                <button type="button" class="wizard-nav-button primary" id="apply-agent-connect" data-i18n="start.agent.apply_button">写入默认项目规则</button>
+                <button type="button" class="wizard-nav-button" data-copy-command="tm agent status">tm agent status</button>
+              </div>
             </div>
           </div>
           <div class="onboarding-visual p-5">
@@ -679,14 +838,21 @@
               <div class="live-panel">
                 <div class="mb-3 flex items-start justify-between gap-3">
                   <div>
-                    <div class="text-xs font-bold text-[#8a6b1f]" data-i18n="start.agent.preview.kicker">模板应用总览</div>
+                    <div class="text-xs font-bold text-[#8a6b1f]" data-i18n="start.agent.preview.kicker">AI 工具扫描</div>
                     <div class="mt-1 text-xl font-black text-[#1f1d1b]" id="agent-preview-title">-</div>
                   </div>
                   <span class="status-pill" id="agent-preview-state">-</span>
                 </div>
-                <div class="grid gap-3" id="agent-connect-list">
-                  <div class="wizard-card" data-i18n="start.agent.loading_card">正在检查 AGENTS、CLAUDE、Cursor 规则和 Hooks 模板...</div>
+                <div class="rounded-lg border border-[#e2d6b7] bg-[#fffaf0] px-3 py-2 text-xs leading-5 text-[#8a8275]" id="agent-software-summary" data-i18n="start.agent.software.loading">正在扫描已安装的 AI 工具...</div>
+                <div class="agent-software-grid mt-3" id="agent-software-list">
+                  <div class="agent-software-card" data-i18n="start.agent.software.loading">正在扫描已安装的 AI 工具...</div>
                 </div>
+                <details class="wizard-details mt-3">
+                  <summary data-i18n="start.agent.template_details">查看将写入的项目规则模板</summary>
+                  <div class="grid gap-2 p-3" id="agent-connect-list">
+                    <div class="wizard-card" data-i18n="start.agent.loading_card">正在检查 AGENTS、CLAUDE、Cursor 规则和 Hooks 模板...</div>
+                  </div>
+                </details>
               </div>
             </div>
           </div>
@@ -745,7 +911,7 @@
         </article>
       </div>
 
-      <div class="relative z-10 flex flex-wrap items-center justify-between gap-3 border-t border-[#e6dfcc] px-5 py-4">
+      <div class="onboarding-footer relative z-10 flex flex-wrap items-center justify-between gap-3 border-t border-[#e6dfcc] px-5 py-4">
         <button type="button" class="wizard-nav-button" data-onboarding-prev>上一步</button>
         <div class="text-sm text-[#8a8275]" id="onboarding-step-help">先了解 TigerMemory 是什么。</div>
         <button type="button" class="wizard-nav-button primary" data-onboarding-next>下一步</button>

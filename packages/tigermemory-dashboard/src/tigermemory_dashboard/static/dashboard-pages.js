@@ -361,6 +361,7 @@
     renderLlmStatus(root = document, message = '') {
       const statusEl = root.getElementById ? root.getElementById('llm-config-status') : document.getElementById('llm-config-status');
       if (!statusEl) return;
+      statusEl.removeAttribute('data-i18n');
       const configured = Boolean(this.llmStatus && this.llmStatus.llm_configured);
       const deepseek = this.llmStatus && Array.isArray(this.llmStatus.providers)
         ? this.llmStatus.providers.find(provider => provider.id === (this.llmStatus.effective_provider || 'deepseek'))
@@ -413,13 +414,23 @@
       try {
         if (button) {
           button.disabled = true;
-          button.textContent = this.i18n('start.llm.saving_button', '正在保存...');
+          button.textContent = this.i18n('start.llm.testing_button', '正在测试...');
         }
-        this.renderLlmStatus(document, this.i18n('start.llm.saving_status', '正在保存到本机 TigerMemory 配置...'));
-        const response = await fetch('/api/start/llm-config', {
+        this.renderLlmStatus(document, this.i18n('start.llm.testing_status', '正在测试模型连通性...'));
+        const testResponse = await fetch('/api/start/llm-test', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(payload),
+          signal: this.abortController.signal
+        });
+        const testResult = await testResponse.json();
+        if (!testResponse.ok || !testResult.ok) throw new Error(testResult.error || `HTTP ${testResponse.status}`);
+        this.renderLlmStatus(document, testResult.message || this.i18n('start.llm.test_passed_status', '模型连通性测试通过，正在保存...'));
+        if (button) button.textContent = this.i18n('start.llm.saving_button', '正在保存...');
+        const response = await fetch('/api/start/llm-config', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({...payload, test_connection: false}),
           signal: this.abortController.signal
         });
         const result = await response.json();
@@ -452,16 +463,24 @@
       const summary = root.getElementById ? root.getElementById('agent-connect-summary') : document.getElementById('agent-connect-summary');
       const list = root.getElementById ? root.getElementById('agent-connect-list') : document.getElementById('agent-connect-list');
       if (!summary || !list) return;
+      const softwareSummary = root.getElementById ? root.getElementById('agent-software-summary') : document.getElementById('agent-software-summary');
+      const softwareList = root.getElementById ? root.getElementById('agent-software-list') : document.getElementById('agent-software-list');
       const previewTitle = root.getElementById ? root.getElementById('agent-preview-title') : document.getElementById('agent-preview-title');
       const previewState = root.getElementById ? root.getElementById('agent-preview-state') : document.getElementById('agent-preview-state');
       const c = window.tmDashboard || {};
       const esc = c.esc || (value => String(value ?? '').replace(/[&<>"']/g, chr => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[chr])));
       const status = this.agentConnectStatus || {};
       const targets = Array.isArray(status.targets) ? status.targets : [];
+      const software = Array.isArray(status.installed_agents) ? status.installed_agents : [];
+      const scan = status.software_scan || {};
       const configured = Number(status.configured_count || targets.filter(item => ['ok', 'available'].includes(item.status)).length || 0);
       const missing = Number(status.missing_count || targets.filter(item => ['missing', 'missing_block'].includes(item.status)).length || 0);
       const blocked = Number(status.blocked_count || targets.filter(item => item.status === 'blocked').length || 0);
       const protectedCount = targets.filter(item => item.status === 'protected').length;
+      const installedCount = Number(scan.installed_count || software.filter(item => item.installed).length || 0);
+      const supportedInstalled = Number(scan.supported_installed_count || software.filter(item => item.installed && item.support === 'supported').length || 0);
+      const plannedInstalled = Number(scan.planned_installed_count || software.filter(item => item.installed && item.support !== 'supported').length || 0);
+      summary.removeAttribute('data-i18n');
       summary.textContent = message || this.i18n(
         'start.agent.summary',
         `项目规则 ${configured} 项已就绪，${missing} 项默认模板可一键写入，${blocked} 项需高级配置，${protectedCount} 项受源仓保护。`,
@@ -470,8 +489,8 @@
       if (previewTitle) {
         previewTitle.textContent = this.i18n(
           'start.agent.preview.title',
-          `${configured} 项已就绪，${missing} 项可一键写入`,
-          {configured, missing}
+          `检测到 ${installedCount} 个 AI 工具，${supportedInstalled} 个可一键接入`,
+          {installed: installedCount, supported: supportedInstalled, configured, missing}
         );
       }
       if (previewState) {
@@ -496,6 +515,44 @@
         if (state === 'missing') return this.i18n('start.agent.status.missing', '内置模板，可生成');
         return state || this.i18n('start.agent.status.unknown', '待检查');
       };
+      const softwareStatusClass = item => {
+        if (item.installed && item.support === 'supported') return 'border-[#a0b889] bg-[#dde8ce] text-[#52733a]';
+        if (item.installed) return 'border-[#d2b56b] bg-[#fffaf0] text-[#8a6b1f]';
+        return 'border-[#d8cfba] bg-[#f7f3ea] text-[#6d6256] opacity-75';
+      };
+      const softwareStatusText = item => {
+        if (item.installed && item.support === 'supported') return this.i18n('start.agent.software.status.supported', '已检测，可一键接入');
+        if (item.installed) return this.i18n('start.agent.software.status.planned', '已检测，暂未自动适配');
+        return this.i18n('start.agent.software.status.missing', '未检测');
+      };
+      const softwareNote = item => {
+        if (item.support === 'supported') return this.i18n('start.agent.software.note.supported', 'TigerMemory 已有默认项目规则模板。');
+        return this.i18n('start.agent.software.note.planned', '先显示识别结果，自动适配会后续补齐。');
+      };
+      if (softwareSummary) {
+        softwareSummary.removeAttribute('data-i18n');
+        softwareSummary.textContent = this.i18n(
+          'start.agent.software.summary',
+          `已扫描 ${software.length} 类 AI 工具：检测到 ${installedCount} 个，其中 ${supportedInstalled} 个可一键接入，${plannedInstalled} 个暂未自动适配。`,
+          {known: software.length, installed: installedCount, supported: supportedInstalled, planned: plannedInstalled}
+        );
+      }
+      if (softwareList) {
+        const ordered = [...software].sort((a, b) => {
+          if (Boolean(a.installed) !== Boolean(b.installed)) return a.installed ? -1 : 1;
+          if ((a.support === 'supported') !== (b.support === 'supported')) return a.support === 'supported' ? -1 : 1;
+          return String(a.label || '').localeCompare(String(b.label || ''));
+        });
+        softwareList.innerHTML = ordered.map(item => `
+          <div class="agent-software-card ${softwareStatusClass(item)}">
+            <div class="grid gap-1">
+              <b>${esc(item.label || item.id)}</b>
+              <span class="w-fit rounded-full border border-current/30 px-2 py-0.5 text-[0.68rem] font-bold">${esc(softwareStatusText(item))}</span>
+            </div>
+            <div class="mt-1 text-xs leading-5 opacity-80">${esc(softwareNote(item))}</div>
+          </div>
+        `).join('') || `<div class="agent-software-card border-[#d2b56b] bg-[#fffaf0] text-[#8a6b1f]">${esc(this.i18n('start.agent.software.empty', '还没有软件扫描结果。'))}</div>`;
+      }
       list.innerHTML = targets.map(item => `
         <div class="rounded-lg border ${statusClass(item.status)} px-3 py-2">
           <div class="flex items-center justify-between gap-3">

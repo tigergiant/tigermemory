@@ -95,7 +95,9 @@ def test_start_static_uses_install_success_intro_and_public_commands() -> None:
     assert "验收清单" in pages_js
     assert "DEEPSEEK_API_KEY" in pages_js
     assert "TIGERMEMORY_LLM_PROVIDER" in pages_js
+    assert "/api/start/llm-test" in pages_js
     assert "/api/start/llm-config" in pages_js
+    assert "agent-software-list" in html
     assert 'tm search --scope wiki --query "agent behavior rules"' in html
     assert 'tm ask --offline --query "agent behavior rules" --scope wiki' in html
     assert "项目画布" not in html
@@ -126,6 +128,8 @@ def test_start_onboarding_i18n_covers_agent_connect_and_english() -> None:
         "start.agent.status.missing_block",
         "start.agent.target.root-agents.label",
         "start.agent.target.pre-tool-use-example.summary",
+        "start.agent.software.summary",
+        "start.llm.testing_status",
     ]
     for key in required:
         assert key in zh
@@ -163,6 +167,7 @@ def test_start_llm_config_writes_runtime_env_without_echoing_secret(monkeypatch,
                 api_key="sk-test-secret",
                 base_url="https://api.deepseek.com/v1/chat/completions",
                 model="deepseek-v4-flash",
+                test_connection=False,
             )
         )
 
@@ -201,6 +206,7 @@ def test_start_llm_config_supports_openai_compatible_without_duplicate_secret(mo
                 api_key="sk-openai-compatible-secret",
                 base_url="https://api.example.com/v1/chat/completions",
                 model="gpt-compatible-mini",
+                test_connection=False,
             )
         )
 
@@ -240,6 +246,7 @@ def test_start_llm_config_route_writes_runtime_env_without_echoing_secret(monkey
                 "api_key": "sk-route-secret",
                 "base_url": "https://api.deepseek.com/v1/chat/completions",
                 "model": "deepseek-v4-flash",
+                "test_connection": False,
             },
         )
 
@@ -254,6 +261,76 @@ def test_start_llm_config_route_writes_runtime_env_without_echoing_secret(monkey
             os.environ.pop(key, None)
 
 
+def test_start_llm_config_tests_connection_before_write(monkeypatch, tmp_path) -> None:
+    env_path = tmp_path / "runtime" / "openmemory" / ".env"
+    monkeypatch.setenv("TIGERMEMORY_OPENMEMORY_ENV", str(env_path))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    calls: list[str] = []
+
+    def fake_test(req: server.StartLlmConfigRequest) -> dict[str, object]:
+        calls.append(req.model or "")
+        return {"ok": True, "message": "模型连通性测试通过"}
+
+    monkeypatch.setattr(server, "test_start_llm_config", fake_test)
+
+    result = server.save_start_llm_config(
+        server.StartLlmConfigRequest(
+            api_key="sk-test-secret",
+            base_url="https://api.deepseek.com/v1/chat/completions",
+            model="deepseek-v4-flash",
+        )
+    )
+
+    assert calls == ["deepseek-v4-flash"]
+    assert result["ok"] is True
+    assert result["connection_test"]["ok"] is True
+    assert "DEEPSEEK_API_KEY=sk-test-secret" in env_path.read_text(encoding="utf-8")
+
+
+def test_start_llm_config_does_not_write_when_connection_fails(monkeypatch, tmp_path) -> None:
+    env_path = tmp_path / "runtime" / "openmemory" / ".env"
+    monkeypatch.setenv("TIGERMEMORY_OPENMEMORY_ENV", str(env_path))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(server, "test_start_llm_config", lambda _req: {"ok": False, "error": "模型连通性测试失败：HTTP 401"})
+
+    try:
+        server.save_start_llm_config(
+            server.StartLlmConfigRequest(
+                api_key="sk-bad-secret",
+                base_url="https://api.deepseek.com/v1/chat/completions",
+                model="deepseek-v4-flash",
+            )
+        )
+    except ValueError as exc:
+        assert "模型连通性测试失败" in str(exc)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("failed connection should block saving")
+
+    assert not env_path.exists()
+
+
+def test_start_llm_test_route_reports_safe_result(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(server, "SESSION_FILE", tmp_path / "session.json")
+    monkeypatch.setattr(server, "test_start_llm_config", lambda _req: {"ok": True, "status_code": 200, "message": "模型连通性测试通过"})
+    client = TestClient(server.app)
+    client.get("/", headers=HOST, follow_redirects=False)
+
+    response = client.post(
+        "/api/start/llm-test",
+        headers=HOST,
+        json={
+            "provider": "deepseek",
+            "api_key": "sk-route-secret",
+            "base_url": "https://api.deepseek.com/v1/chat/completions",
+            "model": "deepseek-v4-flash",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert "sk-route-secret" not in str(response.json())
+
+
 def test_start_llm_config_rejects_unsafe_remote_http(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("TIGERMEMORY_OPENMEMORY_ENV", str(tmp_path / ".env"))
     monkeypatch.delenv("TM_ALLOW_UNSECURE_HTTP", raising=False)
@@ -264,6 +341,7 @@ def test_start_llm_config_rejects_unsafe_remote_http(monkeypatch, tmp_path) -> N
                 api_key="sk-test-secret",
                 base_url="http://example.com/v1/chat/completions",
                 model="deepseek-v4-flash",
+                test_connection=False,
             )
         )
     except (RuntimeError, ValueError) as exc:

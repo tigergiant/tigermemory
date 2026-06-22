@@ -21,7 +21,9 @@ import sys
 import threading
 import time
 import re
+import shutil
 import types
+import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -220,6 +222,7 @@ class StartLlmConfigRequest(BaseModel):
     base_url: Optional[str] = None
     model: Optional[str] = None
     admin_model: Optional[str] = None
+    test_connection: bool = True
 
 
 class StartAgentConnectRequest(BaseModel):
@@ -4089,6 +4092,95 @@ def _clean_llm_env_value(value: str | None, *, field: str) -> str:
     return text
 
 
+def _normalized_start_llm_config(req: StartLlmConfigRequest) -> dict[str, str]:
+    provider = (req.provider or "deepseek").strip().lower()
+    provider_aliases = {
+        "deepseek": "deepseek",
+        "openai": "openai_compatible",
+        "openai-compatible": "openai_compatible",
+        "openai_compatible": "openai_compatible",
+    }
+    provider = provider_aliases.get(provider, "")
+    if provider not in {"deepseek", "openai_compatible"}:
+        raise ValueError("请选择 DeepSeek 或 OpenAI-compatible provider")
+
+    existing = tm_llm_status.llm_env_file_values(REPO_ROOT)
+    api_key = _clean_llm_env_value(req.api_key, field="api_key")
+    if not api_key:
+        api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip() or existing.get("DEEPSEEK_API_KEY", "").strip()
+    default_base = tm_core.DEFAULT_DEEPSEEK_ENDPOINT if provider == "deepseek" else "https://api.openai.com/v1/chat/completions"
+    default_model = tm_core.DEFAULT_DEEPSEEK_MODEL if provider == "deepseek" else "gpt-4o-mini"
+    default_admin_model = tm_core.DEFAULT_DEEPSEEK_ADMIN_MODEL if provider == "deepseek" else default_model
+    base_url = _clean_llm_env_value(req.base_url, field="base_url") or default_base
+    model = _clean_llm_env_value(req.model, field="model") or default_model
+    requested_admin_model = _clean_llm_env_value(req.admin_model, field="admin_model")
+    if requested_admin_model:
+        admin_model = requested_admin_model
+    elif provider == "deepseek":
+        admin_model = existing.get("DEEPSEEK_ADMIN_MODEL", default_admin_model)
+    else:
+        admin_model = model
+
+    if not api_key:
+        raise ValueError("请先填写 API Key")
+    tm_core.check_transport_security(base_url)
+    return {
+        "provider": provider,
+        "api_key": api_key,
+        "base_url": base_url,
+        "model": model,
+        "admin_model": admin_model,
+    }
+
+
+def test_start_llm_config(req: StartLlmConfigRequest) -> dict[str, Any]:
+    try:
+        config = _normalized_start_llm_config(req)
+        body = json.dumps(
+            {
+                "model": config["model"],
+                "messages": [{"role": "user", "content": "Reply OK."}],
+                "temperature": 0,
+                "max_tokens": 8,
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            config["base_url"],
+            data=body,
+            headers={
+                "Authorization": f"Bearer {config['api_key']}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        timeout = max(3, min(30, int(os.getenv("TM_START_LLM_TEST_TIMEOUT", "12"))))
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status_code = int(getattr(response, "status", 200) or 200)
+            response.read(512)
+        return {
+            "ok": True,
+            "provider": config["provider"],
+            "model": config["model"],
+            "status_code": status_code,
+            "message": "模型连通性测试通过",
+        }
+    except urllib.error.HTTPError as exc:
+        return {
+            "ok": False,
+            "status_code": exc.code,
+            "error": f"模型连通性测试失败：HTTP {exc.code}",
+        }
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        return {"ok": False, "error": f"模型连通性测试失败：{reason}"}
+    except TimeoutError:
+        return {"ok": False, "error": "模型连通性测试超时，请检查地址或网络代理"}
+    except Exception as exc:
+        return {"ok": False, "error": f"模型连通性测试失败：{exc}"}
+
+
 def _write_runtime_env_updates(path: pathlib.Path, updates: dict[str, str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
@@ -4115,46 +4207,21 @@ def _write_runtime_env_updates(path: pathlib.Path, updates: dict[str, str]) -> N
 
 
 def save_start_llm_config(req: StartLlmConfigRequest) -> dict[str, Any]:
-    provider = (req.provider or "deepseek").strip().lower()
-    provider_aliases = {
-        "deepseek": "deepseek",
-        "openai": "openai_compatible",
-        "openai-compatible": "openai_compatible",
-        "openai_compatible": "openai_compatible",
-    }
-    provider = provider_aliases.get(provider, "")
-    if provider not in {"deepseek", "openai_compatible"}:
-        raise ValueError("请选择 DeepSeek 或 OpenAI-compatible provider")
-
+    config = _normalized_start_llm_config(req)
+    connection_test = None
+    if req.test_connection:
+        connection_test = test_start_llm_config(req)
+        if not connection_test.get("ok"):
+            raise ValueError(str(connection_test.get("error") or "模型连通性测试失败"))
     env_path = tm_llm_status.llm_env_path(REPO_ROOT)
-    existing = tm_llm_status.llm_env_file_values(REPO_ROOT)
-    api_key = _clean_llm_env_value(req.api_key, field="api_key")
-    default_base = tm_core.DEFAULT_DEEPSEEK_ENDPOINT if provider == "deepseek" else "https://api.openai.com/v1/chat/completions"
-    default_model = tm_core.DEFAULT_DEEPSEEK_MODEL if provider == "deepseek" else "gpt-4o-mini"
-    default_admin_model = tm_core.DEFAULT_DEEPSEEK_ADMIN_MODEL if provider == "deepseek" else default_model
-    base_url = _clean_llm_env_value(req.base_url, field="base_url") or default_base
-    model = _clean_llm_env_value(req.model, field="model") or default_model
-    requested_admin_model = _clean_llm_env_value(req.admin_model, field="admin_model")
-    if requested_admin_model:
-        admin_model = requested_admin_model
-    elif provider == "deepseek":
-        admin_model = existing.get("DEEPSEEK_ADMIN_MODEL", default_admin_model)
-    else:
-        admin_model = model
-
-    has_existing_key = bool(os.environ.get("DEEPSEEK_API_KEY", "").strip() or existing.get("DEEPSEEK_API_KEY", "").strip())
-    if not api_key and not has_existing_key:
-        raise ValueError("请先填写 API Key")
-    tm_core.check_transport_security(base_url)
-
     updates = {
-        "TIGERMEMORY_LLM_PROVIDER": provider,
-        "DEEPSEEK_BASE_URL": base_url,
-        "DEEPSEEK_MODEL": model,
-        "DEEPSEEK_ADMIN_MODEL": admin_model,
+        "TIGERMEMORY_LLM_PROVIDER": config["provider"],
+        "DEEPSEEK_BASE_URL": config["base_url"],
+        "DEEPSEEK_MODEL": config["model"],
+        "DEEPSEEK_ADMIN_MODEL": config["admin_model"],
     }
-    if api_key:
-        updates["DEEPSEEK_API_KEY"] = api_key
+    if _clean_llm_env_value(req.api_key, field="api_key"):
+        updates["DEEPSEEK_API_KEY"] = config["api_key"]
 
     _write_runtime_env_updates(env_path, updates)
     for key, value in updates.items():
@@ -4162,22 +4229,158 @@ def save_start_llm_config(req: StartLlmConfigRequest) -> dict[str, Any]:
     status = tm_llm_status.llm_status_payload(REPO_ROOT)
     return {
         "ok": True,
-        "provider": provider,
+        "provider": config["provider"],
         "env_path": _relpath(env_path),
         "llm_status": status,
+        "connection_test": connection_test,
         "message": "已保存到本机 TigerMemory 配置",
     }
 
 
+AGENT_SOFTWARE_CATALOG: tuple[dict[str, Any], ...] = (
+    {
+        "id": "codex",
+        "label": "Codex",
+        "support": "supported",
+        "target": "codex",
+        "commands": ("codex",),
+        "paths": (("USERPROFILE", ".codex"), ("APPDATA", "npm", "codex.cmd")),
+    },
+    {
+        "id": "claude-code",
+        "label": "Claude Code",
+        "support": "supported",
+        "target": "claude-code",
+        "commands": ("claude",),
+        "paths": (
+            ("USERPROFILE", ".claude"),
+            ("LOCALAPPDATA", "ClaudeCodeOfficial"),
+            ("APPDATA", "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"),
+        ),
+    },
+    {
+        "id": "cursor",
+        "label": "Cursor",
+        "support": "supported",
+        "target": "cursor",
+        "commands": (),
+        "paths": (("APPDATA", "Cursor"), ("LOCALAPPDATA", "Programs", "Cursor", "Cursor.exe"), ("USERPROFILE", ".cursor")),
+    },
+    {
+        "id": "gemini",
+        "label": "Gemini CLI",
+        "support": "planned",
+        "target": "",
+        "commands": ("gemini",),
+        "paths": (("USERPROFILE", ".gemini"), ("APPDATA", "npm", "gemini.cmd")),
+    },
+    {
+        "id": "antigravity",
+        "label": "Antigravity",
+        "support": "planned",
+        "target": "",
+        "commands": (),
+        "paths": (("USERPROFILE", ".gemini", "antigravity"), ("APPDATA", "Antigravity"), ("LOCALAPPDATA", "Antigravity")),
+    },
+    {
+        "id": "windsurf",
+        "label": "Windsurf",
+        "support": "planned",
+        "target": "",
+        "commands": (),
+        "paths": (("APPDATA", "Windsurf"), ("LOCALAPPDATA", "Programs", "Windsurf"), ("USERPROFILE", ".codeium")),
+    },
+    {
+        "id": "opencode",
+        "label": "OpenCode",
+        "support": "planned",
+        "target": "",
+        "commands": ("opencode",),
+        "paths": (("USERPROFILE", ".opencode"), ("APPDATA", "opencode"), ("LOCALAPPDATA", "opencode")),
+    },
+    {
+        "id": "resonmix",
+        "label": "Resonmix",
+        "support": "planned",
+        "target": "",
+        "commands": (),
+        "paths": (("APPDATA", "Resonmix"), ("LOCALAPPDATA", "Resonmix"), ("USERPROFILE", ".resonmix")),
+    },
+    {
+        "id": "trae",
+        "label": "Trae",
+        "support": "planned",
+        "target": "",
+        "commands": (),
+        "paths": (("APPDATA", "Trae"), ("LOCALAPPDATA", "Programs", "Trae"), ("USERPROFILE", ".trae")),
+    },
+    {
+        "id": "zcode",
+        "label": "Zcode",
+        "support": "planned",
+        "target": "",
+        "commands": (),
+        "paths": (("APPDATA", "Zcode"), ("LOCALAPPDATA", "Programs", "Zcode"), ("USERPROFILE", ".zcode")),
+    },
+)
+
+
+def _agent_scan_path(parts: tuple[str, ...]) -> pathlib.Path | None:
+    if not parts:
+        return None
+    base = os.environ.get(parts[0])
+    if not base:
+        return None
+    return pathlib.Path(base).joinpath(*parts[1:])
+
+
+def _scan_installed_agent_software() -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for item in AGENT_SOFTWARE_CATALOG:
+        signals: list[str] = []
+        for command in item.get("commands", ()):
+            if shutil.which(str(command)):
+                signals.append(f"command:{command}")
+        for path_parts in item.get("paths", ()):
+            candidate = _agent_scan_path(tuple(path_parts))
+            if candidate and candidate.exists():
+                signals.append(str(candidate))
+        installed = bool(signals)
+        rows.append(
+            {
+                "id": item["id"],
+                "label": item["label"],
+                "installed": installed,
+                "support": item["support"],
+                "target": item.get("target", ""),
+                "detected_signals": signals[:3],
+            }
+        )
+    installed_rows = [row for row in rows if row["installed"]]
+    return {
+        "items": rows,
+        "installed_count": len(installed_rows),
+        "supported_installed_count": sum(1 for row in installed_rows if row["support"] == "supported"),
+        "planned_installed_count": sum(1 for row in installed_rows if row["support"] != "supported"),
+        "known_count": len(rows),
+    }
+
+
 def _agent_connect_status_payload() -> dict[str, Any]:
+    software = _scan_installed_agent_software()
     if tm_agent_connect is None:
         return {
             "ok": False,
             "action": "status",
             "error": "tigermemory_config.agent_connect is not installed",
             "targets": [],
+            "installed_agents": software["items"],
+            "software_scan": {key: value for key, value in software.items() if key != "items"},
         }
-    return tm_agent_connect.status_agent_connect(repo_root=REPO_ROOT)
+    result = tm_agent_connect.status_agent_connect(repo_root=REPO_ROOT)
+    result["installed_agents"] = software["items"]
+    result["software_scan"] = {key: value for key, value in software.items() if key != "items"}
+    return result
 
 
 def apply_start_agent_connect(req: StartAgentConnectRequest) -> dict[str, Any]:
@@ -4847,6 +5050,14 @@ async def api_update_preferences(req: PreferenceUpdateRequest):
 async def api_start_llm_status():
     try:
         return await run_in_threadpool(tm_llm_status.llm_status_payload, REPO_ROOT)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/api/start/llm-test")
+async def api_start_llm_test(req: StartLlmConfigRequest):
+    try:
+        return await run_in_threadpool(test_start_llm_config, req)
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 

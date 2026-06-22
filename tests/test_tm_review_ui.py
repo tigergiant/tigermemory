@@ -1118,6 +1118,16 @@ def test_start_agent_connect_status_api(tmp_path, monkeypatch):
     import tigermemory_dashboard.server as dashboard_server
 
     monkeypatch.setattr(dashboard_server, "REPO_ROOT", tmp_path)
+    home = tmp_path / "home"
+    appdata = tmp_path / "appdata"
+    localappdata = tmp_path / "localappdata"
+    (home / ".codex").mkdir(parents=True)
+    (appdata / "Trae").mkdir(parents=True)
+    localappdata.mkdir()
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("APPDATA", str(appdata))
+    monkeypatch.setenv("LOCALAPPDATA", str(localappdata))
+    monkeypatch.setenv("PATH", "")
     (tmp_path / "wiki" / "systems").mkdir(parents=True)
     (tmp_path / "tigermemory_cli.py").write_text("# cli\n", encoding="utf-8")
     client = _client(tmp_path, monkeypatch)
@@ -1129,6 +1139,13 @@ def test_start_agent_connect_status_api(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert data["action"] == "status"
     assert any(row["target"] == "codex" for row in data["targets"])
+    installed = {row["id"]: row for row in data["installed_agents"]}
+    assert {"codex", "claude-code", "gemini", "antigravity", "windsurf", "cursor", "opencode", "resonmix", "trae", "zcode"} <= set(installed)
+    assert installed["codex"]["installed"] is True
+    assert installed["codex"]["support"] == "supported"
+    assert installed["trae"]["installed"] is True
+    assert installed["trae"]["support"] == "planned"
+    assert data["software_scan"]["installed_count"] == 2
 
 
 def test_start_agent_connect_apply_api_writes_project_rules(tmp_path, monkeypatch):
@@ -1218,6 +1235,16 @@ def test_start_dynamic_onboarding_i18n_keys_are_complete():
         "start.agent.preview.title",
         "start.agent.preview.ready",
         "start.agent.preview.actionable",
+        "start.agent.software.summary",
+        "start.agent.software.status.supported",
+        "start.agent.software.status.planned",
+        "start.agent.software.status.missing",
+        "start.agent.software.note.supported",
+        "start.agent.software.note.planned",
+        "start.agent.software.empty",
+        "start.llm.testing_button",
+        "start.llm.testing_status",
+        "start.llm.test_passed_status",
         "start.finish.ready_title.complete",
         "start.finish.ready_title.partial",
         "start.finish.check.local.title",
