@@ -98,6 +98,8 @@ def test_start_static_uses_install_success_intro_and_public_commands() -> None:
     assert "/api/start/llm-test" in pages_js
     assert "/api/start/llm-config" in pages_js
     assert "agent-software-list" in html
+    assert "agent-software-missing" in html
+    assert "start.agent.software.missing_toggle" in pages_js
     assert 'tm search --scope wiki --query "agent behavior rules"' in html
     assert 'tm ask --offline --query "agent behavior rules" --scope wiki' in html
     assert "项目画布" not in html

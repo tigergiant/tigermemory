@@ -527,6 +527,7 @@
       };
       const softwareNote = item => {
         if (item.support === 'supported') return this.i18n('start.agent.software.note.supported', 'TigerMemory 已有默认项目规则模板。');
+        if (!item.installed) return this.i18n('start.agent.software.note.missing', '这台机器上没有找到安装痕迹，默认先折叠。');
         return this.i18n('start.agent.software.note.planned', '先显示识别结果，自动适配会后续补齐。');
       };
       if (softwareSummary) {
@@ -543,7 +544,9 @@
           if ((a.support === 'supported') !== (b.support === 'supported')) return a.support === 'supported' ? -1 : 1;
           return String(a.label || '').localeCompare(String(b.label || ''));
         });
-        softwareList.innerHTML = ordered.map(item => `
+        const detectedSoftware = ordered.filter(item => item.installed);
+        const missingSoftware = ordered.filter(item => !item.installed);
+        const renderSoftwareCard = item => `
           <div class="agent-software-card ${softwareStatusClass(item)}">
             <div class="grid gap-1">
               <b>${esc(item.label || item.id)}</b>
@@ -551,7 +554,21 @@
             </div>
             <div class="mt-1 text-xs leading-5 opacity-80">${esc(softwareNote(item))}</div>
           </div>
-        `).join('') || `<div class="agent-software-card border-[#d2b56b] bg-[#fffaf0] text-[#8a6b1f]">${esc(this.i18n('start.agent.software.empty', '还没有软件扫描结果。'))}</div>`;
+        `;
+        const detectedHtml = detectedSoftware.length
+          ? detectedSoftware.map(renderSoftwareCard).join('')
+          : ordered.length
+            ? `<div class="agent-software-card border-[#d2b56b] bg-[#fffaf0] text-[#8a6b1f]">${esc(this.i18n('start.agent.software.detected_empty', '还没有检测到已安装的 AI 工具；可展开查看支持扫描的工具清单。'))}</div>`
+            : '';
+        const missingHtml = missingSoftware.length
+          ? `<details class="agent-software-missing">
+              <summary>${esc(this.i18n('start.agent.software.missing_toggle', '未检测到的工具（{count} 个）', {count: missingSoftware.length}))}</summary>
+              <div class="agent-software-grid">${missingSoftware.map(renderSoftwareCard).join('')}</div>
+            </details>`
+          : '';
+        softwareList.innerHTML = detectedHtml || missingHtml
+          ? `${detectedHtml}${missingHtml}`
+          : `<div class="agent-software-card border-[#d2b56b] bg-[#fffaf0] text-[#8a6b1f]">${esc(this.i18n('start.agent.software.empty', '还没有软件扫描结果。'))}</div>`;
       }
       list.innerHTML = targets.map(item => `
         <div class="rounded-lg border ${statusClass(item.status)} px-3 py-2">
