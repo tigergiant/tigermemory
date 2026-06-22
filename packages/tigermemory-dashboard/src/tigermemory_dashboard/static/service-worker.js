@@ -1,4 +1,4 @@
-const CACHE_NAME = 'tigermemory-memory-ops-v65';
+const CACHE_NAME = 'tigermemory-memory-ops-v71';
 const OFFLINE_URL = '/offline.html';
 const DASHBOARD_PATHS = new Set([
   '/start',

@@ -5,6 +5,7 @@ import pathlib
 import sys
 import builtins
 import datetime as dt
+import subprocess
 from html.parser import HTMLParser
 
 from fastapi.testclient import TestClient
@@ -1359,6 +1360,25 @@ def test_dashboard_git_helpers_do_not_climb_to_parent_repo(tmp_path, monkeypatch
     assert dirty["dirty"] is False
     assert dirty["error"] is None
     assert dirty["git_present"] is False
+
+
+def test_dashboard_git_status_timeout_degrades_to_warning(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tm_review_ui, "DASHBOARD_GIT_STATUS_TIMEOUT", 0.01)
+
+    def fake_run(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, timeout=kwargs.get("timeout", 0.01), output="", stderr="")
+
+    monkeypatch.setattr(tm_review_ui.subprocess, "run", fake_run)
+
+    dirty = tm_review_ui._worktree_dirty_state()
+
+    assert dirty["dirty"] is None
+    assert dirty["status_count"] == 0
+    assert dirty["sample"] == []
+    assert dirty["git_present"] is True
+    assert "timed out" in dirty["error"]
 
 
 def test_dashboard_worktree_check_discloses_runtime_source(tmp_path, monkeypatch):

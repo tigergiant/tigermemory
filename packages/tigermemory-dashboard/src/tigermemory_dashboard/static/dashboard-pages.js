@@ -3874,7 +3874,8 @@
 
     renderWorktree(report) {
       const c = window.tmDashboard;
-      const check = (report.agent_doctor.checks || []).find(item => item.name === 'worktree') || {};
+      const agentDoctor = report.agent_doctor || {};
+      const check = (agentDoctor.checks || []).find(item => item.name === 'worktree') || {};
       const worktreeStatus = document.getElementById('worktree-status');
       if (worktreeStatus) worktreeStatus.innerHTML = c.badge(check.status || 'warn');
 
@@ -3941,7 +3942,8 @@
 
     renderDoctor(report) {
       const c = window.tmDashboard;
-      const summary = report.agent_doctor.summary || {};
+      const agentDoctor = report.agent_doctor || {};
+      const summary = agentDoctor.summary || {};
       const doctorSummary = document.getElementById('doctor-summary');
       if (doctorSummary) {
         doctorSummary.textContent = `正常 ${summary.ok_count || 0} · 注意 ${summary.warn_count || 0} · 故障 ${summary.fail_count || 0}`;
@@ -3949,7 +3951,7 @@
 
       const doctorDetails = document.getElementById('doctor-details');
       if (doctorDetails) {
-        doctorDetails.innerHTML = (report.agent_doctor.checks || []).map(check => {
+        doctorDetails.innerHTML = (agentDoctor.checks || []).map(check => {
           let errHtml = '';
           if (check.error) {
             let errorText = check.error;

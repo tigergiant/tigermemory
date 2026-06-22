@@ -606,9 +606,17 @@ body.tm-is-updating main {
   .tm-action-queue,
   .tm-action-queue__pulse,
   .tm-action-queue__bar span,
-  .tm-action-queue__bar span::after {
+  .tm-action-queue__bar span::after,
+  .card,
+  .service-card,
+  #inbox-list article,
+  #proposal-list article,
+  #decision-grid a,
+  [data-panel] {
     animation: none !important;
     transition: none !important;
+    opacity: 1 !important;
+    transform: none !important;
   }
 
   body.tm-page-ready main {
@@ -1741,4 +1749,108 @@ body.tm-page-leaving {
     transform: translateY(0);
   }
 }
+
+/* Staggered Card Entrance Animation (for static panels) */
+.card,
+.quality-side-card,
+.ledger-editor {
+  animation: tmCardEntrance 1.1s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes tmCardEntrance {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Async cards expand height and opacity together so data loads do not jump. */
+#inbox-list article,
+#proposal-list article,
+#service-grid > *,
+#memory-overview > *,
+#quality-kpi-grid > *,
+#decision-grid > *,
+.service-card {
+  overflow: hidden;
+  animation: tmDynamicCardEntrance 1.1s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes tmDynamicCardEntrance {
+  from {
+    opacity: 0;
+    max-height: 0;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    border-top-width: 0 !important;
+    border-bottom-width: 0 !important;
+    transform: translateY(28px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    max-height: 1200px;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Staggered delays using generic nth-child for direct children. */
+.grid > *:nth-child(1),
+.choice-grid > *:nth-child(1),
+.space-y-4 > *:nth-child(1),
+#inbox-list > *:nth-child(1),
+#proposal-list > *:nth-child(1),
+#decision-grid > *:nth-child(1),
+.quality-kpi-grid > *:nth-child(1),
+.quality-side-card > *:nth-child(1) { animation-delay: 0ms; }
+
+.grid > *:nth-child(2),
+.choice-grid > *:nth-child(2),
+.space-y-4 > *:nth-child(2),
+#inbox-list > *:nth-child(2),
+#proposal-list > *:nth-child(2),
+#decision-grid > *:nth-child(2),
+.quality-kpi-grid > *:nth-child(2),
+.quality-side-card > *:nth-child(2) { animation-delay: 90ms; }
+
+.grid > *:nth-child(3),
+.choice-grid > *:nth-child(3),
+.space-y-4 > *:nth-child(3),
+#inbox-list > *:nth-child(3),
+#proposal-list > *:nth-child(3),
+#decision-grid > *:nth-child(3),
+.quality-kpi-grid > *:nth-child(3),
+.quality-side-card > *:nth-child(3) { animation-delay: 180ms; }
+
+.grid > *:nth-child(4),
+.choice-grid > *:nth-child(4),
+.space-y-4 > *:nth-child(4),
+#inbox-list > *:nth-child(4),
+#proposal-list > *:nth-child(4),
+#decision-grid > *:nth-child(4),
+.quality-kpi-grid > *:nth-child(4),
+.quality-side-card > *:nth-child(4) { animation-delay: 270ms; }
+
+.grid > *:nth-child(5),
+.choice-grid > *:nth-child(5),
+.space-y-4 > *:nth-child(5),
+#inbox-list > *:nth-child(5),
+#proposal-list > *:nth-child(5),
+#decision-grid > *:nth-child(5),
+.quality-kpi-grid > *:nth-child(5),
+.quality-side-card > *:nth-child(5) { animation-delay: 360ms; }
+
+.grid > *:nth-child(n+6),
+.choice-grid > *:nth-child(n+6),
+.space-y-4 > *:nth-child(n+6),
+#inbox-list > *:nth-child(n+6),
+#proposal-list > *:nth-child(n+6),
+#decision-grid > *:nth-child(n+6),
+.quality-kpi-grid > *:nth-child(n+6),
+.quality-side-card > *:nth-child(n+6) { animation-delay: 225ms; }
 
