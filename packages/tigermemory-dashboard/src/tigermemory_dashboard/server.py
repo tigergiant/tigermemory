@@ -75,6 +75,7 @@ PORT = int(os.getenv("TM_DASHBOARD_PORT", "9777"))
 REPO_ROOT = tm_core.REPO_ROOT
 UI_REPO_ROOT = REPO_ROOT
 STATIC_DIR = pathlib.Path(str(resources.files("tigermemory_dashboard") / "static"))
+DASHBOARD_GIT_STATUS_TIMEOUT = float(os.getenv("TM_DASHBOARD_GIT_STATUS_TIMEOUT", "12"))
 PREFS_DB = (
     tm_dashboard_prefs.PREFS_DB
     if tm_dashboard_prefs is not None
@@ -567,7 +568,7 @@ def _mem0_dashboard_json(
 def _worktree_dirty_state() -> dict[str, Any]:
     if not (REPO_ROOT / ".git").exists():
         return {"dirty": False, "status_count": 0, "sample": [], "error": None, "git_present": False}
-    proc = _run(["git", "status", "--short"], timeout=4)
+    proc = _run(["git", "status", "--short"], timeout=DASHBOARD_GIT_STATUS_TIMEOUT)
     if proc.returncode != 0:
         return {
             "dirty": None,
@@ -637,16 +638,23 @@ def _run(cmd: list[str], *, timeout: float = 300) -> subprocess.CompletedProcess
             "",
             f"git metadata not found at dashboard root: {REPO_ROOT}",
         )
-    return subprocess.run(
-        cmd,
-        cwd=REPO_ROOT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-        timeout=timeout,
-        check=False,
-    )
+    try:
+        return subprocess.run(
+            cmd,
+            cwd=REPO_ROOT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.output.decode("utf-8", errors="replace") if isinstance(exc.output, bytes) else (exc.output or "")
+        stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        if not stderr:
+            stderr = f"command timed out after {timeout}s: {' '.join(cmd)}"
+        return subprocess.CompletedProcess(cmd, 124, stdout, stderr)
 
 
 def _run_checked(cmd: list[str], *, timeout: float = 300) -> subprocess.CompletedProcess[str]:

@@ -736,6 +736,7 @@
     }
   };
 
+
   window.tmPages.daily = {
     root: null,
     data: null,
@@ -1826,6 +1827,25 @@
       card.classList.remove('line-through');
       card.classList.add('tm-card-complete');
       this.setCardStatus(card, message, true);
+
+      const isInboxCard = card.closest('#inbox-list');
+      if (isInboxCard) {
+        setTimeout(() => {
+          if (!card.isConnected) return;
+          card.classList.add('tm-card-collapse');
+          setTimeout(() => {
+            if (card.isConnected) card.remove();
+            this.updateBatchToolbar();
+            if (!document.querySelector('#inbox-list article')) {
+              const inboxList = document.getElementById('inbox-list');
+              if (inboxList) {
+                const msg = (window.tmI18n && window.tmI18n.get('daily.inbox.no_pending', '当前没有需要你处理的内容。')) || '当前没有需要你处理的内容。';
+                inboxList.innerHTML = `<p class="text-sm text-[#8a8275]">${msg}</p>`;
+              }
+            }
+          }, 250);
+        }, 1200);
+      }
     },
 
     async refreshDigestThenCompleteCards(cards, message) {
@@ -3325,9 +3345,60 @@
     },
 
     async fetchInvestmentTradingNode() {
+      const signal = this.abortController ? this.abortController.signal : null;
       const card = document.getElementById('investment-trading-node-card');
       if (!card) return;
-      card.innerHTML = '<div class="text-[#8a8275]">此公开仪表盘包不包含私有交易面板。</div>';
+      try {
+        const localRes = await fetch('/api/investment/trading-node/status', { signal });
+        let data = await localRes.json();
+        if (!data.ok && data.status === 'unreachable') {
+          const directRes = await fetch('http://127.0.0.1:8888/api/trading-node/status', { signal });
+          const direct = await directRes.json();
+          data = direct && direct.data ? {
+            ok: direct.ok,
+            status: direct.data.status,
+            date: direct.data.date,
+            account_scope: 'B_qmt MiniQMT simulation',
+            blockers: direct.data.blockers || [],
+            summary: direct.data.summary || {},
+            adapter: ((direct.data.adapter || {}).health || {}),
+            tasks: direct.data.tasks || [],
+          } : data;
+        }
+        if (!data.ok) {
+          card.innerHTML = `<div class="text-[#8a3527]">交易员状态不可用：${window.tmDashboard.esc(data.error || data.status || 'unknown')}</div>`;
+          return;
+        }
+        const summary = data.summary || {};
+        const adapter = data.adapter || {};
+        const blockers = Array.isArray(data.blockers) ? data.blockers : [];
+        const caps = adapter.capabilities || {};
+        const taskText = (data.tasks || []).map(t => `${t.name || '-'}=${t.last_result ?? '-'}`).join('；');
+        const badge = data.status === 'ready' && adapter.simulation_mode
+          ? window.tmDashboard.badge('ok', 'ready')
+          : window.tmDashboard.badge('warn', data.status || 'unknown');
+        card.innerHTML = `
+          <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="font-semibold text-[#1f1d1b]">状态</span>
+                ${badge}
+                <span class="rounded-full bg-[#f0e9d8] px-2 py-0.5 text-xs text-[#8a8275]">${window.tmDashboard.esc(data.account_scope || 'B_qmt simulation')}</span>
+              </div>
+              <div class="mt-2 text-xs text-[#8a8275]">日期 ${window.tmDashboard.esc(data.date || '--')} · 意图 ${summary.intent_count ?? 0} · 活跃委托 ${summary.active_order_count ?? 0} · 成交 ${summary.trade_count ?? 0}</div>
+              <div class="mt-1 text-xs text-[#8a8275]">9100: simulation=${String(adapter.simulation_mode)} query=${String(adapter.query_ready)} place=${String(adapter.can_place_orders ?? caps.can_place_orders)} cancel=${String(adapter.can_cancel_orders ?? caps.can_cancel_orders)}</div>
+              <div class="mt-1 text-xs text-[#8a8275]">任务：${window.tmDashboard.esc(taskText || '--')}</div>
+            </div>
+            <div class="max-w-xl text-xs ${blockers.length ? 'text-[#8a3527]' : 'text-[#52733a]'}">
+              ${blockers.length ? window.tmDashboard.esc(blockers.join('；')) : '当前只读状态正常，详细委托与策略见投资 dashboard。'}
+            </div>
+          </div>
+        `;
+        if (window.lucide) window.lucide.createIcons();
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        card.innerHTML = `<div class="text-[#8a3527]">交易员状态加载失败：${window.tmDashboard.esc(err.message || String(err))}</div>`;
+      }
     },
 
     async runDoctor() {
@@ -3380,10 +3451,6 @@
                 detail = t('agent.doctor_lessons_hit', `已为您拦截防御，命中 lessons 记录 {count} 个。`, {
                   count: window.tmDashboard.esc(check.hit_count)
                 });
-              } else if (check.name === 'public_ask_llm') {
-                const state = check.llm_configured ? '在线问答已配置' : '在线问答未配置';
-                const model = check.routine_model || '未记录模型';
-                detail = `${state} · ${model}`;
               }
               return `
                 <div class="flex items-center justify-between p-3 rounded-xl border border-[#e6dfcc] bg-[#fcfaf2]">
@@ -3625,8 +3692,6 @@
       }
 
       this.renderWorktree(report);
-      this.renderSourceUpdate(report.source_update || null);
-      this.fetchSourceUpdate();
       this.renderDigest(report);
       if (Object.prototype.hasOwnProperty.call(report, 'memory_overview')) {
         this.renderMemoryOverview(report.memory_overview || {});
@@ -3747,7 +3812,7 @@
         actionGuide = `
           <div class="mt-2 border-t border-[#e6dfcc] pt-2 text-[10px] text-[#8a8275]">
             <span class="font-semibold text-[#8a6b1f]">接入命令：</span>
-            <code class="block font-mono bg-[#f0e9d8] p-1 rounded text-[9px] truncate select-all text-center mt-1">tm doctor</code>
+            <code class="block font-mono bg-[#f0e9d8] p-1 rounded text-[9px] truncate select-all text-center mt-1">wsl -- python tools/tm_mcp_bridge.py</code>
           </div>
         `;
       }
@@ -3809,7 +3874,8 @@
 
     renderWorktree(report) {
       const c = window.tmDashboard;
-      const check = (report.agent_doctor.checks || []).find(item => item.name === 'worktree') || {};
+      const agentDoctor = report.agent_doctor || {};
+      const check = (agentDoctor.checks || []).find(item => item.name === 'worktree') || {};
       const worktreeStatus = document.getElementById('worktree-status');
       if (worktreeStatus) worktreeStatus.innerHTML = c.badge(check.status || 'warn');
 
@@ -3839,62 +3905,6 @@
             </div>
           ` : '<div class="rounded-xl border border-[#a0b889] bg-[#dde8ce] p-3 text-sm text-[#52733a]">工作区干净，可以继续操作。</div>'}
         `;
-      }
-    },
-
-    renderSourceUpdate(update) {
-      const c = window.tmDashboard;
-      const statusEl = document.getElementById('source-update-status');
-      const body = document.getElementById('source-update-body');
-      if (!body && !statusEl) return;
-      if (!update) {
-        if (statusEl) statusEl.innerHTML = c.badge('warn', '读取中');
-        if (body) body.innerHTML = '<div class="rounded-xl border border-[#e6dfcc] bg-[#f0e9d8] p-3 text-[#8a8275]">正在读取源码更新状态...</div>';
-        return;
-      }
-      const ok = update.ok !== false;
-      const status = !ok
-        ? 'warn'
-        : update.update_available
-          ? (update.safe_to_apply ? 'warn' : 'fail')
-          : 'ok';
-      const label = !ok
-        ? '不可判断'
-        : update.update_available
-          ? (update.safe_to_apply ? '有更新' : '需先处理')
-          : '已是最新';
-      if (statusEl) statusEl.innerHTML = c.badge(status, label);
-      if (body) {
-        const warnings = Array.isArray(update.warnings) ? update.warnings : [];
-        body.innerHTML = `
-          <div class="rounded-xl border border-[#e6dfcc] bg-[#f0e9d8] p-3">
-            <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
-              <span>模式 <code class="font-mono text-[#1f1d1b]">${c.esc(update.source_mode || '-')}</code></span>
-              <span>↓ <code class="font-mono text-[#1f1d1b]">${c.esc(update.behind ?? 0)}</code></span>
-              <span>↑ <code class="font-mono text-[#1f1d1b]">${c.esc(update.ahead ?? 0)}</code></span>
-              <span>可自动更新 <code class="font-mono text-[#1f1d1b]">${update.safe_to_apply ? 'yes' : 'no'}</code></span>
-            </div>
-            <div class="mt-2 break-all text-xs text-[#8a8275]">${c.esc(update.app_root || '')}</div>
-          </div>
-          <div class="rounded-xl border border-[#e6dfcc] bg-[#fbf8f1] p-3 text-sm leading-6">
-            ${c.esc(update.recommended_action || '暂无建议。')}
-          </div>
-          ${warnings.length ? `<ul class="space-y-1 rounded-xl border border-[#e0c889] bg-[#f4e6c4] p-3 text-xs text-[#8a6b1f]">${warnings.slice(0, 3).map(item => `<li>${c.esc(item)}</li>`).join('')}</ul>` : ''}
-        `;
-      }
-    },
-
-    async fetchSourceUpdate() {
-      try {
-        const response = await fetch('/api/update/status');
-        const data = await response.json();
-        this.renderSourceUpdate(data);
-      } catch (error) {
-        this.renderSourceUpdate({
-          ok: false,
-          reason: 'fetch_failed',
-          recommended_action: `读取源码更新状态失败：${error.message || error}`,
-        });
       }
     },
 
@@ -3932,7 +3942,8 @@
 
     renderDoctor(report) {
       const c = window.tmDashboard;
-      const summary = report.agent_doctor.summary || {};
+      const agentDoctor = report.agent_doctor || {};
+      const summary = agentDoctor.summary || {};
       const doctorSummary = document.getElementById('doctor-summary');
       if (doctorSummary) {
         doctorSummary.textContent = `正常 ${summary.ok_count || 0} · 注意 ${summary.warn_count || 0} · 故障 ${summary.fail_count || 0}`;
@@ -3940,7 +3951,7 @@
 
       const doctorDetails = document.getElementById('doctor-details');
       if (doctorDetails) {
-        doctorDetails.innerHTML = (report.agent_doctor.checks || []).map(check => {
+        doctorDetails.innerHTML = (agentDoctor.checks || []).map(check => {
           let errHtml = '';
           if (check.error) {
             let errorText = check.error;
@@ -3986,31 +3997,11 @@
               guidanceHtml = `
                 <div class="mt-2 rounded bg-[#fcfaf2] border border-[#e6dfcc] p-2 text-[11px] text-[#8a6b1f]">
                   <div class="font-semibold mb-1">💡 解决方案：即时记忆服务未就绪</div>
-                  <div class="mb-1">请运行以下命令检查端口，或在你的本地配置中设置 <code>MEM0_URL</code>：</div>
-                  <code class="block font-mono bg-[#f0e9d8] p-1 rounded select-all text-center">tm doctor</code>
-                </div>
-              `;
-            } else if (check.name === 'public_ask_llm') {
-              guidanceHtml = `
-                <div class="mt-2 rounded bg-[#fcfaf2] border border-[#e6dfcc] p-2 text-[11px] text-[#8a6b1f]">
-                  <div class="font-semibold mb-1">💡 解决方案：在线问答模型未配置</div>
-                  <div class="mb-1">设置 DeepSeek 或 OpenAI 兼容 Key 后，用下面命令确认不会泄露密钥：</div>
-                  <code class="block font-mono bg-[#f0e9d8] p-1 rounded select-all text-center">${c.esc(check.verify_command || 'tm llm status --json')}</code>
+                  <div class="mb-1">请运行以下命令检查端口，或在 <code>runtime/openmemory/.env</code> 中配置 <code>MEM0_URL</code>：</div>
+                  <code class="block font-mono bg-[#f0e9d8] p-1 rounded select-all text-center">python tools/tm_doctor.py check-mem0</code>
                 </div>
               `;
             }
-          }
-
-          let publicAskHtml = '';
-          if (check.name === 'public_ask_llm') {
-            const providers = (check.configured_providers || []).join(', ') || '未配置';
-            publicAskHtml = `
-              <div>在线问答：<code>${check.llm_configured ? '已配置' : '未配置'}</code></div>
-              <div>推荐模型：<code>${c.esc(check.routine_model || '未记录')}</code> / 管理模型：<code>${c.esc(check.admin_model || '未记录')}</code></div>
-              <div>已配置通道：<code>${c.esc(providers)}</code></div>
-              <div>离线备用：<code>${c.esc(check.offline_fallback || 'tm ask --offline')}</code></div>
-              <div>在线验证：<code>${c.esc(check.online_smoke || 'tm ask --query "TigerMemory 是什么？" --scope wiki')}</code></div>
-            `;
           }
 
           return `
@@ -4024,7 +4015,6 @@
                 ${errHtml}
                 ${check.reason ? `<div>原因：${c.esc(check.reason)}</div>` : ''}
                 ${check.paths ? `<div class="break-all font-mono">路径：${c.esc((check.paths || []).slice(0, 3).join(' | '))}</div>` : ''}
-                ${publicAskHtml}
                 ${guidanceHtml}
               </div>
             </article>

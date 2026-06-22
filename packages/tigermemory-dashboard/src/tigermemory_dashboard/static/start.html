@@ -188,21 +188,41 @@
     .onboarding-slide.active .wizard-card,
     .onboarding-slide.active .depth-choice,
     .onboarding-slide.active .page-link-card,
-    .onboarding-slide.active .live-panel {
-      animation: tmElementRise 440ms cubic-bezier(.2,.78,.23,1) both;
+    .onboarding-slide.active .live-panel,
+    .onboarding-slide.active .signal-card,
+    .onboarding-slide.active .memory-device,
+    .onboarding-slide.active .wizard-field,
+    .onboarding-slide.active .agent-software-card,
+    .onboarding-slide.active .copy-command {
+      animation: tmElementRise 0.52s cubic-bezier(0.16, 1, 0.3, 1) both;
     }
-    .onboarding-slide.active .wizard-card:nth-child(2),
-    .onboarding-slide.active .depth-choice:nth-child(2),
-    .onboarding-slide.active .page-link-card:nth-child(2),
-    .onboarding-slide.active .status-row:nth-child(2) {
-      animation-delay: 80ms;
-    }
-    .onboarding-slide.active .wizard-card:nth-child(3),
-    .onboarding-slide.active .depth-choice:nth-child(3),
-    .onboarding-slide.active .page-link-card:nth-child(3),
-    .onboarding-slide.active .status-row:nth-child(3) {
-      animation-delay: 130ms;
-    }
+    .onboarding-slide.active .choice-grid > *:nth-child(1),
+    .onboarding-slide.active .wizard-field-grid > *:nth-child(1),
+    .onboarding-slide.active .agent-software-grid > *:nth-child(1),
+    .onboarding-slide.active .live-panel > *:nth-child(1),
+    .onboarding-slide.active .signal-card.one { animation-delay: 0ms; }
+
+    .onboarding-slide.active .choice-grid > *:nth-child(2),
+    .onboarding-slide.active .wizard-field-grid > *:nth-child(2),
+    .onboarding-slide.active .agent-software-grid > *:nth-child(2),
+    .onboarding-slide.active .live-panel > *:nth-child(2),
+    .onboarding-slide.active .signal-card.two { animation-delay: 45ms; }
+
+    .onboarding-slide.active .choice-grid > *:nth-child(3),
+    .onboarding-slide.active .wizard-field-grid > *:nth-child(3),
+    .onboarding-slide.active .agent-software-grid > *:nth-child(3),
+    .onboarding-slide.active .live-panel > *:nth-child(3),
+    .onboarding-slide.active .signal-card.three { animation-delay: 90ms; }
+
+    .onboarding-slide.active .choice-grid > *:nth-child(4),
+    .onboarding-slide.active .wizard-field-grid > *:nth-child(4),
+    .onboarding-slide.active .agent-software-grid > *:nth-child(4),
+    .onboarding-slide.active .live-panel > *:nth-child(4),
+    .onboarding-slide.active .signal-card.four { animation-delay: 135ms; }
+
+    .onboarding-slide.active .choice-grid > *:nth-child(n+5),
+    .onboarding-slide.active .wizard-field-grid > *:nth-child(n+5),
+    .onboarding-slide.active .agent-software-grid > *:nth-child(n+5) { animation-delay: 180ms; }
     .wizard-card:hover,
     .depth-choice:hover,
     .page-link-card:hover {
@@ -585,12 +605,12 @@
       to { opacity: 1; transform: translateX(0); }
     }
     @keyframes tmPanelRise {
-      from { opacity: 0; transform: translateY(0.7rem); filter: blur(3px); }
-      to { opacity: 1; transform: translateY(0); filter: blur(0); }
+      from { opacity: 0; transform: translateY(12px) scale(0.995); filter: blur(3px); }
+      to { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
     }
     @keyframes tmElementRise {
-      from { opacity: 0; transform: translateY(0.45rem); }
-      to { opacity: 1; transform: translateY(0); }
+      from { opacity: 0; transform: translateY(8px) scale(0.99); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
     }
     @keyframes tmSoftSweep {
       0% { opacity: 0; transform: translateX(-18%); }
@@ -624,12 +644,18 @@
       .onboarding-slide.active .depth-choice,
       .onboarding-slide.active .page-link-card,
       .onboarding-slide.active .live-panel,
+      .onboarding-slide.active .signal-card,
+      .onboarding-slide.active .memory-device,
+      .onboarding-slide.active .wizard-field,
+      .onboarding-slide.active .agent-software-card,
+      .onboarding-slide.active .copy-command,
       .onboarding-slide.active .onboarding-visual::before {
-        animation: none;
+        animation: none !important;
+        transition: none !important;
       }
       .onboarding-slide > * {
-        opacity: 1;
-        transform: none;
+        opacity: 1 !important;
+        transform: none !important;
       }
     }
   </style>
