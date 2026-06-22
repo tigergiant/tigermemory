@@ -13,6 +13,70 @@
   window.tmPages.start = {
     abortController: null,
     toastTimer: null,
+    currentStep: 0,
+    selectedDepth: 'A',
+    llmStatus: null,
+    agentConnectStatus: null,
+    llmProviderDefaults: {
+      deepseek: {
+        label: 'DeepSeek',
+        baseUrl: 'https://api.deepseek.com/v1/chat/completions',
+        model: 'deepseek-v4-flash',
+        adminModel: 'deepseek-v4-pro',
+        helpKey: 'start.llm.deepseek.help',
+        help: '推荐给大多数用户。日常模型负责问答和路由；管理模型负责整理 Wiki 和生成待审核提案。'
+      },
+      openai_compatible: {
+        label: 'OpenAI-compatible',
+        baseUrl: 'https://api.openai.com/v1/chat/completions',
+        model: 'gpt-4o-mini',
+        adminModel: 'gpt-4o-mini',
+        helpKey: 'start.llm.openai_compatible.help',
+        help: '适合已经有 OpenAI-compatible 网关的高级用户。Anthropic 原生接口暂不承诺，需通过已验证的 OpenAI-compatible 网关接入。'
+      }
+    },
+    depthPreviews: {
+      A: {
+        nameKey: 'start.depth.preview.a.name',
+        chipKey: 'start.depth.preview.a.chip',
+        answerKey: 'start.depth.preview.a.answer',
+        noteKey: 'start.depth.preview.a.note',
+        name: 'A 极简',
+        chip: '一句话',
+        answer: '可以。先打开运行检查，看到服务正常就能用。',
+        note: '适合只想快速知道“能不能继续”的时候。'
+      },
+      B: {
+        nameKey: 'start.depth.preview.b.name',
+        chipKey: 'start.depth.preview.b.chip',
+        answerKey: 'start.depth.preview.b.answer',
+        noteKey: 'start.depth.preview.b.note',
+        name: 'B 简短',
+        chip: '结论 + 类比',
+        answer: '可以用了。你可以把它理解成一份会被 AI 读取的本地说明书；先看运行检查，状态正常就可以继续。',
+        note: '适合刚上手，想听人话解释，但不想看太多细节。'
+      },
+      C: {
+        nameKey: 'start.depth.preview.c.name',
+        chipKey: 'start.depth.preview.c.chip',
+        answerKey: 'start.depth.preview.c.answer',
+        noteKey: 'start.depth.preview.c.note',
+        name: 'C 工程',
+        chip: '结论 + 证据',
+        answer: '可以。当前控制台能打开，新手引导、运行检查和本地搜索都在同一个入口里。建议下一步先配置 LLM，再试一次本地问答。',
+        note: '适合日常开发和排障，需要知道依据、路径和下一步。'
+      },
+      D: {
+        nameKey: 'start.depth.preview.d.name',
+        chipKey: 'start.depth.preview.d.chip',
+        answerKey: 'start.depth.preview.d.answer',
+        noteKey: 'start.depth.preview.d.note',
+        name: 'D 全套',
+        chip: '验收清单',
+        answer: '可以，但建议按顺序验收：1. 运行检查没有红色错误；2. AI 连接显示模型已配置；3. 本地搜索能命中规则页；4. 离线问答能返回证据。哪一步失败，就先保留错误信息再排查。',
+        note: '适合审核、复盘、交接，或者你希望 AI 把判断过程说完整。'
+      }
+    },
 
     i18n(key, fallback, vars = {}) {
       return window.tmI18n ? window.tmI18n.t(key, fallback, vars) : fallback;
@@ -23,6 +87,10 @@
       this.abortController = new AbortController();
       const profile = document.getElementById('start-profile');
       if (profile) profile.textContent = data && data.profile ? data.profile : 'local';
+      const prefs = data && data.preferences ? data.preferences : {};
+      this.selectedDepth = prefs.communication_depth || 'A';
+      this.llmStatus = data && data.llm_status ? data.llm_status : null;
+      this.agentConnectStatus = data && data.agent_connect ? data.agent_connect : null;
       const refresh = document.getElementById('last-refresh');
       if (refresh) {
         refresh.textContent = '开始';
@@ -31,6 +99,15 @@
       root.querySelectorAll('[data-copy-command]').forEach(button => {
         button.addEventListener('click', () => this.copyCommand(button), {signal: this.abortController.signal});
       });
+      this.bindOnboarding(root);
+      this.bindDepthChoices(root);
+      this.renderDepthChoices(root);
+      this.renderLlmStatus(root);
+      this.renderAgentConnectStatus(root);
+      this.renderFinishReadiness(root);
+      this.updateLlmCommand();
+      document.addEventListener('tm-i18n-ready', () => this.refreshLocalizedUi(root), {signal: this.abortController.signal});
+      document.addEventListener('tm-lang-change', () => this.refreshLocalizedUi(root), {signal: this.abortController.signal});
       if (window.lucide) window.lucide.createIcons();
     },
 
@@ -42,6 +119,535 @@
       if (this.toastTimer) {
         clearTimeout(this.toastTimer);
         this.toastTimer = null;
+      }
+      this.currentStep = 0;
+    },
+
+    bindOnboarding(root) {
+      root.querySelectorAll('[data-onboarding-next]').forEach(button => {
+        button.addEventListener('click', () => this.showStep(this.currentStep + 1), {signal: this.abortController.signal});
+      });
+      root.querySelectorAll('[data-onboarding-prev]').forEach(button => {
+        button.addEventListener('click', () => this.showStep(this.currentStep - 1), {signal: this.abortController.signal});
+      });
+      root.querySelectorAll('[data-step-dot]').forEach(dot => {
+        dot.addEventListener('click', () => this.showStep(Number(dot.dataset.stepDot || 0)), {signal: this.abortController.signal});
+        dot.style.cursor = 'pointer';
+      });
+      root.querySelectorAll('[data-step-jump]').forEach(button => {
+        button.addEventListener('click', () => this.showStep(Number(button.dataset.stepJump || 0)), {signal: this.abortController.signal});
+      });
+      const saveDepth = document.getElementById('save-start-depth');
+      if (saveDepth) saveDepth.addEventListener('click', () => this.saveDepth(), {signal: this.abortController.signal});
+      ['llm-api-key', 'llm-base-url', 'llm-model', 'llm-admin-model'].forEach(id => {
+        const input = document.getElementById(id);
+        if (input) input.addEventListener('input', () => this.updateLlmCommand(), {signal: this.abortController.signal});
+      });
+      const provider = document.getElementById('llm-provider');
+      if (provider) {
+        provider.addEventListener('change', () => this.applyLlmProviderDefaults(true), {signal: this.abortController.signal});
+        this.applyLlmProviderFromStatus();
+      }
+      const copyLlm = document.getElementById('copy-llm-command');
+      if (copyLlm) copyLlm.addEventListener('click', () => this.copyGeneratedLlmCommand(), {signal: this.abortController.signal});
+      const saveLlm = document.getElementById('save-llm-config');
+      if (saveLlm) saveLlm.addEventListener('click', () => this.saveLlmConfig(), {signal: this.abortController.signal});
+      const applyAgent = document.getElementById('apply-agent-connect');
+      if (applyAgent) applyAgent.addEventListener('click', () => this.applyAgentConnect(), {signal: this.abortController.signal});
+      const finish = document.getElementById('finish-onboarding');
+      if (finish) finish.addEventListener('click', () => {
+        try { localStorage.setItem('tigermemory_onboarding_done', 'true'); } catch (_error) {}
+      }, {signal: this.abortController.signal});
+      this.showStep(this.initialStepFromUrl(), {syncUrl: this.hasStepQuery()});
+    },
+
+    refreshLocalizedUi(root = document) {
+      this.renderDepthChoices(root);
+      this.applyLlmProviderDefaults(false);
+      this.renderLlmStatus(root);
+      this.renderAgentConnectStatus(root);
+      this.renderFinishReadiness(root);
+      this.updateLlmCommand();
+      this.showStep(this.currentStep || 0);
+    },
+
+    bindDepthChoices(root = document) {
+      root.querySelectorAll('[data-start-depth]').forEach(button => {
+        button.addEventListener('click', () => {
+          this.selectedDepth = button.dataset.startDepth || 'A';
+          this.renderDepthChoices(root);
+        }, {signal: this.abortController.signal});
+      });
+    },
+
+    hasStepQuery() {
+      try {
+        return new URLSearchParams(window.location.search).has('step');
+      } catch (_error) {
+        return false;
+      }
+    },
+
+    initialStepFromUrl() {
+      try {
+        const raw = new URLSearchParams(window.location.search).get('step');
+        if (!raw) return 0;
+        const value = Number(raw);
+        if (!Number.isFinite(value)) return 0;
+        return Math.max(0, Math.trunc(value) - 1);
+      } catch (_error) {
+        return 0;
+      }
+    },
+
+    syncStepUrl(index) {
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set('step', String(index + 1));
+        window.history.replaceState({}, '', url);
+      } catch (_error) {}
+    },
+
+    showStep(index, options = {}) {
+      const slides = Array.from(document.querySelectorAll('[data-onboarding-slide]'));
+      if (!slides.length) return;
+      const nextIndex = Math.max(0, Math.min(slides.length - 1, index));
+      this.currentStep = nextIndex;
+      const frame = document.querySelector('.onboarding-frame');
+      if (frame) frame.dataset.stepCurrent = String(nextIndex + 1);
+      if (document.body) document.body.dataset.startStep = String(nextIndex + 1);
+      slides.forEach((slide, idx) => {
+        slide.classList.toggle('active', idx === nextIndex);
+        slide.setAttribute('aria-hidden', idx === nextIndex ? 'false' : 'true');
+      });
+      document.querySelectorAll('[data-step-dot]').forEach(dot => {
+        dot.classList.toggle('active', Number(dot.dataset.stepDot || 0) === nextIndex);
+      });
+      document.querySelectorAll('[data-step-jump]').forEach(button => {
+        button.classList.toggle('active', Number(button.dataset.stepJump || 0) === nextIndex);
+        button.setAttribute('aria-current', Number(button.dataset.stepJump || 0) === nextIndex ? 'step' : 'false');
+      });
+      const label = document.getElementById('start-step-label');
+      if (label) label.textContent = String(nextIndex + 1);
+      const prev = document.querySelector('[data-onboarding-prev]');
+      if (prev) prev.disabled = nextIndex === 0;
+      if (options.syncUrl !== false) this.syncStepUrl(nextIndex);
+      const nextButtons = document.querySelectorAll('[data-onboarding-next]');
+      nextButtons.forEach(button => {
+        button.disabled = nextIndex === slides.length - 1 && !button.closest('[data-onboarding-slide]');
+      });
+      const help = document.getElementById('onboarding-step-help');
+      const helps = [
+        this.i18n('start.step.help.0', '先用一分钟认识 TigerMemory。'),
+        this.i18n('start.step.help.1', '从普通版开始，后面再升级。'),
+        this.i18n('start.step.help.2', '选一个你喜欢的回答风格。'),
+        this.i18n('start.step.help.3', '保存本机 LLM 配置，密钥不上传。'),
+        this.i18n('start.step.help.4', '把项目规则交给你的 AI 工具。'),
+        this.i18n('start.step.help.5', '了解常用页面分别做什么。'),
+        this.i18n('start.step.help.6', '跑通一次，就可以开始用了。')
+      ];
+      if (help) help.textContent = helps[nextIndex] || '';
+    },
+
+    renderDepthChoices(root = document) {
+      root.querySelectorAll('[data-start-depth]').forEach(button => {
+        button.classList.toggle('active', button.dataset.startDepth === this.selectedDepth);
+      });
+      this.updateDepthPreview(root);
+    },
+
+    updateDepthPreview(root = document) {
+      const preview = this.depthPreviews[this.selectedDepth] || this.depthPreviews.A;
+      const fields = {
+        'depth-preview-name': this.i18n(preview.nameKey, preview.name),
+        'depth-preview-chip': this.i18n(preview.chipKey, preview.chip),
+        'depth-preview-answer': this.i18n(preview.answerKey, preview.answer),
+        'depth-preview-note': this.i18n(preview.noteKey, preview.note)
+      };
+      Object.entries(fields).forEach(([id, text]) => {
+        const element = root.getElementById ? root.getElementById(id) : document.getElementById(id);
+        if (element) element.textContent = text;
+      });
+      this.renderFinishReadiness(root);
+    },
+
+    async saveDepth() {
+      try {
+        const response = await fetch('/api/settings/preferences', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({preferences: {communication_depth: this.selectedDepth}, propose_wiki: false}),
+          signal: this.abortController.signal
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        this.toast(this.i18n('start.depth.saved', `已保存回复风格：${this.selectedDepth}`, {depth: this.selectedDepth}));
+      } catch (error) {
+        this.toast(this.i18n('start.save_failed', `保存失败：${error.message || error}`, {error: error.message || error}), false);
+      }
+    },
+
+    shellQuote(value, placeholder) {
+      const text = String(value || '').trim() || placeholder;
+      return text.replace(/"/g, '\\"');
+    },
+
+    buildLlmCommand() {
+      const provider = this.currentLlmProvider();
+      const defaults = this.llmProviderDefaults[provider] || this.llmProviderDefaults.deepseek;
+      const keyPlaceholder = provider === 'deepseek' ? '<your_deepseek_api_key>' : '<your_provider_api_key>';
+      const key = this.shellQuote(document.getElementById('llm-api-key')?.value, keyPlaceholder);
+      const base = this.shellQuote(document.getElementById('llm-base-url')?.value, defaults.baseUrl);
+      const model = this.shellQuote(document.getElementById('llm-model')?.value, defaults.model);
+      const adminModel = this.shellQuote(document.getElementById('llm-admin-model')?.value, defaults.adminModel);
+      return [
+        `setx TIGERMEMORY_LLM_PROVIDER "${provider}"`,
+        `setx DEEPSEEK_API_KEY "${key}"`,
+        `setx DEEPSEEK_BASE_URL "${base}"`,
+        `setx DEEPSEEK_MODEL "${model}"`,
+        `setx DEEPSEEK_ADMIN_MODEL "${adminModel}"`,
+        'tm llm status'
+      ].join('\n');
+    },
+
+    currentLlmProvider() {
+      const value = document.getElementById('llm-provider')?.value || 'deepseek';
+      return this.llmProviderDefaults[value] ? value : 'deepseek';
+    },
+
+    applyLlmProviderDefaults(force = false) {
+      const provider = this.currentLlmProvider();
+      const defaults = this.llmProviderDefaults[provider] || this.llmProviderDefaults.deepseek;
+      const setIfBlank = (id, value) => {
+        const input = document.getElementById(id);
+        if (input && (force || !String(input.value || '').trim())) input.value = value;
+      };
+      setIfBlank('llm-base-url', defaults.baseUrl);
+      setIfBlank('llm-model', defaults.model);
+      setIfBlank('llm-admin-model', defaults.adminModel);
+      const key = document.getElementById('llm-api-key');
+      if (key) key.placeholder = provider === 'deepseek' ? 'sk-...' : 'provider API key';
+      const help = document.getElementById('llm-provider-help');
+      if (help) help.textContent = this.i18n(defaults.helpKey, defaults.help);
+      this.updateLlmCommand();
+    },
+
+    applyLlmProviderFromStatus() {
+      const providerId = this.llmStatus && this.llmStatus.effective_provider ? this.llmStatus.effective_provider : 'deepseek';
+      const provider = this.llmProviderDefaults[providerId] ? providerId : 'deepseek';
+      const select = document.getElementById('llm-provider');
+      if (select) select.value = provider;
+      const providers = this.llmStatus && Array.isArray(this.llmStatus.providers) ? this.llmStatus.providers : [];
+      const configured = providers.find(item => item.id === provider);
+      if (configured) {
+        const base = document.getElementById('llm-base-url');
+        const model = document.getElementById('llm-model');
+        const admin = document.getElementById('llm-admin-model');
+        if (base && configured.base_url) base.value = configured.base_url;
+        if (model && configured.model) model.value = configured.model;
+        if (admin && configured.admin_model) admin.value = configured.admin_model;
+      }
+      this.applyLlmProviderDefaults(false);
+    },
+
+    updateLlmCommand() {
+      const preview = document.getElementById('llm-command-preview');
+      const copy = document.getElementById('copy-llm-command');
+      const command = this.buildLlmCommand();
+      if (preview) preview.textContent = command;
+      if (copy) copy.setAttribute('data-copy-command', command);
+      this.renderLlmPreview();
+    },
+
+    renderLlmStatus(root = document, message = '') {
+      const statusEl = root.getElementById ? root.getElementById('llm-config-status') : document.getElementById('llm-config-status');
+      if (!statusEl) return;
+      statusEl.removeAttribute('data-i18n');
+      const configured = Boolean(this.llmStatus && this.llmStatus.llm_configured);
+      const deepseek = this.llmStatus && Array.isArray(this.llmStatus.providers)
+        ? this.llmStatus.providers.find(provider => provider.id === (this.llmStatus.effective_provider || 'deepseek'))
+        : null;
+      const model = deepseek && deepseek.model ? deepseek.model : 'deepseek-v4-flash';
+      const label = this.llmProviderDefaults[this.llmStatus?.effective_provider || 'deepseek']?.label || 'DeepSeek';
+      statusEl.classList.toggle('bg-[#dde8ce]', configured);
+      statusEl.classList.toggle('border-[#a0b889]', configured);
+      statusEl.classList.toggle('text-[#52733a]', configured);
+      statusEl.classList.toggle('bg-[#fffaf0]', !configured);
+      statusEl.classList.toggle('border-[#d2b56b]', !configured);
+      statusEl.classList.toggle('text-[#8a6b1f]', !configured);
+      statusEl.textContent = message || (configured
+        ? this.i18n('start.llm.status.connected', `已接入 TigerMemory：${label} / ${model}`, {provider: label, model})
+        : this.i18n('start.llm.status.missing', '尚未接入模型。填写 API Key 后点“保存并接入 TigerMemory”。'));
+      this.renderLlmPreview(root);
+      this.renderFinishReadiness(root);
+    },
+
+    renderLlmPreview(root = document) {
+      const state = root.getElementById ? root.getElementById('llm-preview-state') : document.getElementById('llm-preview-state');
+      const daily = root.getElementById ? root.getElementById('llm-preview-daily') : document.getElementById('llm-preview-daily');
+      const admin = root.getElementById ? root.getElementById('llm-preview-admin') : document.getElementById('llm-preview-admin');
+      if (!state && !daily && !admin) return;
+      const provider = this.currentLlmProvider();
+      const defaults = this.llmProviderDefaults[provider] || this.llmProviderDefaults.deepseek;
+      const configured = Boolean(this.llmStatus && this.llmStatus.llm_configured);
+      const model = document.getElementById('llm-model')?.value || defaults.model;
+      const adminModel = document.getElementById('llm-admin-model')?.value || defaults.adminModel;
+      if (daily) daily.textContent = model;
+      if (admin) admin.textContent = adminModel;
+      if (state) {
+        state.textContent = configured
+          ? this.i18n('start.llm.preview.connected', '已接入')
+          : this.i18n('start.llm.preview.not_connected', '待保存');
+        state.classList.toggle('good', configured);
+      }
+    },
+
+    async saveLlmConfig() {
+      const button = document.getElementById('save-llm-config');
+      const apiInput = document.getElementById('llm-api-key');
+      const payload = {
+        provider: this.currentLlmProvider(),
+        api_key: apiInput ? apiInput.value : '',
+        base_url: document.getElementById('llm-base-url')?.value || this.llmProviderDefaults[this.currentLlmProvider()].baseUrl,
+        model: document.getElementById('llm-model')?.value || this.llmProviderDefaults[this.currentLlmProvider()].model,
+        admin_model: document.getElementById('llm-admin-model')?.value || this.llmProviderDefaults[this.currentLlmProvider()].adminModel
+      };
+      try {
+        if (button) {
+          button.disabled = true;
+          button.textContent = this.i18n('start.llm.testing_button', '正在测试...');
+        }
+        this.renderLlmStatus(document, this.i18n('start.llm.testing_status', '正在测试模型连通性...'));
+        const testResponse = await fetch('/api/start/llm-test', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+          signal: this.abortController.signal
+        });
+        const testResult = await testResponse.json();
+        if (!testResponse.ok || !testResult.ok) throw new Error(testResult.error || `HTTP ${testResponse.status}`);
+        this.renderLlmStatus(document, testResult.message || this.i18n('start.llm.test_passed_status', '模型连通性测试通过，正在保存...'));
+        if (button) button.textContent = this.i18n('start.llm.saving_button', '正在保存...');
+        const response = await fetch('/api/start/llm-config', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({...payload, test_connection: false}),
+          signal: this.abortController.signal
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+        this.llmStatus = result.llm_status || null;
+        if (apiInput) apiInput.value = '';
+        this.applyLlmProviderFromStatus();
+        this.updateLlmCommand();
+        this.renderLlmStatus(document, result.message || this.i18n('start.llm.saved_status', '已保存到本机 TigerMemory 配置'));
+        this.renderFinishReadiness(document);
+        this.toast(this.i18n('start.llm.saved_toast', '模型配置已保存，TigerMemory 可以直接读取。'));
+      } catch (error) {
+        this.renderLlmStatus(document, this.i18n('start.save_failed', `保存失败：${error.message || error}`, {error: error.message || error}));
+        this.toast(this.i18n('start.save_failed', `保存失败：${error.message || error}`, {error: error.message || error}), false);
+      } finally {
+        if (button) {
+          button.disabled = false;
+          button.textContent = this.i18n('start.llm.save_button', '保存并接入 TigerMemory');
+        }
+      }
+    },
+
+    async copyGeneratedLlmCommand() {
+      this.updateLlmCommand();
+      const button = document.getElementById('copy-llm-command');
+      if (button) await this.copyCommand(button);
+    },
+
+    renderAgentConnectStatus(root = document, message = '') {
+      const summary = root.getElementById ? root.getElementById('agent-connect-summary') : document.getElementById('agent-connect-summary');
+      const list = root.getElementById ? root.getElementById('agent-connect-list') : document.getElementById('agent-connect-list');
+      if (!summary || !list) return;
+      const softwareSummary = root.getElementById ? root.getElementById('agent-software-summary') : document.getElementById('agent-software-summary');
+      const softwareList = root.getElementById ? root.getElementById('agent-software-list') : document.getElementById('agent-software-list');
+      const previewTitle = root.getElementById ? root.getElementById('agent-preview-title') : document.getElementById('agent-preview-title');
+      const previewState = root.getElementById ? root.getElementById('agent-preview-state') : document.getElementById('agent-preview-state');
+      const c = window.tmDashboard || {};
+      const esc = c.esc || (value => String(value ?? '').replace(/[&<>"']/g, chr => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[chr])));
+      const status = this.agentConnectStatus || {};
+      const targets = Array.isArray(status.targets) ? status.targets : [];
+      const software = Array.isArray(status.installed_agents) ? status.installed_agents : [];
+      const scan = status.software_scan || {};
+      const configured = Number(status.configured_count || targets.filter(item => ['ok', 'available'].includes(item.status)).length || 0);
+      const missing = Number(status.missing_count || targets.filter(item => ['missing', 'missing_block'].includes(item.status)).length || 0);
+      const blocked = Number(status.blocked_count || targets.filter(item => item.status === 'blocked').length || 0);
+      const protectedCount = targets.filter(item => item.status === 'protected').length;
+      const installedCount = Number(scan.installed_count || software.filter(item => item.installed).length || 0);
+      const supportedInstalled = Number(scan.supported_installed_count || software.filter(item => item.installed && item.support === 'supported').length || 0);
+      const plannedInstalled = Number(scan.planned_installed_count || software.filter(item => item.installed && item.support !== 'supported').length || 0);
+      summary.removeAttribute('data-i18n');
+      summary.textContent = message || this.i18n(
+        'start.agent.summary',
+        `项目规则 ${configured} 项已就绪，${missing} 项默认模板可一键写入，${blocked} 项需高级配置，${protectedCount} 项受源仓保护。`,
+        {configured, missing, blocked, protected: protectedCount}
+      );
+      if (previewTitle) {
+        previewTitle.textContent = this.i18n(
+          'start.agent.preview.title',
+          `检测到 ${installedCount} 个 AI 工具，${supportedInstalled} 个可一键接入`,
+          {installed: installedCount, supported: supportedInstalled, configured, missing}
+        );
+      }
+      if (previewState) {
+        const allReady = targets.length > 0 && missing === 0 && blocked === 0;
+        previewState.textContent = allReady
+          ? this.i18n('start.agent.preview.ready', '已连接')
+          : this.i18n('start.agent.preview.actionable', '可完善');
+        previewState.classList.toggle('good', allReady);
+      }
+      const statusClass = state => {
+        if (state === 'ok' || state === 'available') return 'border-[#a0b889] bg-[#dde8ce] text-[#52733a]';
+        if (state === 'protected') return 'border-[#d8cfba] bg-[#f7f3ea] text-[#5d554b]';
+        if (state === 'blocked') return 'border-[#d49a91] bg-[#f0d6d2] text-[#8a3527]';
+        return 'border-[#d2b56b] bg-[#fffaf0] text-[#8a6b1f]';
+      };
+      const statusText = state => {
+        if (state === 'ok') return this.i18n('start.agent.status.ok', '已就绪');
+        if (state === 'available') return this.i18n('start.agent.status.available', '可配置');
+        if (state === 'protected') return this.i18n('start.agent.status.protected', '源仓保护');
+        if (state === 'blocked') return this.i18n('start.agent.status.blocked', '需高级配置');
+        if (state === 'missing_block') return this.i18n('start.agent.status.missing_block', '内置模板，可一键写入');
+        if (state === 'missing') return this.i18n('start.agent.status.missing', '内置模板，可生成');
+        return state || this.i18n('start.agent.status.unknown', '待检查');
+      };
+      const softwareStatusClass = item => {
+        if (item.installed && item.support === 'supported') return 'border-[#a0b889] bg-[#dde8ce] text-[#52733a]';
+        if (item.installed) return 'border-[#d2b56b] bg-[#fffaf0] text-[#8a6b1f]';
+        return 'border-[#d8cfba] bg-[#f7f3ea] text-[#6d6256] opacity-75';
+      };
+      const softwareStatusText = item => {
+        if (item.installed && item.support === 'supported') return this.i18n('start.agent.software.status.supported', '已检测，可一键接入');
+        if (item.installed) return this.i18n('start.agent.software.status.planned', '已检测，暂未自动适配');
+        return this.i18n('start.agent.software.status.missing', '未检测');
+      };
+      const softwareNote = item => {
+        if (item.support === 'supported') return this.i18n('start.agent.software.note.supported', 'TigerMemory 已有默认项目规则模板。');
+        if (!item.installed) return this.i18n('start.agent.software.note.missing', '这台机器上没有找到安装痕迹，默认先折叠。');
+        return this.i18n('start.agent.software.note.planned', '先显示识别结果，自动适配会后续补齐。');
+      };
+      if (softwareSummary) {
+        softwareSummary.removeAttribute('data-i18n');
+        softwareSummary.textContent = this.i18n(
+          'start.agent.software.summary',
+          `已扫描 ${software.length} 类 AI 工具：检测到 ${installedCount} 个，其中 ${supportedInstalled} 个可一键接入，${plannedInstalled} 个暂未自动适配。`,
+          {known: software.length, installed: installedCount, supported: supportedInstalled, planned: plannedInstalled}
+        );
+      }
+      if (softwareList) {
+        const ordered = [...software].sort((a, b) => {
+          if (Boolean(a.installed) !== Boolean(b.installed)) return a.installed ? -1 : 1;
+          if ((a.support === 'supported') !== (b.support === 'supported')) return a.support === 'supported' ? -1 : 1;
+          return String(a.label || '').localeCompare(String(b.label || ''));
+        });
+        const detectedSoftware = ordered.filter(item => item.installed);
+        const missingSoftware = ordered.filter(item => !item.installed);
+        const renderSoftwareCard = item => `
+          <div class="agent-software-card ${softwareStatusClass(item)}">
+            <div class="grid gap-1">
+              <b>${esc(item.label || item.id)}</b>
+              <span class="w-fit rounded-full border border-current/30 px-2 py-0.5 text-[0.68rem] font-bold">${esc(softwareStatusText(item))}</span>
+            </div>
+            <div class="mt-1 text-xs leading-5 opacity-80">${esc(softwareNote(item))}</div>
+          </div>
+        `;
+        const detectedHtml = detectedSoftware.length
+          ? detectedSoftware.map(renderSoftwareCard).join('')
+          : ordered.length
+            ? `<div class="agent-software-card border-[#d2b56b] bg-[#fffaf0] text-[#8a6b1f]">${esc(this.i18n('start.agent.software.detected_empty', '还没有检测到已安装的 AI 工具；可展开查看支持扫描的工具清单。'))}</div>`
+            : '';
+        const missingHtml = missingSoftware.length
+          ? `<details class="agent-software-missing">
+              <summary>${esc(this.i18n('start.agent.software.missing_toggle', '未检测到的工具（{count} 个）', {count: missingSoftware.length}))}</summary>
+              <div class="agent-software-grid">${missingSoftware.map(renderSoftwareCard).join('')}</div>
+            </details>`
+          : '';
+        softwareList.innerHTML = detectedHtml || missingHtml
+          ? `${detectedHtml}${missingHtml}`
+          : `<div class="agent-software-card border-[#d2b56b] bg-[#fffaf0] text-[#8a6b1f]">${esc(this.i18n('start.agent.software.empty', '还没有软件扫描结果。'))}</div>`;
+      }
+      list.innerHTML = targets.map(item => `
+        <div class="rounded-lg border ${statusClass(item.status)} px-3 py-2">
+          <div class="flex items-center justify-between gap-3">
+            <b>${esc(this.agentTargetLabel(item))}</b>
+            <span class="rounded-full border border-current/30 px-2 py-0.5 text-xs">${esc(statusText(item.status))}</span>
+          </div>
+          <div class="mt-1 text-xs leading-5 opacity-80">${esc(this.agentTargetSummary(item))}</div>
+          <div class="mt-2 flex flex-wrap items-center gap-2 text-[0.68rem] font-bold opacity-75">
+            <span class="rounded-full border border-current/25 px-2 py-0.5">${esc(this.i18n('start.agent.template_badge', '内置默认模板'))}</span>
+            ${item.rel_path ? `<span class="truncate rounded-full border border-current/25 px-2 py-0.5">${esc(item.rel_path)}</span>` : ''}
+          </div>
+        </div>
+      `).join('') || `<div class="rounded-lg border border-[#d2b56b] bg-[#fffaf0] px-3 py-2 text-sm text-[#8a6b1f]">${esc(this.i18n('start.agent.empty', '暂时读不到接入状态。'))}</div>`;
+      this.renderFinishReadiness(root);
+    },
+
+    async refreshAgentConnectStatus(message = '') {
+      const response = await fetch('/api/start/agent-connect/status', {signal: this.abortController.signal});
+      const result = await response.json();
+      if (!response.ok || !result) throw new Error(result.error || `HTTP ${response.status}`);
+      this.agentConnectStatus = result;
+      this.renderAgentConnectStatus(document, message);
+      return result;
+    },
+
+    agentTargetLabel(item) {
+      const id = item.target_id || item.target || '';
+      const fallbacks = {
+        'root-agents': item.label_cn || 'Codex / 通用 Agent 规则',
+        'root-claude': item.label_cn || 'Claude Code 项目规则',
+        'cursor-rule': item.label_cn || 'Cursor 项目规则',
+        'hooks-readme': item.label_cn || 'Hooks 模板说明',
+        'pre-tool-use-example': item.label_cn || 'PreToolUse 示例',
+        'mcp-command': item.label_cn || 'MCP 服务端'
+      };
+      return this.i18n(`start.agent.target.${id}.label`, fallbacks[id] || item.label_cn || item.target || item.target_id || '');
+    },
+
+    agentTargetSummary(item) {
+      const id = item.target_id || item.target || '';
+      const fallbacks = {
+        'root-agents': item.summary_cn || item.reason || item.rel_path || '',
+        'root-claude': item.summary_cn || item.reason || item.rel_path || '',
+        'cursor-rule': item.summary_cn || item.reason || item.rel_path || '',
+        'hooks-readme': item.summary_cn || item.reason || item.rel_path || '',
+        'pre-tool-use-example': item.summary_cn || item.reason || item.rel_path || '',
+        'mcp-command': item.summary_cn || item.reason || item.rel_path || ''
+      };
+      return this.i18n(`start.agent.target.${id}.summary`, fallbacks[id] || item.summary_cn || item.reason || item.rel_path || '');
+    },
+
+    async applyAgentConnect() {
+      const button = document.getElementById('apply-agent-connect');
+      try {
+        if (button) {
+          button.disabled = true;
+          button.textContent = this.i18n('start.agent.applying_button', '正在应用...');
+        }
+        this.renderAgentConnectStatus(document, this.i18n('start.agent.applying_status', '正在写入项目级 AI 规则，不会修改全局配置...'));
+        const response = await fetch('/api/start/agent-connect/apply', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({targets: ['codex', 'claude-code', 'cursor', 'hooks'], dry_run: false}),
+          signal: this.abortController.signal
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || (result.errors || []).join('; ') || `HTTP ${response.status}`);
+        await this.refreshAgentConnectStatus(this.i18n('start.agent.applied_status', '项目级 AI 规则已经写入。MCP 如果仍显示需高级配置，说明本机还没有公开版 MCP 命令。'));
+        this.renderFinishReadiness(document);
+        this.toast(this.i18n('start.agent.applied_toast', 'AI 工具项目规则已准备好。'));
+      } catch (error) {
+        this.renderAgentConnectStatus(document, this.i18n('start.agent.apply_failed', `接入失败：${error.message || error}`, {error: error.message || error}));
+        this.toast(this.i18n('start.agent.apply_failed', `接入失败：${error.message || error}`, {error: error.message || error}), false);
+      } finally {
+        if (button) {
+          button.disabled = false;
+          button.textContent = this.i18n('start.agent.apply_button', '应用项目级规则');
+        }
       }
     },
 
@@ -67,6 +673,58 @@
       }
     },
 
+    finishReadinessItems() {
+      const targets = Array.isArray(this.agentConnectStatus?.targets) ? this.agentConnectStatus.targets : [];
+      const missing = Number(this.agentConnectStatus?.missing_count || targets.filter(item => ['missing', 'missing_block'].includes(item.status)).length || 0);
+      const blocked = Number(this.agentConnectStatus?.blocked_count || targets.filter(item => item.status === 'blocked').length || 0);
+      const ready = targets.filter(item => ['ok', 'available', 'protected'].includes(item.status)).length;
+      return [
+        {
+          ok: true,
+          title: this.i18n('start.finish.check.local.title', '本地资料库'),
+          desc: this.i18n('start.finish.check.local.desc', '普通版不需要 Docker；先用 Markdown、Git 和本地索引工作。')
+        },
+        {
+          ok: Boolean(this.llmStatus && this.llmStatus.llm_configured),
+          title: this.i18n('start.finish.check.llm.title', 'LLM 模型'),
+          desc: this.llmStatus && this.llmStatus.llm_configured
+            ? this.i18n('start.finish.check.llm.ok', '模型配置已保存，问答和整理可以使用在线模型。')
+            : this.i18n('start.finish.check.llm.todo', '还没保存 API Key；可以先离线使用，稍后再回来配置。')
+        },
+        {
+          ok: targets.length > 0 && missing === 0 && blocked === 0,
+          title: this.i18n('start.finish.check.agent.title', 'AI 工具规则'),
+          desc: targets.length > 0
+            ? this.i18n('start.finish.check.agent.counts', `${ready} 项已就绪，${missing} 项可一键写入，${blocked} 项需高级配置。`, {ready, missing, blocked})
+            : this.i18n('start.finish.check.agent.todo', '暂时读不到 AI 工具状态；进入 AI 连接页可以继续检查。')
+        },
+        {
+          ok: Boolean(this.selectedDepth),
+          title: this.i18n('start.finish.check.style.title', '回复风格'),
+          desc: this.i18n('start.finish.check.style.desc', `当前默认：${this.selectedDepth || 'A'}`, {depth: this.selectedDepth || 'A'})
+        }
+      ];
+    },
+
+    renderFinishReadiness(root = document) {
+      const title = root.getElementById ? root.getElementById('finish-ready-title') : document.getElementById('finish-ready-title');
+      const list = root.getElementById ? root.getElementById('finish-readiness-list') : document.getElementById('finish-readiness-list');
+      if (!title || !list) return;
+      const c = window.tmDashboard || {};
+      const esc = c.esc || (value => String(value ?? '').replace(/[&<>"']/g, chr => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[chr])));
+      const items = this.finishReadinessItems();
+      const passed = items.filter(item => item.ok).length;
+      title.textContent = passed === items.length
+        ? this.i18n('start.finish.ready_title.complete', '已经可以开始使用')
+        : this.i18n('start.finish.ready_title.partial', `${passed}/${items.length} 项已准备好`, {passed, total: items.length});
+      list.innerHTML = items.map(item => `
+        <div class="status-row">
+          <div><strong>${esc(item.title)}</strong><br><span>${esc(item.desc)}</span></div>
+          <span class="status-pill ${item.ok ? 'good' : ''}">${esc(item.ok ? this.i18n('start.finish.check.ok', '已完成') : this.i18n('start.finish.check.todo', '待完善'))}</span>
+        </div>
+      `).join('');
+    },
+
     toast(message, ok = true) {
       const node = document.getElementById('start-toast');
       if (!node) return;
@@ -77,6 +735,7 @@
       this.toastTimer = setTimeout(() => node.classList.add('hidden'), 3200);
     }
   };
+
 
   window.tmPages.daily = {
     root: null,
