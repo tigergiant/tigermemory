@@ -40,6 +40,27 @@ def test_parse_report_proposals_reads_apply_and_reject_checkboxes():
     assert proposals["proposal-2026-05-21-002"].reject_checked is True
 
 
+def test_parse_report_proposals_reads_slug_id_and_bugfix_type():
+    report = """
+## 🧠 Proposed Changes
+
+#### proposal-mem0-digest-live-fetch
+
+**类型**：bugfix
+
+- [ ] apply（apply 命令：`py tools\\tm_io.py cron-apply 2026-06-18 --proposal proposal-mem0-digest-live-fetch`）
+- [ ] reject（reject 命令：`py tools\\tm_io.py cron-reject 2026-06-18 --proposal proposal-mem0-digest-live-fetch --reason "..."`）
+"""
+
+    proposals = tm_cron_apply.parse_report_proposals(report)
+
+    assert list(proposals) == ["proposal-mem0-digest-live-fetch"]
+    proposal = proposals["proposal-mem0-digest-live-fetch"]
+    assert proposal.proposal_type == "bugfix"
+    assert proposal.apply_checked is False
+    assert proposal.reject_checked is False
+
+
 def test_validate_patch_blocks_meta_files():
     patch = """diff --git a/AGENTS.md b/AGENTS.md
 --- a/AGENTS.md
@@ -141,6 +162,17 @@ def test_reject_one_writes_rejected_json(tmp_path, monkeypatch):
     )
     assert events[-1]["event_type"] == "cron_proposal_reject"
     assert events[-1]["target_ref"]["proposal_id"] == "proposal-2026-05-21-001"
+
+
+def test_reject_one_accepts_slug_proposal_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(tmp_path / "events"))
+    monkeypatch.setattr(tm_cron_apply, "PROPOSAL_ROOT", tmp_path)
+
+    result = tm_cron_apply.reject_one("2026-06-18", "proposal-mem0-digest-live-fetch", "not now")
+
+    path = tmp_path / "2026-06-18" / "proposal-mem0-digest-live-fetch" / "rejected.json"
+    assert result["proposal_id"] == "proposal-mem0-digest-live-fetch"
+    assert path.exists()
 
 
 def test_rollback_rejects_non_cron_apply_commit(monkeypatch):
