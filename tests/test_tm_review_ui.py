@@ -1102,6 +1102,9 @@ def test_start_route_returns_beginner_shell(tmp_path, monkeypatch):
     assert "tm agent status" in response.text
     assert "apply-agent-connect" in response.text
     assert 'data-step-jump="6"' in response.text
+    assert 'id="llm-live-preview"' in response.text
+    assert 'id="agent-preview-title"' in response.text
+    assert 'id="finish-readiness-list"' in response.text
     assert "data-copy-command" in response.text
     assert "window.tmPages.start.init" in response.text
     assert "/static/dashboard-common.js" in response.text
@@ -1168,6 +1171,25 @@ def test_start_dynamic_onboarding_i18n_keys_are_complete():
     js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
     required = {
         "start.agent.template_badge",
+        "start.llm.preview.connected",
+        "start.llm.preview.not_connected",
+        "start.agent.preview.title",
+        "start.agent.preview.ready",
+        "start.agent.preview.actionable",
+        "start.finish.ready_title.complete",
+        "start.finish.ready_title.partial",
+        "start.finish.check.local.title",
+        "start.finish.check.local.desc",
+        "start.finish.check.llm.title",
+        "start.finish.check.llm.ok",
+        "start.finish.check.llm.todo",
+        "start.finish.check.agent.title",
+        "start.finish.check.agent.counts",
+        "start.finish.check.agent.todo",
+        "start.finish.check.style.title",
+        "start.finish.check.style.desc",
+        "start.finish.check.ok",
+        "start.finish.check.todo",
         *{f"start.step.name.{idx}" for idx in range(7)},
     }
     for depth in "abcd":

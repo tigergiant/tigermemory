@@ -119,6 +119,10 @@ def test_start_onboarding_i18n_covers_agent_connect_and_english() -> None:
         "start.agent.title",
         "start.dashboard.onboarding_title",
         "start.finish.title",
+        "start.llm.preview.title",
+        "start.agent.preview.kicker",
+        "start.finish.ready_title.partial",
+        "start.finish.check.agent.counts",
         "start.agent.status.missing_block",
         "start.agent.target.root-agents.label",
         "start.agent.target.pre-tool-use-example.summary",
@@ -129,6 +133,8 @@ def test_start_onboarding_i18n_covers_agent_connect_and_english() -> None:
         assert zh[key] != en[key]
 
     assert en["start.agent.status.missing_block"] == "Built-in template, one-click write"
+    assert en["start.llm.preview.title"] == "How TigerMemory will use your model"
+    assert "{ready}" in en["start.finish.check.agent.counts"]
     assert "built-in default templates" in en["start.agent.template_note"]
     assert "TigerMemory 已经内置" in zh["start.agent.copy"]
 

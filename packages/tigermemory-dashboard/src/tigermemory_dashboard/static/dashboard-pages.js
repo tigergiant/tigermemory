@@ -104,6 +104,7 @@
       this.renderDepthChoices(root);
       this.renderLlmStatus(root);
       this.renderAgentConnectStatus(root);
+      this.renderFinishReadiness(root);
       this.updateLlmCommand();
       document.addEventListener('tm-lang-change', () => this.refreshLocalizedUi(root), {signal: this.abortController.signal});
       if (window.lucide) window.lucide.createIcons();
@@ -164,6 +165,7 @@
       this.applyLlmProviderDefaults(false);
       this.renderLlmStatus(root);
       this.renderAgentConnectStatus(root);
+      this.renderFinishReadiness(root);
       this.updateLlmCommand();
       this.showStep(this.currentStep || 0);
     },
@@ -233,6 +235,7 @@
         const element = root.getElementById ? root.getElementById(id) : document.getElementById(id);
         if (element) element.textContent = text;
       });
+      this.renderFinishReadiness(root);
     },
 
     async saveDepth() {
@@ -319,6 +322,7 @@
       const command = this.buildLlmCommand();
       if (preview) preview.textContent = command;
       if (copy) copy.setAttribute('data-copy-command', command);
+      this.renderLlmPreview();
     },
 
     renderLlmStatus(root = document, message = '') {
@@ -339,6 +343,28 @@
       statusEl.textContent = message || (configured
         ? this.i18n('start.llm.status.connected', `已接入 TigerMemory：${label} / ${model}`, {provider: label, model})
         : this.i18n('start.llm.status.missing', '尚未接入模型。填写 API Key 后点“保存并接入 TigerMemory”。'));
+      this.renderLlmPreview(root);
+      this.renderFinishReadiness(root);
+    },
+
+    renderLlmPreview(root = document) {
+      const state = root.getElementById ? root.getElementById('llm-preview-state') : document.getElementById('llm-preview-state');
+      const daily = root.getElementById ? root.getElementById('llm-preview-daily') : document.getElementById('llm-preview-daily');
+      const admin = root.getElementById ? root.getElementById('llm-preview-admin') : document.getElementById('llm-preview-admin');
+      if (!state && !daily && !admin) return;
+      const provider = this.currentLlmProvider();
+      const defaults = this.llmProviderDefaults[provider] || this.llmProviderDefaults.deepseek;
+      const configured = Boolean(this.llmStatus && this.llmStatus.llm_configured);
+      const model = document.getElementById('llm-model')?.value || defaults.model;
+      const adminModel = document.getElementById('llm-admin-model')?.value || defaults.adminModel;
+      if (daily) daily.textContent = model;
+      if (admin) admin.textContent = adminModel;
+      if (state) {
+        state.textContent = configured
+          ? this.i18n('start.llm.preview.connected', '已接入')
+          : this.i18n('start.llm.preview.not_connected', '待保存');
+        state.classList.toggle('good', configured);
+      }
     },
 
     async saveLlmConfig() {
@@ -370,6 +396,7 @@
         this.applyLlmProviderFromStatus();
         this.updateLlmCommand();
         this.renderLlmStatus(document, result.message || this.i18n('start.llm.saved_status', '已保存到本机 TigerMemory 配置'));
+        this.renderFinishReadiness(document);
         this.toast(this.i18n('start.llm.saved_toast', '模型配置已保存，TigerMemory 可以直接读取。'));
       } catch (error) {
         this.renderLlmStatus(document, this.i18n('start.save_failed', `保存失败：${error.message || error}`, {error: error.message || error}));
@@ -392,6 +419,8 @@
       const summary = root.getElementById ? root.getElementById('agent-connect-summary') : document.getElementById('agent-connect-summary');
       const list = root.getElementById ? root.getElementById('agent-connect-list') : document.getElementById('agent-connect-list');
       if (!summary || !list) return;
+      const previewTitle = root.getElementById ? root.getElementById('agent-preview-title') : document.getElementById('agent-preview-title');
+      const previewState = root.getElementById ? root.getElementById('agent-preview-state') : document.getElementById('agent-preview-state');
       const c = window.tmDashboard || {};
       const esc = c.esc || (value => String(value ?? '').replace(/[&<>"']/g, chr => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[chr])));
       const status = this.agentConnectStatus || {};
@@ -405,6 +434,20 @@
         `项目规则 ${configured} 项已就绪，${missing} 项默认模板可一键写入，${blocked} 项需高级配置，${protectedCount} 项受源仓保护。`,
         {configured, missing, blocked, protected: protectedCount}
       );
+      if (previewTitle) {
+        previewTitle.textContent = this.i18n(
+          'start.agent.preview.title',
+          `${configured} 项已就绪，${missing} 项可一键写入`,
+          {configured, missing}
+        );
+      }
+      if (previewState) {
+        const allReady = targets.length > 0 && missing === 0 && blocked === 0;
+        previewState.textContent = allReady
+          ? this.i18n('start.agent.preview.ready', '已连接')
+          : this.i18n('start.agent.preview.actionable', '可完善');
+        previewState.classList.toggle('good', allReady);
+      }
       const statusClass = state => {
         if (state === 'ok' || state === 'available') return 'border-[#a0b889] bg-[#dde8ce] text-[#52733a]';
         if (state === 'protected') return 'border-[#d8cfba] bg-[#f7f3ea] text-[#5d554b]';
@@ -433,6 +476,7 @@
           </div>
         </div>
       `).join('') || `<div class="rounded-lg border border-[#d2b56b] bg-[#fffaf0] px-3 py-2 text-sm text-[#8a6b1f]">${esc(this.i18n('start.agent.empty', '暂时读不到接入状态。'))}</div>`;
+      this.renderFinishReadiness(root);
     },
 
     async refreshAgentConnectStatus(message = '') {
@@ -487,6 +531,7 @@
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || (result.errors || []).join('; ') || `HTTP ${response.status}`);
         await this.refreshAgentConnectStatus(this.i18n('start.agent.applied_status', '项目级 AI 规则已经写入。MCP 如果仍显示需高级配置，说明本机还没有公开版 MCP 命令。'));
+        this.renderFinishReadiness(document);
         this.toast(this.i18n('start.agent.applied_toast', 'AI 工具项目规则已准备好。'));
       } catch (error) {
         this.renderAgentConnectStatus(document, this.i18n('start.agent.apply_failed', `接入失败：${error.message || error}`, {error: error.message || error}));
@@ -519,6 +564,58 @@
       } catch (_error) {
         this.toast(this.i18n('start.toast.copy_failed', `复制失败，请手动选择：${command}`, {command}), false);
       }
+    },
+
+    finishReadinessItems() {
+      const targets = Array.isArray(this.agentConnectStatus?.targets) ? this.agentConnectStatus.targets : [];
+      const missing = Number(this.agentConnectStatus?.missing_count || targets.filter(item => ['missing', 'missing_block'].includes(item.status)).length || 0);
+      const blocked = Number(this.agentConnectStatus?.blocked_count || targets.filter(item => item.status === 'blocked').length || 0);
+      const ready = targets.filter(item => ['ok', 'available', 'protected'].includes(item.status)).length;
+      return [
+        {
+          ok: true,
+          title: this.i18n('start.finish.check.local.title', '本地资料库'),
+          desc: this.i18n('start.finish.check.local.desc', '普通版不需要 Docker；先用 Markdown、Git 和本地索引工作。')
+        },
+        {
+          ok: Boolean(this.llmStatus && this.llmStatus.llm_configured),
+          title: this.i18n('start.finish.check.llm.title', 'LLM 模型'),
+          desc: this.llmStatus && this.llmStatus.llm_configured
+            ? this.i18n('start.finish.check.llm.ok', '模型配置已保存，问答和整理可以使用在线模型。')
+            : this.i18n('start.finish.check.llm.todo', '还没保存 API Key；可以先离线使用，稍后再回来配置。')
+        },
+        {
+          ok: targets.length > 0 && missing === 0 && blocked === 0,
+          title: this.i18n('start.finish.check.agent.title', 'AI 工具规则'),
+          desc: targets.length > 0
+            ? this.i18n('start.finish.check.agent.counts', `${ready} 项已就绪，${missing} 项可一键写入，${blocked} 项需高级配置。`, {ready, missing, blocked})
+            : this.i18n('start.finish.check.agent.todo', '暂时读不到 AI 工具状态；进入 AI 连接页可以继续检查。')
+        },
+        {
+          ok: Boolean(this.selectedDepth),
+          title: this.i18n('start.finish.check.style.title', '回复风格'),
+          desc: this.i18n('start.finish.check.style.desc', `当前默认：${this.selectedDepth || 'A'}`, {depth: this.selectedDepth || 'A'})
+        }
+      ];
+    },
+
+    renderFinishReadiness(root = document) {
+      const title = root.getElementById ? root.getElementById('finish-ready-title') : document.getElementById('finish-ready-title');
+      const list = root.getElementById ? root.getElementById('finish-readiness-list') : document.getElementById('finish-readiness-list');
+      if (!title || !list) return;
+      const c = window.tmDashboard || {};
+      const esc = c.esc || (value => String(value ?? '').replace(/[&<>"']/g, chr => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[chr])));
+      const items = this.finishReadinessItems();
+      const passed = items.filter(item => item.ok).length;
+      title.textContent = passed === items.length
+        ? this.i18n('start.finish.ready_title.complete', '已经可以开始使用')
+        : this.i18n('start.finish.ready_title.partial', `${passed}/${items.length} 项已准备好`, {passed, total: items.length});
+      list.innerHTML = items.map(item => `
+        <div class="status-row">
+          <div><strong>${esc(item.title)}</strong><br><span>${esc(item.desc)}</span></div>
+          <span class="status-pill ${item.ok ? 'good' : ''}">${esc(item.ok ? this.i18n('start.finish.check.ok', '已完成') : this.i18n('start.finish.check.todo', '待完善'))}</span>
+        </div>
+      `).join('');
     },
 
     toast(message, ok = true) {
