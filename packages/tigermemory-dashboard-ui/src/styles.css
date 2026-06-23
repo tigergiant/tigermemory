@@ -1,5 +1,38 @@
 @import "tailwindcss";
 
+@theme {
+  --color-tm-bg: var(--bg-primary);
+  --color-tm-card: var(--bg-card);
+  --color-tm-card-alt: var(--bg-card-alt);
+  --color-tm-overlay: var(--bg-overlay);
+
+  --color-tm-border: var(--border-soft);
+  --color-tm-border-strong: var(--border-strong);
+  --color-tm-border-divider: var(--border-divider);
+
+  --color-tm-primary: var(--text-primary);
+  --color-tm-secondary: var(--text-secondary);
+  --color-tm-tertiary: var(--text-tertiary);
+  --color-tm-inverse: var(--text-inverse);
+
+  --color-tm-accent: var(--accent-tiger);
+  --color-tm-accent-hi: var(--accent-tiger-hi);
+  --color-tm-accent-lo: var(--accent-tiger-lo);
+
+  --color-tm-ok: var(--status-ok-fg);
+  --color-tm-ok-bg: var(--status-ok-bg);
+  --color-tm-ok-border: var(--status-ok-border);
+  --color-tm-warn: var(--status-warn-fg);
+  --color-tm-warn-bg: var(--status-warn-bg);
+  --color-tm-warn-border: var(--status-warn-border);
+  --color-tm-info: var(--status-info-fg);
+  --color-tm-info-bg: var(--status-info-bg);
+  --color-tm-info-border: var(--status-info-border);
+  --color-tm-fail: var(--status-fail-fg);
+  --color-tm-fail-bg: var(--status-fail-bg);
+  --color-tm-fail-border: var(--status-fail-border);
+}
+
 /*
  * TigerMemory /start — React onboarding shell.
  * Visual scale is locked to the legacy dashboard design system so /start reads
@@ -31,10 +64,16 @@
   --accent-line: #1a3b6e;
   --status-ok-fg: #52733a;
   --status-ok-bg: #dde8ce;
+  --status-ok-border: #a0b889;
   --status-warn-fg: #8a6b1f;
   --status-warn-bg: #f4e6c4;
+  --status-warn-border: #e0c889;
   --status-info-fg: #6f685d;
   --status-info-bg: #ede7da;
+  --status-info-border: #d8cfba;
+  --status-fail-fg: #8a3527;
+  --status-fail-bg: #f0d6d2;
+  --status-fail-border: #d49a91;
 
   color-scheme: light;
   font-family:

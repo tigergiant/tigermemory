@@ -1629,6 +1629,35 @@ def test_self_evolution_shell_reuses_cached_payload(monkeypatch):
     assert shell == cached
 
 
+def test_react_dashboard_theme_exposes_tailwind_tm_tokens():
+    css_path = (
+        REPO_ROOT
+        / "packages"
+        / "tigermemory-dashboard-ui"
+        / "src"
+        / "styles.css"
+    )
+    css = css_path.read_text(encoding="utf-8")
+
+    assert "@theme" in css
+    for token in [
+        "--color-tm-bg",
+        "--color-tm-card",
+        "--color-tm-card-alt",
+        "--color-tm-overlay",
+        "--color-tm-border",
+        "--color-tm-border-divider",
+        "--color-tm-primary",
+        "--color-tm-secondary",
+        "--color-tm-tertiary",
+        "--color-tm-accent",
+        "--color-tm-ok-bg",
+        "--color-tm-warn-bg",
+        "--color-tm-fail-bg",
+    ]:
+        assert token in css
+
+
 def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "dashboard_health_summary", lambda: {"ok": True})
     monkeypatch.setattr(tm_review_ui, "dashboard_memory_quality", lambda date=None: {"ok": True})
