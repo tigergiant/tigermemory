@@ -989,7 +989,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v82" in response.text
+    assert "tigermemory-memory-ops-v83" in response.text
     assert "'/digest'" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
@@ -1109,19 +1109,14 @@ def test_start_route_returns_beginner_shell(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     assert response.headers["Cache-Control"].startswith("no-store")
-    assert 'body data-page="start"' in response.text
+    assert 'id="root" data-tm-react-start' in response.text
+    assert 'id="tm-start-data"' in response.text
+    assert "__TM_START_JSON__" not in response.text
     assert "tm ask --offline" in response.text
     assert "tm agent status" in response.text
-    assert "apply-agent-connect" in response.text
-    assert 'data-step-jump="6"' in response.text
-    assert 'id="llm-live-preview"' in response.text
-    assert 'id="agent-preview-title"' in response.text
-    assert 'id="finish-readiness-list"' in response.text
-    assert "data-copy-command" in response.text
-    assert "tmPanelRise" in response.text
-    assert "window.tmPages.start.init" in response.text
-    assert "/static/dashboard-common.js" in response.text
-    assert "/static/dashboard-pages.js" in response.text
+    assert "/static/react/start/assets/" in response.text
+    assert "window.tmPages.start.init" not in response.text
+    assert "/static/assets/tailwindcss.min.js" not in response.text
 
 
 def test_start_agent_connect_status_api(tmp_path, monkeypatch):
@@ -1576,7 +1571,7 @@ def test_dashboard_data_pages_return_fast_shells(tmp_path, monkeypatch):
     start = client.get("/start", headers=HOST)
 
     assert start.status_code == 200
-    assert "window.tmPages.start.init" in start.text
+    assert 'data-tm-react-start' in start.text
     assert health.status_code == 200
     assert '"loading": true' in health.text
     assert "window.tmPages.health.init" in health.text
@@ -1644,7 +1639,7 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     client.get("/", headers=HOST, follow_redirects=False)
 
     # dashboard shell pages
-    pages = ["/start", "/digest/2026-05-21", "/health", "/quality", "/agent-tools", "/settings"]
+    pages = ["/digest/2026-05-21", "/health", "/quality", "/agent-tools", "/settings"]
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_digest(tmp_path)
 
@@ -1654,7 +1649,8 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
         # 1. dashboard-common.js 被 5 页引用
         assert "/static/dashboard-common.js" in res.text
 
-    # 2. dashboard-pages.js 被 digest / health / quality / settings / agent-tools 引用
+    # 2. dashboard-pages.js 被 digest / health / quality / settings / agent-tools 引用；
+    # /start 已迁移为 React island，不再依赖旧 dashboard-pages.js 控制器。
     digest = client.get("/digest/2026-05-21", headers=HOST)
     start = client.get("/start", headers=HOST)
     health = client.get("/health", headers=HOST)
@@ -1662,7 +1658,8 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     settings = client.get("/settings", headers=HOST)
     agent_tools = client.get("/agent-tools", headers=HOST)
     assert "/static/dashboard-pages.js" in digest.text
-    assert "/static/dashboard-pages.js" in start.text
+    assert "/static/dashboard-pages.js" not in start.text
+    assert "/static/react/start/assets/" in start.text
     assert "/static/dashboard-pages.js" in health.text
     assert "/static/dashboard-pages.js" in quality.text
     assert "/static/dashboard-pages.js" in settings.text
@@ -1674,8 +1671,9 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "/static/dashboard-common.js" in sw_res.text
     assert "/static/dashboard-pages.js" in sw_res.text
 
-    # 4. health/quality/settings/digest/agent-tools 页面不再直接出现 inline 定义，且 digest 使用 init
-    assert "window.tmPages.start.init" in start.text
+    # 4. health/quality/settings/digest/agent-tools 页面不再直接出现 inline 定义，且 digest 使用 init。
+    # start 页面由 React bundle 接管。
+    assert 'data-tm-react-start' in start.text
     assert "function copyCommand" not in start.text
     assert "window.tmPages.daily.init" in digest.text
     assert "function renderInbox" not in digest.text
@@ -1691,7 +1689,8 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "async function runDoctor" not in agent_tools.text
     assert "async function runEval" not in agent_tools.text
 
-    # 5. dashboard-pages.js 中存在 window.tmPages.start, window.tmPages.settings, window.tmPages.daily, window.tmPages.agentTools，以及 AbortController 事件清理机制
+    # 5. dashboard-pages.js 仍保留 legacy start fallback 与其他模块控制器，
+    # 但正式 /start 页面优先使用 React 构建产物。
     js_content = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
     assert "clearInterval" in js_content
     assert "window.tmPages.start" in js_content
@@ -1705,12 +1704,12 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     common_js = (tm_review_ui.STATIC_DIR / "dashboard-common.js").read_text(encoding="utf-8")
     assert "window.tmDashboardRouter" in common_js
     assert "path === '/start'" in common_js
-    assert "FULL_DOCUMENT_ROUTES = new Set(['/start'])" in common_js
+    assert "FULL_DOCUMENT_ROUTES = new Set(['/start'" in common_js
     assert "syncDocumentTitle(doc)" in common_js
     assert "currentTitle.removeAttribute(attr.name)" in common_js
     assert "nextTitle.attributes" in common_js
     assert "isFullDocumentRoute(url)" in common_js
-    assert "document.body.dataset.page === 'start'" in common_js
+    assert "isFullDocumentPath(parsed.pathname)" in common_js
     assert "window.location.reload()" in common_js
     assert "tmDashboardRouter = {" in common_js
     assert "navigateTo(" in common_js

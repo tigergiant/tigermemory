@@ -4583,6 +4583,10 @@ def _start_shell() -> dict[str, Any]:
 
 def _render_start_page(data: dict[str, Any]) -> str:
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    react_entry = STATIC_DIR / "react" / "start" / "index.html"
+    if react_entry.exists():
+        html = react_entry.read_text(encoding="utf-8")
+        return html.replace("__TM_START_JSON__", payload).replace("__GIT_SHA__", git_sha())
     return _render_template("start.html", {"__START_JSON__": payload})
 
 
