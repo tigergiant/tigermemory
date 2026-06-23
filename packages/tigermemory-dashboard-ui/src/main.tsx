@@ -501,34 +501,38 @@ function App() {
   const panelMotion = reduceMotion
     ? { initial: false, animate: { opacity: 1 }, exit: { opacity: 0 } }
     : {
-        initial: { opacity: 0, y: 18, scale: 0.985 },
-        animate: { opacity: 1, y: 0, scale: 1 },
-        exit: { opacity: 0, y: -12, scale: 0.99 },
-        transition: { duration: 0.42, ease: [0.22, 1, 0.36, 1] },
+        initial: { opacity: 0, y: 10 },
+        animate: { opacity: 1, y: 0 },
+        exit: { opacity: 0, y: -6 },
+        transition: { duration: 0.32, ease: [0.22, 1, 0.36, 1] },
       };
 
   return (
     <div className="tm-start-shell">
       <Background />
       <header className="tm-topbar">
-        <a className="tm-brand" href="/start">
-          <img src="/static/tiger/tigerlogo.png" alt="" />
-          <span>
-            <strong>TigerMemory</strong>
-            <small>{t("brandSub")}</small>
-          </span>
-        </a>
-        <nav>
-          {nav.map(([href, label]) => (
-            <a key={href} className={href === "/start" ? "active" : ""} href={href}>
-              {t(label)}
-            </a>
-          ))}
-        </nav>
-        <button className="tm-lang" type="button" onClick={() => setLanguage(lang === "zh" ? "en" : "zh")}>
-          <Globe2 size={14} />
-          {lang === "zh" ? "中" : "EN"}
-        </button>
+        <div className="tm-topbar-inner">
+          <a className="tm-brand" href="/start">
+            <img src="/static/tiger/tigerlogo.png" alt="" />
+            <span>
+              <strong>TigerMemory</strong>
+              <small>{t("brandSub")}</small>
+            </span>
+          </a>
+          <nav>
+            {nav.map(([href, label]) => (
+              <a key={href} className={href === "/start" ? "active" : ""} href={href}>
+                {t(label)}
+              </a>
+            ))}
+          </nav>
+          <div className="tm-topbar-right">
+            <button className="tm-lang" type="button" onClick={() => setLanguage(lang === "zh" ? "en" : "zh")}>
+              <Globe2 size={14} />
+              {lang === "zh" ? "中" : "EN"}
+            </button>
+          </div>
+        </div>
       </header>
 
       <main className="tm-wizard" data-current-step={currentStep}>
@@ -644,9 +648,7 @@ function Background() {
   return (
     <div className="tm-bg" aria-hidden="true">
       <div className="tm-bg-mark" />
-      <div className="tm-orbit one" />
-      <div className="tm-orbit two" />
-      <div className="tm-sheen" />
+      <div className="tm-stripe tr" />
     </div>
   );
 }
