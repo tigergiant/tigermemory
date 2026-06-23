@@ -1784,6 +1784,28 @@ body.tm-page-leaving {
   animation: tmDynamicCardEntrance 1.1s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+body.tm-refresh-quiet #inbox-list article,
+body.tm-refresh-quiet #proposal-list article,
+body.tm-refresh-quiet #decision-grid > *,
+body.tm-refresh-quiet #quality-kpi-grid > *,
+body.tm-refresh-quiet .quality-kpi-grid > *,
+body.tm-refresh-quiet #service-grid > *,
+body.tm-refresh-quiet #memory-overview > *,
+body.tm-refresh-quiet .service-card {
+  animation: none !important;
+  transition: none !important;
+  max-height: none !important;
+  opacity: 1 !important;
+  transform: none !important;
+}
+
+body.tm-refresh-quiet #inbox-list > *,
+body.tm-refresh-quiet #proposal-list > *,
+body.tm-refresh-quiet #decision-grid > *,
+body.tm-refresh-quiet .quality-kpi-grid > * {
+  animation-delay: 0ms !important;
+}
+
 @keyframes tmDynamicCardEntrance {
   from {
     opacity: 0;

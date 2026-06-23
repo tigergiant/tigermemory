@@ -760,6 +760,8 @@
     queueRequestId: 0,
     fetchDigestRequestId: 0,
     fetchDigestAbortController: null,
+    fetchDigestInFlight: false,
+    digestRenderSignature: null,
 
     actionLabels: {
       archive: '归档',
@@ -805,6 +807,8 @@
       this.queueTimer = null;
       this.queueSeq = 0;
       this.abortController = new AbortController();
+      this.fetchDigestInFlight = false;
+      this.digestRenderSignature = null;
 
       // Bind static events with abort signal
       this.bindEvents();
@@ -851,6 +855,8 @@
       this.writeQueue = null;
       this.queueProcessing = false;
       this.queueTimer = null;
+      this.fetchDigestInFlight = false;
+      this.digestRenderSignature = null;
       this.digest = null;
       this.counts = null;
       this.inboxRows = null;
@@ -2774,20 +2780,81 @@
       }
     },
 
-    applyDigest(nextDigest) {
+    digestSignature(digest) {
+      const stableRows = (rows, mapper) => Array.isArray(rows) ? rows.map(mapper) : [];
+      return JSON.stringify({
+        date: digest && digest.date ? digest.date : '',
+        counts: digest && digest.counts ? digest.counts : {},
+        inbox: stableRows(digest && digest.inbox_rows, row => [
+          row.path || '',
+          row.action || '',
+          row.age_days || 0,
+          row.stale_archive || false,
+          row.route_target || '',
+          row.route_score || '',
+          row.route_hard_rule || '',
+          row.raw_summary || row.summary || row.preview_cn || ''
+        ]),
+        ledger: stableRows(digest && digest.wiki_proposal_ledger, row => [
+          row.target || '',
+          row.status || '',
+          row.count || 0,
+          row.latest_date || '',
+          row.updated_at || ''
+        ]),
+        proposals: stableRows(digest && digest.proposals, row => [
+          row.id || '',
+          row.type || '',
+          row.trigger || '',
+          row.status || '',
+          row.impact || ''
+        ]),
+        metrics: digest && digest.metrics ? digest.metrics : '',
+        appendix: digest && digest.appendix ? digest.appendix : ''
+      });
+    },
+
+    withQuietDigestRender(enabled, renderFn) {
+      if (!enabled || typeof document === 'undefined' || !document.body) {
+        return renderFn();
+      }
+      document.body.classList.add('tm-refresh-quiet');
+      try {
+        return renderFn();
+      } finally {
+        window.requestAnimationFrame(() => {
+          document.body.classList.remove('tm-refresh-quiet');
+        });
+      }
+    },
+
+    applyDigest(nextDigest, options = {}) {
+      const digest = nextDigest || {};
+      const signature = this.digestSignature(digest);
+      if (options.skipIfUnchanged && signature === this.digestRenderSignature) {
+        this.digest = digest;
+        this.counts = this.digest.counts || {};
+        this.inboxRows = this.digest.inbox_rows || [];
+        this.wikiProposalLedger = this.digest.wiki_proposal_ledger || [];
+        this.proposals = this.digest.proposals || [];
+        return false;
+      }
       this.digest = nextDigest || {};
       this.counts = this.digest.counts || {};
       this.inboxRows = this.digest.inbox_rows || [];
       this.wikiProposalLedger = this.digest.wiki_proposal_ledger || [];
       this.proposals = this.digest.proposals || [];
+      this.digestRenderSignature = signature;
       if (this.selectedInbox) this.selectedInbox.clear();
 
-      this.renderHeader();
-      this.renderDecision();
-      this.renderCronIntake();
-      this.renderWikiProposalLedger();
-      this.renderInbox();
-      this.renderProposals();
+      this.withQuietDigestRender(!!options.quiet, () => {
+        this.renderHeader();
+        this.renderDecision();
+        this.renderCronIntake();
+        this.renderWikiProposalLedger();
+        this.renderInbox();
+        this.renderProposals();
+      });
 
       const metrics = document.getElementById('metrics');
       if (metrics) {
@@ -2804,6 +2871,7 @@
       }
 
       if (window.lucide) window.lucide.createIcons();
+      return true;
     },
 
     renderDigestError(message) {
@@ -2827,9 +2895,11 @@
     },
 
     async fetchDigest(options = {}) {
+      if (options.quiet && this.fetchDigestInFlight) return false;
       if (this.fetchDigestAbortController) this.fetchDigestAbortController.abort();
       const requestId = ++this.fetchDigestRequestId;
       this.fetchDigestAbortController = new AbortController();
+      this.fetchDigestInFlight = true;
       try {
         const date = this.digest.date || '';
         if (!date) return;
@@ -2839,8 +2909,12 @@
         const data = await response.json();
         if (requestId !== this.fetchDigestRequestId) return;
         if (!data.ok) throw new Error(data.error || '今日数据加载失败');
-        this.applyDigest(data.digest);
-        this.fetchCronIntake({quiet: true});
+        const changed = this.applyDigest(data.digest, {
+          quiet: !!options.quiet,
+          skipIfUnchanged: !!options.quiet
+        });
+        if (changed !== false) this.fetchCronIntake({quiet: true});
+        return changed;
       } catch (error) {
         if (error.name === 'AbortError') return;
         console.error(error);
@@ -2849,6 +2923,11 @@
           return;
         }
         this.renderDigestError(`数据暂时没取到，请稍后重试：${error.message}`);
+      } finally {
+        if (requestId === this.fetchDigestRequestId) {
+          this.fetchDigestInFlight = false;
+          this.fetchDigestAbortController = null;
+        }
       }
     },
 

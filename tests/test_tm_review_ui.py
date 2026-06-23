@@ -550,6 +550,7 @@ def test_api_cron_intake_rejects_invalid_date(tmp_path, monkeypatch):
 def test_daily_page_static_assets_wire_cron_intake_card():
     review_html = (tm_review_ui.STATIC_DIR / "review.html").read_text(encoding="utf-8")
     pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
+    style_css = (tm_review_ui.STATIC_DIR / "_components" / "style.css").read_text(encoding="utf-8")
 
     assert 'id="cron-intake-section"' in review_html
     assert 'id="cron-intake-data"' in review_html
@@ -586,6 +587,12 @@ def test_daily_page_static_assets_wire_cron_intake_card():
     assert "90000" in pages_js
     assert "markCompletedIfPathGone" in pages_js
     assert "digestHasInboxPath" in pages_js
+    assert "digestRenderSignature" in pages_js
+    assert "digestSignature(digest)" in pages_js
+    assert "skipIfUnchanged" in pages_js
+    assert "fetchDigestInFlight" in pages_js
+    assert "tm-refresh-quiet" in pages_js
+    assert "body.tm-refresh-quiet #inbox-list article" in style_css
     assert "/api/cron/intake/" in pages_js
     assert "cron-intake-summary" in pages_js
     assert "font-mono" in pages_js
