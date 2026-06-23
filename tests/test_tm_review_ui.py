@@ -3975,6 +3975,7 @@ def test_canvas_candidate_shelf_is_separate_from_star_map():
 
 def test_health_page_compacts_optional_advanced_services_for_local_mode():
     pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
+    style_css = (tm_review_ui.STATIC_DIR / "_components" / "style.css").read_text(encoding="utf-8")
 
     assert "renderServices(report)" in pages_js
     assert "runtime_profile) === 'local'" in pages_js
@@ -3982,6 +3983,12 @@ def test_health_page_compacts_optional_advanced_services_for_local_mode():
     assert "高级连接未启用" in pages_js
     assert "基础模式不需要" in pages_js
     assert "基础模式可用" in pages_js
+    assert "healthRenderSignature" in pages_js
+    assert "memoryOverviewRenderSignature" in pages_js
+    assert "fetchHealthInFlight" in pages_js
+    assert "fetchMemoryOverviewInFlight" in pages_js
+    assert "body[data-page=\"health\"] .status-dot" in style_css
+    assert "body.tm-refresh-quiet #service-grid > *" in style_css
 
 
 def test_dashboard_p2_static_sections():

@@ -577,6 +577,18 @@ body.tm-page-leaving main {
   transform: scale(0.995) translateY(3px);
 }
 
+body[data-page="health"]::before,
+body[data-page="health"]::after {
+  animation: none !important;
+  transform: none !important;
+}
+
+body[data-page="health"] .status-dot {
+  animation: none !important;
+  box-shadow: 0 0 3px var(--glow-color), inset 0 1px 1px rgba(255, 255, 255, 0.35) !important;
+  transform: none !important;
+}
+
 body.tm-is-updating main {
   animation: none !important;
   transition: none !important;
@@ -1807,6 +1819,32 @@ body.tm-page-leaving {
 .service-card {
   overflow: hidden;
   animation: tmDynamicCardEntrance 1.1s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+body.tm-refresh-quiet #inbox-list article,
+body.tm-refresh-quiet #proposal-list article,
+body.tm-refresh-quiet #decision-grid > *,
+body.tm-refresh-quiet #quality-kpi-grid > *,
+body.tm-refresh-quiet .quality-kpi-grid > *,
+body.tm-refresh-quiet #service-grid > *,
+body.tm-refresh-quiet #memory-overview > *,
+body.tm-refresh-quiet #memory-trend > *,
+body.tm-refresh-quiet .service-card,
+body.tm-refresh-quiet .card {
+  animation: none !important;
+  transition: none !important;
+  max-height: none !important;
+  opacity: 1 !important;
+  transform: none !important;
+}
+
+body.tm-refresh-quiet #inbox-list > *,
+body.tm-refresh-quiet #proposal-list > *,
+body.tm-refresh-quiet #decision-grid > *,
+body.tm-refresh-quiet #memory-overview > *,
+body.tm-refresh-quiet #memory-trend > *,
+body.tm-refresh-quiet .quality-kpi-grid > * {
+  animation-delay: 0ms !important;
 }
 
 @keyframes tmDynamicCardEntrance {

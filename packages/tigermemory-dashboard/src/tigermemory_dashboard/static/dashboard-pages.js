@@ -3710,6 +3710,10 @@
     fetchMemoryOverviewRequestId: 0,
     fetchHealthAbortController: null,
     fetchMemoryOverviewAbortController: null,
+    fetchHealthInFlight: false,
+    fetchMemoryOverviewInFlight: false,
+    healthRenderSignature: null,
+    memoryOverviewRenderSignature: null,
 
     init(root, data) {
       // Prevent duplicate initializations and clear any pre-existing timers/listeners
@@ -3717,6 +3721,10 @@
 
       this.root = root;
       this.data = data;
+      this.fetchHealthInFlight = false;
+      this.fetchMemoryOverviewInFlight = false;
+      this.healthRenderSignature = null;
+      this.memoryOverviewRenderSignature = null;
 
       // Initial render
       this.render(this.data);
@@ -3735,11 +3743,13 @@
       if (this.data.loading) {
         this.fetchHealth();
       }
-      this.fetchMemoryOverview();
+      if (!Object.prototype.hasOwnProperty.call(this.data || {}, 'memory_overview')) {
+        this.fetchMemoryOverview({quiet: true});
+      }
 
       // Set up periodic auto refresh (30 seconds)
-      this.refreshIntervalId = setInterval(() => runWhenVisible(() => this.fetchHealth()), 45000);
-      this.memoryOverviewIntervalId = setInterval(() => runWhenVisible(() => this.fetchMemoryOverview()), 90000);
+      this.refreshIntervalId = setInterval(() => runWhenVisible(() => this.fetchHealth({quiet: true})), 45000);
+      this.memoryOverviewIntervalId = setInterval(() => runWhenVisible(() => this.fetchMemoryOverview({quiet: true})), 90000);
     },
 
     destroy() {
@@ -3760,6 +3770,10 @@
         this.fetchMemoryOverviewAbortController.abort();
         this.fetchMemoryOverviewAbortController = null;
       }
+      this.fetchHealthInFlight = false;
+      this.fetchMemoryOverviewInFlight = false;
+      this.healthRenderSignature = null;
+      this.memoryOverviewRenderSignature = null;
 
       // Remove refresh button listener
       const refreshBtn = document.getElementById('refresh-button');
@@ -3769,31 +3783,110 @@
       }
     },
 
-    render(report) {
-      this.data = report;
-      const c = window.tmDashboard;
+    healthSignature(report) {
+      const stableRows = (rows, mapper) => Array.isArray(rows) ? rows.map(mapper) : [];
+      const checks = report && report.agent_doctor && Array.isArray(report.agent_doctor.checks)
+        ? report.agent_doctor.checks
+        : [];
+      return JSON.stringify({
+        loading: !!(report && report.loading),
+        dashboard: report && report.dashboard ? {
+          git_sha: report.dashboard.git_sha || '',
+          opposite_sha: report.dashboard.opposite_sha || '',
+          runtime_profile: report.dashboard.runtime_profile || '',
+          is_wsl: !!report.dashboard.is_wsl
+        } : {},
+        services: stableRows(report && report.services, service => [
+          service.name || '',
+          service.status || '',
+          service.status_label || '',
+          service.port || '',
+          service.detail || '',
+          service.latency_ms == null ? null : Math.round(Number(service.latency_ms) / 100) * 100
+        ]),
+        daily_digest: report && report.daily_digest ? {
+          exists: !!report.daily_digest.exists,
+          date: report.daily_digest.date || '',
+          path: report.daily_digest.path || ''
+        } : {},
+        agent_doctor: {
+          summary: report && report.agent_doctor ? report.agent_doctor.summary || {} : {},
+          checks: stableRows(checks, check => [
+            check.name || '',
+            check.status || '',
+            check.reason || '',
+            check.error || '',
+            check.dirty_count || 0,
+            check.repo_root || '',
+            check.branch || '',
+            check.head || ''
+          ])
+        },
+        recent_commits: report && Array.isArray(report.recent_commits) ? report.recent_commits : []
+      });
+    },
 
+    memoryOverviewSignature(overview) {
+      return JSON.stringify({
+        ok: overview && Object.prototype.hasOwnProperty.call(overview, 'ok') ? overview.ok : true,
+        wiki_pages: overview ? overview.wiki_pages : null,
+        inbox_pending: overview ? overview.inbox_pending : null,
+        mem0_approximate: overview ? overview.mem0_approximate : null,
+        trend_7d: overview && Array.isArray(overview.trend_7d) ? overview.trend_7d : []
+      });
+    },
+
+    withQuietHealthRender(enabled, renderFn) {
+      if (!enabled || typeof document === 'undefined' || !document.body) {
+        return renderFn();
+      }
+      document.body.classList.add('tm-refresh-quiet');
+      try {
+        return renderFn();
+      } finally {
+        window.requestAnimationFrame(() => {
+          document.body.classList.remove('tm-refresh-quiet');
+        });
+      }
+    },
+
+    updateHealthHeader(report) {
       const generatedAtEl = document.getElementById('generated-at');
       if (generatedAtEl) generatedAtEl.textContent = report.generated_at || '-';
 
       const shaPill = document.getElementById('sha-pill');
       if (shaPill) shaPill.textContent = (report.dashboard && report.dashboard.git_sha) || '-';
+    },
 
-      const serviceGrid = document.getElementById('service-grid');
-      if (serviceGrid) {
-        serviceGrid.innerHTML = this.renderServices(report);
-      }
+    render(report, options = {}) {
+      this.data = report;
+      const c = window.tmDashboard;
+      const signature = this.healthSignature(report || {});
+      this.updateHealthHeader(report || {});
 
-      this.renderWorktree(report);
-      this.renderDigest(report);
-      if (Object.prototype.hasOwnProperty.call(report, 'memory_overview')) {
-        this.renderMemoryOverview(report.memory_overview || {});
+      if (options.skipIfUnchanged && signature === this.healthRenderSignature) {
+        return false;
       }
-      this.renderCommits(report);
-      this.renderDoctor(report);
-      this.renderSelfCheck(report);
+      this.healthRenderSignature = signature;
+
+      this.withQuietHealthRender(!!options.quiet, () => {
+        const serviceGrid = document.getElementById('service-grid');
+        if (serviceGrid) {
+          serviceGrid.innerHTML = this.renderServices(report);
+        }
+
+        this.renderWorktree(report);
+        this.renderDigest(report);
+        if (Object.prototype.hasOwnProperty.call(report, 'memory_overview')) {
+          this.renderMemoryOverview(report.memory_overview || {}, options);
+        }
+        this.renderCommits(report);
+        this.renderDoctor(report);
+        this.renderSelfCheck(report);
+      });
 
       if (window.lucide) window.lucide.createIcons();
+      return true;
     },
 
     async renderSelfCheck(report) {
@@ -3929,12 +4022,18 @@
       `;
     },
 
-    renderMemoryOverview(overview) {
+    renderMemoryOverview(overview, options = {}) {
       const c = window.tmDashboard;
       const grid = document.getElementById('memory-overview');
       const trend = document.getElementById('memory-trend');
       const status = document.getElementById('memory-overview-status');
       if (status) status.textContent = overview.ok === false ? '加载失败' : '实时估算';
+      const signature = this.memoryOverviewSignature(overview || {});
+      if (options.skipIfUnchanged && signature === this.memoryOverviewRenderSignature) {
+        return false;
+      }
+      this.memoryOverviewRenderSignature = signature;
+      return this.withQuietHealthRender(!!options.quiet, () => {
       if (grid) {
         const mem0Available = overview.mem0_approximate !== null && overview.mem0_approximate !== undefined;
         const mem0Subline = mem0Available ? '即时记忆（在线）' : '即时记忆暂时无法连接';
@@ -3963,6 +4062,8 @@
           `;
         }).join('');
       }
+      return true;
+      });
     },
 
     renderWorktree(report) {
@@ -4127,36 +4228,56 @@
       }
     },
 
-    async fetchHealth() {
+    async fetchHealth(options = {}) {
+      if (options.quiet && this.fetchHealthInFlight) return false;
       if (this.fetchHealthAbortController) this.fetchHealthAbortController.abort();
       const requestId = ++this.fetchHealthRequestId;
       this.fetchHealthAbortController = new AbortController();
+      this.fetchHealthInFlight = true;
       try {
         const response = await fetch('/api/health/summary', { signal: this.fetchHealthAbortController.signal });
         const data = await response.json();
         if (requestId !== this.fetchHealthRequestId) return;
-        this.render(data);
+        return this.render(data, {
+          quiet: !!options.quiet,
+          skipIfUnchanged: !!options.quiet
+        });
       } catch (error) {
         if (error.name === 'AbortError') return;
         console.error(error);
         this.renderFetchError('数据暂时没取到，请稍后重试');
+      } finally {
+        if (requestId === this.fetchHealthRequestId) {
+          this.fetchHealthInFlight = false;
+          this.fetchHealthAbortController = null;
+        }
       }
     },
 
-    async fetchMemoryOverview() {
+    async fetchMemoryOverview(options = {}) {
+      if (options.quiet && this.fetchMemoryOverviewInFlight) return false;
       const status = document.getElementById('memory-overview-status');
       if (this.fetchMemoryOverviewAbortController) this.fetchMemoryOverviewAbortController.abort();
       const requestId = ++this.fetchMemoryOverviewRequestId;
       this.fetchMemoryOverviewAbortController = new AbortController();
+      this.fetchMemoryOverviewInFlight = true;
       try {
         const response = await fetch('/api/health/memory-overview', { signal: this.fetchMemoryOverviewAbortController.signal });
         const data = await response.json();
         if (requestId !== this.fetchMemoryOverviewRequestId) return;
-        this.renderMemoryOverview(data);
+        return this.renderMemoryOverview(data, {
+          quiet: !!options.quiet,
+          skipIfUnchanged: !!options.quiet
+        });
       } catch (error) {
         if (error.name === 'AbortError') return;
         console.error(error);
         if (status) status.textContent = '加载失败';
+      } finally {
+        if (requestId === this.fetchMemoryOverviewRequestId) {
+          this.fetchMemoryOverviewInFlight = false;
+          this.fetchMemoryOverviewAbortController = null;
+        }
       }
     }
   };
