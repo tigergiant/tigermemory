@@ -533,7 +533,6 @@ body::before {
   height: 60vw;
   border-radius: 9999px;
   background: radial-gradient(circle, rgba(200, 165, 96, 0.09) 0%, rgba(200, 165, 96, 0) 70%);
-  filter: blur(60px);
   z-index: -2;
   pointer-events: none;
 }
@@ -547,7 +546,6 @@ body::after {
   height: 50vw;
   border-radius: 9999px;
   background: radial-gradient(circle, rgba(26, 59, 110, 0.05) 0%, rgba(26, 59, 110, 0) 70%);
-  filter: blur(60px);
   z-index: -2;
   pointer-events: none;
 }
@@ -732,6 +730,12 @@ body.tm-page-leaving {
       background: #b99445;
       animation: tmFlowDot 7s linear infinite;
       animation-fill-mode: both;
+      animation-play-state: paused;
+      will-change: auto;
+    }
+    .flow-dash:hover .flow-dash-dot,
+    .flow-dash:focus-within .flow-dash-dot {
+      animation-play-state: running;
       will-change: transform, opacity;
     }
     .quality-shell {
@@ -1593,7 +1597,8 @@ body.tm-page-leaving {
       stroke-linecap: round;
       opacity: 0.58;
       animation: tmFlowPathStream 7s linear infinite;
-      will-change: stroke-dashoffset, opacity;
+      animation-play-state: paused;
+      will-change: auto;
     }
 
     @keyframes tmFlowPathStream {
@@ -1614,7 +1619,7 @@ body.tm-page-leaving {
       50% { box-shadow: 0 0 0 4px rgba(201, 121, 111, 0.15); }
     }
     .tm-flow-output-card.issue-card-anim {
-      animation: tmIssueBreathing 3s infinite ease-in-out;
+      animation: tmIssueBreathing 1.5s ease-out 1 forwards;
     }
     
     /* Ensure svg covers without blocking pointer events */
@@ -1773,6 +1778,8 @@ body.tm-page-leaving {
       stroke-width: 3px !important;
       opacity: 0.95 !important;
       animation-duration: 3.5s;
+      animation-play-state: running;
+      will-change: stroke-dashoffset, opacity;
     }
 
 /* Tab Panel Transition */

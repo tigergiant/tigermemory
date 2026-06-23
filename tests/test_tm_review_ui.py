@@ -989,7 +989,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v78" in response.text
+    assert "tigermemory-memory-ops-v79" in response.text
     assert "'/digest'" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
@@ -4016,6 +4016,11 @@ def test_dashboard_p2_static_sections():
     assert "scheduleDrawFlowLines" in pages_js
     assert "window.addEventListener('resize', () => { if (window.tmPages && window.tmPages.quality" not in pages_js
     assert "tmFlowPathStream" in style_css
+    assert ".tm-flow-path-stream" in style_css
+    assert ".tm-flow-path-stream.flow-path-active" in style_css
+    assert "animation-play-state: paused" in style_css
+    assert "animation-play-state: running" in style_css
+    assert "tmIssueBreathing 1.5s ease-out 1 forwards" in style_css
     assert "tmFlowDotPulse" not in style_css
     assert "tmPathFlowAnim" not in style_css
 
