@@ -7,7 +7,6 @@ import {
   Code2,
   Database,
   Gauge,
-  Globe2,
   KeyRound,
   Laptop,
   Layers3,
@@ -22,7 +21,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import React, { useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { ParticleField } from "./ParticleField";
+import { DashboardShell } from "./components/DashboardShell";
 import "./styles.css";
 
 type Lang = "zh" | "en";
@@ -331,18 +330,6 @@ const copy = {
 const steps: StepId[] = ["intro", "mode", "style", "llm", "agent", "pages", "finish"];
 const depthIds: DepthId[] = ["A", "B", "C", "D"];
 
-const nav = [
-  ["/start", "navStart"],
-  ["/digest", "navDigest"],
-  ["/ledger", "navMemory"],
-  ["/health", "navHealth"],
-  ["/quality", "navQuality"],
-  ["/canvas", "navCanvas"],
-  ["/self-evolution", "navEvolution"],
-  ["/agent-tools", "navAgent"],
-  ["/settings", "navSettings"],
-] as const;
-
 const pageCards = [
   ["pageDigestTitle", "pageDigestDesc", "/digest", SearchCheck],
   ["pageHealthTitle", "pageHealthDesc", "/health", Gauge],
@@ -509,33 +496,12 @@ function App() {
       };
 
   return (
-    <div className="tm-start-shell">
-      <Background />
-      <header className="tm-topbar">
-        <div className="tm-topbar-inner">
-          <a className="tm-brand" href="/start">
-            <img src="/static/tiger/tigerlogo.png" alt="" />
-            <span>
-              <strong>TigerMemory</strong>
-              <small>{t("brandSub")}</small>
-            </span>
-          </a>
-          <nav>
-            {nav.map(([href, label]) => (
-              <a key={href} className={href === "/start" ? "active" : ""} href={href}>
-                {t(label)}
-              </a>
-            ))}
-          </nav>
-          <div className="tm-topbar-right">
-            <button className="tm-lang" type="button" onClick={() => setLanguage(lang === "zh" ? "en" : "zh")}>
-              <Globe2 size={14} />
-              {lang === "zh" ? "中" : "EN"}
-            </button>
-          </div>
-        </div>
-      </header>
-
+    <DashboardShell
+      active="/start"
+      lang={lang}
+      onToggleLang={() => setLanguage(lang === "zh" ? "en" : "zh")}
+      tagline={t("brandSub")}
+    >
       <main className="tm-wizard" data-current-step={currentStep}>
         <section className="tm-wizard-card">
           <div className="tm-wizard-head">
@@ -641,17 +607,7 @@ function App() {
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
-  );
-}
-
-function Background() {
-  return (
-    <div className="tm-bg" aria-hidden="true">
-      <ParticleField />
-      <div className="tm-bg-mark" />
-      <div className="tm-stripe tr" />
-    </div>
+    </DashboardShell>
   );
 }
 

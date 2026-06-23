@@ -20,7 +20,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { ParticleField } from "../ParticleField";
+import { DashboardCard, DashboardShell } from "../components/DashboardShell";
 import "../styles.css";
 
 // ---------------------------------------------------------------------------
@@ -287,100 +287,6 @@ function initialLanguage(): Lang {
   const stored = window.localStorage.getItem("tm-lang");
   if (stored === "zh" || stored === "en") return stored;
   return window.navigator.language.toLowerCase().startsWith("en") ? "en" : "zh";
-}
-
-// ---------------------------------------------------------------------------
-// Shared layout primitives (same design system as /start)
-// ---------------------------------------------------------------------------
-const NAV = [
-  ["/start", "navStart"],
-  ["/digest", "navDigest"],
-  ["/health", "navHealth"],
-  ["/quality", "navQuality"],
-  ["/canvas", "navCanvas"],
-  ["/self-evolution", "navSelf"],
-  ["/agent-tools", "navAgent"],
-  ["/settings", "navSettings"],
-] as const;
-
-const CARD = "rounded-2xl border border-tm-border bg-tm-card shadow-[0_1px_2px_rgba(31,29,27,0.04),0_12px_32px_rgba(168,123,34,0.06)]";
-const SECTION_TITLE = "mb-3 flex items-center gap-2 text-lg font-semibold text-tm-primary";
-
-function Header({ active, lang, onToggleLang, t }: { active: string; lang: Lang; onToggleLang: () => void; t: TFn }) {
-  return (
-    <header className="sticky top-0 z-30 border-b border-tm-border-divider bg-tm-bg/95 backdrop-blur">
-      <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-4">
-        <a href="/" className="flex w-[220px] shrink-0 select-none items-center gap-3">
-          <img src="/static/tiger/tigerlogo.png" alt="" className="h-10 w-10" />
-          <span>
-            <span className="block text-base font-extrabold leading-none text-tm-primary">TigerMemory</span>
-            <span className="mt-0.5 block text-xs text-tm-tertiary">{t("tagline")}</span>
-          </span>
-        </a>
-        <nav className="hidden flex-1 items-center justify-center gap-1 md:flex">
-          {NAV.map(([href, label]) => (
-            <a
-              key={href}
-              href={href}
-              className={classNames(
-                "rounded-xl px-2.5 py-2 text-[13px] leading-5 whitespace-nowrap transition-colors",
-                href === active
-                  ? "bg-tm-accent font-bold text-tm-inverse shadow-[0_2px_6px_rgba(200,165,96,0.18)]"
-                  : "text-tm-secondary hover:bg-tm-card-alt",
-              )}
-            >
-              {t(label)}
-            </a>
-          ))}
-        </nav>
-        <div className="flex w-[220px] shrink-0 items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onToggleLang}
-            className="rounded-full bg-tm-card-alt px-2 py-1 text-xs font-semibold text-tm-tertiary hover:text-tm-secondary"
-            aria-label="Toggle language"
-          >
-            {lang === "zh" ? "中" : "EN"}
-          </button>
-          <span className="rounded-full bg-tm-card-alt px-2 py-1 text-xs text-tm-tertiary">digest</span>
-        </div>
-      </div>
-    </header>
-  );
-}
-
-function SectionShell({
-  icon,
-  title,
-  count,
-  children,
-  className,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  count?: string;
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <motion.section
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-      className={classNames("mb-5 p-4", CARD, className)}
-    >
-      <h2 className={SECTION_TITLE}>
-        <span className="text-tm-accent">{icon}</span>
-        <span>{title}</span>
-        {count && (
-          <span className="ml-auto rounded-full border border-tm-border-divider bg-tm-card-alt px-3 py-1 text-xs text-tm-secondary">
-            {count}
-          </span>
-        )}
-      </h2>
-      {children}
-    </motion.section>
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -828,7 +734,7 @@ function CronIntakeSection({ intake, t }: { intake: CronIntake | null; t: TFn })
     );
 
   return (
-    <SectionShell icon={<Radar size={20} />} title={t("cronTitle")}>
+    <DashboardCard icon={<Radar size={20} />} title={t("cronTitle")}>
       <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <span
           className={classNames(
@@ -888,7 +794,7 @@ function CronIntakeSection({ intake, t }: { intake: CronIntake | null; t: TFn })
           ))}
         </div>
       ) : null}
-    </SectionShell>
+    </DashboardCard>
   );
 }
 
@@ -944,7 +850,7 @@ function WikiLedgerSection({
   const investmentWikiGroups = rows.filter((row) => row.status === "investment-wiki").length;
   const investmentArchiveGroups = rows.filter((row) => row.status === "investment-thread").length;
   return (
-    <SectionShell
+    <DashboardCard
       icon={<BookMarked size={20} />}
       title={t("wikiLedgerTitle")}
       count={`${rows.length} 条`}
@@ -1062,7 +968,7 @@ function WikiLedgerSection({
         );
         })}
       </div>
-    </SectionShell>
+    </DashboardCard>
   );
 }
 
@@ -1344,20 +1250,11 @@ function App() {
   const visibleRows = inboxRows.filter((r) => r.path);
 
   return (
-    <div className="relative min-h-screen">
-      <ParticleField />
-      <img
-        src="/static/tiger/tigerlogo.png"
-        alt=""
-        aria-hidden="true"
-        className="pointer-events-none fixed -bottom-[330px] -left-[180px] z-0 w-[min(1040px,90vw)] select-none opacity-10"
-      />
-      <Header active="/digest" lang={lang} onToggleLang={toggleLang} t={t} />
-
+    <DashboardShell active="/digest" lang={lang} onToggleLang={toggleLang} tagline={t("tagline")} badge={t("badge")}>
       <main className="relative z-10 mx-auto max-w-6xl px-5 py-6">
         {/* Hero archive banner */}
         {staleCount > 0 && (
-          <SectionShell
+          <DashboardCard
             icon={<Archive size={20} />}
             title={t("staleTitle")}
             className="border-tm-fail-border bg-tm-fail-bg"
@@ -1376,16 +1273,16 @@ function App() {
                 {t("archiveAll")}
               </button>
             </div>
-          </SectionShell>
+          </DashboardCard>
         )}
 
         {/* Decision */}
         {digest.decision && (
-          <SectionShell icon={<Sparkles size={20} />} title={t("decisionTitle")}>
+          <DashboardCard icon={<Sparkles size={20} />} title={t("decisionTitle")}>
             <div className="text-sm leading-7 text-tm-secondary [&_strong]:text-tm-primary [&_strong]:font-semibold">
               <Markdownish text={digest.decision} />
             </div>
-          </SectionShell>
+          </DashboardCard>
         )}
 
         <CronIntakeSection intake={intake} t={t} />
@@ -1399,7 +1296,7 @@ function App() {
         />
 
         {/* Inbox */}
-        <SectionShell
+        <DashboardCard
           icon={<Inbox size={20} />}
           title={t("inboxTitle")}
           count={`${visibleRows.length} 条`}
@@ -1473,11 +1370,11 @@ function App() {
               {t("emptyInbox")}
             </div>
           )}
-        </SectionShell>
+        </DashboardCard>
 
         {/* Proposals */}
         {proposals.length > 0 && (
-          <SectionShell icon={<Lightbulb size={20} />} title={t("proposalsTitle")} count={`${proposals.length} 条`}>
+          <DashboardCard icon={<Lightbulb size={20} />} title={t("proposalsTitle")} count={`${proposals.length} 条`}>
             <div className="space-y-3">
               {proposals.map((p, i) => (
                 <div key={String(p.id || i)} className="rounded-xl border border-tm-border bg-tm-card p-3">
@@ -1500,21 +1397,21 @@ function App() {
                 </div>
               ))}
             </div>
-          </SectionShell>
+          </DashboardCard>
         )}
 
         {/* Metrics */}
         {digest.metrics && (
-          <SectionShell icon={<TrendingUp size={20} />} title={t("metricsTitle")}>
+          <DashboardCard icon={<TrendingUp size={20} />} title={t("metricsTitle")}>
             <pre className="whitespace-pre-wrap text-sm leading-6 text-tm-secondary">
               {digest.metrics}
             </pre>
-          </SectionShell>
+          </DashboardCard>
         )}
 
         {/* Appendix */}
         {digest.appendix && (
-          <SectionShell icon={<BookOpen size={20} />} title={t("appendixTitle")}>
+          <DashboardCard icon={<BookOpen size={20} />} title={t("appendixTitle")}>
             <details>
               <summary className="cursor-pointer text-sm font-medium text-tm-secondary">
                 {t("appendixExpand")}
@@ -1523,7 +1420,7 @@ function App() {
                 {digest.appendix}
               </pre>
             </details>
-          </SectionShell>
+          </DashboardCard>
         )}
 
         <div className="flex items-center justify-center gap-2 pt-2 pb-4 text-xs text-tm-tertiary">
@@ -1548,7 +1445,7 @@ function App() {
         onConfirm={confirmWikiModal}
         onSelect={(target) => setWikiModal((state) => state ? { ...state, target } : state)}
       />
-    </div>
+    </DashboardShell>
   );
 }
 

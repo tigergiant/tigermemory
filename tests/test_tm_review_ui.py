@@ -1658,6 +1658,23 @@ def test_react_dashboard_theme_exposes_tailwind_tm_tokens():
         assert token in css
 
 
+def test_react_dashboard_pages_use_shared_shell_components():
+    ui_src = REPO_ROOT / "packages" / "tigermemory-dashboard-ui" / "src"
+    shell = ui_src / "components" / "DashboardShell.tsx"
+    start = (ui_src / "main.tsx").read_text(encoding="utf-8")
+    digest = (ui_src / "digest" / "main.tsx").read_text(encoding="utf-8")
+
+    assert shell.exists()
+    shell_text = shell.read_text(encoding="utf-8")
+    for exported in ["DashboardShell", "DashboardHeader", "DashboardCard", "dashboardNavItems"]:
+        assert f"export function {exported}" in shell_text or f"export const {exported}" in shell_text
+
+    assert "./components/DashboardShell" in start
+    assert "../components/DashboardShell" in digest
+    assert "const nav =" not in start
+    assert "const NAV =" not in digest
+
+
 def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_review_ui, "dashboard_health_summary", lambda: {"ok": True})
     monkeypatch.setattr(tm_review_ui, "dashboard_memory_quality", lambda date=None: {"ok": True})
