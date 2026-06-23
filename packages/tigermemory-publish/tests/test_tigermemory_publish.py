@@ -694,7 +694,7 @@ def test_release_evidence_includes_true_split_status(tmp_path, monkeypatch, caps
     assert payload["release_evidence"]["true_split"]["source_update_reason"] == "verified"
 
 
-def test_module_dry_run_is_inspection_only_and_keeps_full_snapshot_audit(tmp_path, monkeypatch, capsys) -> None:
+def test_module_dry_run_is_inspection_only_and_skips_full_snapshot_audit(tmp_path, monkeypatch, capsys) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     _build_fake_repo(repo)
@@ -726,7 +726,8 @@ def test_module_dry_run_is_inspection_only_and_keeps_full_snapshot_audit(tmp_pat
     assert release["selected_module"] == "public-core"
     assert set(release["module_checks"]) == {"public-core"}
     assert release["snapshot_audit"]["sensitive_total"] == 0
-    assert release["full_snapshot_audit"]["sensitive_total"] == 0
+    assert release["full_snapshot_audit"]["skipped"] is True
+    assert release["full_snapshot_audit"]["reason"] == "inspection-only module dry-run"
 
 
 def test_main_with_evidence_output_generates_markdown(tmp_path, monkeypatch, capsys) -> None:

@@ -29,7 +29,7 @@ git -C "$ROOT" worktree add --detach --quiet "$SMOKE_ROOT" HEAD
 
 export PYTHONPATH="$SMOKE_ROOT/packages/tigermemory-publish/src${PYTHONPATH:+:$PYTHONPATH}"
 
-if ! $PY -m tigermemory_publish --dry-run --json >/dev/null; then
+if ! $PY -m tigermemory_publish --dry-run --json --module public-publish >/dev/null; then
   echo "[tigermemory pre-push] tigermemory_publish dry-run smoke failed" >&2
   exit 1
 fi

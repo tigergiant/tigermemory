@@ -247,7 +247,10 @@ def collect_publish_plan(repo_root: pathlib.Path, module_id: str | None = None) 
 
     wiki_root = repo_root / "wiki"
     if wiki_root.is_dir():
-        for partition in EXCLUDED_WIKI_PARTITIONS:
+        # Module inspection is intentionally narrow and should not scan the
+        # private dogfood wiki on every pre-push smoke.
+        private_partition_scan = module_id is None
+        for partition in EXCLUDED_WIKI_PARTITIONS if private_partition_scan else ():
             partition_dir = wiki_root / partition
             if not partition_dir.is_dir():
                 continue
@@ -737,6 +740,10 @@ def _snapshot_audit_payload(
     return {"ok": not has_blocking_findings, "sensitive_total": len(sensitive_findings)}
 
 
+def _skipped_snapshot_audit_payload(reason: str) -> dict[str, object]:
+    return {"ok": None, "sensitive_total": None, "skipped": True, "reason": reason}
+
+
 def _public_module_manifest(module_id: str | None = None) -> dict[str, object]:
     return {
         "schema": "tigermemory-public-modules-v1",
@@ -1080,7 +1087,6 @@ def main(argv: list[str] | None = None) -> int:
         dest = REPO_ROOT / dest
 
     plan = collect_publish_plan(REPO_ROOT, module_id=args.module)
-    full_snapshot_plan = collect_publish_plan(REPO_ROOT)
     included = _included_plan(plan)
     excluded = _excluded_plan(plan)
     counts = {k: len(v) for k, v in included.items()}
@@ -1091,7 +1097,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.audit_scope == "repo"
         else audit_publish_plan(plan, REPO_ROOT)
     )
-    full_snapshot_findings = audit_publish_plan(full_snapshot_plan, REPO_ROOT)
+    full_snapshot_findings: list[dict[str, object]] = []
+    if args.module is None:
+        full_snapshot_plan = collect_publish_plan(REPO_ROOT)
+        full_snapshot_findings = audit_publish_plan(full_snapshot_plan, REPO_ROOT)
     full_snapshot_blocking_findings = [
         f for f in full_snapshot_findings if f.get("severity") != "warning"
     ]
@@ -1236,9 +1245,13 @@ def main(argv: list[str] | None = None) -> int:
             "module_checks": module_checks(args.module),
             "private_package_names": list(PRIVATE_PACKAGE_NAMES),
             "snapshot_audit": _snapshot_audit_payload(sensitive_findings, has_blocking_findings),
-            "full_snapshot_audit": _snapshot_audit_payload(
-                full_snapshot_findings,
-                bool(full_snapshot_blocking_findings),
+            "full_snapshot_audit": (
+                _skipped_snapshot_audit_payload("inspection-only module dry-run")
+                if args.module
+                else _snapshot_audit_payload(
+                    full_snapshot_findings,
+                    bool(full_snapshot_blocking_findings),
+                )
             ),
             "module_check_validation": module_check_validation,
             "public_boundary_validation": public_boundary_validation,

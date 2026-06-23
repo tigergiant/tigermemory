@@ -9,7 +9,7 @@ def test_pre_push_hook_runs_tigermemory_publish_dry_run_smoke() -> None:
 
     text = hook.read_text(encoding="utf-8")
 
-    assert "tigermemory_publish --dry-run --json" in text
+    assert "tigermemory_publish --dry-run --json --module public-publish" in text
     assert ">/dev/null" in text
     assert "git -C \"$ROOT\" worktree add --detach --quiet \"$SMOKE_ROOT\" HEAD" in text
     assert "packages/tigermemory-publish/src" in text
