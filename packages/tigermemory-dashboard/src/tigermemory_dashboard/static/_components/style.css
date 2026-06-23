@@ -730,8 +730,9 @@ body.tm-page-leaving {
       margin-top: -3px;
       border-radius: 9999px;
       background: #b99445;
-      animation: tmFlowDot 4s linear infinite;
+      animation: tmFlowDot 7s linear infinite;
       animation-fill-mode: both;
+      will-change: transform, opacity;
     }
     .quality-shell {
       width: min(100% - 3rem, 1560px);
@@ -1584,17 +1585,19 @@ body.tm-page-leaving {
       opacity: 0.65;
       transition: opacity 0.3s ease, stroke-width 0.3s ease, stroke 0.3s ease;
     }
-    
-    .tm-flow-dot-anim {
-      fill: #ffffff;
-      filter: drop-shadow(0 0 3px #b99445) drop-shadow(0 0 8px #c8a560);
-      transform-origin: center;
-      animation: tmFlowDotPulse 1.8s infinite ease-in-out;
+
+    .tm-flow-path-stream {
+      stroke: rgba(185, 148, 69, 0.68);
+      stroke-width: 2px;
+      stroke-dasharray: 10 18;
+      stroke-linecap: round;
+      opacity: 0.58;
+      animation: tmFlowPathStream 7s linear infinite;
+      will-change: stroke-dashoffset, opacity;
     }
 
-    @keyframes tmFlowDotPulse {
-      0%, 100% { filter: drop-shadow(0 0 2px #b99445) drop-shadow(0 0 6px #b99445); opacity: 0.75; }
-      50% { filter: drop-shadow(0 0 5px #c8a560) drop-shadow(0 0 12px #c8a560); opacity: 1; }
+    @keyframes tmFlowPathStream {
+      to { stroke-dashoffset: -56; }
     }
 
     .tm-flow-output-card {
@@ -1763,18 +1766,13 @@ body.tm-page-leaving {
       stroke-width: 4.5px !important;
       opacity: 1 !important;
       stroke-dasharray: 16 8;
-      animation: tmPathFlowAnim 0.5s linear infinite;
-      filter: drop-shadow(0 0 4px var(--accent-tiger)) drop-shadow(0 0 8px var(--accent-tiger-lo));
+      filter: none;
     }
-    .tm-flow-path.flow-path-active + .tm-flow-dot-anim {
-      fill: #ffffff !important;
-      filter: drop-shadow(0 0 6px var(--accent-tiger)) drop-shadow(0 0 14px var(--accent-tiger)) !important;
-      animation: none !important;
-      transform: scale(1.4);
-      transition: transform 0.2s ease, filter 0.2s ease;
-    }
-    @keyframes tmPathFlowAnim {
-      to { stroke-dashoffset: -96; }
+    .tm-flow-path-stream.flow-path-active {
+      stroke: var(--accent-tiger-hi) !important;
+      stroke-width: 3px !important;
+      opacity: 0.95 !important;
+      animation-duration: 3.5s;
     }
 
 /* Tab Panel Transition */

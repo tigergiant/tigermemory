@@ -3742,8 +3742,9 @@
       // Check if loading flag is active
       if (this.data.loading) {
         this.fetchHealth();
+        this.fetchMemoryOverview({quiet: true});
       }
-      if (!Object.prototype.hasOwnProperty.call(this.data || {}, 'memory_overview')) {
+      else if (!Object.prototype.hasOwnProperty.call(this.data || {}, 'memory_overview')) {
         this.fetchMemoryOverview({quiet: true});
       }
 
@@ -4296,6 +4297,11 @@
     prefetchQualityAbortController: null,
     prefetchedQualityRanges: new Set(),
     qualityUpdating: false,
+    drawFlowTimer: null,
+    _handleResize: null,
+    _flowHoverRoot: null,
+    _handleFlowPointerOver: null,
+    _handleFlowPointerOut: null,
 
     init(root, data) {
       // Prevent duplicate initializations and clear any pre-existing timers/listeners
@@ -4305,6 +4311,8 @@
       this.data = data;
       this.rangeKey = (((data.memory || data || {}).range || {}).key) || this.rangeKey || 'today';
       this.prefetchedQualityRanges = new Set([this.rangeKey]);
+      this.drawFlowTimer = null;
+      this._flowHoverRoot = null;
 
       // Initial render
       this.render(this.data);
@@ -4354,6 +4362,12 @@
 
       // Set up periodic auto refresh (30 seconds)
       this.refreshIntervalId = setInterval(() => runWhenVisible(() => this.fetchQuality()), 45000);
+      this._handleResize = () => {
+        if (document.body.dataset.page === 'quality') {
+          this.scheduleDrawFlowLines();
+        }
+      };
+      window.addEventListener('resize', this._handleResize);
     },
 
     destroy() {
@@ -4393,6 +4407,23 @@
         this.prefetchQualityAbortController.abort();
         this.prefetchQualityAbortController = null;
       }
+      if (this.drawFlowTimer) {
+        clearTimeout(this.drawFlowTimer);
+        this.drawFlowTimer = null;
+      }
+      if (this._handleResize) {
+        window.removeEventListener('resize', this._handleResize);
+        this._handleResize = null;
+      }
+      if (this._flowHoverRoot && this._handleFlowPointerOver) {
+        this._flowHoverRoot.removeEventListener('mouseover', this._handleFlowPointerOver);
+      }
+      if (this._flowHoverRoot && this._handleFlowPointerOut) {
+        this._flowHoverRoot.removeEventListener('mouseout', this._handleFlowPointerOut);
+      }
+      this._flowHoverRoot = null;
+      this._handleFlowPointerOver = null;
+      this._handleFlowPointerOut = null;
       this.prefetchedQualityRanges = new Set();
     },
 
@@ -4582,19 +4613,9 @@
         const c2y = y2;
         const d = `M ${x1} ${y1} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${x2} ${y2}`;
         
-        // Randomize animation duration for a natural feel
-        const dur = (Math.random() * 2 + 3).toFixed(1);
-        const delay = (Math.random() * -3).toFixed(1);
-        
         return `
           <path class="tm-flow-path" data-flow-path-for="${flowId}" d="${d}" />
-          <circle class="tm-flow-dot-anim" r="3">
-            <animateMotion dur="${dur}s" repeatCount="indefinite" begin="${delay}s">
-              <mpath href="#path_${x1}_${y1}_${x2}_${y2}" />
-            </animateMotion>
-          </circle>
-          <!-- hidden path for mpath reference -->
-          <path id="path_${x1}_${y1}_${x2}_${y2}" d="${d}" fill="none" stroke="none" />
+          <path class="tm-flow-path tm-flow-path-stream" data-flow-path-for="${flowId}" d="${d}" />
         `;
       };
 
@@ -4615,26 +4636,47 @@
       });
 
       svg.innerHTML = svgContent;
+      this.bindFlowHover(container, svg);
+    },
 
-      // Bind hover events to highlight paths
-      const bindHover = (node) => {
+    bindFlowHover(container, svg) {
+      if (!container || !svg) return;
+      if (this._flowHoverRoot === container) return;
+      if (this._flowHoverRoot && this._handleFlowPointerOver) {
+        this._flowHoverRoot.removeEventListener('mouseover', this._handleFlowPointerOver);
+      }
+      if (this._flowHoverRoot && this._handleFlowPointerOut) {
+        this._flowHoverRoot.removeEventListener('mouseout', this._handleFlowPointerOut);
+      }
+      this._flowHoverRoot = container;
+      this._handleFlowPointerOver = event => {
+        const node = event.target.closest('[data-flow-id]');
+        if (!node || !container.contains(node)) return;
         const flowId = node.dataset.flowId;
         if (!flowId) return;
-        const path = svg.querySelector(`path[data-flow-path-for="${flowId}"]`);
-        if (!path) return;
-        const eventOptions = this.abortController ? { signal: this.abortController.signal } : undefined;
-
-        node.addEventListener('mouseenter', () => {
+        svg.querySelectorAll(`path[data-flow-path-for="${CSS.escape(flowId)}"]`).forEach(path => {
           path.classList.add('flow-path-active');
-        }, eventOptions);
-
-        node.addEventListener('mouseleave', () => {
-          path.classList.remove('flow-path-active');
-        }, eventOptions);
+        });
       };
+      this._handleFlowPointerOut = event => {
+        const node = event.target.closest('[data-flow-id]');
+        if (!node || !container.contains(node)) return;
+        const flowId = node.dataset.flowId;
+        if (!flowId) return;
+        svg.querySelectorAll(`path[data-flow-path-for="${CSS.escape(flowId)}"]`).forEach(path => {
+          path.classList.remove('flow-path-active');
+        });
+      };
+      container.addEventListener('mouseover', this._handleFlowPointerOver);
+      container.addEventListener('mouseout', this._handleFlowPointerOut);
+    },
 
-      sources.forEach(bindHover);
-      outputs.forEach(bindHover);
+    scheduleDrawFlowLines(delayMs = 50) {
+      if (this.drawFlowTimer) clearTimeout(this.drawFlowTimer);
+      this.drawFlowTimer = setTimeout(() => {
+        this.drawFlowTimer = null;
+        this.drawFlowLines();
+      }, delayMs);
     },
 
     renderFlowPanel(memory) {
@@ -4753,8 +4795,7 @@
         `;
       }).join('');
       if (routeSection) routeSection.classList.remove('hidden');
-      // schedule draw
-      setTimeout(() => { if (window.tmPages && window.tmPages.quality && window.tmPages.quality.drawFlowLines) window.tmPages.quality.drawFlowLines(); }, 50);
+      this.scheduleDrawFlowLines();
       routeBars.innerHTML = `
         <div class="space-y-4 min-w-0 max-w-full">
           ${historyNote ? `<div class="rounded-xl border border-[#dfd3bc] bg-[#fbf7ef] px-3 py-2 text-xs leading-5 text-[#6f6258]">${c.esc(historyNote)}</div>` : ''}
@@ -6947,5 +6988,3 @@
     // Canvas page is server-rendered in current implementation; no polling fetch required.
   };
 })();
-
-window.addEventListener('resize', () => { if (window.tmPages && window.tmPages.quality && window.tmPages.quality.drawFlowLines) window.tmPages.quality.drawFlowLines(); });

@@ -118,7 +118,7 @@
     ['/self-evolution', 8000, true],
     ['/digest', 30000, true]
   ];
-  const PREFETCH_ROUTES = ['/digest', '/canvas'];
+  const PREFETCH_ROUTES = [];
   const PREFETCH_DELAY_MS = 1200;
   const PREFETCH_TIMEOUT_MS = 20000;
 
@@ -295,6 +295,7 @@
     },
 
     canPrefetchDashboardRoutes() {
+      if (!PREFETCH_ROUTES.length) return false;
       if (document.visibilityState && document.visibilityState !== 'visible') return false;
       if (navigator.connection && navigator.connection.saveData) return false;
       return true;

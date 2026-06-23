@@ -989,7 +989,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v75" in response.text
+    assert "tigermemory-memory-ops-v78" in response.text
     assert "'/digest'" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
@@ -1718,7 +1718,8 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "cache: {" in common_js
     assert "clearCache(" in common_js
     assert "updateRefreshIndicator(" in common_js
-    assert "PREFETCH_ROUTES = ['/digest', '/canvas']" in common_js
+    assert "PREFETCH_ROUTES = []" in common_js
+    assert "if (!PREFETCH_ROUTES.length) return false;" in common_js
     assert "scheduleIdlePrefetch(" in common_js
     assert "prefetchDashboardRoutes(" in common_js
     assert "PREFETCH_TIMEOUT_MS = 20000" in common_js
@@ -3990,6 +3991,8 @@ def test_health_page_compacts_optional_advanced_services_for_local_mode():
     assert "memoryOverviewRenderSignature" in pages_js
     assert "fetchHealthInFlight" in pages_js
     assert "fetchMemoryOverviewInFlight" in pages_js
+    assert "this.fetchHealth();" in pages_js
+    assert "this.fetchMemoryOverview({quiet: true});" in pages_js
     assert "body[data-page=\"health\"] .status-dot" in style_css
     assert "body.tm-refresh-quiet #service-grid > *" in style_css
 
@@ -3998,6 +4001,7 @@ def test_dashboard_p2_static_sections():
     health_html = (tm_review_ui.STATIC_DIR / "health.html").read_text(encoding="utf-8")
     agent_html = (tm_review_ui.STATIC_DIR / "agent-tools.html").read_text(encoding="utf-8")
     pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
+    style_css = (tm_review_ui.STATIC_DIR / "_components" / "style.css").read_text(encoding="utf-8")
 
     assert 'id="memory-overview"' in health_html
     assert 'id="recent-activity-list"' in agent_html
@@ -4005,6 +4009,15 @@ def test_dashboard_p2_static_sections():
     assert "fetchRecentActivity" in pages_js
     assert "fetchMemoryOverview" in pages_js
     assert "/api/health/memory-overview" in pages_js
+    assert "animateMotion" not in pages_js
+    assert "tm-flow-dot-anim" not in pages_js
+    assert "tm-flow-path-stream" in pages_js
+    assert "bindFlowHover" in pages_js
+    assert "scheduleDrawFlowLines" in pages_js
+    assert "window.addEventListener('resize', () => { if (window.tmPages && window.tmPages.quality" not in pages_js
+    assert "tmFlowPathStream" in style_css
+    assert "tmFlowDotPulse" not in style_css
+    assert "tmPathFlowAnim" not in style_css
 
 
 def test_dashboard_smoke_script_execution(monkeypatch):
