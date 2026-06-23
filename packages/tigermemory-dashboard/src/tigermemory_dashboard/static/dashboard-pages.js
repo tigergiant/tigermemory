@@ -4356,8 +4356,6 @@
       // Check if loading flag is active
       if ((this.data.memory || {}).loading) {
         this.fetchQuality();
-      } else {
-        this.prefetchQualityRanges();
       }
 
       // Set up periodic auto refresh (30 seconds)
@@ -5203,7 +5201,6 @@
         const memory = await memoryResponse.json();
         this.prefetchedQualityRanges.add(((memory.range || {}).key) || this.rangeKey || 'today');
         this.render({ memory });
-        this.prefetchQualityRanges();
       } catch (error) {
         if (error.name === 'AbortError') return;
         console.error(error);

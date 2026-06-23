@@ -110,6 +110,7 @@
   }
 
   const DEFAULT_CACHE_TTL_MS = 5000;
+  const CACHE_MAX_ENTRIES = 4;
   const CACHE_STRATEGY = [
     ['/start', 60000, false],
     ['/health', 3000, true],
@@ -121,6 +122,13 @@
   const PREFETCH_ROUTES = [];
   const PREFETCH_DELAY_MS = 1200;
   const PREFETCH_TIMEOUT_MS = 20000;
+  const BODY_TRANSIENT_CLASSES = new Set(['tm-page-leaving', 'tm-page-ready', 'tm-is-updating']);
+
+  function syncBodyClasses(newBody) {
+    const transientClasses = Array.from(document.body.classList).filter(cls => BODY_TRANSIENT_CLASSES.has(cls));
+    document.body.className = newBody.className || '';
+    transientClasses.forEach(cls => document.body.classList.add(cls));
+  }
 
   function cacheStrategy(pathname) {
     const route = CACHE_STRATEGY.find(([routePath]) => pathname === routePath || pathname.startsWith(`${routePath}/`));
@@ -293,6 +301,23 @@
       if (policy.ttlMs <= 0) return false;
       return Date.now() - cached.timestamp < policy.ttlMs;
     },
+    setCacheEntry(cacheKey, entry) {
+      this.cache[cacheKey] = entry;
+      this.pruneCache();
+    },
+    pruneCache() {
+      const entries = Object.entries(this.cache || {});
+      entries.forEach(([key, entry]) => {
+        if (!this.shouldUseCache(key, entry)) {
+          delete this.cache[key];
+        }
+      });
+      const remaining = Object.entries(this.cache || {})
+        .sort((a, b) => (b[1].timestamp || 0) - (a[1].timestamp || 0));
+      remaining.slice(CACHE_MAX_ENTRIES).forEach(([key]) => {
+        delete this.cache[key];
+      });
+    },
 
     canPrefetchDashboardRoutes() {
       if (!PREFETCH_ROUTES.length) return false;
@@ -350,11 +375,11 @@
           throw new Error(`HTTP error! status: ${response.status}`);
         }
         const htmlText = await response.text();
-        this.cache[cacheKey] = {
+        this.setCacheEntry(cacheKey, {
           htmlText,
           timestamp: Date.now(),
           source: 'prefetch'
-        };
+        });
         this.markRefreshSuccess(cacheKey, { source: 'prefetch' });
       } catch (err) {
         if (err.name !== 'AbortError') {
@@ -447,6 +472,7 @@
       syncDocumentTitle(doc);
 
       document.body.dataset.page = newBody.dataset.page || '';
+      syncBodyClasses(newBody);
 
       if (isBackgroundUpdate) {
         document.body.classList.add('tm-is-updating');
@@ -475,6 +501,12 @@
       };
       const dataId = dataElementMap[newPageKey];
       let pageData = {};
+      Object.values(dataElementMap).forEach(id => {
+        if (id !== dataId) {
+          const staleNode = document.getElementById(id);
+          if (staleNode) staleNode.remove();
+        }
+      });
       if (dataId) {
         const dataEl = doc.getElementById(dataId);
         if (dataEl) {
@@ -539,11 +571,11 @@
         const currentUrlObj = new URL(window.location.href);
         const currentPath = currentUrlObj.pathname + currentUrlObj.search;
 
-        this.cache[cacheKey] = {
+        this.setCacheEntry(cacheKey, {
           htmlText,
           timestamp: responseTime,
           source: 'refresh'
-        };
+        });
         this.markRefreshSuccess(cacheKey, { timestamp: responseTime, source: 'background-refresh' });
 
         if (currentPath === cacheKey) {
@@ -626,10 +658,10 @@
 
         if (requestId !== this.requestId) return;
 
-        this.cache[cacheKey] = {
+        this.setCacheEntry(cacheKey, {
           htmlText,
           timestamp: Date.now()
-        };
+        });
         this.markRefreshSuccess(cacheKey, { source: 'network' });
 
         this.renderHTML(htmlText, url, pushState, true);
