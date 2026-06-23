@@ -27,6 +27,18 @@ import "../styles.css";
 // Types — mirror the server payloads (see wiki report on /digest data shape).
 // ---------------------------------------------------------------------------
 type AnyRecord = Record<string, unknown>;
+type Lang = "zh" | "en";
+
+type WikiTarget = {
+  partition: string;
+  slug: string;
+  label?: string;
+  path?: string;
+  reason?: string;
+  recommended?: boolean;
+  alternatives?: WikiTarget[];
+  similar?: Array<{ path?: string; reason?: string }>;
+};
 
 type InboxRow = {
   path: string;
@@ -45,6 +57,7 @@ type InboxRow = {
   route_reason?: string;
   route_flags?: string[];
   route_hard_rule?: boolean | string;
+  wiki_target?: WikiTarget;
 };
 
 type Counts = Record<string, number | null | undefined>;
@@ -116,24 +129,184 @@ async function postJson(path: string, body: unknown) {
   return data as AnyRecord & { ok?: boolean; error?: string };
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+const copy = {
+  zh: {
+    tagline: "你的 AI 第二大脑",
+    badge: "今日待确认",
+    navStart: "开始",
+    navDigest: "今日待确认",
+    navHealth: "运行检查",
+    navQuality: "记忆质量",
+    navCanvas: "项目进展",
+    navSelf: "自我进化",
+    navAgent: "AI 连接",
+    navSettings: "偏好设置",
+    actionArchive: "归档",
+    actionMem0: "存入即时记忆",
+    actionWiki: "存入知识库",
+    actionKeep: "保留",
+    select: "选择",
+    details: "详情",
+    staleTitle: "14 天后自动归档",
+    staleSuffix: "条待归档",
+    staleCopy: "这些收件箱已超过 14 天且没有应用记录。",
+    archiveAll: "一键归档全部",
+    decisionTitle: "今日要决策",
+    cronTitle: "cron 承接卡",
+    loading: "加载中",
+    loadingCron: "正在读取短卡...",
+    wikiLedgerTitle: "Wiki 提案台账",
+    wikiLedgerSummary: "当前有 Wiki 提案，优先由本线程归并成长期 Wiki。",
+    wikiLedgerEmpty: "当前没有待归并的 Wiki proposal。",
+    wikiLedgerBatch: "批量写入 Wiki",
+    wikiLedgerInvestmentMeta: "投研可写",
+    wikiLedgerArchiveMeta: "归档",
+    writeInvestmentWiki: "写入投研 Wiki",
+    archiveInvestment: "移入投资提案归档",
+    archiveInvestmentHint: "生成可检索摘要，不写正式投研页",
+    technicalDetails: "查看技术详情",
+    targetPage: "目标页",
+    samplePaths: "inbox 路径",
+    inboxTitle: "待确认内容",
+    selectedPrefix: "已选择",
+    batchArchive: "批量归档",
+    batchMem0: "存入即时记忆",
+    batchWiki: "存入知识库",
+    clearSelected: "清空选择",
+    emptyInbox: "收件箱已清空",
+    proposalsTitle: "AI 修改建议",
+    metricsTitle: "系统自检",
+    appendixTitle: "原始材料",
+    appendixExpand: "展开原始明细",
+    refresh: "刷新",
+    trigger: "触发",
+    other: "其他",
+    daysStayed: "停留",
+    hardRule: "硬规则",
+    wikiModalTitle: "写入知识库推荐",
+    wikiModalSubtitle: "确认目标页后再写入 Wiki。",
+    wikiModalRecommended: "Codex 推荐操作",
+    wikiModalAlternatives: "其他可选落点",
+    wikiModalSimilar: "相似页面参考",
+    wikiModalNoSimilar: "未找到明显相似页面，可以按默认推荐新建。",
+    wikiModalBatchCopy: "按每条提案自己的推荐目标写入",
+    wikiModalMode: "处理方式",
+    confirmWiki: "确认写入知识库",
+    cancel: "取消",
+    defaultRecommended: "默认推荐",
+    done: "完成",
+    refreshFailed: "刷新失败",
+    intakeFailed: "承接卡读取失败",
+    actionFailed: "操作失败",
+    batchFailed: "批量操作失败",
+    archiveFailed: "归档失败",
+    recovered: "页面已复查确认该条已处理。",
+  },
+  en: {
+    tagline: "Your AI second brain",
+    badge: "Review",
+    navStart: "Start",
+    navDigest: "Review",
+    navHealth: "Health",
+    navQuality: "Quality",
+    navCanvas: "Canvas",
+    navSelf: "Self evolution",
+    navAgent: "AI tools",
+    navSettings: "Settings",
+    actionArchive: "Archive",
+    actionMem0: "Save to memory",
+    actionWiki: "Save to Wiki",
+    actionKeep: "Keep",
+    select: "Select",
+    details: "Details",
+    staleTitle: "Auto archive after 14 days",
+    staleSuffix: "items pending archive",
+    staleCopy: "These inbox items are older than 14 days and have no applied record.",
+    archiveAll: "Archive all",
+    decisionTitle: "Decision today",
+    cronTitle: "Cron intake",
+    loading: "Loading",
+    loadingCron: "Reading intake card...",
+    wikiLedgerTitle: "Wiki proposal ledger",
+    wikiLedgerSummary: "Wiki proposals are grouped here for this thread to merge into long-term Wiki pages.",
+    wikiLedgerEmpty: "No Wiki proposals waiting to merge.",
+    wikiLedgerBatch: "Batch write Wiki",
+    wikiLedgerInvestmentMeta: "Investment writable",
+    wikiLedgerArchiveMeta: "Archive",
+    writeInvestmentWiki: "Write investment Wiki",
+    archiveInvestment: "Move to investment archive",
+    archiveInvestmentHint: "Create a searchable summary, not a formal investment page",
+    technicalDetails: "Technical details",
+    targetPage: "Target page",
+    samplePaths: "Inbox paths",
+    inboxTitle: "Pending review",
+    selectedPrefix: "Selected",
+    batchArchive: "Batch archive",
+    batchMem0: "Save to memory",
+    batchWiki: "Save to Wiki",
+    clearSelected: "Clear selection",
+    emptyInbox: "Inbox is clear",
+    proposalsTitle: "AI suggestions",
+    metricsTitle: "System checks",
+    appendixTitle: "Raw material",
+    appendixExpand: "Expand raw details",
+    refresh: "Refresh",
+    trigger: "Trigger",
+    other: "Other",
+    daysStayed: "days",
+    hardRule: "Hard rule",
+    wikiModalTitle: "Wiki target recommendation",
+    wikiModalSubtitle: "Confirm the target page before writing to the Wiki.",
+    wikiModalRecommended: "Codex recommendation",
+    wikiModalAlternatives: "Other target options",
+    wikiModalSimilar: "Similar pages",
+    wikiModalNoSimilar: "No obvious similar page found. The default target can create a new page.",
+    wikiModalBatchCopy: "Write each proposal to its own recommended target",
+    wikiModalMode: "Handling mode",
+    confirmWiki: "Confirm Wiki write",
+    cancel: "Cancel",
+    defaultRecommended: "Recommended",
+    done: "done",
+    refreshFailed: "Refresh failed",
+    intakeFailed: "Intake card failed",
+    actionFailed: "Action failed",
+    batchFailed: "Batch action failed",
+    archiveFailed: "Archive failed",
+    recovered: "The page was rechecked and the item is already handled.",
+  },
+} as const;
+
+type CopyKey = keyof typeof copy.zh;
+type TFn = (key: CopyKey) => string;
+
+function initialLanguage(): Lang {
+  const stored = window.localStorage.getItem("tm-lang");
+  if (stored === "zh" || stored === "en") return stored;
+  return window.navigator.language.toLowerCase().startsWith("en") ? "en" : "zh";
+}
+
 // ---------------------------------------------------------------------------
 // Shared layout primitives (same design system as /start)
 // ---------------------------------------------------------------------------
 const NAV = [
-  ["/start", "开始"],
-  ["/digest", "今日待确认"],
-  ["/health", "运行检查"],
-  ["/quality", "记忆质量"],
-  ["/canvas", "项目进展"],
-  ["/self-evolution", "自我进化"],
-  ["/agent-tools", "AI 连接"],
-  ["/settings", "偏好设置"],
+  ["/start", "navStart"],
+  ["/digest", "navDigest"],
+  ["/health", "navHealth"],
+  ["/quality", "navQuality"],
+  ["/canvas", "navCanvas"],
+  ["/self-evolution", "navSelf"],
+  ["/agent-tools", "navAgent"],
+  ["/settings", "navSettings"],
 ] as const;
 
 const CARD = "rounded-2xl border border-tm-border bg-tm-card shadow-[0_1px_2px_rgba(31,29,27,0.04),0_12px_32px_rgba(168,123,34,0.06)]";
 const SECTION_TITLE = "mb-3 flex items-center gap-2 text-lg font-semibold text-tm-primary";
 
-function Header({ active }: { active: string }) {
+function Header({ active, lang, onToggleLang, t }: { active: string; lang: Lang; onToggleLang: () => void; t: TFn }) {
   return (
     <header className="sticky top-0 z-30 border-b border-tm-border-divider bg-tm-bg/95 backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-4">
@@ -141,7 +314,7 @@ function Header({ active }: { active: string }) {
           <img src="/static/tiger/tigerlogo.png" alt="" className="h-10 w-10" />
           <span>
             <span className="block text-base font-extrabold leading-none text-tm-primary">TigerMemory</span>
-            <span className="mt-0.5 block text-xs text-tm-tertiary">你的 AI 第二大脑</span>
+            <span className="mt-0.5 block text-xs text-tm-tertiary">{t("tagline")}</span>
           </span>
         </a>
         <nav className="hidden flex-1 items-center justify-center gap-1 md:flex">
@@ -156,11 +329,19 @@ function Header({ active }: { active: string }) {
                   : "text-tm-secondary hover:bg-tm-card-alt",
               )}
             >
-              {label}
+              {t(label)}
             </a>
           ))}
         </nav>
         <div className="flex w-[220px] shrink-0 items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onToggleLang}
+            className="rounded-full bg-tm-card-alt px-2 py-1 text-xs font-semibold text-tm-tertiary hover:text-tm-secondary"
+            aria-label="Toggle language"
+          >
+            {lang === "zh" ? "中" : "EN"}
+          </button>
           <span className="rounded-full bg-tm-card-alt px-2 py-1 text-xs text-tm-tertiary">digest</span>
         </div>
       </div>
@@ -230,19 +411,21 @@ function Toast({ msg }: { msg: { text: string; ok: boolean } | null }) {
 // ---------------------------------------------------------------------------
 // Inbox row card
 // ---------------------------------------------------------------------------
-function actionLabel(action: string): string {
+function actionLabel(action: string, t?: TFn): string {
   switch (action) {
     case "promote_to_mem0":
     case "promote_mem0":
-      return "存入即时记忆";
+      return t ? t("actionMem0") : "存入即时记忆";
     case "promote_to_wiki":
     case "promote_wiki":
-      return "存入知识库";
+      return t ? t("actionWiki") : "存入知识库";
     case "archive":
-      return "归档";
+      return t ? t("actionArchive") : "归档";
     case "keep":
     case "keep_in_inbox":
-      return "保留";
+      return t ? t("actionKeep") : "保留";
+    case "investment_archive":
+      return t ? t("archiveInvestment") : "移入投资提案归档";
     default:
       return action;
   }
@@ -256,6 +439,7 @@ function InboxCard({
   onAction,
   busy,
   done,
+  t,
 }: {
   row: InboxRow;
   index: number;
@@ -264,6 +448,7 @@ function InboxCard({
   onAction: (action: string) => void;
   busy: boolean;
   done: boolean;
+  t: TFn;
 }) {
   const [open, setOpen] = useState(false);
   const hardRule = Boolean(row.route_hard_rule);
@@ -291,7 +476,7 @@ function InboxCard({
           checked={selected}
           onChange={onToggle}
           className="mt-1 size-4 shrink-0 accent-tm-accent"
-          aria-label="选择"
+          aria-label={t("select")}
         />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -300,7 +485,7 @@ function InboxCard({
             </strong>
             {typeof row.age_days === "number" && row.age_days > 0 && (
               <span className="rounded-full bg-tm-card-alt px-2 py-0.5 text-xs text-tm-tertiary">
-                停留 {row.age_days} 天
+                {t("daysStayed")} {row.age_days}
               </span>
             )}
             {row.route_label && (
@@ -309,7 +494,7 @@ function InboxCard({
               </span>
             )}
             {hardRule && (
-              <span className="rounded-full bg-tm-fail-bg px-2 py-0.5 text-xs text-tm-fail">硬规则</span>
+              <span className="rounded-full bg-tm-fail-bg px-2 py-0.5 text-xs text-tm-fail">{t("hardRule")}</span>
             )}
           </div>
           {row.summary || row.preview_cn ? (
@@ -342,7 +527,7 @@ function InboxCard({
               )}
             >
               {busy && isRec && <Loader2 size={12} className="animate-spin" />}
-              {actionLabel(action)}
+              {actionLabel(action, t)}
             </button>
           );
         })}
@@ -353,7 +538,7 @@ function InboxCard({
             className="ml-auto inline-flex items-center gap-1 text-xs text-tm-tertiary hover:text-tm-secondary"
           >
             {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-            详情
+            {t("details")}
           </button>
         )}
       </div>
@@ -383,10 +568,253 @@ function mapAction(serverAction: string): string {
   return serverAction;
 }
 
+const WIKI_PARTITIONS = [
+  ["operations", "Operations"],
+  ["systems", "Systems"],
+  ["production", "Production"],
+  ["self-evolution", "Self Evolution"],
+  ["brand", "Brand"],
+  ["investment", "Investment"],
+] as const;
+
+function wikiTargetPath(partition: string, slug: string) {
+  return `wiki/${partition}/${slug}.md`;
+}
+
+function parseWikiTarget(path: unknown): WikiTarget | null {
+  const match = String(path || "").replaceAll("\\", "/").match(/^wiki\/([^/]+)\/(.+?)\.md$/);
+  if (!match) return null;
+  return { partition: match[1], slug: match[2], path: wikiTargetPath(match[1], match[2]) };
+}
+
+function coerceWikiTarget(raw: unknown): WikiTarget | null {
+  if (!raw || typeof raw !== "object") return null;
+  const value = raw as AnyRecord;
+  const partition = String(value.partition || "").trim();
+  const slug = String(value.slug || "").trim();
+  if (!partition || !slug) return null;
+  const alternatives = Array.isArray(value.alternatives)
+    ? value.alternatives.map(coerceWikiTarget).filter(Boolean) as WikiTarget[]
+    : [];
+  const similar = Array.isArray(value.similar)
+    ? value.similar.map((item) => ({
+        path: String((item as AnyRecord).path || ""),
+        reason: String((item as AnyRecord).reason || ""),
+      }))
+    : [];
+  return {
+    partition,
+    slug,
+    label: String(value.label || partition),
+    path: String(value.path || wikiTargetPath(partition, slug)),
+    reason: String(value.reason || ""),
+    recommended: Boolean(value.recommended),
+    alternatives,
+    similar,
+  };
+}
+
+function targetForInboxRow(row: InboxRow): WikiTarget {
+  const fromPayload = coerceWikiTarget(row.wiki_target);
+  if (fromPayload) return fromPayload;
+  const slug = row.path.split("/").pop()?.replace(/\.md$/i, "").replace(/^\d{4}-\d{2}-\d{2}-\d{4}-/, "") || "inbox-review-note";
+  return {
+    partition: "systems",
+    slug,
+    path: wikiTargetPath("systems", slug),
+    reason: "缺少后端推荐，临时落到 systems 分区。",
+    alternatives: WIKI_PARTITIONS.map(([partition, label]) => ({
+      partition,
+      slug,
+      label,
+      path: wikiTargetPath(partition, slug),
+      reason: partition === "systems" ? "默认兜底分区。" : `改写到 ${label} 分区，页面名保持一致。`,
+      recommended: partition === "systems",
+    })),
+    similar: [],
+  };
+}
+
+function targetForLedgerRow(row: AnyRecord): WikiTarget {
+  const parsed = parseWikiTarget(row.target);
+  const partition = String(row.target_partition || parsed?.partition || "systems").trim();
+  const slug = String(row.target_slug || parsed?.slug || "wiki-proposal").trim();
+  return {
+    partition,
+    slug,
+    path: wikiTargetPath(partition, slug),
+    reason: "根据 wiki proposal 的 frontmatter 推荐该目标页。",
+    alternatives: WIKI_PARTITIONS.map(([part, label]) => ({
+      partition: part,
+      slug,
+      label,
+      path: wikiTargetPath(part, slug),
+      reason: part === partition ? "系统推荐落点。" : `改写到 ${label} 分区，页面名保持一致。`,
+      recommended: part === partition,
+    })),
+    similar: [],
+  };
+}
+
+function wikiProposalPaths(rows: AnyRecord[]) {
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  rows.forEach((row) => {
+    (Array.isArray(row.paths) ? row.paths : []).forEach((path) => {
+      const value = String(path || "").trim();
+      if (value && !seen.has(value)) {
+        seen.add(value);
+        paths.push(value);
+      }
+    });
+  });
+  return paths;
+}
+
+type WikiModalState = {
+  kind: "inbox" | "wiki-ledger" | "wiki-ledger-batch";
+  title: string;
+  subtitle: string;
+  paths: string[];
+  rows: AnyRecord[];
+  target: WikiTarget | null;
+};
+
+function WikiTargetModal({
+  state,
+  busy,
+  t,
+  onCancel,
+  onConfirm,
+  onSelect,
+}: {
+  state: WikiModalState | null;
+  busy: boolean;
+  t: TFn;
+  onCancel: () => void;
+  onConfirm: () => void;
+  onSelect: (target: WikiTarget) => void;
+}) {
+  const target = state?.target || null;
+  const alternatives = target ? (target.alternatives?.length ? target.alternatives : [target]) : [];
+  return (
+    <AnimatePresence>
+      {state && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-tm-overlay/70 px-4 py-6 backdrop-blur-sm"
+        >
+          <motion.div
+            initial={{ opacity: 0, y: 18, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 18, scale: 0.98 }}
+            className="max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-tm-border bg-tm-bg p-4 shadow-2xl"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-tm-primary">{t("wikiModalTitle")}</h2>
+                <p className="mt-1 text-sm text-tm-secondary">{state.subtitle || t("wikiModalSubtitle")}</p>
+              </div>
+              <button type="button" onClick={onCancel} className="rounded-full bg-tm-card-alt p-2 text-tm-tertiary hover:text-tm-secondary">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              <section className="rounded-xl border border-tm-accent bg-tm-warn-bg p-3">
+                <div className="text-sm font-semibold text-tm-primary">{t("wikiModalRecommended")}</div>
+                {target ? (
+                  <>
+                    <div className="mt-1 break-all font-mono text-xs text-tm-secondary">{target.path || wikiTargetPath(target.partition, target.slug)}</div>
+                    {target.reason ? <p className="mt-2 text-sm leading-6 text-tm-secondary">{target.reason}</p> : null}
+                  </>
+                ) : (
+                  <p className="mt-2 text-sm leading-6 text-tm-secondary">{t("wikiModalBatchCopy")}，共 {state.paths.length} 条。</p>
+                )}
+              </section>
+
+              {target ? (
+                <section>
+                  <div className="mb-2 text-sm font-semibold text-tm-primary">{t("wikiModalAlternatives")}</div>
+                  <div className="grid gap-2 md:grid-cols-2">
+                    {alternatives.map((item) => {
+                      const selected = item.partition === target.partition && item.slug === target.slug;
+                      return (
+                        <button
+                          key={`${item.partition}:${item.slug}`}
+                          type="button"
+                          onClick={() => onSelect(item)}
+                          className={classNames(
+                            "w-full rounded-xl border px-3 py-2 text-left text-sm transition-colors",
+                            selected ? "border-tm-accent bg-tm-warn-bg text-tm-primary" : "border-tm-border bg-tm-card text-tm-secondary hover:bg-tm-card-alt",
+                          )}
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-semibold">{item.label || item.partition}</span>
+                            {item.recommended ? <span className="rounded-full bg-tm-accent px-2 py-0.5 text-xs text-tm-primary">{t("defaultRecommended")}</span> : null}
+                          </div>
+                          <div className="mt-1 break-all font-mono text-xs">{item.path || wikiTargetPath(item.partition, item.slug)}</div>
+                          {item.reason ? <div className="mt-1 text-xs text-tm-tertiary">{item.reason}</div> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              ) : (
+                <section>
+                  <div className="mb-2 text-sm font-semibold text-tm-primary">{t("wikiModalMode")}</div>
+                  <div className="rounded-xl border border-tm-border bg-tm-card-alt p-3 text-sm leading-6 text-tm-secondary">
+                    {t("wikiModalBatchCopy")}。
+                  </div>
+                </section>
+              )}
+
+              {target ? (
+                <section>
+                  <div className="mb-2 text-sm font-semibold text-tm-primary">{t("wikiModalSimilar")}</div>
+                  {target.similar?.length ? (
+                    <div className="space-y-2">
+                      {target.similar.map((item, i) => (
+                        <div key={i} className="rounded-xl border border-tm-border bg-tm-card-alt p-2 text-sm">
+                          <div className="break-all font-mono text-xs text-tm-secondary">{item.path}</div>
+                          {item.reason ? <div className="mt-1 text-xs text-tm-tertiary">{item.reason}</div> : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-tm-tertiary">{t("wikiModalNoSimilar")}</p>
+                  )}
+                </section>
+              ) : null}
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={onCancel} className="rounded-md bg-tm-card-alt px-4 py-2 text-sm text-tm-secondary hover:bg-tm-overlay">
+                {t("cancel")}
+              </button>
+              <button
+                type="button"
+                onClick={onConfirm}
+                disabled={busy}
+                className="inline-flex items-center gap-2 rounded-md bg-tm-accent px-4 py-2 text-sm font-semibold text-tm-primary hover:bg-tm-accent-hi disabled:opacity-50"
+              >
+                {busy ? <Loader2 size={14} className="animate-spin" /> : null}
+                {t("confirmWiki")}
+              </button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Cron intake card
 // ---------------------------------------------------------------------------
-function CronIntakeSection({ intake }: { intake: CronIntake | null }) {
+function CronIntakeSection({ intake, t }: { intake: CronIntake | null; t: TFn }) {
   if (!intake) return null;
   const statusColor =
     intake.status === "ok"
@@ -400,7 +828,7 @@ function CronIntakeSection({ intake }: { intake: CronIntake | null }) {
     );
 
   return (
-    <SectionShell icon={<Radar size={20} />} title="cron 承接卡">
+    <SectionShell icon={<Radar size={20} />} title={t("cronTitle")}>
       <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <span
           className={classNames(
@@ -408,10 +836,10 @@ function CronIntakeSection({ intake }: { intake: CronIntake | null }) {
             statusColor,
           )}
         >
-          {intake.status || "加载中"}
+          {intake.status || t("loading")}
         </span>
       </div>
-      <p className="text-sm leading-6 text-tm-secondary">{intake.summary || "正在读取短卡..."}</p>
+      <p className="text-sm leading-6 text-tm-secondary">{intake.summary || t("loadingCron")}</p>
 
       {intake.action_items?.length ? (
         <div className="mt-3 grid gap-2 md:grid-cols-2">
@@ -467,35 +895,172 @@ function CronIntakeSection({ intake }: { intake: CronIntake | null }) {
 // ---------------------------------------------------------------------------
 // Wiki proposal ledger
 // ---------------------------------------------------------------------------
-function WikiLedgerSection({ rows }: { rows: AnyRecord[] }) {
+function wikiProposalStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    pending: "待本线程归并",
+    applied: "已处理",
+    "investment-wiki": "可写入投研 Wiki",
+    "investment-thread": "投资提案归档",
+    truncated: "未完全展示",
+  };
+  return labels[status] || status || "待处理";
+}
+
+function wikiProposalCardTitle(row: AnyRecord) {
+  const samples = Array.isArray(row.sample_items) ? row.sample_items : [];
+  const first = samples[0] as AnyRecord | undefined;
+  const title = String(first?.title || row.target || "Wiki 知识提案").replace(/^reason\s*[：:]\s*/i, "");
+  return title.length > 64 ? `${title.slice(0, 64)}...` : title;
+}
+
+function wikiProposalCardSummary(row: AnyRecord) {
+  const samples = Array.isArray(row.sample_items) ? row.sample_items : [];
+  const first = samples[0] as AnyRecord | undefined;
+  const preview = String(first?.preview || row.preview_cn || row.cn_summary || row.raw_summary || "").trim();
+  if (preview) return preview.length > 180 ? `${preview.slice(0, 180)}...` : preview;
+  if (row.status === "investment-wiki") return "这条内容被系统判断为有长期保存价值，可以先写入投研 Wiki；证据不足的部分会作为待确认点保留。";
+  if (row.status === "investment-thread") return "这条内容被系统判断为有长期保存价值，但需要先进入投资提案归档，暂不直接写入正式投研结论页。";
+  return "这条内容被系统判断为有长期保存价值，可在确认后写入长期 Wiki。";
+}
+
+function WikiLedgerSection({
+  rows,
+  busy,
+  t,
+  onApproveAll,
+  onApproveOne,
+  onInvestmentArchive,
+}: {
+  rows: AnyRecord[];
+  busy: boolean;
+  t: TFn;
+  onApproveAll: () => void;
+  onApproveOne: (row: AnyRecord) => void;
+  onInvestmentArchive: (row: AnyRecord) => void;
+}) {
   if (!rows.length) return null;
+  const pendingRows = rows.filter((row) => row.status === "pending" || row.status === "investment-wiki");
+  const pendingPaths = wikiProposalPaths(pendingRows);
+  const investmentWikiGroups = rows.filter((row) => row.status === "investment-wiki").length;
+  const investmentArchiveGroups = rows.filter((row) => row.status === "investment-thread").length;
   return (
     <SectionShell
       icon={<BookMarked size={20} />}
-      title="Wiki 提案台账"
+      title={t("wikiLedgerTitle")}
       count={`${rows.length} 条`}
     >
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm leading-6 text-tm-secondary">{t("wikiLedgerSummary")}</p>
+        {pendingPaths.length ? (
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onApproveAll}
+              disabled={busy}
+              className="rounded-md bg-tm-accent px-3 py-1.5 text-xs font-semibold text-tm-primary hover:bg-tm-accent-hi disabled:opacity-50"
+            >
+              {t("wikiLedgerBatch")} {pendingPaths.length} 条
+            </button>
+            <span className="rounded-md border border-tm-border bg-tm-card-alt px-3 py-1.5 text-xs text-tm-secondary">
+              {t("wikiLedgerInvestmentMeta")} {investmentWikiGroups} 组 · {t("wikiLedgerArchiveMeta")} {investmentArchiveGroups} 组
+            </span>
+          </div>
+        ) : (
+          <span className="rounded-md border border-tm-border bg-tm-card-alt px-3 py-1.5 text-xs text-tm-tertiary">
+            {t("wikiLedgerEmpty")}
+          </span>
+        )}
+      </div>
       <div className="grid gap-3 md:grid-cols-2">
-        {rows.map((row, i) => (
-          <div key={i} className="rounded-xl border border-tm-border bg-tm-card p-3">
+        {rows.map((row, i) => {
+          const status = String(row.status || "pending");
+          const canWriteWiki = status === "pending" || status === "investment-wiki";
+          const isInvestment = status === "investment-thread" || status === "investment-wiki";
+          const samples = Array.isArray(row.sample_items) ? row.sample_items : [];
+          return (
+          <div
+            key={i}
+            className={classNames(
+              "rounded-xl border bg-tm-card p-3",
+              isInvestment ? "border-tm-primary shadow-[inset_4px_0_0_#c8a560]" : "border-tm-border",
+            )}
+          >
             <div className="flex items-center justify-between gap-2">
-              <code className="truncate text-xs text-tm-secondary">
-                {String(row.target_partition || "")}/{String(row.target_slug || "")}
-              </code>
+              <h3 className="min-w-0 truncate text-sm font-semibold text-tm-primary">{wikiProposalCardTitle(row)}</h3>
               {row.review_label ? (
                 <span className="shrink-0 rounded-full bg-tm-info-bg px-2 py-0.5 text-xs text-tm-secondary">
                   {String(row.review_label)}
                 </span>
               ) : null}
             </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <span className="rounded-full border border-tm-border bg-tm-card-alt px-2 py-0.5 text-xs text-tm-tertiary">
+                {String(row.count ?? 0)} 条
+              </span>
+              <span className="rounded-full border border-tm-border bg-tm-card-alt px-2 py-0.5 text-xs text-tm-secondary">
+                {wikiProposalStatusLabel(status)}
+              </span>
+            </div>
             <p className="mt-1.5 text-sm text-tm-secondary">
-              {String(row.count ?? 0)} 条 · 话题 {String(row.topics || "—")} · 代理 {String(row.agents || "—")}
+              {wikiProposalCardSummary(row)}
             </p>
             <p className="mt-1 text-xs text-tm-tertiary">
               {String(row.first_date || "")} → {String(row.newest_date || "")}
             </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {canWriteWiki ? (
+                <button
+                  type="button"
+                  onClick={() => onApproveOne(row)}
+                  disabled={busy}
+                  className={classNames(
+                    "rounded-md px-3 py-1.5 text-xs font-semibold disabled:opacity-50",
+                    status === "investment-wiki" ? "border border-tm-primary bg-tm-primary text-tm-accent hover:opacity-90" : "bg-tm-accent text-tm-primary hover:bg-tm-accent-hi",
+                  )}
+                >
+                  {status === "investment-wiki" ? t("writeInvestmentWiki") : t("actionWiki")}
+                </button>
+              ) : null}
+              {status === "investment-thread" ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => onInvestmentArchive(row)}
+                    disabled={busy}
+                    className="rounded-md border border-tm-primary bg-tm-primary px-3 py-1.5 text-xs font-semibold text-tm-accent hover:opacity-90 disabled:opacity-50"
+                  >
+                    {t("archiveInvestment")}
+                  </button>
+                  <span className="rounded-md border border-tm-accent bg-tm-card px-3 py-1.5 text-xs text-tm-primary">
+                    {t("archiveInvestmentHint")}
+                  </span>
+                </>
+              ) : null}
+            </div>
+            <details className="mt-2 text-xs text-tm-tertiary">
+              <summary className="cursor-pointer">{t("technicalDetails")}</summary>
+              <div className="mt-2 rounded-lg border border-tm-border bg-tm-card-alt p-2 leading-5">
+                <div>{t("targetPage")}：<span className="font-mono">{String(row.target || `${row.target_partition || ""}/${row.target_slug || ""}`)}</span></div>
+                <div>topic：{String(row.topics || "-")} · agent：{String(row.agents || "-")}</div>
+                {samples.length ? (
+                  <div className="mt-2 space-y-2">
+                    {samples.slice(0, 2).map((item, j) => (
+                      <div key={j} className="rounded-lg border border-tm-border bg-tm-card p-2">
+                        <div className="font-semibold text-tm-secondary">{String((item as AnyRecord).title || "未提供标题")}</div>
+                        <div className="mt-1 text-tm-tertiary">{String((item as AnyRecord).preview || "")}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="mt-2">{t("samplePaths")}：</div>
+                <ul className="mt-1 list-disc space-y-1 pl-5">
+                  {wikiProposalPaths([row]).map((path) => <li key={path} className="break-all font-mono">{path}</li>)}
+                </ul>
+              </div>
+            </details>
           </div>
-        ))}
+        );
+        })}
       </div>
     </SectionShell>
   );
@@ -508,6 +1073,7 @@ function App() {
   const initialDigest = useMemo(() => readJsonScript("tm-digest-data"), []);
   const initialIntake = useMemo(() => readJsonScript("tm-cron-intake-data"), []);
   const digestRef = useRef<DigestData>(initialDigest as DigestData);
+  const [lang, setLang] = useState<Lang>(initialLanguage);
   const [digest, setDigest] = useState<DigestData>(initialDigest as DigestData);
   const [intake, setIntake] = useState<CronIntake | null>(
     Object.keys(initialIntake).length ? (initialIntake as CronIntake) : null,
@@ -517,8 +1083,10 @@ function App() {
   const [donePaths, setDonePaths] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [wikiModal, setWikiModal] = useState<WikiModalState | null>(null);
 
   const date = digest.date || "";
+  const t: TFn = (key) => copy[lang][key] || copy.zh[key];
   const counts = digest.counts || {};
   const inboxRows = digest.inbox_rows || [];
   const proposals = digest.proposals || [];
@@ -530,8 +1098,17 @@ function App() {
     window.setTimeout(() => setToast(null), 3500);
   }
 
-  async function fetchDigest(quiet = false) {
-    if (!date) return;
+  function toggleLang() {
+    setLang((current) => {
+      const next = current === "zh" ? "en" : "zh";
+      window.localStorage.setItem("tm-lang", next);
+      window.dispatchEvent(new CustomEvent("tm-lang-change", { detail: { lang: next } }));
+      return next;
+    });
+  }
+
+  async function fetchDigest(quiet = false): Promise<DigestData | null> {
+    if (!date) return null;
     if (!quiet) setRefreshing(true);
     try {
       const res = await fetch(`/api/digest/${date}`);
@@ -539,12 +1116,14 @@ function App() {
       if (data?.ok !== false && data?.digest) {
         digestRef.current = data.digest as DigestData;
         setDigest(data.digest as DigestData);
+        return data.digest as DigestData;
       }
     } catch {
-      if (!quiet) notify("刷新失败", false);
+      if (!quiet) notify(t("refreshFailed"), false);
     } finally {
       setRefreshing(false);
     }
+    return null;
   }
 
   async function fetchIntake(quiet = true) {
@@ -554,7 +1133,7 @@ function App() {
       const data = await res.json();
       if (data?.ok !== false && data?.intake) setIntake(data.intake as CronIntake);
     } catch {
-      if (!quiet) notify("承接卡读取失败", false);
+      if (!quiet) notify(t("intakeFailed"), false);
     }
   }
 
@@ -577,10 +1156,45 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date]);
 
-  async function runInboxAction(path: string, action: string) {
+  function digestHasInboxPath(current: DigestData, path: string) {
+    const rows = [...(current.inbox_rows || []), ...(current.hidden_inbox_rows || [])];
+    return rows.some((row) => row.path === path);
+  }
+
+  async function markCompletedIfPathGone(path: string, label: string, waitMs = 0) {
+    const deadline = Date.now() + Math.max(0, waitMs);
+    do {
+      const refreshed = await fetchDigest(true);
+      const current = refreshed || digestRef.current;
+      if (!digestHasInboxPath(current, path)) {
+        setDonePaths((prev) => new Set(prev).add(path));
+        setSelected((prev) => {
+          const next = new Set(prev);
+          next.delete(path);
+          return next;
+        });
+        notify(`${label}${t("done")}：${t("recovered")}`);
+        return true;
+      }
+      if (Date.now() >= deadline) break;
+      await sleep(2500);
+    } while (true);
+    return false;
+  }
+
+  async function markCompletedIfPathGoneAfterError(error: unknown, path: string, label: string) {
+    const message = String((error as Error)?.message || "");
+    const waitMs = message.includes("任务超时") ? 90000 : 0;
+    return markCompletedIfPathGone(path, label, waitMs);
+  }
+
+  async function runInboxAction(path: string, action: string, target?: WikiTarget) {
     setBusyPaths((prev) => new Set(prev).add(path));
     try {
-      const res = await postJson("/api/inbox/action", { path, action, date });
+      const body = target
+        ? { path, action, date, partition: target.partition, slug: target.slug }
+        : { path, action, date };
+      const res = await postJson("/api/inbox/action", body);
       if (res.ok !== false) {
         setDonePaths((prev) => new Set(prev).add(path));
         setSelected((prev) => {
@@ -588,13 +1202,15 @@ function App() {
           next.delete(path);
           return next;
         });
-        notify(`${actionLabel(action)} 完成`);
+        notify(`${actionLabel(action, t)} ${t("done")}`);
         await fetchDigest(true);
       } else {
-        notify(res.error || "操作失败", false);
+        notify(res.error || t("actionFailed"), false);
       }
     } catch (e) {
-      notify(String((e as Error).message || "操作失败"), false);
+      if (!(await markCompletedIfPathGoneAfterError(e, path, actionLabel(action, t)))) {
+        notify(String((e as Error).message || t("actionFailed")), false);
+      }
     } finally {
       setBusyPaths((prev) => {
         const next = new Set(prev);
@@ -604,23 +1220,32 @@ function App() {
     }
   }
 
-  async function runBatchAction(action: string) {
-    const paths = Array.from(selected);
+  async function runBatchAction(action: string, explicitPaths?: string[], target?: WikiTarget | null) {
+    const paths = explicitPaths || Array.from(selected);
     if (!paths.length) return;
     setBusyPaths((prev) => new Set([...prev, ...paths]));
     try {
-      const res = await postJson("/api/inbox/batch-action", { paths, action, date });
+      const body = target
+        ? { paths, action, date, partition: target.partition, slug_prefix: target.slug }
+        : { paths, action, date };
+      const res = await postJson("/api/inbox/batch-action", body);
       if (res.ok !== false) {
         const success = Number(res.success_count || paths.length);
-        notify(`批量${actionLabel(action)}：${success} 条完成`);
+        notify(`${t("selectedPrefix")} ${success} 条：${actionLabel(action, t)} ${t("done")}`);
         setDonePaths((prev) => new Set([...prev, ...paths]));
         setSelected(new Set());
         await fetchDigest(true);
       } else {
-        notify(res.error || "批量操作失败", false);
+        notify(res.error || t("batchFailed"), false);
       }
     } catch (e) {
-      notify(String((e as Error).message || "批量操作失败"), false);
+      const reconciled: string[] = [];
+      for (const path of paths) {
+        if (await markCompletedIfPathGone(path, actionLabel(action, t))) reconciled.push(path);
+      }
+      if (reconciled.length !== paths.length) {
+        notify(String((e as Error).message || t("batchFailed")), false);
+      }
     } finally {
       setBusyPaths((prev) => {
         const next = new Set(prev);
@@ -639,13 +1264,81 @@ function App() {
         notify(`已归档 ${Number(res.archived?.length || 0)} 条过期收件箱`);
         await fetchDigest(true);
       } else {
-        notify(res.error || "归档失败", false);
+        notify(res.error || t("archiveFailed"), false);
       }
     } catch (e) {
-      notify(String((e as Error).message || "归档失败"), false);
+      notify(String((e as Error).message || t("archiveFailed")), false);
     } finally {
       setRefreshing(false);
     }
+  }
+
+  function openWikiModalForInbox(row: InboxRow) {
+    setWikiModal({
+      kind: "inbox",
+      title: row.title_cn || row.path,
+      subtitle: row.title_cn || row.path,
+      paths: [row.path],
+      rows: [row as AnyRecord],
+      target: targetForInboxRow(row),
+    });
+  }
+
+  function openWikiProposal(row: AnyRecord) {
+    const paths = wikiProposalPaths([row]);
+    if (!paths.length) {
+      notify("没有可写入的 Wiki 提案", false);
+      return;
+    }
+    setWikiModal({
+      kind: "wiki-ledger",
+      title: wikiProposalCardTitle(row),
+      subtitle: `${wikiProposalCardTitle(row)} · ${paths.length} 条`,
+      paths,
+      rows: [row],
+      target: targetForLedgerRow(row),
+    });
+  }
+
+  function openWikiProposalBatch() {
+    const rows = ledger.filter((row) => row.status === "pending" || row.status === "investment-wiki");
+    const paths = wikiProposalPaths(rows);
+    if (!paths.length) {
+      notify("没有可写入的 Wiki 提案", false);
+      return;
+    }
+    setWikiModal({
+      kind: "wiki-ledger-batch",
+      title: `${t("wikiLedgerBatch")} ${paths.length} 条`,
+      subtitle: `${t("wikiModalBatchCopy")}，共 ${paths.length} 条`,
+      paths,
+      rows,
+      target: null,
+    });
+  }
+
+  async function runWikiLedgerAction(row: AnyRecord, action: "promote_wiki" | "investment_archive", target?: WikiTarget | null) {
+    const paths = wikiProposalPaths([row]);
+    if (!paths.length) {
+      notify(action === "investment_archive" ? "没有可归档的投资资料条目" : "没有可写入的 Wiki 提案", false);
+      return;
+    }
+    await runBatchAction(action, paths, target || null);
+  }
+
+  async function confirmWikiModal() {
+    if (!wikiModal) return;
+    const state = wikiModal;
+    setWikiModal(null);
+    if (state.kind === "inbox" && state.paths[0] && state.target) {
+      await runInboxAction(state.paths[0], "promote_wiki", state.target);
+      return;
+    }
+    if (state.kind === "wiki-ledger") {
+      await runBatchAction("promote_wiki", state.paths, state.target);
+      return;
+    }
+    await runBatchAction("promote_wiki", state.paths, null);
   }
 
   const visibleRows = inboxRows.filter((r) => r.path);
@@ -659,20 +1352,20 @@ function App() {
         aria-hidden="true"
         className="pointer-events-none fixed -bottom-[330px] -left-[180px] z-0 w-[min(1040px,90vw)] select-none opacity-10"
       />
-      <Header active="/digest" />
+      <Header active="/digest" lang={lang} onToggleLang={toggleLang} t={t} />
 
       <main className="relative z-10 mx-auto max-w-6xl px-5 py-6">
         {/* Hero archive banner */}
         {staleCount > 0 && (
           <SectionShell
             icon={<Archive size={20} />}
-            title="14 天后自动归档"
+            title={t("staleTitle")}
             className="border-tm-fail-border bg-tm-fail-bg"
           >
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h3 className="text-2xl font-extrabold text-tm-fail">{staleCount} 条待归档</h3>
-                <p className="text-sm text-tm-fail">这些收件箱已超过 14 天且没有应用记录。</p>
+                <h3 className="text-2xl font-extrabold text-tm-fail">{staleCount} {t("staleSuffix")}</h3>
+                <p className="text-sm text-tm-fail">{t("staleCopy")}</p>
               </div>
               <button
                 type="button"
@@ -680,7 +1373,7 @@ function App() {
                 disabled={refreshing}
                 className="rounded-md bg-tm-fail px-4 py-2 text-sm font-medium text-tm-inverse hover:opacity-90 disabled:opacity-50"
               >
-                一键归档全部
+                {t("archiveAll")}
               </button>
             </div>
           </SectionShell>
@@ -688,20 +1381,27 @@ function App() {
 
         {/* Decision */}
         {digest.decision && (
-          <SectionShell icon={<Sparkles size={20} />} title="今日要决策">
+          <SectionShell icon={<Sparkles size={20} />} title={t("decisionTitle")}>
             <div className="text-sm leading-7 text-tm-secondary [&_strong]:text-tm-primary [&_strong]:font-semibold">
               <Markdownish text={digest.decision} />
             </div>
           </SectionShell>
         )}
 
-        <CronIntakeSection intake={intake} />
-        <WikiLedgerSection rows={ledger} />
+        <CronIntakeSection intake={intake} t={t} />
+        <WikiLedgerSection
+          rows={ledger}
+          busy={Boolean(wikiModal) || busyPaths.size > 0}
+          t={t}
+          onApproveAll={openWikiProposalBatch}
+          onApproveOne={openWikiProposal}
+          onInvestmentArchive={(row) => runWikiLedgerAction(row, "investment_archive")}
+        />
 
         {/* Inbox */}
         <SectionShell
           icon={<Inbox size={20} />}
-          title="待确认内容"
+          title={t("inboxTitle")}
           count={`${visibleRows.length} 条`}
         >
           {/* batch toolbar */}
@@ -714,12 +1414,28 @@ function App() {
                 className="mb-3 overflow-hidden"
               >
                 <div className="sticky top-[53px] z-20 flex flex-wrap items-center justify-between gap-2 rounded-md border border-tm-warn-border bg-tm-warn-bg px-3 py-2 text-sm text-tm-warn shadow-md">
-                  <span>已选择 {selected.size} 条</span>
+                  <span>{t("selectedPrefix")} {selected.size} 条</span>
                   <div className="flex flex-wrap gap-2">
-                    <button onClick={() => runBatchAction("archive")} className="rounded-md bg-tm-fail px-3 py-1.5 text-xs text-tm-inverse hover:opacity-90">批量归档</button>
-                    <button onClick={() => runBatchAction("promote_mem0")} className="rounded-md bg-tm-warn px-3 py-1.5 text-xs text-tm-inverse hover:opacity-90">存入即时记忆</button>
-                    <button onClick={() => runBatchAction("promote_wiki")} className="rounded-md bg-tm-accent px-3 py-1.5 text-xs font-semibold text-tm-primary hover:bg-tm-accent-hi">存入知识库</button>
-                    <button onClick={() => setSelected(new Set())} className="rounded-md bg-tm-overlay px-3 py-1.5 text-xs text-tm-secondary hover:bg-tm-border-strong">清空选择</button>
+                    <button onClick={() => runBatchAction("archive")} className="rounded-md bg-tm-fail px-3 py-1.5 text-xs text-tm-inverse hover:opacity-90">{t("batchArchive")}</button>
+                    <button onClick={() => runBatchAction("promote_mem0")} className="rounded-md bg-tm-warn px-3 py-1.5 text-xs text-tm-inverse hover:opacity-90">{t("batchMem0")}</button>
+                    <button
+                      onClick={() => {
+                        const rows = visibleRows.filter((row) => selected.has(row.path));
+                        const paths = rows.map((row) => row.path);
+                        setWikiModal({
+                          kind: "wiki-ledger-batch",
+                          title: `${t("batchWiki")} ${paths.length} 条`,
+                          subtitle: `${t("wikiModalBatchCopy")}，共 ${paths.length} 条`,
+                          paths,
+                          rows: rows as AnyRecord[],
+                          target: null,
+                        });
+                      }}
+                      className="rounded-md bg-tm-accent px-3 py-1.5 text-xs font-semibold text-tm-primary hover:bg-tm-accent-hi"
+                    >
+                      {t("batchWiki")}
+                    </button>
+                    <button onClick={() => setSelected(new Set())} className="rounded-md bg-tm-overlay px-3 py-1.5 text-xs text-tm-secondary hover:bg-tm-border-strong">{t("clearSelected")}</button>
                   </div>
                 </div>
               </motion.div>
@@ -743,9 +1459,10 @@ function App() {
                         return next;
                       })
                     }
-                    onAction={(action) => runInboxAction(row.path, action)}
+                    onAction={(action) => action === "promote_wiki" ? openWikiModalForInbox(row) : runInboxAction(row.path, action)}
                     busy={busyPaths.has(row.path)}
                     done={donePaths.has(row.path)}
+                    t={t}
                   />
                 ))}
               </AnimatePresence>
@@ -753,23 +1470,23 @@ function App() {
           ) : (
             <div className="flex items-center gap-2 py-6 text-sm text-tm-tertiary">
               <CheckCircle2 size={16} className="text-tm-ok" />
-              收件箱已清空
+              {t("emptyInbox")}
             </div>
           )}
         </SectionShell>
 
         {/* Proposals */}
         {proposals.length > 0 && (
-          <SectionShell icon={<Lightbulb size={20} />} title="AI 修改建议" count={`${proposals.length} 条`}>
+          <SectionShell icon={<Lightbulb size={20} />} title={t("proposalsTitle")} count={`${proposals.length} 条`}>
             <div className="space-y-3">
               {proposals.map((p, i) => (
                 <div key={String(p.id || i)} className="rounded-xl border border-tm-border bg-tm-card p-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="rounded-full bg-tm-card-alt px-2 py-0.5 text-xs text-tm-secondary">
-                      {String(p.type || "其他")}
+                       {String(p.type || t("other"))}
                     </span>
                     {p.trigger ? (
-                      <span className="text-xs text-tm-tertiary">触发：{String(p.trigger)}</span>
+                      <span className="text-xs text-tm-tertiary">{t("trigger")}：{String(p.trigger)}</span>
                     ) : null}
                   </div>
                   {p.impact ? (
@@ -788,7 +1505,7 @@ function App() {
 
         {/* Metrics */}
         {digest.metrics && (
-          <SectionShell icon={<TrendingUp size={20} />} title="系统自检">
+          <SectionShell icon={<TrendingUp size={20} />} title={t("metricsTitle")}>
             <pre className="whitespace-pre-wrap text-sm leading-6 text-tm-secondary">
               {digest.metrics}
             </pre>
@@ -797,10 +1514,10 @@ function App() {
 
         {/* Appendix */}
         {digest.appendix && (
-          <SectionShell icon={<BookOpen size={20} />} title="原始材料">
+          <SectionShell icon={<BookOpen size={20} />} title={t("appendixTitle")}>
             <details>
               <summary className="cursor-pointer text-sm font-medium text-tm-secondary">
-                展开原始明细
+                {t("appendixExpand")}
               </summary>
               <pre className="mt-3 whitespace-pre-wrap text-xs leading-5 text-tm-tertiary">
                 {digest.appendix}
@@ -816,13 +1533,21 @@ function App() {
             <Layers size={13} />
           )}
           <button onClick={() => fetchDigest(false)} className="hover:text-tm-secondary">
-            刷新
+            {t("refresh")}
           </button>
           <span>· {date || "—"}</span>
         </div>
       </main>
 
       <Toast msg={toast} />
+      <WikiTargetModal
+        state={wikiModal}
+        busy={busyPaths.size > 0}
+        t={t}
+        onCancel={() => setWikiModal(null)}
+        onConfirm={confirmWikiModal}
+        onSelect={(target) => setWikiModal((state) => state ? { ...state, target } : state)}
+      />
     </div>
   );
 }

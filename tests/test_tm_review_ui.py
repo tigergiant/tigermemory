@@ -1750,6 +1750,23 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
 
 
 
+def test_digest_react_source_keeps_daily_review_actions():
+    source = (REPO_ROOT / "packages" / "tigermemory-dashboard-ui" / "src" / "digest" / "main.tsx").read_text(encoding="utf-8")
+
+    assert "const copy = {" in source
+    assert "window.navigator.language" in source
+    assert "WikiTargetModal" in source
+    assert "wiki_target" in source
+    assert "partition" in source
+    assert "slug" in source
+    assert "openWikiProposalBatch" in source
+    assert "runWikiLedgerAction" in source
+    assert "investment_archive" in source
+    assert "markCompletedIfPathGoneAfterError" in source
+    assert "fetch(`/api/digest/${date}`" in source
+    assert "按每条提案自己的推荐目标写入" in source
+
+
 def test_review_write_ready_allows_unstaged_foreign_dirty():
     status = "\n".join(
         [
