@@ -22,6 +22,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import React, { useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import { ParticleField } from "./ParticleField";
 import "./styles.css";
 
 type Lang = "zh" | "en";
@@ -647,6 +648,7 @@ function App() {
 function Background() {
   return (
     <div className="tm-bg" aria-hidden="true">
+      <ParticleField />
       <div className="tm-bg-mark" />
       <div className="tm-stripe tr" />
     </div>

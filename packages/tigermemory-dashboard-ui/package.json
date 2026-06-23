@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
+    "build": "node build-all.mjs",
+    "build:start": "node build-all.mjs start",
+    "build:digest": "node build-all.mjs digest",
     "dev": "vite --host 127.0.0.1 --port 2000"
   },
   "dependencies": {

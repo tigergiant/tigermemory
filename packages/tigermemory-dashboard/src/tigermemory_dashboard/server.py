@@ -4630,6 +4630,14 @@ def _render_digest_page_html(date: str) -> str:
             "action_items": [],
         }
     intake_data = json.dumps(intake, ensure_ascii=False).replace("</", "<\\/")
+    react_entry = STATIC_DIR / "react" / "digest" / "digest.html"
+    if react_entry.exists():
+        html = react_entry.read_text(encoding="utf-8")
+        return (
+            html.replace("__TM_DIGEST_JSON__", data)
+            .replace("__TM_CRON_INTAKE_JSON__", intake_data)
+            .replace("__GIT_SHA__", git_sha())
+        )
     return _template().replace("__DIGEST_JSON__", data).replace("__CRON_INTAKE_JSON__", intake_data)
 
 

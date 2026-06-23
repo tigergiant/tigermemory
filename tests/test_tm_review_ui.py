@@ -1638,26 +1638,31 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     client.get("/", headers=HOST, follow_redirects=False)
 
-    # dashboard shell pages
-    pages = ["/digest/2026-05-21", "/health", "/quality", "/agent-tools", "/settings"]
+    # dashboard shell pages — /digest 已迁移为 React island，不再引用旧 dashboard-common.js。
+    legacy_pages = ["/health", "/quality", "/agent-tools", "/settings"]
+    pages = ["/digest/2026-05-21"] + legacy_pages
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_digest(tmp_path)
 
     for route in pages:
         res = client.get(route, headers=HOST)
         assert res.status_code == 200
-        # 1. dashboard-common.js 被 5 页引用
+
+    # 1. dashboard-common.js 仍被 4 个未迁移页引用
+    for route in legacy_pages:
+        res = client.get(route, headers=HOST)
         assert "/static/dashboard-common.js" in res.text
 
-    # 2. dashboard-pages.js 被 digest / health / quality / settings / agent-tools 引用；
-    # /start 已迁移为 React island，不再依赖旧 dashboard-pages.js 控制器。
+    # 2. dashboard-pages.js 被 health / quality / settings / agent-tools 引用；
+    # /start 与 /digest 均已迁移为 React island，不再依赖旧 dashboard-pages.js 控制器。
     digest = client.get("/digest/2026-05-21", headers=HOST)
     start = client.get("/start", headers=HOST)
     health = client.get("/health", headers=HOST)
     quality = client.get("/quality", headers=HOST)
     settings = client.get("/settings", headers=HOST)
     agent_tools = client.get("/agent-tools", headers=HOST)
-    assert "/static/dashboard-pages.js" in digest.text
+    assert "/static/dashboard-pages.js" not in digest.text
+    assert "/static/react/digest/assets/" in digest.text
     assert "/static/dashboard-pages.js" not in start.text
     assert "/static/react/start/assets/" in start.text
     assert "/static/dashboard-pages.js" in health.text
@@ -1671,11 +1676,12 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "/static/dashboard-common.js" in sw_res.text
     assert "/static/dashboard-pages.js" in sw_res.text
 
-    # 4. health/quality/settings/digest/agent-tools 页面不再直接出现 inline 定义，且 digest 使用 init。
-    # start 页面由 React bundle 接管。
-    assert 'data-tm-react-start' in start.text
+    # 4. health/quality/settings/agent-tools 页面不再直接出现 inline 定义；
+    # /start 与 /digest 页面均由 React bundle 接管。
+    assert "data-tm-react-start" in start.text
     assert "function copyCommand" not in start.text
-    assert "window.tmPages.daily.init" in digest.text
+    assert "data-tm-react-digest" in digest.text
+    assert "window.tmPages.daily.init" not in digest.text
     assert "function renderInbox" not in digest.text
     assert "function openWikiModal" not in digest.text
     assert "async function fetchDigest" not in digest.text
