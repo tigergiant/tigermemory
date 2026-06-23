@@ -145,6 +145,23 @@ def test_start_onboarding_i18n_covers_agent_connect_and_english() -> None:
     assert "TigerMemory 已经内置" in zh["start.agent.copy"]
 
 
+def test_dashboard_git_command_uses_windows_git_for_wsl_mount(monkeypatch) -> None:
+    monkeypatch.setattr(server, "REPO_ROOT", pathlib.PurePosixPath("/mnt/d/tigermemory-worktrees/master"))
+    monkeypatch.setattr(server.os, "name", "posix", raising=False)
+    monkeypatch.setattr(server, "_windows_git_executable", lambda: "/mnt/f/software/Git/cmd/git.exe")
+
+    cmd, cwd = server._prepare_command(["git", "status", "--short"])
+
+    assert cmd == [
+        "/mnt/f/software/Git/cmd/git.exe",
+        "-C",
+        "D:\\tigermemory-worktrees\\master",
+        "status",
+        "--short",
+    ]
+    assert cwd is None
+
+
 def test_start_shell_includes_preferences(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(server, "PREFS_DB", tmp_path / "prefs.sqlite")
 

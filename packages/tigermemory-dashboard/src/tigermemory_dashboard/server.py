@@ -632,6 +632,41 @@ def _mark_kept(date: str, inbox_path: str) -> dict[str, Any]:
     return {"ok": True, "action": "keep", "path": rel, "date": date, "hidden": True}
 
 
+def _wsl_mount_to_windows_path(path: pathlib.Path) -> str | None:
+    raw = path.as_posix()
+    match = re.match(r"^/mnt/([a-zA-Z])(?:/(.*))?$", raw)
+    if not match:
+        return None
+    drive = match.group(1).upper()
+    tail = (match.group(2) or "").replace("/", "\\")
+    return f"{drive}:\\{tail}" if tail else f"{drive}:\\"
+
+
+def _windows_git_executable() -> str | None:
+    configured = os.getenv("TM_DASHBOARD_WINDOWS_GIT")
+    candidates = [
+        configured,
+        "/mnt/f/software/Git/cmd/git.exe",
+        "/mnt/f/software/Git/bin/git.exe",
+        "/mnt/c/Program Files/Git/cmd/git.exe",
+        "/mnt/c/Program Files/Git/bin/git.exe",
+    ]
+    for candidate in candidates:
+        if candidate and pathlib.Path(candidate).exists():
+            return candidate
+    return None
+
+
+def _prepare_command(cmd: list[str]) -> tuple[list[str], pathlib.Path | None]:
+    if not cmd or cmd[0] != "git" or os.name == "nt":
+        return cmd, REPO_ROOT
+    win_root = _wsl_mount_to_windows_path(REPO_ROOT)
+    win_git = _windows_git_executable() if win_root else None
+    if win_git:
+        return [win_git, "-C", win_root, *cmd[1:]], None
+    return cmd, REPO_ROOT
+
+
 def _run(cmd: list[str], *, timeout: float = 300) -> subprocess.CompletedProcess[str]:
     if cmd and cmd[0] == "git" and not (REPO_ROOT / ".git").exists():
         return subprocess.CompletedProcess(
@@ -640,10 +675,11 @@ def _run(cmd: list[str], *, timeout: float = 300) -> subprocess.CompletedProcess
             "",
             f"git metadata not found at dashboard root: {REPO_ROOT}",
         )
+    prepared_cmd, cwd = _prepare_command(cmd)
     try:
         return subprocess.run(
-            cmd,
-            cwd=REPO_ROOT,
+            prepared_cmd,
+            cwd=cwd,
             text=True,
             encoding="utf-8",
             errors="replace",
