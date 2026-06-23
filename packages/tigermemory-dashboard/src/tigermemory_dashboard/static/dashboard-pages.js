@@ -4612,10 +4612,17 @@
         const c2x = x1 + (x2 - x1) / 2;
         const c2y = y2;
         const d = `M ${x1} ${y1} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${x2} ${y2}`;
+        const dur = (Math.random() * 2 + 3).toFixed(1);
+        const delay = (Math.random() * -3).toFixed(1);
         
         return `
           <path class="tm-flow-path" data-flow-path-for="${flowId}" d="${d}" />
-          <path class="tm-flow-path tm-flow-path-stream" data-flow-path-for="${flowId}" d="${d}" />
+          <circle class="tm-flow-dot-anim" r="3">
+            <animateMotion dur="${dur}s" repeatCount="indefinite" begin="${delay}s">
+              <mpath href="#path_${x1}_${y1}_${x2}_${y2}" />
+            </animateMotion>
+          </circle>
+          <path id="path_${x1}_${y1}_${x2}_${y2}" d="${d}" fill="none" stroke="none" />
         `;
       };
 

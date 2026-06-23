@@ -989,7 +989,7 @@ def test_service_worker_does_not_cache_dynamic_review_pages(tmp_path, monkeypatc
     response = client.get("/service-worker.js", headers=HOST)
 
     assert response.status_code == 200
-    assert "tigermemory-memory-ops-v79" in response.text
+    assert "tigermemory-memory-ops-v80" in response.text
     assert "'/digest'" in response.text
     assert "request.mode === 'navigate'" in response.text
     assert "url.pathname.startsWith('/api/')" in response.text
@@ -4009,20 +4009,15 @@ def test_dashboard_p2_static_sections():
     assert "fetchRecentActivity" in pages_js
     assert "fetchMemoryOverview" in pages_js
     assert "/api/health/memory-overview" in pages_js
-    assert "animateMotion" not in pages_js
-    assert "tm-flow-dot-anim" not in pages_js
-    assert "tm-flow-path-stream" in pages_js
+    assert "animateMotion" in pages_js
+    assert "tm-flow-dot-anim" in pages_js
+    assert "tm-flow-path-stream" not in pages_js
     assert "bindFlowHover" in pages_js
     assert "scheduleDrawFlowLines" in pages_js
     assert "window.addEventListener('resize', () => { if (window.tmPages && window.tmPages.quality" not in pages_js
-    assert "tmFlowPathStream" in style_css
-    assert ".tm-flow-path-stream" in style_css
-    assert ".tm-flow-path-stream.flow-path-active" in style_css
-    assert "animation-play-state: paused" in style_css
-    assert "animation-play-state: running" in style_css
-    assert "tmIssueBreathing 1.5s ease-out 1 forwards" in style_css
-    assert "tmFlowDotPulse" not in style_css
-    assert "tmPathFlowAnim" not in style_css
+    assert "tmFlowDotPulse" in style_css
+    assert "tmPathFlowAnim" in style_css
+    assert "tmIssueBreathing 3s infinite ease-in-out" in style_css
 
 
 def test_dashboard_smoke_script_execution(monkeypatch):
