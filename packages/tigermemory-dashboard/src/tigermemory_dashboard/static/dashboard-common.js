@@ -4,7 +4,7 @@
  */
 
 (() => {
-  const FULL_DOCUMENT_ROUTES = new Set(['/start']);
+  const FULL_DOCUMENT_ROUTES = new Set(['/start', '/digest', '/quality', '/canvas']);
 
   function syncDocumentTitle(doc) {
     const nextTitle = doc.querySelector('title');
@@ -107,6 +107,10 @@
     } catch (_error) {
       return '';
     }
+  }
+
+  function isFullDocumentPath(pathname) {
+    return FULL_DOCUMENT_ROUTES.has(pathname) || pathname.startsWith('/digest/');
   }
 
   const DEFAULT_CACHE_TTL_MS = 5000;
@@ -232,9 +236,7 @@
     isFullDocumentRoute(url) {
       try {
         const parsed = new URL(url, window.location.href);
-        return FULL_DOCUMENT_ROUTES.has(parsed.pathname) ||
-               FULL_DOCUMENT_ROUTES.has(window.location.pathname) ||
-               document.body.dataset.page === 'start';
+        return isFullDocumentPath(parsed.pathname);
       } catch (e) {
         return false;
       }
