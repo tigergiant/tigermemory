@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#c8a560">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="TigerMemory" data-i18n-attr="content" data-i18n-content="app.title">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/static/tiger/tigermemory_tiger_logo_192.png">
+  <title data-i18n="page.ledger.title">TigerMemory 记账审批</title>
+  <script src="/static/assets/tailwindcss.min.js"></script>
+  <script src="/static/assets/lucide.min.js"></script>
+  <style>__STYLE__</style>
+  <style>
+    .ledger-control {
+      display: grid;
+      gap: 5px;
+      color: var(--text-tertiary);
+      font-size: 12px;
+      line-height: 18px;
+      font-weight: 600;
+    }
+
+    .ledger-input,
+    .ledger-select,
+    .ledger-textarea {
+      width: 100%;
+      border: 1px solid var(--border-strong);
+      border-radius: 10px;
+      background: var(--bg-card);
+      color: var(--text-primary);
+      padding: 9px 10px;
+      font: inherit;
+      font-size: 14px;
+      line-height: 20px;
+    }
+
+    .ledger-textarea {
+      min-height: 42px;
+      resize: vertical;
+    }
+
+    .ledger-input:focus,
+    .ledger-select:focus,
+    .ledger-textarea:focus {
+      outline: 2px solid rgba(200, 165, 96, .26);
+      border-color: var(--accent-tiger-hi);
+    }
+
+    .ledger-secondary-button,
+    .ledger-danger-button,
+    .ledger-link-button {
+      border-radius: 10px;
+      border: 1px solid var(--border-strong);
+      background: var(--bg-card);
+      color: var(--text-secondary);
+      padding: 9px 12px;
+      font-size: 14px;
+      line-height: 20px;
+      font-weight: 600;
+      white-space: nowrap;
+      transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+    }
+
+    .ledger-secondary-button:hover,
+    .ledger-link-button:hover {
+      border-color: var(--accent-tiger-hi);
+      background: var(--bg-card-alt);
+      color: var(--text-primary);
+    }
+
+    .ledger-danger-button {
+      color: var(--status-fail-fg);
+      border-color: var(--status-fail-border);
+      background: var(--status-fail-bg);
+    }
+
+    .ledger-danger-button:hover {
+      background: #e9c5bf;
+    }
+
+    .ledger-kpi {
+      border: 1px solid var(--border-soft);
+      border-radius: 12px;
+      background: rgba(251, 248, 241, .74);
+      padding: 14px;
+    }
+
+    .ledger-kpi span {
+      display: block;
+      color: var(--text-tertiary);
+      font-size: 12px;
+      line-height: 18px;
+      font-weight: 700;
+    }
+
+    .ledger-kpi b {
+      display: block;
+      margin-top: 6px;
+      color: var(--text-primary);
+      font-size: 24px;
+      line-height: 30px;
+      font-weight: 800;
+    }
+
+    .ledger-table-wrap {
+      overflow: auto;
+      border: 1px solid var(--border-soft);
+      border-radius: 14px;
+      background: var(--bg-card);
+    }
+
+    .ledger-table {
+      min-width: 1180px;
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .ledger-table th,
+    .ledger-table td {
+      border-bottom: 1px solid var(--border-soft);
+      padding: 11px 12px;
+      text-align: left;
+      vertical-align: top;
+      font-size: 13px;
+      line-height: 19px;
+    }
+
+    .ledger-table th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: var(--bg-card-alt);
+      color: var(--text-tertiary);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .ledger-table tr.selected {
+      background: #fff8df;
+    }
+
+    .ledger-tag {
+      display: inline-block;
+      margin: 1px;
+      border: 1px solid var(--border-strong);
+      border-radius: 999px;
+      background: var(--bg-card-alt);
+      color: var(--text-secondary);
+      padding: 2px 7px;
+      font-size: 11px;
+      line-height: 16px;
+    }
+
+    .ledger-status {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-size: 12px;
+      line-height: 16px;
+      font-weight: 700;
+    }
+
+    .ledger-status-pending { color: var(--status-warn-fg); background: var(--status-warn-bg); }
+    .ledger-status-approved { color: var(--status-ok-fg); background: var(--status-ok-bg); }
+    .ledger-status-skipped,
+    .ledger-status-deleted { color: var(--status-fail-fg); background: var(--status-fail-bg); }
+
+    .ledger-editor {
+      display: none;
+    }
+
+    .ledger-editor.open {
+      display: block;
+    }
+
+    @media (max-width: 760px) {
+      .ledger-actions {
+        display: grid;
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body data-page="ledger">
+  __HEADER__
+  <img class="dashboard-motif main" src="/static/tiger/tigerlogo.png" alt="">
+  <div class="stripe-motif tl"></div>
+  <div class="stripe-motif tr"></div>
+  <div class="stripe-motif br"></div>
+
+  <main class="relative z-10 mx-auto max-w-6xl px-6 py-8">
+    <section class="card mb-6 p-6">
+      <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <div class="flex items-center gap-2 text-sm font-medium text-[#8a8275]">
+            <i data-lucide="wallet-cards" class="h-4 w-4 text-[#c8a560]"></i>
+            <span>个人记忆控制台</span>
+          </div>
+          <h1 class="mt-2 text-3xl font-extrabold leading-9 text-[#1f1d1b]">记账审批</h1>
+          <p class="mt-2 text-sm leading-6 text-[#4a443d]">查看导入后的账本候选，快速确认、修正或跳过需要处理的流水。</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+          <span id="ledger-db" class="rounded-full border border-[#c9bf9f] bg-[#f0e9d8] px-3 py-1 text-xs text-[#4a443d]">本地账本</span>
+          <button id="ledger-refresh" class="primary-button" type="button">刷新</button>
+        </div>
+      </div>
+      <div id="ledger-toast" class="mt-4 text-sm text-[#8a8275]">正在读取账本...</div>
+    </section>
+
+    <section class="mb-6 grid gap-3 md:grid-cols-5" id="ledger-summary"></section>
+
+    <section class="card mb-6 p-6">
+      <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-6">
+        <label class="ledger-control">月份 <input id="ledger-month" class="ledger-input" type="month"></label>
+        <label class="ledger-control">状态
+          <select id="ledger-status" class="ledger-select">
+            <option value="pending">待确认</option>
+            <option value="approved">已确认</option>
+            <option value="skipped">已跳过</option>
+            <option value="deleted">已删除</option>
+            <option value="all">全部</option>
+          </select>
+        </label>
+        <label class="ledger-control">类型
+          <select id="ledger-kind" class="ledger-select">
+            <option value="">全部</option>
+            <option value="expense">支出</option>
+            <option value="income">收入</option>
+          </select>
+        </label>
+        <label class="ledger-control">分类 <input id="ledger-category" class="ledger-input" placeholder="餐饮 / 交通"></label>
+        <label class="ledger-control">来源 <input id="ledger-source-agent" class="ledger-input" placeholder="expense-import"></label>
+        <label class="ledger-control">搜索 <input id="ledger-query" class="ledger-input" placeholder="商户 / 备注 / tag"></label>
+      </div>
+      <div class="mt-4 flex flex-wrap gap-3 ledger-actions">
+        <button id="ledger-apply-filter" class="primary-button" type="button">应用筛选</button>
+        <button id="ledger-clear-filter" class="ledger-secondary-button" type="button">清空筛选</button>
+      </div>
+    </section>
+
+    <section id="ledger-editor" class="ledger-editor card mb-6 p-6">
+      <div class="mb-4 flex items-center justify-between gap-3">
+        <h2 class="flex items-center gap-2 text-lg font-semibold text-[#1f1d1b]">
+          <i data-lucide="pencil" class="h-5 w-5 text-[#c8a560]"></i>
+          <span>修正流水</span>
+        </h2>
+        <button id="ledger-close-editor" class="ledger-link-button" type="button">关闭</button>
+      </div>
+      <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <label class="ledger-control">分类 <input id="ledger-edit-category" class="ledger-input"></label>
+        <label class="ledger-control">商户 <input id="ledger-edit-merchant" class="ledger-input"></label>
+        <label class="ledger-control lg:col-span-2">备注 <textarea id="ledger-edit-note" class="ledger-textarea" rows="2"></textarea></label>
+      </div>
+      <button id="ledger-save-edit" class="primary-button mt-4" type="button">保存并确认</button>
+    </section>
+
+    <section class="card p-6">
+      <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <h2 class="flex items-center gap-2 text-lg font-semibold text-[#1f1d1b]">
+          <i data-lucide="list-checks" class="h-5 w-5 text-[#c8a560]"></i>
+          <span>流水清单</span>
+        </h2>
+        <span id="ledger-row-count" class="text-sm text-[#8a8275]">-</span>
+      </div>
+      <div class="ledger-table-wrap">
+        <table class="ledger-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>状态</th>
+              <th>时间</th>
+              <th>类型</th>
+              <th>金额</th>
+              <th>分类</th>
+              <th>商户</th>
+              <th>账户</th>
+              <th>备注</th>
+              <th>Tags</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="ledger-rows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      const API_BASE = '/api/ledger/review';
+      const state = { rows: [], selected: null };
+      const $ = id => document.getElementById(id);
+      const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+      const money = value => `¥${Number(value || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      const toast = message => { $('ledger-toast').textContent = message || ''; };
+      const statusLabel = status => ({pending:'待确认', approved:'已确认', skipped:'已跳过', deleted:'已删除'}[status] || status || '-');
+      const kindLabel = kind => ({expense:'支出', income:'收入'}[kind] || kind || '-');
+
+      function filterParams() {
+        const params = new URLSearchParams();
+        for (const [id, key] of [
+          ['ledger-month', 'month'],
+          ['ledger-status', 'status'],
+          ['ledger-kind', 'kind'],
+          ['ledger-category', 'category'],
+          ['ledger-source-agent', 'source_agent'],
+          ['ledger-query', 'q']
+        ]) {
+          const value = ($(id).value || '').trim();
+          if (value) params.set(key, value);
+        }
+        params.set('limit', '300');
+        return params;
+      }
+
+      function summaryParams() {
+        const params = new URLSearchParams();
+        if ($('ledger-month').value) params.set('month', $('ledger-month').value);
+        return params;
+      }
+
+      function renderSummary(data) {
+        const counts = data.status_counts || {};
+        $('ledger-db').textContent = data.ok ? '本地账本已连接' : '账本读取失败';
+        const metrics = [
+          ['待确认', counts.pending || 0],
+          ['已确认', counts.approved || 0],
+          ['已跳过', counts.skipped || 0],
+          ['支出合计', money(data.live_expense_total || 0)],
+          ['收入合计', money(data.live_income_total || 0)]
+        ];
+        $('ledger-summary').innerHTML = metrics.map(([label, value]) => `
+          <article class="ledger-kpi">
+            <span>${esc(label)}</span>
+            <b>${esc(value)}</b>
+          </article>
+        `).join('');
+      }
+
+      async function loadSummary() {
+        const response = await fetch(`${API_BASE}/summary?${summaryParams().toString()}`);
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(JSON.stringify(data.detail || data.error || data));
+        renderSummary(data);
+      }
+
+      function renderRows(total) {
+        $('ledger-row-count').textContent = `共 ${Number(total || 0).toLocaleString('zh-CN')} 条，当前显示 ${state.rows.length.toLocaleString('zh-CN')} 条`;
+        $('ledger-rows').innerHTML = state.rows.map(row => {
+          const tags = (row.tags_list || []).map(tag => `<span class="ledger-tag">${esc(tag)}</span>`).join('');
+          const selected = state.selected && Number(state.selected.id) === Number(row.id);
+          return `<tr data-id="${row.id}" class="${selected ? 'selected' : ''}">
+            <td>${esc(row.id)}</td>
+            <td><span class="ledger-status ledger-status-${esc(row.review_status)}">${esc(statusLabel(row.review_status))}</span></td>
+            <td>${esc(row.occurred_at || '')}</td>
+            <td>${esc(kindLabel(row.kind))}</td>
+            <td>${money(row.amount)}</td>
+            <td>${esc(row.category || '')}</td>
+            <td>${esc(row.merchant || '')}</td>
+            <td>${esc(row.payment_method || '')}</td>
+            <td>${esc(row.note || '')}</td>
+            <td>${tags}</td>
+            <td>
+              <div class="flex flex-wrap gap-2">
+                <button class="ledger-link-button" data-action="approve" data-id="${row.id}" type="button">确认</button>
+                <button class="ledger-link-button" data-action="edit" data-id="${row.id}" type="button">编辑</button>
+                <button class="ledger-danger-button" data-action="skip" data-id="${row.id}" type="button">跳过</button>
+              </div>
+            </td>
+          </tr>`;
+        }).join('');
+      }
+
+      async function loadRows() {
+        toast('读取中...');
+        await loadSummary();
+        const response = await fetch(`${API_BASE}/entries?${filterParams().toString()}`);
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(JSON.stringify(data.detail || data.error || data));
+        state.rows = data.rows || [];
+        renderRows(data.total || 0);
+        toast('已更新');
+        if (window.lucide) window.lucide.createIcons();
+      }
+
+      function selectRow(id) {
+        state.selected = state.rows.find(row => Number(row.id) === Number(id));
+        if (!state.selected) return;
+        $('ledger-edit-category').value = state.selected.category || '';
+        $('ledger-edit-merchant').value = state.selected.merchant || '';
+        $('ledger-edit-note').value = state.selected.note || '';
+        $('ledger-editor').classList.add('open');
+        renderRows(state.rows.length);
+      }
+
+      async function post(url, body = {}) {
+        const response = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(JSON.stringify(data.detail || data.error || data));
+        return data;
+      }
+
+      document.addEventListener('click', async event => {
+        const button = event.target.closest('button');
+        if (!button) return;
+        const action = button.dataset.action;
+        const id = button.dataset.id;
+        try {
+          if (action === 'approve') {
+            await post(`${API_BASE}/entries/${id}/approve`);
+            await loadRows();
+          } else if (action === 'skip') {
+            const reason = prompt('跳过原因', '重复或不入账');
+            if (reason !== null) {
+              await post(`${API_BASE}/entries/${id}/skip`, { reason });
+              await loadRows();
+            }
+          } else if (action === 'edit') {
+            selectRow(id);
+          }
+        } catch (error) {
+          toast(error.message || String(error));
+        }
+      });
+
+      $('ledger-refresh').addEventListener('click', loadRows);
+      $('ledger-apply-filter').addEventListener('click', loadRows);
+      $('ledger-clear-filter').addEventListener('click', () => {
+        for (const id of ['ledger-month', 'ledger-kind', 'ledger-category', 'ledger-source-agent', 'ledger-query']) $(id).value = '';
+        $('ledger-status').value = 'pending';
+        loadRows();
+      });
+      $('ledger-close-editor').addEventListener('click', () => $('ledger-editor').classList.remove('open'));
+      $('ledger-save-edit').addEventListener('click', async () => {
+        if (!state.selected) return;
+        try {
+          await post(`${API_BASE}/entries/${state.selected.id}/edit`, {
+            category: $('ledger-edit-category').value,
+            merchant: $('ledger-edit-merchant').value,
+            note: $('ledger-edit-note').value,
+            approve: true
+          });
+          $('ledger-editor').classList.remove('open');
+          await loadRows();
+        } catch (error) {
+          toast(error.message || String(error));
+        }
+      });
+
+      const current = new Date();
+      $('ledger-month').value = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`;
+      loadRows().catch(error => toast(error.message || String(error)));
+      if (window.tmDashboard) window.tmDashboard.registerServiceWorker();
+      if (window.lucide) window.lucide.createIcons();
+    })();
+  </script>
+</body>
+</html>

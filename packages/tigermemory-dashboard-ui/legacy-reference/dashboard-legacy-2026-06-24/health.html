@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#c8a560">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="TigerMemory" data-i18n-attr="content" data-i18n-content="app.title">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/static/tiger/tigermemory_tiger_logo_192.png">
+  <title data-i18n="page.health.title">TigerMemory 运行检查</title>
+  <script src="/static/assets/tailwindcss.min.js"></script>
+  <script src="/static/assets/lucide.min.js"></script>
+  <style>__STYLE__</style>
+</head>
+<body data-page="health">
+  __HEADER__
+  <script id="health-data" type="application/json">__HEALTH_JSON__</script>
+  <img class="dashboard-motif main" src="/static/tiger/tigerlogo.png" alt="">
+  <div class="stripe-motif tl"></div>
+  <div class="stripe-motif tr"></div>
+  <div class="stripe-motif br"></div>
+
+  <main class="relative z-10 mx-auto max-w-6xl px-6 py-8">
+    <section class="card mb-6 p-6">
+      <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <div class="flex items-center gap-2 text-sm font-medium text-[#8a8275]">
+            <i data-lucide="activity" class="h-4 w-4 text-[#c8a560]"></i>
+            <span data-i18n="brand.subtitle">记忆管家</span>
+          </div>
+          <h1 class="mt-2 text-3xl font-extrabold leading-9 text-[#1f1d1b]" data-i18n="nav.health">运行检查</h1>
+          <p class="mt-2 text-sm leading-6 text-[#4a443d]" data-i18n="page.health.intro">运行检查约每 45 秒自动刷新；基础模式会把高级连接显示为可选。</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+          <span class="rounded-full border border-[#c9bf9f] bg-[#f0e9d8] px-3 py-1 text-xs text-[#4a443d]" data-i18n="term.auto_refresh_45s">自动刷新 45s</span>
+          <button id="refresh-button" class="primary-button" type="button" data-i18n="action.refresh">手动刷新</button>
+        </div>
+      </div>
+      <div class="mt-4 text-sm text-[#8a8275]">最后更新：<span id="generated-at">-</span></div>
+    </section>
+
+    <section class="mb-6">
+      <div class="mb-3 flex items-center gap-2">
+        <i data-lucide="server" class="h-5 w-5 text-[#c8a560]"></i>
+        <h2 class="text-xl font-bold text-[#1f1d1b]" data-i18n="section.health.services">关键服务</h2>
+      </div>
+      <div id="service-grid" class="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-5"></div>
+    </section>
+
+    <section class="mb-6 card p-6">
+      <div class="mb-4 flex items-center justify-between gap-3">
+        <h2 class="flex items-center gap-2 text-lg font-semibold text-[#1f1d1b]">
+          <i data-lucide="brain" class="h-5 w-5 text-[#c8a560]"></i>
+          <span>记忆概览</span>
+        </h2>
+        <span id="memory-overview-status" class="text-sm text-[#8a8275]"></span>
+      </div>
+      <div id="memory-overview" class="grid gap-3 md:grid-cols-4"></div>
+      <div id="memory-trend" class="mt-4 grid grid-cols-7 gap-2"></div>
+    </section>
+
+    <section class="mb-6 grid gap-5 lg:grid-cols-3">
+      <div class="card p-6">
+        <div class="mb-4 flex items-center justify-between gap-3">
+          <h2 class="flex items-center gap-2 text-lg font-semibold text-[#1f1d1b]">
+            <i data-lucide="git-branch" class="h-5 w-5 text-[#c8a560]"></i>
+            <span data-i18n="section.health.repo">文件同步</span>
+          </h2>
+          <span id="worktree-status"></span>
+        </div>
+        <div id="worktree-body" class="space-y-3 text-sm text-[#4a443d]"></div>
+      </div>
+
+      <div class="card p-6">
+        <div class="mb-4 flex items-center justify-between gap-3">
+          <h2 class="flex items-center gap-2 text-lg font-semibold text-[#1f1d1b]">
+            <i data-lucide="calendar-days" class="h-5 w-5 text-[#c8a560]"></i>
+            <span data-i18n="section.health.digest">今日整理</span>
+          </h2>
+          <span id="digest-status"></span>
+        </div>
+        <div id="digest-body" class="space-y-3 text-sm text-[#4a443d]"></div>
+      </div>
+
+      <div class="card p-6">
+        <div class="mb-4 flex items-center justify-between gap-3">
+          <h2 class="flex items-center gap-2 text-lg font-semibold text-[#1f1d1b]">
+            <i data-lucide="download-cloud" class="h-5 w-5 text-[#c8a560]"></i>
+            <span>源码更新</span>
+          </h2>
+          <span id="source-update-status"></span>
+        </div>
+        <div id="source-update-body" class="space-y-3 text-sm text-[#4a443d]"></div>
+      </div>
+    </section>
+
+    <section class="mb-6 card p-6">
+      <div class="mb-4 flex items-center justify-between gap-3">
+        <h2 class="flex items-center gap-2 text-lg font-semibold text-[#1f1d1b]">
+          <i data-lucide="shield-check" class="h-5 w-5 text-[#c8a560]"></i>
+          <span data-i18n="section.health.self_check">系统自检</span>
+        </h2>
+        <span id="self-check-status"></span>
+      </div>
+      <div id="self-check-body" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 text-xs text-[#4a443d]">
+        <div class="rounded border border-[#e6dfcc] bg-[#fbf8f1] p-3">
+          <div class="font-bold text-[#8a8275]" data-i18n="health.self_check.platform">运行平台</div>
+          <div id="self-check-platform" class="mt-1 font-semibold text-sm">-</div>
+        </div>
+        <div class="rounded border border-[#e6dfcc] bg-[#fbf8f1] p-3">
+          <div class="font-bold text-[#8a8275]" data-i18n="health.self_check.dual_align">两台电脑同步</div>
+          <div id="self-check-align" class="mt-1 font-semibold text-sm">-</div>
+        </div>
+        <div class="rounded border border-[#e6dfcc] bg-[#fbf8f1] p-3">
+          <div class="font-bold text-[#8a8275]" data-i18n="health.self_check.cache">离线缓存</div>
+          <div id="self-check-cache" class="mt-1 font-semibold text-sm">-</div>
+        </div>
+        <div class="rounded border border-[#e6dfcc] bg-[#fbf8f1] p-3">
+          <div class="font-bold text-[#8a8275]" data-i18n="health.self_check.locale">界面语言</div>
+          <div id="self-check-locale" class="mt-1 font-semibold text-sm">-</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="mb-6 card p-6">
+      <div class="mb-4 flex items-center gap-2">
+        <i data-lucide="history" class="h-5 w-5 text-[#c8a560]"></i>
+        <h2 class="text-lg font-semibold text-[#1f1d1b]" data-i18n="section.health.recent">最近 5 次保存记录</h2>
+      </div>
+      <div id="commit-list" class="space-y-2"></div>
+    </section>
+
+    <section class="card p-6">
+      <details open>
+        <summary class="cursor-pointer list-none">
+          <div class="flex items-center justify-between gap-3">
+            <h2 class="flex items-center gap-2 text-lg font-semibold text-[#1f1d1b]">
+              <i data-lucide="stethoscope" class="h-5 w-5 text-[#c8a560]"></i>
+              <span data-i18n="section.health.doctor">健康检查详情</span>
+            </h2>
+            <span id="doctor-summary" class="text-sm text-[#8a8275]"></span>
+          </div>
+        </summary>
+        <div id="doctor-details" class="mt-4 space-y-3"></div>
+      </details>
+    </section>
+  </main>
+
+  <script>
+    const healthData = JSON.parse(document.getElementById('health-data').textContent);
+    window.tmPages.health.init(document, healthData);
+    window.tmDashboard.registerServiceWorker();
+  </script>
+</body>
+</html>

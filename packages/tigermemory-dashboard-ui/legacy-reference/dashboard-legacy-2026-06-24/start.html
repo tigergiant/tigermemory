@@ -1,0 +1,983 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#c8a560">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="TigerMemory" data-i18n-attr="content" data-i18n-content="app.title">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/static/tiger/tigermemory_tiger_logo_192.png">
+  <title data-i18n="page.start.title">TigerMemory 开始</title>
+  <script src="/static/assets/tailwindcss.min.js"></script>
+  <script src="/static/assets/lucide.min.js"></script>
+  <style>__STYLE__</style>
+  <style>
+    .onboarding-shell {
+      min-height: calc(100vh - 5rem);
+      display: grid;
+      align-items: center;
+    }
+    .onboarding-frame {
+      position: relative;
+      isolation: isolate;
+      overflow: hidden;
+      border: 1px solid rgba(201, 191, 159, 0.78);
+      border-radius: 8px;
+      background: rgba(251, 248, 241, 0.9);
+      box-shadow: 0 24px 70px rgba(56, 45, 24, 0.12);
+      backdrop-filter: blur(18px);
+    }
+    .onboarding-frame::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(120deg, rgba(200, 165, 96, 0.12), transparent 32%),
+        linear-gradient(300deg, rgba(103, 134, 150, 0.12), transparent 36%);
+    }
+    .onboarding-track {
+      min-height: 34rem;
+      position: relative;
+      overflow-x: hidden;
+    }
+    .onboarding-slide {
+      display: none;
+      min-height: 34rem;
+      box-sizing: border-box;
+      width: 100%;
+      grid-template-columns: minmax(0, 0.95fr) minmax(21rem, 1.05fr);
+      gap: 1.5rem;
+      align-items: stretch;
+      position: relative;
+      padding: 2rem;
+      animation: tmSlideIn 420ms ease both;
+    }
+    .onboarding-slide > * {
+      opacity: 0;
+      transform: translateY(0.7rem);
+    }
+    .onboarding-slide > :first-child {
+      align-self: start;
+      padding-top: 1rem;
+    }
+    .onboarding-slide > .onboarding-visual {
+      align-self: stretch;
+    }
+    .onboarding-slide.active {
+      display: grid;
+    }
+    .onboarding-slide.active > * {
+      animation: tmPanelRise 520ms cubic-bezier(.2,.78,.23,1) both;
+    }
+    .onboarding-slide.active > *:nth-child(2) {
+      animation-delay: 80ms;
+    }
+    @media (max-width: 900px) {
+      .onboarding-slide {
+        grid-template-columns: 1fr;
+        min-height: auto;
+        padding: 1.25rem;
+      }
+      .onboarding-visual {
+        min-height: 16rem;
+      }
+    }
+    .onboarding-kicker {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: #8a6b1f;
+      letter-spacing: 0;
+    }
+    .onboarding-title {
+      margin-top: 0.9rem;
+      font-size: clamp(1.45rem, 2.15vw, 2.12rem);
+      line-height: 1.14;
+      font-weight: 800;
+      letter-spacing: 0;
+      color: #1f1d1b;
+    }
+    .onboarding-copy {
+      margin-top: 1.1rem;
+      max-width: 40rem;
+      font-size: 1rem;
+      line-height: 1.9;
+      color: #4a443d;
+    }
+    .onboarding-visual {
+      min-height: 30rem;
+      position: relative;
+      border-radius: 8px;
+      border: 1px solid rgba(201, 191, 159, 0.72);
+      background:
+        linear-gradient(180deg, rgba(255, 252, 245, 0.94), rgba(240, 233, 216, 0.78)),
+        repeating-linear-gradient(90deg, rgba(201, 191, 159, 0.16) 0 1px, transparent 1px 48px),
+        repeating-linear-gradient(0deg, rgba(201, 191, 159, 0.12) 0 1px, transparent 1px 48px);
+      overflow: hidden;
+    }
+    .onboarding-visual::before {
+      content: "";
+      position: absolute;
+      inset: -35% -55%;
+      pointer-events: none;
+      background: linear-gradient(110deg, transparent 35%, rgba(255, 255, 255, 0.34) 48%, transparent 60%);
+      opacity: 0;
+      transform: translateX(-18%);
+    }
+    .onboarding-slide.active .onboarding-visual::before {
+      animation: tmSoftSweep 1100ms ease-out 180ms both;
+    }
+    .memory-device {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: min(78%, 23rem);
+      transform: translate(-50%, -50%);
+      border-radius: 8px;
+      border: 1px solid rgba(31, 29, 27, 0.12);
+      background: rgba(31, 29, 27, 0.92);
+      color: #fbf8f1;
+      padding: 1.25rem;
+      box-shadow: 0 28px 65px rgba(31, 29, 27, 0.22);
+      animation: tmFloat 4.8s ease-in-out infinite;
+    }
+    .memory-device .bar {
+      height: 0.55rem;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #c8a560, #7fa174, #678696);
+      margin-top: 0.7rem;
+      animation: tmScan 3.2s ease-in-out infinite;
+    }
+    .signal-card {
+      position: absolute;
+      width: 9.8rem;
+      border-radius: 8px;
+      border: 1px solid rgba(201, 191, 159, 0.75);
+      background: rgba(255, 252, 245, 0.92);
+      padding: 0.8rem;
+      font-size: 0.78rem;
+      color: #4a443d;
+      box-shadow: 0 14px 34px rgba(56, 45, 24, 0.1);
+      animation: tmDrift 5.2s ease-in-out infinite;
+    }
+    .signal-card.one { left: 7%; top: 12%; }
+    .signal-card.two { right: 7%; top: 18%; animation-delay: -1.2s; }
+    .signal-card.three { left: 11%; bottom: 13%; animation-delay: -2.1s; }
+    .signal-card.four { right: 10%; bottom: 12%; animation-delay: -3s; }
+    .choice-grid {
+      display: grid;
+      gap: 0.75rem;
+      grid-template-columns: repeat(auto-fit, minmax(11.5rem, 1fr));
+      margin-top: 1.4rem;
+    }
+    .wizard-card,
+    .depth-choice,
+    .page-link-card {
+      border: 1px solid rgba(201, 191, 159, 0.78);
+      border-radius: 8px;
+      background: rgba(255, 252, 245, 0.82);
+      padding: 0.9rem;
+      text-align: left;
+      transition: transform 180ms ease, border-color 180ms ease, background 180ms ease, box-shadow 180ms ease;
+    }
+    .onboarding-slide.active .wizard-card,
+    .onboarding-slide.active .depth-choice,
+    .onboarding-slide.active .page-link-card,
+    .onboarding-slide.active .live-panel,
+    .onboarding-slide.active .signal-card,
+    .onboarding-slide.active .memory-device,
+    .onboarding-slide.active .wizard-field,
+    .onboarding-slide.active .agent-software-card,
+    .onboarding-slide.active .copy-command {
+      animation: tmElementRise 0.52s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    .onboarding-slide.active .choice-grid > *:nth-child(1),
+    .onboarding-slide.active .wizard-field-grid > *:nth-child(1),
+    .onboarding-slide.active .agent-software-grid > *:nth-child(1),
+    .onboarding-slide.active .live-panel > *:nth-child(1),
+    .onboarding-slide.active .signal-card.one { animation-delay: 0ms; }
+
+    .onboarding-slide.active .choice-grid > *:nth-child(2),
+    .onboarding-slide.active .wizard-field-grid > *:nth-child(2),
+    .onboarding-slide.active .agent-software-grid > *:nth-child(2),
+    .onboarding-slide.active .live-panel > *:nth-child(2),
+    .onboarding-slide.active .signal-card.two { animation-delay: 45ms; }
+
+    .onboarding-slide.active .choice-grid > *:nth-child(3),
+    .onboarding-slide.active .wizard-field-grid > *:nth-child(3),
+    .onboarding-slide.active .agent-software-grid > *:nth-child(3),
+    .onboarding-slide.active .live-panel > *:nth-child(3),
+    .onboarding-slide.active .signal-card.three { animation-delay: 90ms; }
+
+    .onboarding-slide.active .choice-grid > *:nth-child(4),
+    .onboarding-slide.active .wizard-field-grid > *:nth-child(4),
+    .onboarding-slide.active .agent-software-grid > *:nth-child(4),
+    .onboarding-slide.active .live-panel > *:nth-child(4),
+    .onboarding-slide.active .signal-card.four { animation-delay: 135ms; }
+
+    .onboarding-slide.active .choice-grid > *:nth-child(n+5),
+    .onboarding-slide.active .wizard-field-grid > *:nth-child(n+5),
+    .onboarding-slide.active .agent-software-grid > *:nth-child(n+5) { animation-delay: 180ms; }
+    .wizard-card:hover,
+    .depth-choice:hover,
+    .page-link-card:hover {
+      transform: translateY(-2px);
+      border-color: #c8a560;
+      box-shadow: 0 12px 26px rgba(56, 45, 24, 0.1);
+    }
+    .depth-choice.active {
+      background: rgba(221, 232, 206, 0.9);
+      border-color: #7fa174;
+    }
+    .wizard-input {
+      width: 100%;
+      border-radius: 8px;
+      border: 1px solid #c9bf9f;
+      background: rgba(255, 252, 245, 0.95);
+      padding: 0.75rem 0.85rem;
+      color: #1f1d1b;
+      outline: none;
+    }
+    .wizard-input:focus {
+      border-color: #678696;
+      box-shadow: 0 0 0 3px rgba(103, 134, 150, 0.18);
+    }
+    .wizard-input:hover {
+      border-color: rgba(103, 134, 150, 0.74);
+    }
+    .wizard-field-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.72rem 0.9rem;
+    }
+    .wizard-field {
+      display: grid;
+      gap: 0.35rem;
+    }
+    .wizard-field.wide {
+      grid-column: 1 / -1;
+    }
+    .wizard-field label {
+      font-size: 0.86rem;
+      font-weight: 800;
+      color: #4a443d;
+    }
+    .wizard-details {
+      border: 1px solid rgba(201, 191, 159, 0.82);
+      border-radius: 8px;
+      background: rgba(255, 252, 245, 0.78);
+    }
+    .wizard-details summary {
+      cursor: pointer;
+      padding: 0.72rem 0.85rem;
+      color: #8a6b1f;
+      font-weight: 900;
+    }
+    .wizard-details[open] summary {
+      border-bottom: 1px solid rgba(226, 214, 183, 0.82);
+    }
+    .wizard-command {
+      border-radius: 8px;
+      border: 1px solid rgba(201, 191, 159, 0.82);
+      background: rgba(31, 29, 27, 0.9);
+      color: #fbf8f1;
+      padding: 0.85rem;
+      min-height: 5.5rem;
+      overflow: auto;
+      font-size: 0.78rem;
+      line-height: 1.7;
+    }
+    .agent-software-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.6rem;
+    }
+    .agent-software-card {
+      border-radius: 8px;
+      border: 1px solid rgba(201, 191, 159, 0.78);
+      background: rgba(255, 252, 245, 0.82);
+      padding: 0.72rem;
+      min-width: 0;
+    }
+    .agent-software-card b {
+      display: block;
+      white-space: normal;
+    }
+    .agent-software-missing {
+      grid-column: 1 / -1;
+      border-radius: 8px;
+      border: 1px solid rgba(201, 191, 159, 0.78);
+      background: rgba(247, 243, 234, 0.86);
+    }
+    .agent-software-missing summary {
+      cursor: pointer;
+      padding: 0.72rem;
+      color: #6d6256;
+      font-size: 0.78rem;
+      font-weight: 800;
+    }
+    .agent-software-missing .agent-software-grid {
+      border-top: 1px solid rgba(226, 214, 183, 0.82);
+      padding: 0.72rem;
+    }
+    .live-panel {
+      border: 1px solid rgba(201, 191, 159, 0.78);
+      border-radius: 8px;
+      background: rgba(255, 252, 245, 0.82);
+      padding: 1rem;
+      box-shadow: 0 16px 34px rgba(56, 45, 24, 0.08);
+    }
+    .live-panel strong {
+      color: #1f1d1b;
+    }
+    .status-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 0.9rem;
+      border-top: 1px solid rgba(226, 214, 183, 0.82);
+      padding: 0.75rem 0;
+      color: #4a443d;
+      font-size: 0.88rem;
+      line-height: 1.55;
+    }
+    .status-row:first-of-type {
+      border-top: 0;
+      padding-top: 0;
+    }
+    .status-pill {
+      flex: none;
+      border: 1px solid #d2b56b;
+      border-radius: 999px;
+      background: #fffaf0;
+      color: #8a6b1f;
+      padding: 0.2rem 0.55rem;
+      font-size: 0.72rem;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+    .status-pill.good {
+      border-color: #a0b889;
+      background: #dde8ce;
+      color: #52733a;
+    }
+    .status-pill.muted {
+      border-color: #d8cfba;
+      background: #f7f3ea;
+      color: #6d6256;
+    }
+    .success-orb {
+      display: grid;
+      width: 4.2rem;
+      height: 4.2rem;
+      place-items: center;
+      border-radius: 999px;
+      border: 1px solid rgba(160, 184, 137, 0.9);
+      background:
+        radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.95), transparent 34%),
+        linear-gradient(145deg, #dde8ce, #c8a560);
+      color: #1f1d1b;
+      box-shadow: 0 18px 42px rgba(82, 115, 58, 0.18);
+      animation: tmSuccessPulse 3.8s ease-in-out infinite;
+    }
+    .progress-dot {
+      width: 0.58rem;
+      height: 0.58rem;
+      border-radius: 999px;
+      background: rgba(138, 130, 117, 0.28);
+      transition: width 180ms ease, background 180ms ease, box-shadow 180ms ease;
+    }
+    .progress-dot.active {
+      width: 2rem;
+      background: #c8a560;
+      box-shadow: 0 0 0 4px rgba(200, 165, 96, 0.14);
+    }
+    .step-rail {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 0.5rem;
+      border-bottom: 1px solid #e6dfcc;
+      padding: 0.75rem 1.25rem;
+    }
+    .step-button {
+      min-width: 0;
+      position: relative;
+      overflow: hidden;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 0.55rem 0.65rem;
+      text-align: left;
+      color: #6d6256;
+      background: rgba(255, 252, 245, 0.54);
+      transition: border-color 180ms ease, background 180ms ease, color 180ms ease, transform 180ms ease;
+    }
+    .step-button::after {
+      content: "";
+      position: absolute;
+      left: 0.65rem;
+      right: 0.65rem;
+      bottom: 0.35rem;
+      height: 2px;
+      border-radius: 999px;
+      background: #c8a560;
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform 180ms ease;
+    }
+    .step-button:hover {
+      transform: translateY(-1px);
+      border-color: rgba(200, 165, 96, 0.68);
+      background: rgba(255, 250, 240, 0.9);
+    }
+    .step-button:focus-visible,
+    .wizard-nav-button:focus-visible {
+      outline: 3px solid rgba(103, 134, 150, 0.26);
+      outline-offset: 2px;
+    }
+    .step-button.active {
+      color: #1f1d1b;
+      border-color: rgba(200, 165, 96, 0.9);
+      background: rgba(240, 221, 177, 0.56);
+    }
+    .step-button.active::after {
+      transform: scaleX(1);
+    }
+    .step-index {
+      display: inline-grid;
+      width: 1.35rem;
+      height: 1.35rem;
+      place-items: center;
+      border-radius: 999px;
+      background: rgba(201, 191, 159, 0.26);
+      font-size: 0.72rem;
+      font-weight: 900;
+    }
+    .step-button.active .step-index {
+      color: #fffaf0;
+      background: #c8a560;
+    }
+    .step-label {
+      display: block;
+      margin-top: 0.32rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 0.78rem;
+      font-weight: 800;
+    }
+    @media (max-width: 980px) {
+      .step-rail {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+    }
+    @media (max-width: 620px) {
+      .step-rail {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .wizard-field-grid,
+      .agent-software-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    @media (max-height: 820px) and (min-width: 901px) {
+      .onboarding-shell {
+        align-items: start;
+        padding-top: 1rem;
+      }
+      .onboarding-frame {
+        display: flex;
+        flex-direction: column;
+        max-height: calc(100vh - 5.8rem);
+      }
+      .onboarding-track {
+        flex: 1 1 auto;
+        overflow-x: hidden;
+        overflow-y: auto;
+      }
+      .onboarding-footer {
+        flex: none;
+      }
+      .onboarding-track,
+      .onboarding-slide {
+        min-height: 0;
+      }
+      .step-rail {
+        display: none;
+      }
+      .onboarding-slide {
+        align-items: start;
+        gap: 0.85rem;
+        padding: 0.95rem 1.35rem;
+      }
+      .onboarding-slide > :first-child {
+        padding-top: 0;
+      }
+      .onboarding-title {
+        margin-top: 0.45rem;
+        font-size: 1.5rem;
+        line-height: 1.16;
+      }
+      .onboarding-copy {
+        margin-top: 0.5rem;
+        font-size: 0.95rem;
+        line-height: 1.55;
+        display: -webkit-box;
+        overflow: hidden;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+      }
+      .onboarding-visual {
+        min-height: 19rem;
+      }
+      .live-panel {
+        padding: 0.85rem;
+      }
+      .wizard-field-grid {
+        gap: 0.52rem 0.72rem;
+      }
+      .wizard-field label {
+        margin-bottom: 0.26rem;
+        font-size: 0.72rem;
+      }
+      .status-row {
+        padding: 0.5rem 0;
+      }
+      .wizard-card,
+      .depth-choice,
+      .page-link-card,
+      .agent-software-card {
+        padding: 0.72rem;
+      }
+      .wizard-input {
+        padding: 0.52rem 0.68rem;
+      }
+      .wizard-details {
+        display: none;
+      }
+      .agent-software-grid {
+        max-height: 12rem;
+        overflow: auto;
+      }
+      .agent-software-card .mt-1 {
+        display: none;
+      }
+      .wizard-nav-button {
+        padding: 0.58rem 0.82rem;
+      }
+      #llm-provider-help {
+        display: none;
+      }
+    }
+    .wizard-nav-button {
+      border-radius: 8px;
+      border: 1px solid #c9bf9f;
+      padding: 0.72rem 1rem;
+      font-size: 0.9rem;
+      font-weight: 800;
+      color: #1f1d1b;
+      background: #f0e9d8;
+      transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease, background 180ms ease;
+    }
+    .wizard-nav-button.primary {
+      border-color: #c8a560;
+      background: #c8a560;
+    }
+    .wizard-nav-button:hover:not(:disabled) {
+      transform: translateY(-1px);
+      border-color: #c8a560;
+      box-shadow: 0 12px 26px rgba(56, 45, 24, 0.12);
+    }
+    .wizard-nav-button:active:not(:disabled) {
+      transform: translateY(0);
+      box-shadow: 0 6px 16px rgba(56, 45, 24, 0.1);
+    }
+    .wizard-nav-button:disabled {
+      opacity: 0.42;
+      cursor: not-allowed;
+    }
+    @keyframes tmSlideIn {
+      from { opacity: 0; transform: translateX(1.5rem); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes tmPanelRise {
+      from { opacity: 0; transform: translateY(12px) scale(0.995); filter: blur(3px); }
+      to { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+    }
+    @keyframes tmElementRise {
+      from { opacity: 0; transform: translateY(8px) scale(0.99); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes tmSoftSweep {
+      0% { opacity: 0; transform: translateX(-18%); }
+      20% { opacity: 0.82; }
+      100% { opacity: 0; transform: translateX(18%); }
+    }
+    @keyframes tmFloat {
+      0%, 100% { transform: translate(-50%, -50%) translateY(0); }
+      50% { transform: translate(-50%, -50%) translateY(-0.7rem); }
+    }
+    @keyframes tmDrift {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-0.55rem); }
+    }
+    @keyframes tmScan {
+      0%, 100% { opacity: 0.7; transform: scaleX(0.72); transform-origin: left; }
+      50% { opacity: 1; transform: scaleX(1); transform-origin: left; }
+    }
+    @keyframes tmSuccessPulse {
+      0%, 100% { transform: scale(1); box-shadow: 0 18px 42px rgba(82, 115, 58, 0.18); }
+      50% { transform: scale(1.045); box-shadow: 0 24px 58px rgba(82, 115, 58, 0.28); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .onboarding-slide,
+      .memory-device,
+      .signal-card,
+      .memory-device .bar,
+      .success-orb,
+      .onboarding-slide.active > *,
+      .onboarding-slide.active .wizard-card,
+      .onboarding-slide.active .depth-choice,
+      .onboarding-slide.active .page-link-card,
+      .onboarding-slide.active .live-panel,
+      .onboarding-slide.active .signal-card,
+      .onboarding-slide.active .memory-device,
+      .onboarding-slide.active .wizard-field,
+      .onboarding-slide.active .agent-software-card,
+      .onboarding-slide.active .copy-command,
+      .onboarding-slide.active .onboarding-visual::before {
+        animation: none !important;
+        transition: none !important;
+      }
+      .onboarding-slide > * {
+        opacity: 1 !important;
+        transform: none !important;
+      }
+    }
+  </style>
+</head>
+<body data-page="start">
+  __HEADER__
+  <script id="start-data" type="application/json">__START_JSON__</script>
+  <img class="dashboard-motif main" src="/static/tiger/tigerlogo.png" alt="">
+  <div class="stripe-motif tl"></div>
+  <div class="stripe-motif br"></div>
+
+  <main class="onboarding-shell relative z-10 mx-auto max-w-6xl px-5 py-8">
+    <section class="onboarding-frame" aria-label="TigerMemory 新手引导">
+      <div class="relative z-10 flex flex-wrap items-center justify-between gap-4 border-b border-[#e6dfcc] px-5 py-4">
+        <div class="flex items-center gap-3">
+          <div class="flex gap-1.5" aria-label="引导进度">
+            <span class="progress-dot active" data-step-dot="0"></span>
+            <span class="progress-dot" data-step-dot="1"></span>
+            <span class="progress-dot" data-step-dot="2"></span>
+            <span class="progress-dot" data-step-dot="3"></span>
+            <span class="progress-dot" data-step-dot="4"></span>
+            <span class="progress-dot" data-step-dot="5"></span>
+            <span class="progress-dot" data-step-dot="6"></span>
+          </div>
+          <span class="text-sm font-semibold text-[#8a8275]"><span id="start-step-label">1</span> / 7</span>
+        </div>
+        <div class="flex flex-wrap items-center gap-2 text-xs text-[#8a8275]">
+          <span class="rounded-full border border-[#c9bf9f] bg-[#f0e9d8] px-3 py-1"><span data-i18n="start.profile.label">当前模式：</span><b id="start-profile">-</b></span>
+          <span class="rounded-full border border-[#c9bf9f] bg-[#f0e9d8] px-3 py-1" data-i18n="start.local_evidence_first">本地证据优先</span>
+        </div>
+      </div>
+      <nav class="step-rail relative z-10" aria-label="新手引导步骤">
+        <button type="button" class="step-button active" data-step-jump="0"><span class="step-index">1</span><span class="step-label" data-i18n="start.step.name.0">认识</span></button>
+        <button type="button" class="step-button" data-step-jump="1"><span class="step-index">2</span><span class="step-label" data-i18n="start.step.name.1">模式</span></button>
+        <button type="button" class="step-button" data-step-jump="2"><span class="step-index">3</span><span class="step-label" data-i18n="start.step.name.2">回复</span></button>
+        <button type="button" class="step-button" data-step-jump="3"><span class="step-index">4</span><span class="step-label" data-i18n="start.step.name.3">模型</span></button>
+        <button type="button" class="step-button" data-step-jump="4"><span class="step-index">5</span><span class="step-label" data-i18n="start.step.name.4">Agent</span></button>
+        <button type="button" class="step-button" data-step-jump="5"><span class="step-index">6</span><span class="step-label" data-i18n="start.step.name.5">页面</span></button>
+        <button type="button" class="step-button" data-step-jump="6"><span class="step-index">7</span><span class="step-label" data-i18n="start.step.name.6">完成</span></button>
+      </nav>
+
+      <div class="onboarding-track relative z-10">
+        <article class="onboarding-slide active" data-onboarding-slide="0">
+          <div>
+            <div class="onboarding-kicker"><i data-lucide="sparkles" class="h-4 w-4"></i> 欢迎使用</div>
+            <h1 class="onboarding-title">欢迎来到 TigerMemory</h1>
+            <p class="onboarding-copy">接下来几步会帮你把本地资料、使用规则和问答入口连起来。先不用理解所有概念，跟着完成设置，就能让你的 AI 助手开始有自己的长期记忆。</p>
+            <div class="mt-6 flex flex-wrap gap-3">
+              <button type="button" class="wizard-nav-button primary" data-onboarding-next>开始设置</button>
+              <a class="wizard-nav-button" href="/health">先看运行检查</a>
+            </div>
+          </div>
+          <div class="onboarding-visual" aria-hidden="true">
+            <div class="signal-card one"><b data-i18n="start.visual.knowledge">知识库</b><br><span data-i18n="start.visual.knowledge_desc">长期知识、规则、项目说明</span></div>
+            <div class="signal-card two"><b data-i18n="start.visual.agent">AI 助手</b><br><span data-i18n="start.visual.agent_desc">先读规则，再行动</span></div>
+            <div class="signal-card three"><b data-i18n="start.visual.evidence">证据</b><br><span data-i18n="start.visual.evidence_desc">先查清楚，再回答</span></div>
+            <div class="signal-card four"><b data-i18n="start.visual.you">你</b><br><span data-i18n="start.visual.you_desc">保留最终控制权</span></div>
+            <div class="memory-device">
+              <div class="text-xs text-[#c8a560]">TigerMemory</div>
+              <div class="mt-2 text-2xl font-black" data-i18n="start.visual.local_memory">你的本地记忆库</div>
+              <div class="mt-3 text-sm leading-6 text-[#f0e9d8]" data-i18n="start.visual.local_memory_desc">Wiki + 证据 + 你自己的模型</div>
+              <div class="bar"></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="onboarding-slide" data-onboarding-slide="1">
+          <div>
+            <div class="onboarding-kicker"><i data-lucide="layers-3" class="h-4 w-4"></i> 选择运行方式</div>
+            <h2 class="onboarding-title">先从普通版开始</h2>
+            <p class="onboarding-copy">普通版已经能管理 Wiki、查本地证据、连接 LLM。等你用顺了，再打开多设备、实时记忆和更多工具连接也不晚。</p>
+            <div class="choice-grid">
+              <div class="wizard-card">
+                <div class="text-lg font-black text-[#1f1d1b]">普通版 / local</div>
+                <p class="mt-2 text-sm leading-6 text-[#4a443d]">Python + Git + Markdown + SQLite。适合第一次安装，不需要 Docker 或 WSL。</p>
+              </div>
+              <div class="wizard-card">
+                <div class="text-lg font-black text-[#1f1d1b]">高级版 / hybrid</div>
+                <p class="mt-2 text-sm leading-6 text-[#4a443d]">接入实时记忆、MCP、多 IDE 和远程网关。适合已经想把记忆系统接进日常工作的人。</p>
+              </div>
+            </div>
+          </div>
+          <div class="onboarding-visual p-5">
+            <div class="grid h-full content-center gap-3">
+              <div class="wizard-card bg-[#dde8ce]">
+                <div class="text-sm font-bold text-[#52733a]">现在推荐</div>
+                <div class="mt-1 text-2xl font-black">local + LLM</div>
+                <div class="mt-2 text-sm text-[#4a443d]">依赖最少，适合第一次安装和试用。</div>
+              </div>
+              <div class="wizard-card">
+                <div class="text-sm font-bold text-[#678696]">以后扩展</div>
+                <div class="mt-1 text-2xl font-black">hybrid services</div>
+                <div class="mt-2 text-sm text-[#4a443d]">需要共享、自动化和跨工具接入时再打开。</div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="onboarding-slide" data-onboarding-slide="2">
+          <div>
+            <div class="onboarding-kicker"><i data-lucide="sliders-horizontal" class="h-4 w-4"></i> 设置回复风格</div>
+            <h2 class="onboarding-title">选择你喜欢的回答方式</h2>
+            <p class="onboarding-copy">有些时候你只想要一句结论，有些时候你需要路径、证据和排查过程。先选一个默认风格，以后随时可以改。</p>
+            <div class="choice-grid" id="start-depth-grid">
+              <button type="button" class="depth-choice" data-start-depth="A">
+                <div class="font-black">A 极简</div>
+                <p class="mt-2 text-sm leading-6">只给结论和最短说明。</p>
+              </button>
+              <button type="button" class="depth-choice" data-start-depth="B">
+                <div class="font-black">B 简短</div>
+                <p class="mt-2 text-sm leading-6">结论 + 类比，适合新手。</p>
+              </button>
+              <button type="button" class="depth-choice" data-start-depth="C">
+                <div class="font-black">C 工程</div>
+                <p class="mt-2 text-sm leading-6">补上下文、路径和验证。</p>
+              </button>
+              <button type="button" class="depth-choice" data-start-depth="D">
+                <div class="font-black">D 全套</div>
+                <p class="mt-2 text-sm leading-6">适合审查、复盘和排障。</p>
+              </button>
+            </div>
+            <div class="mt-4 flex flex-wrap gap-3">
+              <button type="button" class="wizard-nav-button primary" id="save-start-depth">保存回复风格</button>
+              <a class="wizard-nav-button" href="/settings">打开完整偏好设置</a>
+            </div>
+          </div>
+          <div class="onboarding-visual p-5">
+            <div class="grid h-full content-center gap-3">
+              <div class="wizard-card">
+                <div class="text-xs font-bold text-[#8a8275]">用户问</div>
+                <div class="mt-2 text-lg font-black">这个功能能不能用了？</div>
+              </div>
+              <div class="wizard-card bg-[#f0e9d8]" id="depth-preview-card">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <div class="text-xs font-bold text-[#8a6b1f]" id="depth-preview-name">A 极简</div>
+                  <span class="rounded-full border border-[#d2b56b] bg-[#fbf8f1] px-2 py-1 text-xs font-bold text-[#8a6b1f]" id="depth-preview-chip">一句话</span>
+                </div>
+                <div class="mt-3 text-sm leading-7 text-[#3d3832]" id="depth-preview-answer">可以。先打开运行检查，看到服务正常就能用。</div>
+                <div class="mt-4 rounded-lg border border-[#e2d6b7] bg-[#fffaf0] px-3 py-2 text-xs leading-5 text-[#8a8275]" id="depth-preview-note">适合只想快速知道“能不能继续”的时候。</div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="onboarding-slide" data-onboarding-slide="3">
+          <div>
+            <div class="onboarding-kicker"><i data-lucide="key-round" class="h-4 w-4"></i> <span data-i18n="start.llm.kicker">连接 LLM</span></div>
+            <h2 class="onboarding-title" data-i18n="start.llm.title">连接一个你自己的模型</h2>
+            <p class="onboarding-copy" data-i18n="start.llm.copy">推荐先用 DeepSeek。API Key 只会保存到本机 runtime 配置，不上传，也不会写进 Git；保存后 TigerMemory 就能直接读取这组模型配置。</p>
+            <div class="mt-4 grid gap-3">
+              <div class="rounded-lg border border-[#d2b56b] bg-[#fffaf0] px-3 py-2 text-sm text-[#8a6b1f]" id="llm-config-status" data-i18n="start.llm.status_loading">正在读取模型连接状态...</div>
+              <div class="wizard-field-grid">
+                <div class="wizard-field">
+                  <label for="llm-provider" data-i18n="start.llm.provider_label">模型服务</label>
+                  <select id="llm-provider" class="wizard-input">
+                    <option value="deepseek" data-i18n="start.llm.deepseek_option">DeepSeek（推荐）</option>
+                    <option value="openai_compatible" data-i18n="start.llm.openai_option">OpenAI-compatible（高级）</option>
+                  </select>
+                </div>
+                <div class="wizard-field">
+                  <label for="llm-api-key" data-i18n="start.llm.api_key_label">API Key</label>
+                  <input id="llm-api-key" class="wizard-input" type="password" autocomplete="off" placeholder="sk-...">
+                </div>
+                <div class="wizard-field wide">
+                  <label for="llm-base-url" data-i18n="start.llm.base_url_label">接口地址</label>
+                  <input id="llm-base-url" class="wizard-input" value="https://api.deepseek.com/v1/chat/completions">
+                </div>
+                <div class="wizard-field">
+                  <label for="llm-model" data-i18n="start.llm.routine_model_label">日常模型</label>
+                  <input id="llm-model" class="wizard-input" value="deepseek-v4-flash">
+                </div>
+                <div class="wizard-field">
+                  <label for="llm-admin-model" data-i18n="start.llm.admin_model_label">管理模型</label>
+                  <input id="llm-admin-model" class="wizard-input" value="deepseek-v4-pro">
+                </div>
+              </div>
+              <div class="flex flex-wrap gap-3">
+                <button type="button" class="wizard-nav-button primary" id="save-llm-config" data-i18n="start.llm.save_button">保存并接入 TigerMemory</button>
+              </div>
+              <p class="text-xs leading-5 text-[#8a8275]" id="llm-provider-help" data-i18n="start.llm.deepseek.help">日常模型负责问答和路由；管理模型负责整理 Wiki 和生成待审核提案。</p>
+              <details class="wizard-details">
+                <summary data-i18n="start.llm.manual_summary">高级：查看手动配置命令</summary>
+                <div class="grid gap-3 p-3">
+                  <pre class="wizard-command" id="llm-command-preview"></pre>
+                  <button type="button" class="wizard-nav-button w-fit" id="copy-llm-command" data-i18n="start.llm.copy_command">复制手动配置命令</button>
+                </div>
+              </details>
+            </div>
+          </div>
+          <div class="onboarding-visual p-5">
+            <div class="grid h-full content-center gap-3">
+              <div class="live-panel" id="llm-live-preview">
+                <div class="mb-3 flex items-start justify-between gap-3">
+                  <div>
+                    <div class="text-xs font-bold text-[#8a6b1f]" data-i18n="start.llm.preview.kicker">当前连接预览</div>
+                    <div class="mt-1 text-xl font-black text-[#1f1d1b]" data-i18n="start.llm.preview.title">TigerMemory 会这样使用模型</div>
+                  </div>
+                  <span class="status-pill" id="llm-preview-state">-</span>
+                </div>
+                <div class="status-row">
+                  <div><strong data-i18n="start.llm.preview.daily_title">日常问答</strong><br><span id="llm-preview-daily">deepseek-v4-flash</span></div>
+                  <span class="status-pill good" data-i18n="start.llm.preview.daily_badge">常用</span>
+                </div>
+                <div class="status-row">
+                  <div><strong data-i18n="start.llm.preview.admin_title">Wiki 管理</strong><br><span id="llm-preview-admin">deepseek-v4-pro</span></div>
+                  <span class="status-pill muted" data-i18n="start.llm.preview.admin_badge">审核</span>
+                </div>
+                <div class="status-row">
+                  <div><strong data-i18n="start.llm.preview.secret_title">密钥位置</strong><br><span data-i18n="start.llm.preview.secret_desc">只写入本机 runtime 配置，不进入 Git。</span></div>
+                  <span class="status-pill good" data-i18n="start.llm.preview.local_badge">本机</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="onboarding-slide" data-onboarding-slide="4">
+          <div>
+            <div class="onboarding-kicker"><i data-lucide="bot" class="h-4 w-4"></i> <span data-i18n="start.agent.kicker">连接 AI 工具</span></div>
+            <h2 class="onboarding-title" data-i18n="start.agent.title">把默认规则交给你的 AI</h2>
+            <p class="onboarding-copy" data-i18n="start.agent.copy">TigerMemory 已经内置了 Codex、Claude Code、Cursor 和 hooks 的项目模板。点击下面的按钮，只是把这些默认模板写进当前项目；它不会改你的全局 Codex、Claude 或 Cursor 配置。</p>
+            <div class="mt-4 grid gap-3">
+              <div class="rounded-lg border border-[#d2b56b] bg-[#fffaf0] px-3 py-2 text-sm text-[#8a6b1f]" id="agent-connect-summary" data-i18n="start.agent.status_loading">正在读取 AI 接入状态...</div>
+              <div class="rounded-lg border border-[#e2d6b7] bg-[#fffaf0] px-3 py-2 text-xs leading-5 text-[#8a8275]" data-i18n="start.agent.template_note">这些是现成默认模板，不需要你手写。写入后，AI 会先查本地证据、用提案写 Wiki、把最终批准权留给你。</div>
+              <div class="flex flex-wrap gap-3">
+                <button type="button" class="wizard-nav-button primary" id="apply-agent-connect" data-i18n="start.agent.apply_button">写入默认项目规则</button>
+                <button type="button" class="wizard-nav-button" data-copy-command="tm agent status">tm agent status</button>
+              </div>
+            </div>
+          </div>
+          <div class="onboarding-visual p-5">
+            <div class="grid h-full content-center gap-3">
+              <div class="live-panel">
+                <div class="mb-3 flex items-start justify-between gap-3">
+                  <div>
+                    <div class="text-xs font-bold text-[#8a6b1f]" data-i18n="start.agent.preview.kicker">AI 工具扫描</div>
+                    <div class="mt-1 text-xl font-black text-[#1f1d1b]" id="agent-preview-title">-</div>
+                  </div>
+                  <span class="status-pill" id="agent-preview-state">-</span>
+                </div>
+                <div class="rounded-lg border border-[#e2d6b7] bg-[#fffaf0] px-3 py-2 text-xs leading-5 text-[#8a8275]" id="agent-software-summary" data-i18n="start.agent.software.loading">正在扫描已安装的 AI 工具...</div>
+                <div class="agent-software-grid mt-3" id="agent-software-list">
+                  <div class="agent-software-card" data-i18n="start.agent.software.loading">正在扫描已安装的 AI 工具...</div>
+                </div>
+                <details class="wizard-details mt-3">
+                  <summary data-i18n="start.agent.template_details">查看将写入的项目规则模板</summary>
+                  <div class="grid gap-2 p-3" id="agent-connect-list">
+                    <div class="wizard-card" data-i18n="start.agent.loading_card">正在检查 AGENTS、CLAUDE、Cursor 规则和 Hooks 模板...</div>
+                  </div>
+                </details>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="onboarding-slide" data-onboarding-slide="5">
+          <div>
+            <div class="onboarding-kicker"><i data-lucide="layout-dashboard" class="h-4 w-4"></i> <span data-i18n="start.dashboard.kicker">认识控制台</span></div>
+            <h2 class="onboarding-title" data-i18n="start.dashboard.onboarding_title">先认识几个常用入口</h2>
+            <p class="onboarding-copy" data-i18n="start.dashboard.onboarding_copy">刚开始只看运行检查、AI 连接和偏好设置就够了。待确认、记忆质量和项目进展，会在你持续使用后慢慢派上用场。</p>
+          </div>
+          <div class="onboarding-visual p-5">
+            <div class="grid gap-3 sm:grid-cols-2">
+              <a class="page-link-card" href="/health"><b data-i18n="start.dashboard.health_title">运行检查</b><br><span class="text-sm text-[#8a8275]" data-i18n="start.dashboard.health_desc">确认本机能不能正常工作。</span></a>
+              <a class="page-link-card" href="/agent-tools"><b data-i18n="start.dashboard.agent_title">AI 连接</b><br><span class="text-sm text-[#8a8275]" data-i18n="start.dashboard.agent_desc">检查 IDE / MCP 接入。</span></a>
+              <a class="page-link-card" href="/settings"><b data-i18n="start.dashboard.settings_title">偏好设置</b><br><span class="text-sm text-[#8a8275]" data-i18n="start.dashboard.settings_desc">调整回复详细程度。</span></a>
+              <a class="page-link-card" href="/quality"><b data-i18n="start.dashboard.quality_title">记忆质量</b><br><span class="text-sm text-[#8a8275]" data-i18n="start.dashboard.quality_desc">看问答、分流和失败情况。</span></a>
+              <a class="page-link-card" href="/canvas"><b data-i18n="start.dashboard.canvas_title">项目进展</b><br><span class="text-sm text-[#8a8275]" data-i18n="start.dashboard.canvas_desc">了解 Wiki 里的项目地图。</span></a>
+              <a class="page-link-card" href="/digest"><b data-i18n="start.dashboard.digest_title">今日待确认</b><br><span class="text-sm text-[#8a8275]" data-i18n="start.dashboard.digest_desc">有待审内容后再处理。</span></a>
+            </div>
+          </div>
+        </article>
+
+        <article class="onboarding-slide" data-onboarding-slide="6">
+          <div>
+            <div class="onboarding-kicker"><i data-lucide="check-circle-2" class="h-4 w-4"></i> <span data-i18n="start.finish.kicker">准备开始</span></div>
+            <h2 class="onboarding-title" data-i18n="start.finish.title">最后，试一次完整流程</h2>
+            <p class="onboarding-copy" data-i18n="start.finish.copy">下面几条命令会检查本地资料库、搜索、离线问答和控制台。都能跑通，就说明 TigerMemory 已经准备好了。</p>
+            <div class="mt-5 grid gap-2">
+              <button type="button" class="copy-command" data-copy-command="tm init">tm init</button>
+              <button type="button" class="copy-command" data-copy-command="tm profile show">tm profile show</button>
+              <button type="button" class="copy-command" data-copy-command="tm agent status">tm agent status</button>
+              <button type="button" class="copy-command" data-copy-command='tm search --scope wiki --query "agent behavior rules"'>tm search --scope wiki --query "agent behavior rules"</button>
+              <button type="button" class="copy-command" data-copy-command='tm ask --offline --query "agent behavior rules" --scope wiki'>tm ask --offline --query "agent behavior rules" --scope wiki</button>
+            </div>
+            <div class="mt-6 flex flex-wrap gap-3">
+              <a class="wizard-nav-button primary" href="/health" id="finish-onboarding" data-i18n="start.finish.enter_health">完成并进入运行检查</a>
+              <a class="wizard-nav-button" href="/agent-tools" data-i18n="start.finish.view_agent">查看 AI 连接</a>
+            </div>
+          </div>
+          <div class="onboarding-visual p-5">
+            <div class="grid h-full content-center gap-3">
+              <div class="live-panel">
+                <div class="flex items-center gap-4">
+                  <div class="success-orb"><i data-lucide="check" class="h-8 w-8"></i></div>
+                  <div>
+                    <div class="text-xs font-bold text-[#52733a]" data-i18n="start.finish.ready_kicker">就绪清单</div>
+                    <div class="mt-1 text-2xl font-black text-[#1f1d1b]" id="finish-ready-title">-</div>
+                  </div>
+                </div>
+                <div class="mt-5" id="finish-readiness-list"></div>
+                <div class="mt-4 rounded-lg border border-[#e2d6b7] bg-[#fffaf0] px-3 py-2 text-xs leading-5 text-[#8a8275]" data-i18n="start.finish.ready_note">如果还有黄色项，也可以先进入运行检查；TigerMemory 会告诉你下一步应该补什么。</div>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <div class="onboarding-footer relative z-10 flex flex-wrap items-center justify-between gap-3 border-t border-[#e6dfcc] px-5 py-4">
+        <button type="button" class="wizard-nav-button" data-onboarding-prev>上一步</button>
+        <div class="text-sm text-[#8a8275]" id="onboarding-step-help">先了解 TigerMemory 是什么。</div>
+        <button type="button" class="wizard-nav-button primary" data-onboarding-next>下一步</button>
+      </div>
+    </section>
+  </main>
+
+  <div id="start-toast" class="fixed bottom-6 left-1/2 z-50 hidden max-w-[min(92vw,32rem)] -translate-x-1/2 rounded-xl border border-[#a0b889] bg-[#dde8ce] px-4 py-3 text-sm text-[#52733a] shadow-lg"></div>
+
+  <script>
+    const startData = JSON.parse(document.getElementById('start-data').textContent);
+    window.tmPages.start.init(document, startData);
+    window.tmDashboard.registerServiceWorker();
+  </script>
+</body>
+</html>

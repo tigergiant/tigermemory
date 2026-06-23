@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#c8a560">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="TigerMemory" data-i18n-attr="content" data-i18n-content="app.title">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/static/tiger/tigermemory_tiger_logo_192.png">
+  <title data-i18n="page.daily.title">TigerMemory 今日待确认</title>
+  <script src="/static/assets/tailwindcss.min.js"></script>
+  <script src="/static/assets/lucide.min.js"></script>
+  <style>__STYLE__</style>
+</head>
+<body data-page="daily" class="bg-[#f7f2e6] text-[#1f1d1b]">
+  __HEADER__
+  <script id="digest-data" type="application/json">__DIGEST_JSON__</script>
+  <script id="cron-intake-data" type="application/json">__CRON_INTAKE_JSON__</script>
+  <img class="dashboard-motif" src="/static/tiger/tigerlogo.png" alt="">
+
+  <main class="relative z-10 mx-auto max-w-6xl px-5 py-6">
+    <section class="mb-5 rounded-2xl border border-[#d49a91] bg-[#f0d6d2] p-4" id="hero-archive">
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 class="text-3xl font-extrabold text-[#8a3527]" data-i18n="term.archive_14d">14 天后自动归档</h2>
+          <p class="text-sm text-[#8a3527]" data-i18n="daily.archive.note">这些收件箱已超过 14 天且没有应用记录。</p>
+        </div>
+        <button id="batch-archive" title="归档：把这条收件箱条目移到归档区，日常审批列表里不再显示；适合过期、重复或无继续处理价值的记录。" data-i18n-attr="title" data-i18n-title="help.archive" class="rounded-md bg-[#8a3527] px-4 py-2 text-sm font-medium text-[#fbf8f1] hover:bg-[#6f2b20] disabled:opacity-50">一键归档全部</button>
+      </div>
+    </section>
+
+    <section id="decision-section" class="mb-5 rounded-2xl border border-[#e6dfcc] bg-[#fbf8f1] p-4">
+      <h2 class="mb-3 flex items-center gap-2 text-lg font-semibold text-[#1f1d1b]"><i data-lucide="zap" class="h-5 w-5 text-[#c8a560]"></i><span data-i18n="section.daily.decision">今日要决策</span></h2>
+      <div id="decision-grid" class="grid gap-3 md:grid-cols-4"></div>
+    </section>
+
+    <section id="cron-intake-section" data-no-i18n class="mb-5 rounded-2xl border border-[#e6dfcc] bg-[#fbf8f1] p-4">
+      <div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <h2 class="flex items-center gap-2 text-lg font-semibold text-[#1f1d1b]"><i data-lucide="radar" class="h-5 w-5 text-[#c8a560]"></i><span>cron 承接卡</span></h2>
+        <span id="cron-intake-status" class="rounded-full border border-[#e6dfcc] bg-[#f0e9d8] px-3 py-1 text-xs text-[#4a443d]">加载中</span>
+      </div>
+      <p id="cron-intake-summary" class="text-sm leading-6 text-[#4a443d]">正在读取短卡...</p>
+      <div id="cron-intake-actions" class="mt-3 grid gap-2 md:grid-cols-2"></div>
+      <div id="cron-intake-reports" class="mt-3 flex flex-wrap gap-2"></div>
+      <div id="cron-intake-learning" class="mt-3 text-sm leading-6 text-[#4a443d]"></div>
+      <div id="cron-intake-warnings" class="mt-3 text-xs leading-5 text-[#8a3527]"></div>
+    </section>
+
+    <section id="wiki-proposal-ledger-section" data-no-i18n class="mb-5 rounded-2xl border border-[#e6dfcc] bg-[#fbf8f1] p-4">
+      <div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <h2 class="flex items-center gap-2 text-lg font-semibold text-[#1f1d1b]"><i data-lucide="book-marked" class="h-5 w-5 text-[#c8a560]"></i><span>Wiki 提案台账</span></h2>
+        <span id="wiki-proposal-ledger-count" class="rounded-full border border-[#e6dfcc] bg-[#f0e9d8] px-3 py-1 text-xs text-[#4a443d]">0 条</span>
+      </div>
+      <p id="wiki-proposal-ledger-summary" class="text-sm leading-6 text-[#4a443d]">正在读取待归并的 wiki proposal...</p>
+      <div id="wiki-proposal-ledger-actions" class="mt-3 flex flex-wrap gap-2"></div>
+      <div id="wiki-proposal-ledger-list" class="mt-3 grid gap-3 md:grid-cols-2"></div>
+    </section>
+
+    <section id="inbox-section" class="mb-5 rounded-2xl border border-[#e6dfcc] bg-[#fbf8f1] p-4">
+      <h2 class="mb-3 flex items-center gap-2 text-lg font-semibold text-[#1f1d1b]"><i data-lucide="inbox" class="h-5 w-5 text-[#c8a560]"></i><span data-i18n="section.daily.inbox">待确认内容</span></h2>
+      <div id="batch-toolbar" class="mb-3 hidden items-center justify-between rounded-md border border-[#e0c889] bg-[#f4e6c4] px-3 py-2 text-sm text-[#8a6b1f] sticky top-[53px] z-20 shadow-md">
+        <span id="selected-count">已选择 0 条</span>
+        <div class="flex flex-wrap gap-2">
+          <button id="batch-archive-selected" title="归档：把选中的收件箱条目移到归档区，日常审批列表里不再显示。" data-i18n-attr="title" data-i18n-title="help.archive" class="rounded-md bg-[#8a3527] px-3 py-1.5 text-xs text-[#fbf8f1] hover:bg-[#6f2b20] disabled:opacity-50" data-i18n="action.archive_selected">批量归档</button>
+          <button id="batch-mem0-selected" title="即时记忆：适合近期偏好、反馈、会话结论和还在变化的信息。" data-i18n-attr="title" data-i18n-title="help.write_mem0" class="rounded-md bg-[#8a6b1f] px-3 py-1.5 text-xs text-[#fbf8f1] hover:bg-[#6f5619] disabled:opacity-50" data-i18n="action.write_mem0">存入即时记忆</button>
+          <button id="batch-wiki-selected" title="知识库：适合稳定规则、流程和可长期引用的资料，永久保存。" data-i18n-attr="title" data-i18n-title="help.write_wiki" class="rounded-md bg-[#c8a560] px-3 py-1.5 text-xs font-semibold text-[#1f1d1b] hover:bg-[#b8932e] disabled:opacity-50" data-i18n="action.write_wiki">存入知识库</button>
+          <button id="batch-clear-selected" title="清空当前多选，不改变任何收件箱文件。" data-i18n-attr="title" data-i18n-title="help.clear_selection" class="rounded-md bg-[#e8e0c8] px-3 py-1.5 text-xs text-[#4a443d] hover:bg-[#d8cfb5]" data-i18n="action.clear_selection">清空选择</button>
+        </div>
+      </div>
+      <div id="inbox-list" class="space-y-3"></div>
+    </section>
+
+    <section id="proposal-section" class="mb-5 rounded-2xl border border-[#e6dfcc] bg-[#fbf8f1] p-4">
+      <h2 class="mb-3 flex items-center gap-2 text-lg font-semibold text-[#1f1d1b]"><i data-lucide="lightbulb" class="h-5 w-5 text-[#c8a560]"></i><span data-i18n="section.daily.proposed">AI 修改建议</span></h2>
+      <div id="proposal-list" class="space-y-3"></div>
+    </section>
+
+    <section class="mb-5 rounded-2xl border border-[#e6dfcc] bg-[#fbf8f1] p-4">
+      <h2 class="mb-3 flex items-center gap-2 text-lg font-semibold text-[#1f1d1b]"><i data-lucide="trending-up" class="h-5 w-5 text-[#c8a560]"></i><span data-i18n="section.daily.metrics">系统自检</span></h2>
+      <pre id="metrics" class="text-sm text-[#4a443d]" style="white-space: pre-wrap"></pre>
+    </section>
+
+    <section class="rounded-2xl border border-[#e6dfcc] bg-[#fbf8f1] p-4">
+      <h2 class="mb-3 flex items-center gap-2 text-lg font-semibold text-[#1f1d1b]"><i data-lucide="book-open" class="h-5 w-5 text-[#c8a560]"></i><span data-i18n="section.daily.appendix">原始材料</span></h2>
+      <details>
+        <summary class="cursor-pointer text-sm font-medium text-[#4a443d]" data-i18n="daily.appendix.summary">展开原始明细</summary>
+        <div id="appendix" class="mt-3 text-xs text-[#8a8275]" style="white-space: pre-wrap"></div>
+      </details>
+    </section>
+  </main>
+
+  <div id="wiki-modal" class="fixed inset-0 z-40 hidden items-center justify-center bg-[#1f1d1b]/40 px-4">
+    <div class="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-2xl bg-[#fbf8f1] p-5 shadow-xl">
+      <div class="flex items-start justify-between gap-4">
+        <div>
+          <h2 id="wiki-modal-title" class="text-lg font-semibold text-[#1f1d1b]" data-i18n="daily.wiki.modal.title">写入知识库推荐</h2>
+          <p id="wiki-modal-subtitle" class="mt-1 text-sm text-[#8a8275]"></p>
+        </div>
+        <button id="wiki-modal-close" class="rounded-md bg-[#f0e9d8] px-2 py-1 text-sm text-[#4a443d] hover:bg-[#e8e0c8]" data-i18n="action.close">关闭</button>
+      </div>
+      <div id="wiki-modal-body" class="mt-4 space-y-4"></div>
+      <div class="mt-5 flex flex-wrap justify-end gap-2">
+        <button id="wiki-modal-cancel" class="rounded-md bg-[#f0e9d8] px-4 py-2 text-sm text-[#4a443d] hover:bg-[#e8e0c8]" data-i18n="action.cancel">取消</button>
+        <button id="wiki-modal-confirm" class="rounded-md bg-[#c8a560] px-4 py-2 text-sm font-medium text-[#1f1d1b] hover:bg-[#b8932e] disabled:opacity-50" data-i18n="action.confirm_wiki">确认写入知识库</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="action-queue" class="tm-action-queue hidden" aria-live="polite">
+    <div id="action-queue-summary" class="tm-action-queue__summary"></div>
+    <div class="tm-action-queue__panel">
+      <div class="mb-2 flex items-center justify-between gap-3">
+        <div class="text-sm font-semibold text-[#1f1d1b]">处理进度</div>
+        <button id="action-queue-clear" class="rounded-md bg-[#f0e9d8] px-2 py-1 text-xs text-[#4a443d] hover:bg-[#e8e0c8]">清理完成项</button>
+      </div>
+      <div id="action-queue-list" class="grid gap-2"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="fixed bottom-6 left-1/2 z-50 hidden max-w-[min(92vw,36rem)] -translate-x-1/2 rounded-md border bg-[#fbf8f1] px-4 py-3 text-sm shadow-lg"></div>
+
+  <script>
+    const digestData = JSON.parse(document.getElementById('digest-data').textContent);
+    const cronIntakeData = JSON.parse(document.getElementById('cron-intake-data').textContent);
+    window.tmPages.daily.init(document, digestData, cronIntakeData);
+    window.tmDashboard.registerServiceWorker();
+  </script>
+</body>
+</html>

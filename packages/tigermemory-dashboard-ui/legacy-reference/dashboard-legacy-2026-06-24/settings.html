@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#c8a560">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="TigerMemory" data-i18n-attr="content" data-i18n-content="app.title">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/static/tiger/tigermemory_tiger_logo_192.png">
+  <title data-i18n="page.settings.title">TigerMemory 偏好设置</title>
+  <script src="/static/assets/tailwindcss.min.js"></script>
+  <script src="/static/assets/lucide.min.js"></script>
+  <style>__STYLE__</style>
+</head>
+<body data-page="settings">
+  __HEADER__
+  <script id="settings-data" type="application/json">__SETTINGS_JSON__</script>
+  <img class="dashboard-motif" src="/static/tiger/tigerlogo.png" alt="">
+
+  <main class="relative z-10 mx-auto max-w-6xl px-6 py-8">
+    <section class="card mb-6 p-6">
+      <div class="mb-2 inline-flex items-center gap-2 text-sm font-medium text-[#8a8275]">
+        <i data-lucide="settings-2" class="h-4 w-4 text-[#c8a560]"></i>
+        <span data-i18n="brand.subtitle">记忆管家</span>
+      </div>
+      <h1 class="text-3xl font-extrabold leading-9 text-[#1f1d1b]" data-i18n="nav.settings">偏好设置</h1>
+      <p class="mt-3 max-w-3xl text-sm leading-6 text-[#4a443d]" data-i18n="page.settings.intro">这些设置先保存在本机。勾选长期同步后，会生成提议再写入个人偏好页，控制台不会直接改敏感资料。</p>
+    </section>
+
+    <form id="settings-form" class="space-y-6">
+      <section class="card p-6">
+        <div class="mb-4 flex items-center gap-2">
+          <i data-lucide="message-circle" class="h-5 w-5 text-[#c8a560]"></i>
+          <h2 class="text-lg font-semibold text-[#1f1d1b]" data-i18n="section.settings.depth">AI 回复详细程度</h2>
+        </div>
+        <div id="depth-grid" class="grid gap-4 md:grid-cols-4"></div>
+      </section>
+
+      <section class="card p-6">
+        <div class="mb-4 flex items-center gap-2">
+          <i data-lucide="badge-check" class="h-5 w-5 text-[#c8a560]"></i>
+          <h2 class="text-lg font-semibold text-[#1f1d1b]" data-i18n="section.settings.exemption">不用解释的词</h2>
+        </div>
+        <div id="exemption-chips" class="flex flex-wrap gap-2"></div>
+        <label class="mt-5 block text-sm font-semibold text-[#1f1d1b]" data-i18n="section.settings.custom_terms">自定义词汇</label>
+        <div id="custom-terms-container" class="tag-container mt-2">
+          <!-- Tag chips and input element will be rendered here dynamically -->
+        </div>
+      </section>
+
+      <section class="grid gap-6 lg:grid-cols-2">
+        <div class="card p-6">
+          <div class="mb-4 flex items-center justify-between gap-4">
+            <div>
+              <h2 class="text-lg font-semibold text-[#1f1d1b]" data-i18n="section.settings.progressive">少重复解释</h2>
+              <p class="mt-1 text-sm leading-6 text-[#4a443d]" data-i18n="settings.progressive.desc">开启后，同一个词被解释过多次时，会自动少重复，让页面更清爽。</p>
+            </div>
+            <button id="progressive-toggle" type="button" class="toggle"><span></span></button>
+          </div>
+          <div class="rounded-2xl border border-[#e0c889] bg-[#f4e6c4] p-4 text-sm leading-6 text-[#8a6b1f]" data-i18n="settings.progressive.note">当前版本只保存开关状态，详细计数功能将在后续版本上线。</div>
+        </div>
+
+        <div class="card p-6">
+          <div class="mb-4 flex items-center gap-2">
+            <i data-lucide="bot" class="h-5 w-5 text-[#c8a560]"></i>
+            <h2 class="text-lg font-semibold text-[#1f1d1b]" data-i18n="section.settings.agents">这些 AI 助手都适用</h2>
+          </div>
+          <div id="agent-chips" class="flex flex-wrap gap-2"></div>
+        </div>
+      </section>
+
+      <section class="grid gap-6 lg:grid-cols-2">
+        <div class="card p-6">
+          <label class="mb-3 block text-lg font-semibold text-[#1f1d1b]" data-i18n="section.settings.workflow">不同 AI 怎么分工</label>
+          <textarea id="model-workflow" rows="5" class="w-full rounded-2xl border border-[#c9bf9f] bg-[#fbf8f1] p-4 text-sm leading-6 text-[#1f1d1b] outline-none focus:border-[#b8932e]"></textarea>
+        </div>
+        <div class="card p-6">
+          <label class="mb-4 block text-lg font-semibold text-[#1f1d1b]" data-i18n="section.settings.timeout">命令最多等多久</label>
+          <div class="space-y-4" id="timeout-budget-sliders">
+            <!-- Numerical sliders will be rendered here dynamically -->
+          </div>
+        </div>
+      </section>
+
+      <section class="card p-6">
+        <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <label class="flex items-center gap-3 text-sm font-semibold text-[#1f1d1b]">
+            <input id="propose-wiki" type="checkbox" class="h-4 w-4 accent-[#c8a560]" checked>
+            <span data-i18n="settings.propose_wiki">保存后同步到云端知识库</span>
+          </label>
+          <div class="flex flex-wrap gap-2">
+            <button id="reset-button" type="button" class="rounded-xl border border-[#c9bf9f] bg-[#f0e9d8] px-5 py-2.5 text-sm font-semibold text-[#4a443d] hover:bg-[#e8e0c8]" data-i18n="action.reset_default">重置默认</button>
+            <button type="submit" class="rounded-xl bg-[#c8a560] px-5 py-2.5 text-sm font-semibold text-[#1f1d1b] hover:bg-[#b8932e] hover:text-[#fbf8f1] disabled:opacity-50" data-i18n="action.save_pref">保存设置</button>
+          </div>
+        </div>
+        <div id="save-status" class="mt-3 text-sm"></div>
+      </section>
+
+      <section class="card p-6">
+        <details>
+          <summary class="cursor-pointer text-sm font-semibold text-[#1f1d1b]" data-i18n="section.settings.json">展开当前设置详情（技术人员用）</summary>
+          <pre id="settings-json" class="mt-4 max-h-[52vh] overflow-auto whitespace-pre-wrap rounded-2xl border border-[#e6dfcc] bg-[#f0e9d8] p-4 text-xs leading-5 text-[#4a443d]"></pre>
+        </details>
+      </section>
+    </form>
+  </main>
+
+  <div id="toast" class="fixed bottom-6 left-1/2 z-50 hidden max-w-[min(92vw,36rem)] -translate-x-1/2 rounded-xl border px-4 py-3 text-sm shadow-lg"></div>
+
+  <script>
+    const settingsData = JSON.parse(document.getElementById('settings-data').textContent);
+    window.tmPages.settings.init(document, settingsData);
+    window.tmDashboard.registerServiceWorker();
+  </script>
+</body>
+</html>
