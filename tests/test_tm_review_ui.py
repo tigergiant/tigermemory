@@ -593,6 +593,9 @@ def test_daily_page_static_assets_wire_cron_intake_card():
     assert "fetchDigestInFlight" in pages_js
     assert "tm-refresh-quiet" in pages_js
     assert "body.tm-refresh-quiet #inbox-list article" in style_css
+    assert "animation: statusPulse" not in style_css
+    assert "animation: tmGlowMove" not in style_css
+    assert "tmQueuePulseLite" in style_css
     assert "/api/cron/intake/" in pages_js
     assert "cron-intake-summary" in pages_js
     assert "font-mono" in pages_js
