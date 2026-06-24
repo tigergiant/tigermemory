@@ -321,10 +321,11 @@ function MemoryFlowDiagram({
       const rect = board.getBoundingClientRect();
       const engine = board.querySelector<HTMLElement>('[data-flow-id="engine"]');
       if (!engine) return;
-      const engineRect = engine.getBoundingClientRect();
-      const engineLeft = engineRect.left - rect.left;
-      const engineRight = engineRect.right - rect.left;
-      const engineCenterY = engineRect.top - rect.top + engineRect.height / 2;
+      const figure = board.querySelector<HTMLElement>('[data-flow-id="engine-figure"]') || engine;
+      const figureRect = figure.getBoundingClientRect();
+      const engineLeft = figureRect.left - rect.left + figureRect.width * 0.24;
+      const engineRight = figureRect.right - rect.left - figureRect.width * 0.24;
+      const engineCenterY = figureRect.top - rect.top + figureRect.height * 0.58;
 
       const next: Array<{ id: string; d: string; tone: FlowTone; delay: number }> = [];
       const pathFor = (x1: number, y1: number, x2: number, y2: number) => {
@@ -336,9 +337,10 @@ function MemoryFlowDiagram({
       board.querySelectorAll<HTMLElement>('[data-flow-id^="source-"]').forEach((node, index) => {
         const nodeRect = node.getBoundingClientRect();
         const flowId = node.dataset.flowId || `source-${index}`;
+        const anchorY = nodeRect.top - rect.top + nodeRect.height * 0.5;
         next.push({
           id: flowId,
-          d: pathFor(nodeRect.right - rect.left, nodeRect.top - rect.top + nodeRect.height / 2, engineLeft + 8, engineCenterY),
+          d: pathFor(nodeRect.right - rect.left, anchorY, engineLeft, engineCenterY),
           tone: sources[index]?.tone || "info",
           delay: index * 0.16,
         });
@@ -347,9 +349,10 @@ function MemoryFlowDiagram({
       board.querySelectorAll<HTMLElement>('[data-flow-id^="output-"]').forEach((node, index) => {
         const nodeRect = node.getBoundingClientRect();
         const flowId = node.dataset.flowId || `output-${index}`;
+        const anchorY = nodeRect.top - rect.top + nodeRect.height * 0.5;
         next.push({
           id: flowId,
-          d: pathFor(engineRight - 8, engineCenterY, nodeRect.left - rect.left, nodeRect.top - rect.top + nodeRect.height / 2),
+          d: pathFor(engineRight, engineCenterY, nodeRect.left - rect.left, anchorY),
           tone: outputs[index]?.tone || "info",
           delay: 0.42 + index * 0.16,
         });
@@ -408,6 +411,7 @@ function MemoryFlowDiagram({
             className="relative flex w-40 flex-col items-center text-center"
           >
             <motion.img
+              data-flow-id="engine-figure"
               src="/static/cute_tiger_guard.png"
               alt=""
               className="h-32 w-32 object-contain drop-shadow-xl"
