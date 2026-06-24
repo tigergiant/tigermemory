@@ -1673,6 +1673,7 @@ def test_react_dashboard_pages_use_shared_shell_components():
     quality = (ui_src / "quality" / "main.tsx").read_text(encoding="utf-8")
     settings = (ui_src / "settings" / "main.tsx").read_text(encoding="utf-8")
     agent_tools = (ui_src / "agent-tools" / "main.tsx").read_text(encoding="utf-8")
+    canvas = (ui_src / "canvas" / "main.tsx").read_text(encoding="utf-8")
 
     assert shell.exists()
     shell_text = shell.read_text(encoding="utf-8")
@@ -1685,12 +1686,14 @@ def test_react_dashboard_pages_use_shared_shell_components():
     assert "../components/DashboardShell" in quality
     assert "../components/DashboardShell" in settings
     assert "../components/DashboardShell" in agent_tools
+    assert "../components/DashboardShell" in canvas
     assert "const nav =" not in start
     assert "const NAV =" not in digest
     assert "const NAV =" not in health
     assert "const NAV =" not in quality
     assert "const NAV =" not in settings
     assert "const NAV =" not in agent_tools
+    assert "const NAV =" not in canvas
 
 
 def test_dashboard_modularization_rules(tmp_path, monkeypatch):
@@ -1702,9 +1705,9 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     client.get("/", headers=HOST, follow_redirects=False)
 
-    # dashboard shell pages — /digest、/health、/quality、/settings、/agent-tools 已迁移为 React island，不再引用旧 dashboard-common.js。
+    # dashboard shell pages — /digest、/health、/quality、/settings、/agent-tools、/canvas 已迁移为 React island，不再引用旧 dashboard-common.js。
     legacy_pages: list[str] = []
-    react_pages = ["/digest/2026-05-21", "/health", "/quality", "/settings", "/agent-tools"]
+    react_pages = ["/digest/2026-05-21", "/health", "/quality", "/settings", "/agent-tools", "/canvas"]
     pages = react_pages + legacy_pages
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_digest(tmp_path)
@@ -1718,7 +1721,7 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
         res = client.get(route, headers=HOST)
         assert "/static/dashboard-common.js" in res.text
 
-    # 2. /start、/digest、/health、/quality、/settings 与 /agent-tools 均已迁移为 React island，
+    # 2. /start、/digest、/health、/quality、/settings、/agent-tools 与 /canvas 均已迁移为 React island，
     # 不再依赖旧 dashboard-pages.js 控制器。
     digest = client.get("/digest/2026-05-21", headers=HOST)
     start = client.get("/start", headers=HOST)
@@ -1726,6 +1729,7 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     quality = client.get("/quality", headers=HOST)
     settings = client.get("/settings", headers=HOST)
     agent_tools = client.get("/agent-tools", headers=HOST)
+    canvas = client.get("/canvas", headers=HOST)
     assert "/static/dashboard-pages.js" not in digest.text
     assert "/static/react/digest/assets/" in digest.text
     assert "/static/dashboard-pages.js" not in start.text
@@ -1741,6 +1745,9 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "/static/dashboard-pages.js" not in agent_tools.text
     assert "/static/react/agent-tools/assets/" in agent_tools.text
     assert 'data-tm-react-agent-tools' in agent_tools.text
+    assert "/static/dashboard-pages.js" not in canvas.text
+    assert "/static/react/canvas/assets/" in canvas.text
+    assert 'data-tm-react-canvas' in canvas.text
 
     # 3. service-worker.js 仍保留旧 JS 以服务暂未迁移页面。
     sw_res = client.get("/service-worker.js", headers=HOST)
@@ -1748,7 +1755,7 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "/static/dashboard-common.js" in sw_res.text
     assert "/static/dashboard-pages.js" in sw_res.text
 
-    # 4. health/quality/settings/agent-tools 页面不再直接出现 inline 定义；
+    # 4. health/quality/settings/agent-tools/canvas 页面不再直接出现 inline 定义；
     # /start 与 /digest 页面均由 React bundle 接管。
     assert "data-tm-react-start" in start.text
     assert "function copyCommand" not in start.text
@@ -1768,6 +1775,9 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "async function checkAgentStatus" not in agent_tools.text
     assert "async function runDoctor" not in agent_tools.text
     assert "async function runEval" not in agent_tools.text
+    assert "window.tmPages.canvas.init" not in canvas.text
+    assert "function renderRoadmap" not in canvas.text
+    assert "function renderCandidates" not in canvas.text
 
     # 5. dashboard-pages.js 仍保留 legacy start fallback 与其他模块控制器，
     # 但正式 /start 页面优先使用 React 构建产物。
@@ -1777,6 +1787,7 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "window.tmPages.settings" in js_content
     assert "window.tmPages.daily" in js_content
     assert "window.tmPages.agentTools" in js_content
+    assert "window.tmPages.canvas" in js_content
     assert "AbortController" in js_content
     assert "this.abortController.abort()" in js_content
 
@@ -1973,6 +1984,7 @@ def test_dashboard_pages_share_identical_header(tmp_path, monkeypatch):
 
     react_responses = {
         "agent-tools": client.get("/agent-tools", headers=HOST),
+        "canvas": client.get("/canvas", headers=HOST),
         "digest": client.get("/digest/2026-05-21", headers=HOST),
         "health": client.get("/health", headers=HOST),
         "quality": client.get("/quality", headers=HOST),

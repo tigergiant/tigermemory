@@ -4571,6 +4571,10 @@ def _require_tigerledger_review():
 
 def _render_canvas_page(data: dict[str, Any]) -> str:
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    react_entry = STATIC_DIR / "react" / "canvas" / "canvas.html"
+    if react_entry.exists():
+        html = react_entry.read_text(encoding="utf-8")
+        return html.replace("__TM_CANVAS_JSON__", payload).replace("__GIT_SHA__", git_sha())
     return _render_template("canvas.html", {"__CANVAS_JSON__": payload})
 
 

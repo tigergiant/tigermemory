@@ -11,6 +11,7 @@
     "build:quality": "node build-all.mjs quality",
     "build:settings": "node build-all.mjs settings",
     "build:agent-tools": "node build-all.mjs agent-tools",
+    "build:canvas": "node build-all.mjs canvas",
     "dev": "vite --host 127.0.0.1 --port 2000"
   },
   "dependencies": {

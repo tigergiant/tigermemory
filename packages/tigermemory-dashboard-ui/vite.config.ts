@@ -12,8 +12,9 @@ import { defineConfig } from "vite";
 //   TM_PAGE=quality ->  src/quality/index.html    ->  static/react/quality/
 //   TM_PAGE=settings -> src/settings/index.html    ->  static/react/settings/
 //   TM_PAGE=agent-tools -> agent-tools.html           ->  static/react/agent-tools/
+//   TM_PAGE=canvas -> canvas.html                 ->  static/react/canvas/
 // The base path must match the FastAPI static mount so hashed assets resolve.
-const pages = new Set(["start", "digest", "health", "quality", "settings", "agent-tools"]);
+const pages = new Set(["start", "digest", "health", "quality", "settings", "agent-tools", "canvas"]);
 const requestedPage = process.env.TM_PAGE || "start";
 const page = pages.has(requestedPage) ? requestedPage : "start";
 
@@ -28,6 +29,8 @@ const entry =
           ? path.resolve(__dirname, "settings.html")
           : page === "agent-tools"
             ? path.resolve(__dirname, "agent-tools.html")
+            : page === "canvas"
+              ? path.resolve(__dirname, "canvas.html")
     : path.resolve(__dirname, "index.html");
 
 const outDir = path.resolve(
