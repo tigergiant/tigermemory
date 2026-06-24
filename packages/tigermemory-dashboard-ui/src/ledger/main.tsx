@@ -478,7 +478,7 @@ function App() {
             <Input label={t("query")}><input className="h-10 rounded-xl border border-tm-border-strong bg-tm-card px-3 text-sm text-tm-primary outline-none focus:border-tm-accent" placeholder={t("queryPlaceholder")} value={filters.q} onChange={(event) => setFilter("q", event.target.value)} /></Input>
           </div>
           <div className="mt-4 flex flex-wrap gap-3">
-            <button type="button" onClick={applyFilters} className="inline-flex h-10 items-center gap-2 rounded-xl bg-tm-accent px-4 text-sm font-semibold text-tm-primary hover:bg-tm-accent-hi"><CheckCircle2 size={16} />{t("apply")}</button>
+            <button type="button" onClick={applyFilters} className="inline-flex h-10 items-center gap-2 rounded-xl bg-tm-accent px-4 text-sm font-semibold text-tm-accent-fg hover:bg-tm-accent-hi"><CheckCircle2 size={16} />{t("apply")}</button>
             <button type="button" onClick={clearFilters} className="inline-flex h-10 items-center gap-2 rounded-xl border border-tm-border bg-tm-card-alt px-4 text-sm font-semibold text-tm-secondary hover:border-tm-accent"><Eraser size={16} />{t("clear")}</button>
           </div>
         </DashboardCard>
@@ -495,7 +495,7 @@ function App() {
                 <Input label={t("merchant")}><input className="h-10 rounded-xl border border-tm-border-strong bg-tm-card px-3 text-sm text-tm-primary outline-none focus:border-tm-accent" value={editDraft.merchant} onChange={(event) => setEditDraft((current) => ({ ...current, merchant: event.target.value }))} /></Input>
                 <Input label={t("note")}><textarea className="min-h-10 rounded-xl border border-tm-border-strong bg-tm-card px-3 py-2 text-sm text-tm-primary outline-none focus:border-tm-accent lg:col-span-2" rows={2} value={editDraft.note} onChange={(event) => setEditDraft((current) => ({ ...current, note: event.target.value }))} /></Input>
               </div>
-              <button type="button" onClick={() => void saveEdit()} disabled={busyId === selected.id} className="mt-4 inline-flex h-10 items-center gap-2 rounded-xl bg-tm-accent px-4 text-sm font-semibold text-tm-primary hover:bg-tm-accent-hi disabled:opacity-60">
+              <button type="button" onClick={() => void saveEdit()} disabled={busyId === selected.id} className="mt-4 inline-flex h-10 items-center gap-2 rounded-xl bg-tm-accent px-4 text-sm font-semibold text-tm-accent-fg hover:bg-tm-accent-hi disabled:opacity-60">
                 {busyId === selected.id ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}{t("saveApprove")}
               </button>
             </motion.section>

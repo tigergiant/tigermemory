@@ -402,7 +402,7 @@ function App() {
                 type="button"
                 onClick={() => void runDoctor()}
                 disabled={doctorLoading}
-                className="inline-flex h-9 items-center gap-2 rounded-xl bg-tm-accent px-3 text-sm font-bold text-tm-primary hover:brightness-105 disabled:opacity-60"
+                className="inline-flex h-9 items-center gap-2 rounded-xl bg-tm-accent px-3 text-sm font-bold text-tm-accent-fg hover:brightness-105 disabled:opacity-60"
               >
                 {doctorLoading ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
                 {doctor ? t("rerunDoctor") : t("runDoctor")}
@@ -418,7 +418,7 @@ function App() {
                 type="button"
                 onClick={() => void runEval()}
                 disabled={evalLoading}
-                className="inline-flex h-9 items-center gap-2 rounded-xl bg-tm-accent px-3 text-sm font-bold text-tm-primary hover:brightness-105 disabled:opacity-60"
+                className="inline-flex h-9 items-center gap-2 rounded-xl bg-tm-accent px-3 text-sm font-bold text-tm-accent-fg hover:brightness-105 disabled:opacity-60"
               >
                 {evalLoading ? <Loader2 size={16} className="animate-spin" /> : <RefreshCcw size={16} />}
                 {evalRan ? t("rerunEval") : t("runEval")}

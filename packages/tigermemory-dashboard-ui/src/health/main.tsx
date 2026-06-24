@@ -228,7 +228,7 @@ function App() {
               <button
                 type="button"
                 onClick={() => refresh(false)}
-                className="inline-flex items-center gap-2 rounded-md bg-tm-accent px-4 py-2 text-sm font-semibold text-tm-primary hover:bg-tm-accent-hi disabled:opacity-50"
+                className="inline-flex items-center gap-2 rounded-md bg-tm-accent px-4 py-2 text-sm font-semibold text-tm-accent-fg hover:bg-tm-accent-hi disabled:opacity-50"
                 disabled={refreshing}
               >
                 {refreshing ? <Loader2 size={16} className="animate-spin" /> : <RefreshCcw size={16} />}

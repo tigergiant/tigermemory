@@ -210,7 +210,7 @@ function Chip({ active, children, onClick }: { active: boolean; children: React.
       className={cx(
         "rounded-full border px-3 py-1.5 text-sm font-semibold transition-colors",
         active
-          ? "border-tm-accent bg-tm-accent text-tm-primary"
+          ? "border-tm-accent bg-tm-accent text-tm-accent-fg"
           : "border-tm-border bg-tm-card-alt text-tm-secondary hover:border-tm-accent",
       )}
     >
@@ -517,7 +517,7 @@ function App() {
                   <RotateCcw size={16} />
                   {t("reset")}
                 </button>
-                <button type="submit" disabled={saving} className="inline-flex items-center gap-2 rounded-md bg-tm-accent px-4 py-2 text-sm font-semibold text-tm-primary hover:bg-tm-accent-hi disabled:opacity-50">
+                <button type="submit" disabled={saving} className="inline-flex items-center gap-2 rounded-md bg-tm-accent px-4 py-2 text-sm font-semibold text-tm-accent-fg hover:bg-tm-accent-hi disabled:opacity-50">
                   {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
                   {t("save")}
                 </button>

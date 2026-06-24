@@ -281,7 +281,7 @@ function App() {
                     key={mode}
                     type="button"
                     onClick={() => setView(mode)}
-                    className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors ${view === mode ? "bg-tm-accent text-tm-primary" : "text-tm-secondary hover:bg-tm-bg"}`}
+                    className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors ${view === mode ? "bg-tm-accent text-tm-accent-fg" : "text-tm-secondary hover:bg-tm-bg"}`}
                   >
                     {mode === "overview" ? t("overview") : mode === "module" ? t("modules") : t("technical")}
                   </button>
@@ -789,31 +789,48 @@ function drawGraphCanvas(canvas: HTMLCanvasElement | null, model: GraphModel) {
   if (!ctx) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
-  drawGraphHalo(ctx, model.center.x, model.center.y, model.radius);
-  drawGraphHalo(ctx, model.center.x, model.center.y, model.radius + 205);
+  const styles = getComputedStyle(canvas);
+  const accent = cssVarRgba(styles, "--accent-tiger", 1);
+  const tertiary = cssVarRgba(styles, "--text-tertiary", 1);
+  drawGraphHalo(ctx, model.center.x, model.center.y, model.radius, accent);
+  drawGraphHalo(ctx, model.center.x, model.center.y, model.radius + 205, accent);
   for (const node of model.moduleNodes) {
-    drawGraphCurve(ctx, model.center, node, node.index === 0 || node.index === 1);
+    drawGraphCurve(ctx, model.center, node, node.index === 0 || node.index === 1, accent, tertiary);
   }
 }
 
-function drawGraphHalo(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number) {
+function cssVarRgba(styles: CSSStyleDeclaration, name: string, fallback: number): { r: number; g: number; b: number } {
+  const raw = styles.getPropertyValue(name).trim();
+  const m = raw.match(/#([0-9a-f]{6})/i);
+  if (m) {
+    const n = parseInt(m[1], 16);
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  }
+  return { r: fallback * 200, g: fallback * 165, b: fallback * 96 };
+}
+
+function rgba(c: { r: number; g: number; b: number }, a: number): string {
+  return `rgba(${c.r}, ${c.g}, ${c.b}, ${a})`;
+}
+
+function drawGraphHalo(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, accent: { r: number; g: number; b: number }) {
   ctx.save();
   ctx.beginPath();
   ctx.arc(x, y, radius, 0, Math.PI * 2);
   ctx.setLineDash([8, 12]);
   ctx.lineWidth = 1.2;
-  ctx.strokeStyle = "rgba(200, 165, 96, .18)";
+  ctx.strokeStyle = rgba(accent, 0.18);
   ctx.stroke();
   ctx.restore();
 }
 
-function drawGraphCurve(ctx: CanvasRenderingContext2D, from: { x: number; y: number }, to: { x: number; y: number }, strong: boolean) {
+function drawGraphCurve(ctx: CanvasRenderingContext2D, from: { x: number; y: number }, to: { x: number; y: number }, strong: boolean, accent: { r: number; g: number; b: number }, tertiary: { r: number; g: number; b: number }) {
   ctx.save();
   ctx.beginPath();
   ctx.moveTo(from.x, from.y);
   ctx.bezierCurveTo(from.x, to.y, to.x, from.y, to.x, to.y);
   ctx.lineWidth = strong ? 2.1 : 1.35;
-  ctx.strokeStyle = strong ? "rgba(200, 165, 96, .42)" : "rgba(138, 130, 117, .22)";
+  ctx.strokeStyle = strong ? rgba(accent, 0.42) : rgba(tertiary, 0.22);
   ctx.stroke();
   ctx.restore();
 }

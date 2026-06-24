@@ -532,7 +532,7 @@ function InboxCard({
               className={classNames(
                 "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-40",
                 isRec && action === "promote_wiki"
-                  ? "bg-tm-accent text-tm-primary hover:bg-tm-accent-hi"
+                  ? "bg-tm-accent text-tm-accent-fg hover:bg-tm-accent-hi"
                   : action === "archive"
                     ? "bg-tm-fail text-tm-inverse hover:opacity-90"
                     : "bg-tm-card-alt text-tm-secondary hover:bg-tm-overlay",
@@ -777,7 +777,7 @@ function WikiTargetModal({
                         >
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="font-semibold">{item.label || item.partition}</span>
-                            {item.recommended ? <span className="rounded-full bg-tm-accent px-2 py-0.5 text-xs text-tm-primary">{t("defaultRecommended")}</span> : null}
+                            {item.recommended ? <span className="rounded-full bg-tm-accent px-2 py-0.5 text-xs text-tm-accent-fg">{t("defaultRecommended")}</span> : null}
                           </div>
                           <div className="mt-1 break-all font-mono text-xs">{item.path || wikiTargetPath(item.partition, item.slug)}</div>
                           {item.reason ? <div className="mt-1 text-xs text-tm-tertiary">{item.reason}</div> : null}
@@ -822,7 +822,7 @@ function WikiTargetModal({
                 type="button"
                 onClick={onConfirm}
                 disabled={busy}
-                className="inline-flex items-center gap-2 rounded-md bg-tm-accent px-4 py-2 text-sm font-semibold text-tm-primary hover:bg-tm-accent-hi disabled:opacity-50"
+                className="inline-flex items-center gap-2 rounded-md bg-tm-accent px-4 py-2 text-sm font-semibold text-tm-accent-fg hover:bg-tm-accent-hi disabled:opacity-50"
               >
                 {busy ? <Loader2 size={14} className="animate-spin" /> : null}
                 {t("confirmWiki")}
@@ -981,7 +981,7 @@ function WikiLedgerSection({
               type="button"
               onClick={onApproveAll}
               disabled={busy}
-              className="rounded-md bg-tm-accent px-3 py-1.5 text-xs font-semibold text-tm-primary hover:bg-tm-accent-hi disabled:opacity-50"
+              className="rounded-md bg-tm-accent px-3 py-1.5 text-xs font-semibold text-tm-accent-fg hover:bg-tm-accent-hi disabled:opacity-50"
             >
               {t("wikiLedgerBatch")} {pendingPaths.length} 条
             </button>
@@ -1039,7 +1039,7 @@ function WikiLedgerSection({
                   disabled={busy}
                   className={classNames(
                     "rounded-md px-3 py-1.5 text-xs font-semibold disabled:opacity-50",
-                    status === "investment-wiki" ? "border border-tm-primary bg-tm-primary text-tm-accent hover:opacity-90" : "bg-tm-accent text-tm-primary hover:bg-tm-accent-hi",
+                    status === "investment-wiki" ? "border border-tm-primary bg-tm-primary text-tm-accent hover:opacity-90" : "bg-tm-accent text-tm-accent-fg hover:bg-tm-accent-hi",
                   )}
                 >
                   {status === "investment-wiki" ? t("writeInvestmentWiki") : t("actionWiki")}
@@ -1516,7 +1516,7 @@ function App() {
                           target: null,
                         });
                       }}
-                      className="rounded-md bg-tm-accent px-3 py-1.5 text-xs font-semibold text-tm-primary hover:bg-tm-accent-hi"
+                      className="rounded-md bg-tm-accent px-3 py-1.5 text-xs font-semibold text-tm-accent-fg hover:bg-tm-accent-hi"
                     >
                       {t("batchWiki")}
                     </button>

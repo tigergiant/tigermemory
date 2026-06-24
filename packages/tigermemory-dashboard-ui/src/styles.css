@@ -18,6 +18,7 @@
   --color-tm-accent: var(--accent-tiger);
   --color-tm-accent-hi: var(--accent-tiger-hi);
   --color-tm-accent-lo: var(--accent-tiger-lo);
+  --color-tm-accent-fg: var(--accent-tiger-fg);
 
   --color-tm-ok: var(--status-ok-fg);
   --color-tm-ok-bg: var(--status-ok-bg);
@@ -61,6 +62,7 @@
   --accent-tiger: #c8a560;
   --accent-tiger-hi: #b8932e;
   --accent-tiger-lo: #d8c084;
+  --accent-tiger-fg: #2a2210;
   --accent-line: #1a3b6e;
   --status-ok-fg: #52733a;
   --status-ok-bg: #dde8ce;
@@ -968,6 +970,7 @@ code {
   --accent-tiger: #e6c378;
   --accent-tiger-hi: #f2d49a;
   --accent-tiger-lo: #c8a560;
+  --accent-tiger-fg: #2a2210;
   --accent-line: #6f9bd6;
 
   --status-ok-fg: #9ed084;
@@ -1098,3 +1101,48 @@ code {
   position: relative;
   z-index: 1;
 }
+
+/* ---- Dark-mode hover states for start cards/options ---- */
+.tm-dark-shell .tm-page-card:hover,
+.tm-dark-shell .tm-option:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* ---- Dark-mode overrides for Tailwind arbitrary shadows tuned for light ----
+   Cards across canvas / ledger / self-evolution / digest use the same light
+   shadow token; neutralise the dark base + keep a soft gold glow. */
+.tm-dark-shell .shadow-\[0_1px_2px_rgba\(31\,29\,27\,0\.04\)\2c 0_12px_32px_rgba\(168\,123\,34\,0\.06\)\] {
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.36);
+}
+.tm-dark-shell .shadow-\[0_1px_2px_rgba\(31\,29\,27\,0\.03\)\],
+.tm-dark-shell .shadow-\[0_1px_2px_rgba\(31\,29\,27\,0\.04\)\] {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
+}
+.tm-dark-shell .shadow-\[0_10px_24px_rgba\(31\,29\,27\,0\.10\)\] {
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* ---- Dark-mode: gold inset border on digest wiki proposal cards ---- */
+.tm-dark-shell .shadow-\[inset_4px_0_0_\#c8a560\] {
+  box-shadow: inset 4px 0 0 var(--accent-tiger);
+}
+
+/* ---- Dark-mode: danger action hover (ledger #e9c5bf) ---- */
+.tm-dark-shell .hover\:bg-\[\#e9c5bf\]:hover {
+  background-color: rgba(255, 120, 120, 0.16) !important;
+}
+
+/* ---- Dark-mode: form input focus ring ---- */
+.tm-dark-shell .tm-form input:focus,
+.tm-dark-shell .tm-form select:focus {
+  border-color: var(--accent-tiger);
+  box-shadow: 0 0 0 2px rgba(230, 195, 120, 0.22);
+}
+
+/* ---- Dark-mode: quality flow anchor/route dots white glow ----
+   Light mode uses a near-white ring; on dark it is too bright. */
+.tm-dark-shell .shadow-\[0_0_0_2px_rgba\(255\,251\,241\,0\.65\)\],
+.tm-dark-shell .shadow-\[0_0_0_2px_rgba\(255\,251\,241\,0\.75\)\] {
+  box-shadow: 0 0 0 2px rgba(230, 195, 120, 0.35);
+}
+

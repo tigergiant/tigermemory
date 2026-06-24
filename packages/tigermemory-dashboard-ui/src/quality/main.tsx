@@ -276,7 +276,7 @@ function RoutePanel({
               key={item}
               type="button"
               onClick={() => onRangeChange(item)}
-              className={cx("rounded-full px-3 py-1.5 transition-colors", range.key === item ? "bg-tm-accent text-tm-primary shadow-sm" : "text-tm-secondary hover:bg-tm-card")}
+              className={cx("rounded-full px-3 py-1.5 transition-colors", range.key === item ? "bg-tm-accent text-tm-accent-fg shadow-sm" : "text-tm-secondary hover:bg-tm-card")}
               disabled={refreshing && updatingRange === item}
             >
               {rangeFallback[item].label}
@@ -452,7 +452,7 @@ function MemoryFlowDiagram({
 }
 
 function FlowPath({ id, path, delay, tone, active }: { id: string; path: string; delay: number; tone: FlowTone; active: boolean }) {
-  const stroke = tone === "ok" ? "#52733a" : tone === "warn" ? "#c8a560" : "#6f8ea0";
+  const stroke = tone === "ok" ? "var(--status-ok-fg)" : tone === "warn" ? "var(--status-warn-fg)" : "var(--status-info-fg)";
   return (
     <>
       <path
@@ -924,7 +924,7 @@ function App() {
             </div>
             <div className="flex flex-wrap items-center gap-3">
               <span className="rounded-full border border-tm-border-strong bg-tm-card-alt px-3 py-1 text-xs text-tm-secondary">{t("autoRefresh")}</span>
-              <button type="button" onClick={() => fetchQuality(rangeKey, false)} className="inline-flex items-center gap-2 rounded-md bg-tm-accent px-4 py-2 text-sm font-semibold text-tm-primary hover:bg-tm-accent-hi disabled:opacity-50" disabled={refreshing}>
+              <button type="button" onClick={() => fetchQuality(rangeKey, false)} className="inline-flex items-center gap-2 rounded-md bg-tm-accent px-4 py-2 text-sm font-semibold text-tm-accent-fg hover:bg-tm-accent-hi disabled:opacity-50" disabled={refreshing}>
                 {refreshing ? <Loader2 size={16} className="animate-spin" /> : <RefreshCcw size={16} />}
                 {t("refresh")}
               </button>
