@@ -321,11 +321,17 @@ function MemoryFlowDiagram({
       const rect = board.getBoundingClientRect();
       const engine = board.querySelector<HTMLElement>('[data-flow-id="engine"]');
       if (!engine) return;
-      const figure = board.querySelector<HTMLElement>('[data-flow-id="engine-figure"]') || engine;
-      const figureRect = figure.getBoundingClientRect();
-      const engineLeft = figureRect.left - rect.left + figureRect.width * 0.24;
-      const engineRight = figureRect.right - rect.left - figureRect.width * 0.24;
-      const engineCenterY = figureRect.top - rect.top + figureRect.height * 0.58;
+      const pointFor = (node: HTMLElement) => {
+        const nodeRect = node.getBoundingClientRect();
+        return {
+          x: nodeRect.left - rect.left + nodeRect.width / 2,
+          y: nodeRect.top - rect.top + nodeRect.height / 2,
+        };
+      };
+      const leftAnchor = board.querySelector<HTMLElement>('[data-flow-id="engine-left-anchor"]');
+      const rightAnchor = board.querySelector<HTMLElement>('[data-flow-id="engine-right-anchor"]');
+      const engineLeft = pointFor(leftAnchor || engine);
+      const engineRight = pointFor(rightAnchor || engine);
 
       const next: Array<{ id: string; d: string; tone: FlowTone; delay: number }> = [];
       const pathFor = (x1: number, y1: number, x2: number, y2: number) => {
@@ -335,24 +341,22 @@ function MemoryFlowDiagram({
       };
 
       board.querySelectorAll<HTMLElement>('[data-flow-id^="source-"]').forEach((node, index) => {
-        const nodeRect = node.getBoundingClientRect();
         const flowId = node.dataset.flowId || `source-${index}`;
-        const anchorY = nodeRect.top - rect.top + nodeRect.height * 0.5;
+        const sourceAnchor = pointFor(node);
         next.push({
           id: flowId,
-          d: pathFor(nodeRect.right - rect.left, anchorY, engineLeft, engineCenterY),
+          d: pathFor(sourceAnchor.x, sourceAnchor.y, engineLeft.x, engineLeft.y),
           tone: sources[index]?.tone || "info",
           delay: index * 0.16,
         });
       });
 
       board.querySelectorAll<HTMLElement>('[data-flow-id^="output-"]').forEach((node, index) => {
-        const nodeRect = node.getBoundingClientRect();
         const flowId = node.dataset.flowId || `output-${index}`;
-        const anchorY = nodeRect.top - rect.top + nodeRect.height * 0.5;
+        const outputAnchor = pointFor(node);
         next.push({
           id: flowId,
-          d: pathFor(engineRight, engineCenterY, nodeRect.left - rect.left, anchorY),
+          d: pathFor(engineRight.x, engineRight.y, outputAnchor.x, outputAnchor.y),
           tone: outputs[index]?.tone || "info",
           delay: 0.42 + index * 0.16,
         });
@@ -410,6 +414,8 @@ function MemoryFlowDiagram({
             whileHover={{ scale: 1.03 }}
             className="relative flex w-40 flex-col items-center text-center"
           >
+            <span data-flow-id="engine-left-anchor" aria-hidden="true" className="absolute left-[2.95rem] top-[5.2rem] h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-tm-accent/70 shadow-[0_0_0_2px_rgba(255,251,241,0.65)]" />
+            <span data-flow-id="engine-right-anchor" aria-hidden="true" className="absolute right-[2.95rem] top-[5.2rem] h-2 w-2 translate-x-1/2 -translate-y-1/2 rounded-full bg-tm-accent/70 shadow-[0_0_0_2px_rgba(255,251,241,0.65)]" />
             <motion.img
               data-flow-id="engine-figure"
               src="/static/cute_tiger_guard.png"
@@ -482,11 +488,19 @@ function RouteChip({
   return (
     <motion.article
       layout
-      data-flow-id={flowId}
+      data-flow-card={flowId}
       onMouseEnter={() => onHover(flowId)}
       onMouseLeave={() => onHover(null)}
-      className={cx("rounded-xl border px-2.5 py-2 shadow-sm transition-shadow hover:shadow-md", toneClass(tone))}
+      className={cx("relative rounded-xl border px-2.5 py-2 shadow-sm transition-shadow hover:shadow-md", toneClass(tone))}
     >
+      <span
+        data-flow-id={flowId}
+        aria-hidden="true"
+        className={cx(
+          "absolute top-1/2 h-2 w-2 -translate-y-1/2 rounded-full bg-current opacity-70 shadow-[0_0_0_2px_rgba(255,251,241,0.75)]",
+          flowId.startsWith("output-") ? "-left-1" : "-right-1",
+        )}
+      />
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <div className="text-[13px] font-semibold leading-4">{label}</div>
