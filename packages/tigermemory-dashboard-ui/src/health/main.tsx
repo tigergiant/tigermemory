@@ -209,7 +209,7 @@ function App() {
   const trend = Array.isArray(memory.trend_7d) ? memory.trend_7d : [];
 
   return (
-    <DashboardShell active="/health" lang={lang} onToggleLang={toggleLang} tagline={t("tagline")} badge={t("badge")}>
+    <DashboardShell active="/health" lang={lang} onToggleLang={toggleLang} tagline={t("tagline")} badge={t("badge")} background="galaxy">
       <main className="relative z-10 mx-auto max-w-6xl px-5 py-6">
         <DashboardCard>
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">

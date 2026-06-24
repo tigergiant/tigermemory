@@ -464,7 +464,7 @@ function App() {
   const baselineStatus = baseline.status || "unknown";
 
   return (
-    <DashboardShell active="/self-evolution" lang={lang} onToggleLang={toggleLang} tagline={t("tagline")} badge={t("badge")}>
+    <DashboardShell active="/self-evolution" lang={lang} onToggleLang={toggleLang} tagline={t("tagline")} badge={t("badge")} background="galaxy">
       <main className="relative z-10 mx-auto max-w-6xl px-6 py-8">
         <motion.section initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} className="mb-6 rounded-2xl border border-tm-border bg-tm-card p-5 shadow-[0_1px_2px_rgba(31,29,27,0.04),0_12px_32px_rgba(168,123,34,0.06)]">
           <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">

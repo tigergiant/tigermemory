@@ -342,7 +342,7 @@ function App() {
   }, []);
 
   return (
-    <DashboardShell active="/agent-tools" lang={lang} onToggleLang={toggleLang} tagline={t("tagline")} badge={t("badge")}>
+    <DashboardShell active="/agent-tools" lang={lang} onToggleLang={toggleLang} tagline={t("tagline")} badge={t("badge")} background="galaxy">
       <main className="relative z-10 mx-auto max-w-6xl px-6 py-8">
         <motion.section initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
           <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">

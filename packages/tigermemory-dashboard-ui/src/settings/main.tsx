@@ -341,7 +341,7 @@ function App() {
   }, []);
 
   return (
-    <DashboardShell active="/settings" lang={lang} onToggleLang={toggleLang} tagline={t("tagline")} badge={t("badge")}>
+    <DashboardShell active="/settings" lang={lang} onToggleLang={toggleLang} tagline={t("tagline")} badge={t("badge")} background="galaxy">
       <main className="relative z-10 mx-auto max-w-6xl px-5 py-6">
         <DashboardCard>
           <div className="min-w-0">

@@ -942,3 +942,139 @@ code {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ============================================================
+   Dark glass theme — scoped to .tm-dark-shell (start sample page).
+   Everything else stays on the legacy light tokens above.
+   ============================================================ */
+
+.tm-dark-shell {
+  color-scheme: dark;
+
+  --bg-primary: #0a0e1a;
+  --bg-card: rgba(255, 255, 255, 0.045);
+  --bg-card-alt: rgba(255, 255, 255, 0.06);
+  --bg-overlay: rgba(255, 255, 255, 0.1);
+
+  --border-soft: rgba(200, 165, 96, 0.16);
+  --border-strong: rgba(200, 165, 96, 0.32);
+  --border-divider: rgba(255, 255, 255, 0.08);
+
+  --text-primary: #f4f1ea;
+  --text-secondary: #b8b0a4;
+  --text-tertiary: #7d7568;
+  --text-inverse: #0a0e1a;
+
+  --accent-tiger: #e6c378;
+  --accent-tiger-hi: #f2d49a;
+  --accent-tiger-lo: #c8a560;
+  --accent-line: #6f9bd6;
+
+  --status-ok-fg: #9ed084;
+  --status-ok-bg: rgba(110, 170, 90, 0.12);
+  --status-ok-border: rgba(140, 200, 110, 0.3);
+  --status-warn-fg: #e8c878;
+  --status-warn-bg: rgba(220, 170, 60, 0.12);
+  --status-warn-border: rgba(230, 190, 90, 0.3);
+  --status-info-fg: #a8b4d0;
+  --status-info-bg: rgba(120, 140, 190, 0.12);
+  --status-info-border: rgba(150, 170, 210, 0.3);
+  --status-fail-fg: #e89689;
+  --status-fail-bg: rgba(200, 90, 70, 0.14);
+  --status-fail-border: rgba(220, 120, 100, 0.32);
+
+  background:
+    radial-gradient(circle at 78% 12%, rgba(70, 55, 120, 0.28), transparent 42%),
+    radial-gradient(circle at 12% 88%, rgba(26, 59, 110, 0.34), transparent 46%),
+    radial-gradient(circle at 50% 50%, rgba(40, 34, 70, 0.22), transparent 60%),
+    #0a0e1a;
+}
+
+/* Glass cards: translucent surface + blur + hairline border. The card tokens
+   are rgba, so we layer a translucent white wash + blur on top. */
+.tm-dark-shell .tm-wizard-card,
+.tm-dark-shell .tm-visual-panel,
+.tm-dark-shell .tm-preview-card,
+.tm-dark-shell .tm-agent-board,
+.tm-dark-shell .tm-form,
+.tm-dark-shell .tm-flow-card,
+.tm-dark-shell .tm-page-card,
+.tm-dark-shell .tm-agent-row,
+.tm-dark-shell .tm-option,
+.tm-dark-shell .tm-finish-card,
+.tm-dark-shell .tm-choice-card,
+.tm-dark-shell .tm-command-box button {
+  background-color: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 12px 36px rgba(0, 0, 0, 0.36);
+}
+
+.tm-dark-shell .tm-wizard-card {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.tm-dark-shell .tm-wizard-head {
+  background: linear-gradient(180deg, rgba(200, 165, 96, 0.07), rgba(255, 255, 255, 0));
+}
+
+.tm-dark-shell .tm-wizard-actions {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Header: translucent dark glass so stars faintly show through. */
+.tm-dark-shell .tm-topbar,
+.tm-dark-shell header {
+  background: rgba(10, 14, 26, 0.72) !important;
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* Form inputs: dark surface instead of pure white. */
+.tm-dark-shell .tm-form input,
+.tm-dark-shell .tm-form select {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.tm-dark-shell .tm-form input::placeholder {
+  color: var(--text-tertiary);
+}
+
+/* Selected choice card glow. */
+.tm-dark-shell .tm-choice-card.selected {
+  background: linear-gradient(135deg, rgba(200, 165, 96, 0.16), rgba(255, 255, 255, 0.05));
+  border-color: rgba(230, 195, 120, 0.45);
+}
+
+/* Primary button pops more on dark. */
+.tm-dark-shell .primary {
+  box-shadow: 0 6px 20px rgba(230, 195, 120, 0.32);
+}
+
+/* Toast adapts to dark. */
+.tm-dark-shell .tm-toast {
+  background: rgba(20, 18, 30, 0.94);
+  border-color: rgba(200, 165, 96, 0.32);
+}
+
+/* The GalaxyBackground canvas sits behind everything; ensure the wizard
+   content stacks above it and the shell establishes a stacking context. */
+.tm-dark-shell {
+  isolation: isolate;
+  position: relative;
+}
+.tm-dark-shell > div:first-child {
+  z-index: 0;
+}
+.tm-dark-shell header,
+.tm-dark-shell main {
+  position: relative;
+  z-index: 1;
+}

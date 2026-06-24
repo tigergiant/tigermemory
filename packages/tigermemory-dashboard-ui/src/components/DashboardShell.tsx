@@ -2,6 +2,7 @@ import { Globe2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import type { ReactNode } from "react";
 
+import { GalaxyBackground } from "../GalaxyBackground";
 import { ParticleField } from "../ParticleField";
 
 export type DashboardLang = "zh" | "en";
@@ -123,6 +124,7 @@ export function DashboardShell({
   onToggleLang,
   tagline,
   badge,
+  background = "particles",
   children,
 }: {
   active: string;
@@ -130,11 +132,18 @@ export function DashboardShell({
   onToggleLang: () => void;
   tagline?: string;
   badge?: string;
+  /**
+   * Page background. "particles" (default) is the legacy Canvas-2D field used
+   * by every dashboard page. "galaxy" is the WebGL tiger-gold star field; it
+   * also opts the shell into the dark glass theme via .tm-dark-shell.
+   */
+  background?: "particles" | "galaxy";
   children: ReactNode;
 }) {
+  const dark = background === "galaxy";
   return (
-    <div className="relative min-h-screen bg-tm-bg text-tm-primary">
-      <ParticleField />
+    <div className={cx("relative min-h-screen bg-tm-bg text-tm-primary", dark && "tm-dark-shell")}>
+      {dark ? <GalaxyBackground /> : <ParticleField />}
       <img
         src="/static/tiger/tigerlogo.png"
         alt=""

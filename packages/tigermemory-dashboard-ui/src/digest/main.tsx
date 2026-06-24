@@ -1438,7 +1438,7 @@ function App() {
   const visibleRows = inboxRows.filter((r) => r.path);
 
   return (
-    <DashboardShell active="/digest" lang={lang} onToggleLang={toggleLang} tagline={t("tagline")} badge={t("badge")}>
+    <DashboardShell active="/digest" lang={lang} onToggleLang={toggleLang} tagline={t("tagline")} badge={t("badge")} background="galaxy">
       <main className="relative z-10 mx-auto max-w-6xl px-5 py-6">
         {/* Hero archive banner */}
         {staleCount > 0 && (
