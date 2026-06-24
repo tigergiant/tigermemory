@@ -544,7 +544,18 @@ function ModuleList({
         >
           <div className="flex items-start justify-between gap-2">
             <span className="min-w-0 break-words text-sm font-semibold text-tm-primary">{text(item.module)}</span>
-            <StatusPill status={item.status} />
+            <span
+              className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
+                statusTone(item.status) === "done"
+                  ? "bg-tm-ok"
+                  : statusTone(item.status) === "current"
+                    ? "bg-tm-warn"
+                    : statusTone(item.status) === "blocked"
+                      ? "bg-tm-fail"
+                      : "bg-tm-tertiary"
+              }`}
+              aria-label={text(item.status)}
+            />
           </div>
           <div className="mt-2 grid gap-1 text-xs text-tm-tertiary">
             <div>{labels.owner}：{text(item.owner)}</div>
