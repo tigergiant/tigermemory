@@ -92,7 +92,7 @@ const copy = {
     overview: "画布",
     modules: "模块视图",
     technical: "技术图",
-    candidates: "待纳入星图",
+    candidates: "待纳入画布",
     candidatesIntro: "来自交接卡的只读候选，需人工确认后才会进入已验证模块。",
     activeModules: "活跃模块",
     activeIntro: "页面读取源文件中的活跃模块表，仅展示最近状态。",
@@ -411,9 +411,11 @@ function MermaidCanvas({ source, zoom, hint, fallback }: { source: string; zoom:
             dangerouslySetInnerHTML={{ __html: svg }}
           />
         ) : error ? (
-          <div className="rounded-xl border border-tm-fail-border bg-tm-fail-bg p-4 text-sm leading-6 text-tm-fail">
-            {error}
-            <div className="mt-2 text-xs text-tm-tertiary">已保留模块列表；可切到“技术图”查看源码。</div>
+          <div className="space-y-3">
+            <div className="rounded-xl border border-tm-warn-border bg-tm-warn-bg p-3 text-xs leading-5 text-tm-warn">
+              Mermaid 源码暂时无法渲染，已切换为结构化画布视图。错误：{error}
+            </div>
+            {fallback}
           </div>
         ) : (
           <div className="flex h-full items-center justify-center gap-2 text-sm text-tm-tertiary">
@@ -453,63 +455,70 @@ function ProjectStarMap({
   onSelect: (index: number) => void;
   hint: string;
 }) {
-  const visible = modules.slice(0, 18);
-  const width = 940;
-  const height = 520;
-  const center = { x: width / 2, y: height / 2 };
-  const radiusX = 340;
-  const radiusY = 178;
-  const nodes = visible.map((module, index) => {
-    const angle = (Math.PI * 2 * index) / Math.max(visible.length, 1) - Math.PI / 2;
-    return {
-      module,
-      x: center.x + Math.cos(angle) * radiusX,
-      y: center.y + Math.sin(angle) * radiusY,
-      tone: statusTone(module.status),
-      index,
-    };
-  });
+  const visible = modules.slice(0, 24);
+  const groups = [
+    { key: "current", label: "进行中", tone: "current" as Tone },
+    { key: "done", label: "已完成", tone: "done" as Tone },
+    { key: "pending", label: "待推进", tone: "pending" as Tone },
+    { key: "blocked", label: "阻塞", tone: "blocked" as Tone },
+  ].map((group) => ({
+    ...group,
+    items: visible
+      .map((module, index) => ({ module, index, tone: statusTone(module.status) }))
+      .filter((item) => item.tone === group.tone),
+  }));
+  const uncategorized = visible
+    .map((module, index) => ({ module, index, tone: statusTone(module.status) }))
+    .filter((item) => !groups.some((group) => group.items.some((candidate) => candidate.index === item.index)));
+  if (uncategorized.length) groups[2].items.push(...uncategorized);
   return (
     <div>
       <div className="mb-3 flex items-center gap-2 rounded-xl border border-tm-border bg-tm-card-alt px-3 py-2 text-xs text-tm-tertiary">
         <Search size={14} className="text-tm-accent" />
         {hint}
       </div>
-      <div className="relative h-[560px] overflow-hidden rounded-2xl border border-tm-border bg-tm-card-alt">
-        <motion.div className="absolute left-1/2 top-1/2 origin-center" animate={{ scale: zoom }} transition={{ type: "spring", stiffness: 260, damping: 30 }} style={{ width, height, marginLeft: -width / 2, marginTop: -height / 2 }}>
-          <svg className="absolute inset-0 h-full w-full" viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
-            <defs>
-              <radialGradient id="canvasCenterGlow" cx="50%" cy="50%" r="55%">
-                <stop offset="0%" stopColor="#f6e3a9" stopOpacity="0.7" />
-                <stop offset="100%" stopColor="#f6e3a9" stopOpacity="0" />
-              </radialGradient>
-            </defs>
-            <circle cx={center.x} cy={center.y} r="210" fill="url(#canvasCenterGlow)" />
-            {nodes.map((node) => (
-              <line key={`line-${node.index}`} x1={center.x} y1={center.y} x2={node.x} y2={node.y} stroke="#d8cfba" strokeWidth="1.4" strokeDasharray={node.tone === "pending" ? "5 6" : undefined} />
+      <div className="relative h-[560px] overflow-auto rounded-2xl border border-tm-border bg-tm-card-alt p-4">
+        <motion.div
+          className="relative min-w-[980px] origin-top-left"
+          animate={{ scale: zoom }}
+          transition={{ type: "spring", stiffness: 260, damping: 30 }}
+        >
+          <div className="grid grid-cols-[220px_repeat(4,180px)] items-start gap-4">
+            <div className="sticky left-0 top-24 z-10 rounded-2xl border border-tm-accent bg-tm-card p-4 text-center shadow-[0_12px_30px_rgba(168,123,34,0.16)]">
+              <LayoutDashboard className="mx-auto mb-2 text-tm-accent" size={24} />
+              <div className="text-sm font-extrabold text-tm-primary">Project Canvas</div>
+              <div className="mt-1 text-xs text-tm-tertiary">{visible.length} visible modules</div>
+              <div className="mt-4 h-px bg-tm-accent" />
+              <div className="mt-3 text-[11px] leading-5 text-tm-tertiary">按状态分支组织，点击模块查看详情。</div>
+            </div>
+            {groups.map((group) => (
+              <section key={group.key} className="min-h-[500px] rounded-2xl border border-tm-border bg-tm-card/80 p-3">
+                <div className="mb-3 flex items-center justify-between gap-2 border-b border-tm-border pb-2">
+                  <div className="text-sm font-bold text-tm-primary">{group.label}</div>
+                  <StatusPill status={group.tone} label={`${group.items.length}`} />
+                </div>
+                <div className="space-y-2">
+                  {group.items.length ? group.items.map((node) => (
+                    <motion.button
+                      key={`${node.module.module || "module"}-${node.index}`}
+                      type="button"
+                      onClick={() => onSelect(node.index)}
+                      whileHover={{ x: 3 }}
+                      className={`w-full rounded-xl border bg-tm-card px-3 py-2 text-left shadow-sm transition-shadow hover:shadow-md ${selectedIndex === node.index ? "border-tm-accent" : "border-tm-border"}`}
+                    >
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <span className="line-clamp-2 text-xs font-bold leading-4 text-tm-primary">{text(node.module.module)}</span>
+                        <span className={`h-2 w-2 shrink-0 rounded-full ${node.tone === "done" ? "bg-tm-ok" : node.tone === "current" ? "bg-tm-warn" : node.tone === "blocked" ? "bg-tm-fail" : "bg-tm-tertiary"}`} />
+                      </div>
+                      <div className="line-clamp-2 text-[11px] leading-4 text-tm-tertiary">{text(node.module.status)}</div>
+                    </motion.button>
+                  )) : (
+                    <div className="rounded-xl border border-dashed border-tm-border bg-tm-card-alt p-3 text-xs text-tm-tertiary">暂无模块</div>
+                  )}
+                </div>
+              </section>
             ))}
-          </svg>
-          <div className="absolute left-1/2 top-1/2 w-[210px] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-tm-accent bg-tm-card p-4 text-center shadow-[0_12px_30px_rgba(168,123,34,0.16)]">
-            <LayoutDashboard className="mx-auto mb-2 text-tm-accent" size={24} />
-            <div className="text-sm font-extrabold text-tm-primary">Project Canvas</div>
-            <div className="mt-1 text-xs text-tm-tertiary">{visible.length} visible modules</div>
           </div>
-          {nodes.map((node) => (
-            <motion.button
-              key={`${node.module.module || "module"}-${node.index}`}
-              type="button"
-              onClick={() => onSelect(node.index)}
-              whileHover={{ y: -3 }}
-              className={`absolute w-[180px] -translate-x-1/2 -translate-y-1/2 rounded-xl border bg-tm-card px-3 py-2 text-left shadow-sm transition-shadow hover:shadow-md ${selectedIndex === node.index ? "border-tm-accent" : "border-tm-border"}`}
-              style={{ left: node.x, top: node.y }}
-            >
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <span className="truncate text-xs font-bold text-tm-primary">{text(node.module.module)}</span>
-                <span className={`h-2 w-2 shrink-0 rounded-full ${node.tone === "done" ? "bg-tm-ok" : node.tone === "current" ? "bg-tm-warn" : node.tone === "blocked" ? "bg-tm-fail" : "bg-tm-tertiary"}`} />
-              </div>
-              <div className="truncate text-[11px] text-tm-tertiary">{text(node.module.status)}</div>
-            </motion.button>
-          ))}
         </motion.div>
       </div>
     </div>
