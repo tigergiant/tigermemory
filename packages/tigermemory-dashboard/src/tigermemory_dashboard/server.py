@@ -4534,6 +4534,10 @@ def _render_health_page(data: dict[str, Any]) -> str:
 
 def _render_quality_page(data: dict[str, Any]) -> str:
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    react_entry = STATIC_DIR / "react" / "quality" / "quality.html"
+    if react_entry.exists():
+        html = react_entry.read_text(encoding="utf-8")
+        return html.replace("__TM_QUALITY_JSON__", payload).replace("__GIT_SHA__", git_sha())
     return _render_template("quality.html", {"__QUALITY_JSON__": payload})
 
 

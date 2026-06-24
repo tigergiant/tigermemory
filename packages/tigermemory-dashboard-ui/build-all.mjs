@@ -4,8 +4,8 @@
 // extra deps (avoids cross-env).
 import { spawn } from "node:child_process";
 
-const target = process.argv[2]; // optional: "start" | "digest" | "health"
-const pages = target ? [target] : ["start", "digest", "health"];
+const target = process.argv[2]; // optional: "start" | "digest" | "health" | "quality"
+const pages = target ? [target] : ["start", "digest", "health", "quality"];
 
 for (const page of pages) {
   console.log(`\n=== building ${page} ===`);

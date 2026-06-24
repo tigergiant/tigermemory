@@ -1,0 +1,11 @@
+{
+  "quality.html": {
+    "file": "assets/quality-6-KAPpqI.js",
+    "name": "quality",
+    "src": "quality.html",
+    "isEntry": true,
+    "css": [
+      "assets/quality-ygVz_Y2l.css"
+    ]
+  }
+}

@@ -1579,7 +1579,9 @@ def test_dashboard_data_pages_return_fast_shells(tmp_path, monkeypatch):
     assert "/static/react/health/assets/" in health.text
     assert quality.status_code == 200
     assert '"loading": true' in quality.text
-    assert "window.tmPages.quality.init" in quality.text
+    assert 'data-tm-react-quality' in quality.text
+    assert "/static/dashboard-pages.js" not in quality.text
+    assert "/static/react/quality/assets/" in quality.text
     assert settings.status_code == 200
     assert '"loading": true' in settings.text
     assert "window.tmPages.settings.init" in settings.text
@@ -1666,6 +1668,7 @@ def test_react_dashboard_pages_use_shared_shell_components():
     start = (ui_src / "main.tsx").read_text(encoding="utf-8")
     digest = (ui_src / "digest" / "main.tsx").read_text(encoding="utf-8")
     health = (ui_src / "health" / "main.tsx").read_text(encoding="utf-8")
+    quality = (ui_src / "quality" / "main.tsx").read_text(encoding="utf-8")
 
     assert shell.exists()
     shell_text = shell.read_text(encoding="utf-8")
@@ -1675,9 +1678,11 @@ def test_react_dashboard_pages_use_shared_shell_components():
     assert "./components/DashboardShell" in start
     assert "../components/DashboardShell" in digest
     assert "../components/DashboardShell" in health
+    assert "../components/DashboardShell" in quality
     assert "const nav =" not in start
     assert "const NAV =" not in digest
     assert "const NAV =" not in health
+    assert "const NAV =" not in quality
 
 
 def test_dashboard_modularization_rules(tmp_path, monkeypatch):
@@ -1689,9 +1694,9 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     client.get("/", headers=HOST, follow_redirects=False)
 
-    # dashboard shell pages — /digest 与 /health 已迁移为 React island，不再引用旧 dashboard-common.js。
-    legacy_pages = ["/quality", "/agent-tools", "/settings"]
-    react_pages = ["/digest/2026-05-21", "/health"]
+    # dashboard shell pages — /digest、/health、/quality 已迁移为 React island，不再引用旧 dashboard-common.js。
+    legacy_pages = ["/agent-tools", "/settings"]
+    react_pages = ["/digest/2026-05-21", "/health", "/quality"]
     pages = react_pages + legacy_pages
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_digest(tmp_path)
@@ -1700,13 +1705,13 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
         res = client.get(route, headers=HOST)
         assert res.status_code == 200
 
-    # 1. dashboard-common.js 仍被 3 个未迁移页引用
+    # 1. dashboard-common.js 仍被 2 个未迁移页引用
     for route in legacy_pages:
         res = client.get(route, headers=HOST)
         assert "/static/dashboard-common.js" in res.text
 
-    # 2. dashboard-pages.js 被 health / quality / settings / agent-tools 引用；
-    # /start、/digest 与 /health 均已迁移为 React island，不再依赖旧 dashboard-pages.js 控制器。
+    # 2. dashboard-pages.js 被 settings / agent-tools 引用；
+    # /start、/digest、/health 与 /quality 均已迁移为 React island，不再依赖旧 dashboard-pages.js 控制器。
     digest = client.get("/digest/2026-05-21", headers=HOST)
     start = client.get("/start", headers=HOST)
     health = client.get("/health", headers=HOST)
@@ -1719,7 +1724,9 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "/static/react/start/assets/" in start.text
     assert "/static/dashboard-pages.js" not in health.text
     assert "/static/react/health/assets/" in health.text
-    assert "/static/dashboard-pages.js" in quality.text
+    assert "/static/dashboard-pages.js" not in quality.text
+    assert "/static/react/quality/assets/" in quality.text
+    assert 'data-tm-react-quality' in quality.text
     assert "/static/dashboard-pages.js" in settings.text
     assert "/static/dashboard-pages.js" in agent_tools.text
 
@@ -1740,6 +1747,7 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "async function fetchDigest" not in digest.text
     assert "setInterval(fetchHealth" not in health.text
     assert "setInterval(fetchQuality" not in quality.text
+    assert "window.tmPages.quality.init" not in quality.text
     assert "function renderDepth" not in settings.text
     assert "function renderChips" not in settings.text
     assert "async function fetchSettings" not in settings.text
@@ -1953,10 +1961,10 @@ def test_dashboard_pages_share_identical_header(tmp_path, monkeypatch):
     react_responses = {
         "digest": client.get("/digest/2026-05-21", headers=HOST),
         "health": client.get("/health", headers=HOST),
+        "quality": client.get("/quality", headers=HOST),
         "start": client.get("/start", headers=HOST),
     }
     legacy_responses = {
-        "quality": client.get("/quality", headers=HOST),
         "agent-tools": client.get("/agent-tools", headers=HOST),
         "settings": client.get("/settings", headers=HOST),
     }
@@ -1994,13 +2002,13 @@ def test_quality_and_settings_no_longer_use_raw_json_page(tmp_path, monkeypatch)
     quality = client.get("/quality", headers=HOST)
     settings = client.get("/settings", headers=HOST)
 
-    assert "quality-data" in quality.text
+    assert "tm-quality-data" in quality.text
+    assert 'data-tm-react-quality' in quality.text
+    assert "/static/react/quality/assets/" in quality.text
     assert "settings-data" in settings.text
-    assert "记忆系统质量" in quality.text
-    assert "回答状态分布" in quality.text
+    assert "/static/dashboard-pages.js" not in quality.text
     assert "沟通规则执行度" not in quality.text
     assert "AI 回复详细程度" in settings.text
-    assert "记忆管家" in quality.text
     assert "记忆管家" in settings.text
     assert "保存在本机" in settings.text
     combined = quality.text + settings.text
@@ -3751,6 +3759,14 @@ def test_quality_page_flow_panel_keeps_all_routes_visible():
     quality_html = (tm_review_ui.STATIC_DIR / "quality.html").read_text(encoding="utf-8")
     pages_js = (tm_review_ui.STATIC_DIR / "dashboard-pages.js").read_text(encoding="utf-8")
     style_css = (tm_review_ui.STATIC_DIR / "_components" / "style.css").read_text(encoding="utf-8")
+    quality_react = (
+        REPO_ROOT
+        / "packages"
+        / "tigermemory-dashboard-ui"
+        / "src"
+        / "quality"
+        / "main.tsx"
+    ).read_text(encoding="utf-8")
 
     assert 'id="route-section"' in quality_html
     assert 'id="status-section"' in quality_html
@@ -3781,15 +3797,20 @@ def test_quality_page_flow_panel_keeps_all_routes_visible():
     assert "prefetchQualityRanges()" in pages_js
     assert "quality range prefetch failed" in pages_js
     assert ".tm-quality-updating" in style_css
-    assert "const eventOptions = this.abortController ? { signal: this.abortController.signal } : undefined;" in pages_js
-    assert "}, eventOptions);" in pages_js
+    assert "abortRef.current?.abort()" in quality_react
+    assert 'new URLSearchParams({ range: nextRange })' in quality_react
+    assert "setUpdatingRange(nextRange)" in quality_react
+    assert '"mem0"' in quality_react
+    assert '"wiki"' in quality_react
+    assert '"inbox"' in quality_react
+    assert '"discard"' in quality_react
     assert "['即时记忆', sourceValues.daily" in pages_js
     assert "'缺日志'" in pages_js
     assert "flowPayload.flow_source === 'route_events'" in pages_js
     assert "真实退回人工" in pages_js
     assert "已忽略数" not in pages_js
     assert "statusSection.classList.add('hidden')" not in pages_js
-    assert "暂无失败样本" in pages_js
+    assert "P5 真实失败池暂无样本" in quality_react
     assert "renderFlowPanel(memory)" in pages_js
     assert "if (routeSection) routeSection.classList.remove('hidden')" in pages_js
     assert "routeSection.classList.add('hidden')" not in pages_js
