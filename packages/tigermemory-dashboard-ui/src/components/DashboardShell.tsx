@@ -1,6 +1,6 @@
-import { Globe2 } from "lucide-react";
+import { Globe2, Moon, Sun } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
-import type { ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { GalaxyBackground } from "../GalaxyBackground";
 import { ParticleField } from "../ParticleField";
@@ -21,6 +21,32 @@ export const dashboardNavItems = [
 
 function cx(...items: Array<string | false | null | undefined>) {
   return items.filter(Boolean).join(" ");
+}
+
+/* ---------- Theme management ---------- */
+
+type Theme = "dark" | "light";
+const THEME_KEY = "tm-theme";
+const THEME_COLORS: Record<Theme, string> = { dark: "#0a0e1a", light: "#f7f2e6" };
+
+function useTheme() {
+  const [theme, setTheme] = useState<Theme>(() => {
+    try {
+      const stored = window.localStorage.getItem(THEME_KEY);
+      if (stored === "dark" || stored === "light") return stored;
+    } catch { /* noop */ }
+    return "dark";
+  });
+
+  useEffect(() => {
+    window.localStorage.setItem(THEME_KEY, theme);
+    const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+    if (meta) meta.content = THEME_COLORS[theme];
+  }, [theme]);
+
+  const toggle = useCallback(() => setTheme((t) => (t === "dark" ? "light" : "dark")), []);
+
+  return { theme, toggleTheme: toggle } as const;
 }
 
 function dashboardVersionLabel() {
@@ -44,12 +70,16 @@ export function DashboardHeader({
   active,
   lang,
   onToggleLang,
+  theme,
+  onToggleTheme,
   tagline,
   badge,
 }: {
   active: string;
   lang: DashboardLang;
   onToggleLang: () => void;
+  theme: Theme;
+  onToggleTheme: () => void;
   tagline?: string;
   badge?: string;
 }) {
@@ -100,6 +130,15 @@ export function DashboardHeader({
         <div className="flex w-[220px] shrink-0 items-center justify-end gap-2">
           <button
             type="button"
+            onClick={onToggleTheme}
+            className="inline-flex items-center gap-1 rounded-full bg-tm-card-alt px-2 py-1 text-xs font-semibold text-tm-tertiary hover:text-tm-secondary"
+            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          >
+            {theme === "dark" ? <Sun size={13} /> : <Moon size={13} />}
+            {theme === "dark" ? (lang === "zh" ? "日间" : "Light") : (lang === "zh" ? "夜间" : "Dark")}
+          </button>
+          <button
+            type="button"
             onClick={onToggleLang}
             className="inline-flex items-center gap-1 rounded-full bg-tm-card-alt px-2 py-1 text-xs font-semibold text-tm-tertiary hover:text-tm-secondary"
             aria-label="Toggle language"
@@ -124,7 +163,6 @@ export function DashboardShell({
   onToggleLang,
   tagline,
   badge,
-  background = "particles",
   children,
 }: {
   active: string;
@@ -132,15 +170,10 @@ export function DashboardShell({
   onToggleLang: () => void;
   tagline?: string;
   badge?: string;
-  /**
-   * Page background. "particles" (default) is the legacy Canvas-2D field used
-   * by every dashboard page. "galaxy" is the WebGL tiger-gold star field; it
-   * also opts the shell into the dark glass theme via .tm-dark-shell.
-   */
-  background?: "particles" | "galaxy";
   children: ReactNode;
 }) {
-  const dark = background === "galaxy";
+  const { theme, toggleTheme } = useTheme();
+  const dark = theme === "dark";
   return (
     <div className={cx("relative min-h-screen bg-tm-bg text-tm-primary", dark && "tm-dark-shell")}>
       {dark ? <GalaxyBackground /> : <ParticleField />}
@@ -151,7 +184,7 @@ export function DashboardShell({
         className="pointer-events-none fixed -bottom-[330px] -left-[180px] z-0 w-[min(1040px,90vw)] select-none opacity-10"
       />
       <div className="pointer-events-none fixed right-[-48px] top-24 z-0 h-[130px] w-[220px] scale-x-[-1] bg-[url('/static/tiger/tigermemory_tiger_stripes_bg.svg')] bg-contain bg-center bg-no-repeat opacity-15" />
-      <DashboardHeader active={active} lang={lang} onToggleLang={onToggleLang} tagline={tagline} badge={badge} />
+      <DashboardHeader active={active} lang={lang} onToggleLang={onToggleLang} theme={theme} onToggleTheme={toggleTheme} tagline={tagline} badge={badge} />
       {children}
     </div>
   );

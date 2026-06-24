@@ -501,7 +501,6 @@ function App() {
       lang={lang}
       onToggleLang={() => setLanguage(lang === "zh" ? "en" : "zh")}
       tagline={t("brandSub")}
-      background="galaxy"
     >
       <main className="tm-wizard" data-current-step={currentStep}>
         <section className="tm-wizard-card">

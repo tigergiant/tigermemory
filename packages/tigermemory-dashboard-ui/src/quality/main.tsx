@@ -910,7 +910,7 @@ function App() {
   const empty = Boolean(memory.fallback_mode && numeric(asRecord(memory.counts).mem0) === null && Number(asRecord(memory.counts).inbox || 0) <= 0 && traceTotal <= 0);
 
   return (
-    <DashboardShell active="/quality" lang={lang} onToggleLang={toggleLang} tagline={t("tagline")} badge={t("badge")} background="galaxy">
+    <DashboardShell active="/quality" lang={lang} onToggleLang={toggleLang} tagline={t("tagline")} badge={t("badge")}>
       <main className="relative z-10 mx-auto max-w-6xl px-5 py-6">
         <DashboardCard>
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
