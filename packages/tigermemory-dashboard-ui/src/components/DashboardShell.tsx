@@ -22,6 +22,23 @@ function cx(...items: Array<string | false | null | undefined>) {
   return items.filter(Boolean).join(" ");
 }
 
+function dashboardVersionLabel() {
+  const node = document.getElementById("tm-dashboard-meta");
+  const raw = node?.textContent?.trim();
+  if (raw && !raw.includes("__GIT_SHA__")) {
+    try {
+      const meta = JSON.parse(raw) as { git_sha?: string; version?: string };
+      const value = meta.git_sha || meta.version || "";
+      if (value) return value.length > 12 ? value.slice(0, 7) : value;
+    } catch {
+      return raw.length > 12 ? raw.slice(0, 7) : raw;
+    }
+  }
+  const legacy = document.getElementById("sha-pill")?.textContent?.trim();
+  if (legacy && !legacy.includes("__GIT_SHA__")) return legacy.length > 12 ? legacy.slice(0, 7) : legacy;
+  return "";
+}
+
 export function DashboardHeader({
   active,
   lang,
@@ -39,6 +56,7 @@ export function DashboardHeader({
   const activeTransition = reduceMotion
     ? { duration: 0 }
     : { type: "spring" as const, stiffness: 420, damping: 34, mass: 0.72 };
+  const versionLabel = dashboardVersionLabel() || badge;
 
   return (
     <header className="sticky top-0 z-30 border-b border-tm-border-divider bg-tm-bg/95 backdrop-blur">
@@ -88,7 +106,11 @@ export function DashboardHeader({
             <Globe2 size={13} />
             {lang === "zh" ? "中" : "EN"}
           </button>
-          {badge && <span className="rounded-full bg-tm-card-alt px-2 py-1 text-xs text-tm-tertiary">{badge}</span>}
+          {versionLabel && (
+            <code className="min-w-[4.75rem] rounded-full bg-tm-card-alt px-2 py-1 text-center text-xs text-tm-tertiary">
+              {versionLabel}
+            </code>
+          )}
         </div>
       </div>
     </header>

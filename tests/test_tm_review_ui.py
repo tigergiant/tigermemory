@@ -1683,6 +1683,9 @@ def test_react_dashboard_pages_use_shared_shell_components():
     shell_text = shell.read_text(encoding="utf-8")
     for exported in ["DashboardShell", "DashboardHeader", "DashboardCard", "dashboardNavItems"]:
         assert f"export function {exported}" in shell_text or f"export const {exported}" in shell_text
+    assert "tm-dashboard-meta" in shell_text
+    assert "git_sha" in shell_text
+    assert "sha-pill" in shell_text
 
     assert "./components/DashboardShell" in start
     assert "../components/DashboardShell" in digest
@@ -1764,6 +1767,9 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "/static/dashboard-pages.js" not in self_evolution.text
     assert "/static/react/self-evolution/assets/" in self_evolution.text
     assert 'data-tm-react-self-evolution' in self_evolution.text
+    for html in [digest, start, ledger, health, quality, settings, agent_tools, canvas, self_evolution]:
+        assert '"git_sha":"' in html.text
+        assert "__GIT_SHA__" not in html.text
 
     # 3. service-worker.js 仍保留旧 JS 以服务暂未迁移页面。
     sw_res = client.get("/service-worker.js", headers=HOST)
@@ -3897,7 +3903,7 @@ def test_canvas_star_map_uses_stable_compact_layout():
     assert "const iterations = 96" in pages_js
 
 
-def test_canvas_react_prefers_legacy_mermaid_canvas():
+def test_canvas_react_uses_legacy_zoomable_canvas_graph():
     canvas_react = (
         REPO_ROOT
         / "packages"
@@ -3907,12 +3913,17 @@ def test_canvas_react_prefers_legacy_mermaid_canvas():
         / "main.tsx"
     ).read_text(encoding="utf-8")
 
-    assert "MermaidCanvas" in canvas_react
-    assert "/static/assets/mermaid.min.js" in canvas_react
-    assert "window.mermaid.render" in canvas_react
-    assert "ProjectStarMap" in canvas_react
-    assert 'fallback={<ProjectStarMap' in canvas_react
-    assert "画布" in canvas_react
+    assert "ProjectCanvasGraph" in canvas_react
+    assert "graphWorld = { width: 1680, height: 1080 }" in canvas_react
+    assert 'id="canvas-graph-viewport"' in canvas_react
+    assert 'id="canvas-graph-world"' in canvas_react
+    assert 'id="canvas-graph-canvas"' in canvas_react
+    assert "window.requestAnimationFrame" in canvas_react
+    assert "function zoomGraph" in canvas_react
+    assert "function fitGraph" in canvas_react
+    assert "const spacing = 64" in canvas_react
+    assert "const iterations = 96" in canvas_react
+    assert "MermaidCanvas" not in canvas_react
 
 
 def test_canvas_payload_includes_canvas_update_candidates(monkeypatch):

@@ -4568,7 +4568,7 @@ def _render_ledger_page(data: dict[str, Any] | None = None) -> str:
     react_entry = STATIC_DIR / "react" / "ledger" / "ledger.html"
     if react_entry.exists():
         html = react_entry.read_text(encoding="utf-8")
-        return html.replace("__TM_LEDGER_JSON__", payload)
+        return html.replace("__TM_LEDGER_JSON__", payload).replace("__GIT_SHA__", git_sha())
     return _render_template("ledger.html", {})
 
 
@@ -4592,7 +4592,7 @@ def _render_self_evolution_page(data: dict[str, Any]) -> str:
     react_entry = STATIC_DIR / "react" / "self-evolution" / "self-evolution.html"
     if react_entry.exists():
         html = react_entry.read_text(encoding="utf-8")
-        return html.replace("__TM_SELF_EVOLUTION_JSON__", payload)
+        return html.replace("__TM_SELF_EVOLUTION_JSON__", payload).replace("__GIT_SHA__", git_sha())
     return _render_template("self-evolution.html", {"__SELF_EVOLUTION_JSON__": payload})
 
 

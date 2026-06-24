@@ -2,16 +2,12 @@ import {
   Activity,
   AlertTriangle,
   ArrowLeft,
-  Braces,
-  CheckCircle2,
-  GitBranch,
   Inbox,
   LayoutDashboard,
   ListChecks,
   Loader2,
   RefreshCcw,
   Search,
-  Target,
   Workflow,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -65,16 +61,6 @@ type CanvasData = {
   repo_dirty?: boolean;
 };
 
-declare global {
-  interface Window {
-    mermaid?: {
-      initialize: (config: AnyRecord) => void;
-      render: (id: string, source: string, container?: Element) => Promise<string | { svg?: string }>;
-    };
-    __tmMermaidLoadPromise?: Promise<void>;
-  }
-}
-
 const copy = {
   zh: {
     tagline: "你的 AI 第二大脑",
@@ -109,11 +95,11 @@ const copy = {
     reason: "原因",
     evidence: "证据",
     confidence: "置信度",
-    graphHint: "按旧版 Mermaid 项目画布渲染；可用按钮缩放查看。",
+    graphHint: "拖拽空白处移动，滚轮缩放；点击节点查看详情。",
     zoomIn: "放大",
     zoomOut: "缩小",
     reset: "复位",
-    technicalHint: "技术视图展示 project-canvas.md 中的 Mermaid 源码；总览使用同一份源码渲染。",
+    technicalHint: "技术视图保留 project-canvas.md 中的 Mermaid 源码，方便和旧版数据源对照。",
     warnings: "提示",
     errors: "错误",
   },
@@ -150,11 +136,11 @@ const copy = {
     reason: "Reason",
     evidence: "Evidence",
     confidence: "Confidence",
-    graphHint: "Rendered from the legacy Mermaid project canvas; use controls to zoom.",
+    graphHint: "Drag empty space to pan, wheel to zoom, and click nodes for details.",
     zoomIn: "Zoom in",
     zoomOut: "Zoom out",
     reset: "Reset",
-    technicalHint: "Technical view shows the Mermaid source from project-canvas.md; overview renders the same source.",
+    technicalHint: "Technical view keeps the Mermaid source from project-canvas.md for comparison with the legacy data source.",
     warnings: "Warnings",
     errors: "Errors",
   },
@@ -221,7 +207,6 @@ function App() {
   const [data, setData] = useState<CanvasData>(initialData);
   const [view, setView] = useState<CanvasView>("overview");
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [zoom, setZoom] = useState(1);
   const [refreshing, setRefreshing] = useState(false);
   const t = (key: keyof typeof copy.zh) => copy[lang][key];
   const modules = Array.isArray(data.active_modules) ? data.active_modules : [];
@@ -302,23 +287,16 @@ function App() {
                   </button>
                 ))}
               </div>
-              {view === "overview" && (
-                <div className="flex items-center gap-2 text-xs text-tm-tertiary">
-                  <button type="button" onClick={() => setZoom((current) => Math.max(0.72, current - 0.12))} className="rounded-lg border border-tm-border bg-tm-card-alt px-2 py-1">{t("zoomOut")}</button>
-                  <span className="w-12 text-center font-bold">{Math.round(zoom * 100)}%</span>
-                  <button type="button" onClick={() => setZoom((current) => Math.min(1.3, current + 0.12))} className="rounded-lg border border-tm-border bg-tm-card-alt px-2 py-1">{t("zoomIn")}</button>
-                  <button type="button" onClick={() => setZoom(1)} className="rounded-lg border border-tm-border bg-tm-card-alt px-2 py-1">{t("reset")}</button>
-                </div>
-              )}
             </div>
             <AnimatePresence mode="wait">
               {view === "overview" && (
                 <motion.div key="overview" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-                  <MermaidCanvas
-                    source={data.mermaid_src || ""}
-                    zoom={zoom}
+                  <ProjectCanvasGraph
+                    modules={modules}
+                    selectedIndex={selectedIndex}
+                    onSelect={(index) => { setSelectedIndex(index); setView("module"); }}
                     hint={t("graphHint")}
-                    fallback={<ProjectStarMap modules={modules} zoom={zoom} selectedIndex={selectedIndex} onSelect={(index) => { setSelectedIndex(index); setView("module"); }} hint={t("graphHint")} />}
+                    labels={copy[lang]}
                   />
                 </motion.div>
               )}
@@ -373,164 +351,471 @@ function MessageList({ title, items, tone }: { title: string; items: unknown[]; 
   );
 }
 
-function MermaidCanvas({ source, zoom, hint, fallback }: { source: string; zoom: number; hint: string; fallback: React.ReactNode }) {
-  const hostRef = useRef<HTMLDivElement | null>(null);
-  const tokenRef = useRef(0);
-  const [svg, setSvg] = useState("");
-  const [error, setError] = useState("");
+type GraphTransform = { x: number; y: number; scale: number };
+type GraphBox = { width: number; height: number };
+type GraphNode = {
+  type: "center" | "module";
+  index: number;
+  module?: CanvasModule;
+  kind: Tone | "center";
+  x: number;
+  y: number;
+  titleLines: string[];
+  subLines: string[];
+  box: GraphBox;
+};
+type GraphModel = {
+  world: { width: number; height: number };
+  center: { x: number; y: number };
+  radius: number;
+  nodes: GraphNode[];
+  moduleNodes: GraphNode[];
+  bounds: { x: number; y: number; width: number; height: number };
+};
 
-  useEffect(() => {
-    const token = ++tokenRef.current;
-    const cleanSource = source.trim();
-    setSvg("");
-    setError("");
-    if (!cleanSource) return;
-    loadMermaid()
-      .then(async () => {
-        if (!window.mermaid || token !== tokenRef.current) return;
-        window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "base" });
-        const result = await window.mermaid.render(`tm-canvas-react-${token}-${Date.now()}`, cleanSource, hostRef.current || undefined);
-        if (token !== tokenRef.current) return;
-        const rendered = typeof result === "string" ? result : result.svg;
-        if (!rendered) throw new Error("Mermaid 渲染返回空");
-        setSvg(rendered);
-      })
-      .catch((err: unknown) => {
-        if (token !== tokenRef.current) return;
-        setError(String((err as Error).message || "Mermaid 渲染失败"));
-      });
-  }, [source]);
+const graphWorld = { width: 1680, height: 1080 };
 
-  if (!source.trim()) return <>{fallback}</>;
-
-  return (
-    <div>
-      <div className="mb-3 flex items-center gap-2 rounded-xl border border-tm-border bg-tm-card-alt px-3 py-2 text-xs text-tm-tertiary">
-        <Search size={14} className="text-tm-accent" />
-        {hint}
-      </div>
-      <div className="relative h-[560px] overflow-auto rounded-2xl border border-tm-border bg-tm-card-alt p-5">
-        <div ref={hostRef} className="hidden" />
-        {svg ? (
-          <motion.div
-            className="mx-auto min-w-[820px] origin-top-left rounded-xl bg-tm-card p-4 shadow-sm [&_svg]:h-auto [&_svg]:max-w-none [&_svg]:min-w-[760px] [&_svg]:text-tm-primary"
-            animate={{ scale: zoom }}
-            transition={{ type: "spring", stiffness: 260, damping: 30 }}
-            dangerouslySetInnerHTML={{ __html: svg }}
-          />
-        ) : error ? (
-          <div className="space-y-3">
-            <div className="rounded-xl border border-tm-warn-border bg-tm-warn-bg p-3 text-xs leading-5 text-tm-warn">
-              Mermaid 源码暂时无法渲染，已切换为结构化画布视图。错误：{error}
-            </div>
-            {fallback}
-          </div>
-        ) : (
-          <div className="flex h-full items-center justify-center gap-2 text-sm text-tm-tertiary">
-            <Loader2 size={16} className="animate-spin" />
-            正在渲染项目画布...
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function loadMermaid() {
-  if (window.mermaid) return Promise.resolve();
-  if (window.__tmMermaidLoadPromise) return window.__tmMermaidLoadPromise;
-  window.__tmMermaidLoadPromise = new Promise<void>((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = "/static/assets/mermaid.min.js";
-    script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error("Mermaid 资源加载失败"));
-    document.head.appendChild(script);
-  });
-  return window.__tmMermaidLoadPromise;
-}
-
-function ProjectStarMap({
+function ProjectCanvasGraph({
   modules,
-  zoom,
   selectedIndex,
   onSelect,
   hint,
+  labels,
 }: {
   modules: CanvasModule[];
-  zoom: number;
   selectedIndex: number;
   onSelect: (index: number) => void;
   hint: string;
+  labels: typeof copy.zh;
 }) {
-  const visible = modules.slice(0, 24);
-  const groups = [
-    { key: "current", label: "进行中", tone: "current" as Tone },
-    { key: "done", label: "已完成", tone: "done" as Tone },
-    { key: "pending", label: "待推进", tone: "pending" as Tone },
-    { key: "blocked", label: "阻塞", tone: "blocked" as Tone },
-  ].map((group) => ({
-    ...group,
-    items: visible
-      .map((module, index) => ({ module, index, tone: statusTone(module.status) }))
-      .filter((item) => item.tone === group.tone),
-  }));
-  const uncategorized = visible
-    .map((module, index) => ({ module, index, tone: statusTone(module.status) }))
-    .filter((item) => !groups.some((group) => group.items.some((candidate) => candidate.index === item.index)));
-  if (uncategorized.length) groups[2].items.push(...uncategorized);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const frameRef = useRef(0);
+  const dragRef = useRef({ active: false, moved: false, lastX: 0, lastY: 0 });
+  const targetRef = useRef<GraphTransform>({ x: 0, y: 0, scale: 1 });
+  const transformRef = useRef<GraphTransform>({ x: 0, y: 0, scale: 1 });
+  const [transform, setTransform] = useState<GraphTransform>({ x: 0, y: 0, scale: 1 });
+  const [isDragging, setIsDragging] = useState(false);
+  const model = useMemo(() => buildGraphModel(modules, labels), [modules, labels]);
+
+  function commitTransform(next: GraphTransform) {
+    transformRef.current = next;
+    setTransform(next);
+  }
+
+  function clampGraphScale(value: number) {
+    return Math.min(5, Math.max(0.12, value));
+  }
+
+  function setGraphTarget(next: Partial<GraphTransform>) {
+    const viewport = viewportRef.current;
+    const current = targetRef.current;
+    const scale = Number.isFinite(next.scale) ? clampGraphScale(next.scale as number) : current.scale;
+    let x = Number.isFinite(next.x) ? (next.x as number) : current.x;
+    let y = Number.isFinite(next.y) ? (next.y as number) : current.y;
+    if (viewport) {
+      const rect = viewport.getBoundingClientRect();
+      const padding = 100;
+      const minX = padding - (model.bounds.x + model.bounds.width) * scale;
+      const maxX = rect.width - padding - model.bounds.x * scale;
+      const minY = padding - (model.bounds.y + model.bounds.height) * scale;
+      const maxY = rect.height - padding - model.bounds.y * scale;
+      x = minX < maxX ? Math.min(maxX, Math.max(minX, x)) : Math.min(minX, Math.max(maxX, x));
+      y = minY < maxY ? Math.min(maxY, Math.max(minY, y)) : Math.min(minY, Math.max(maxY, y));
+    }
+    targetRef.current = { x, y, scale };
+    applyGraphTransform();
+  }
+
+  function applyGraphTransform() {
+    if (frameRef.current) return;
+    frameRef.current = window.requestAnimationFrame(() => {
+      frameRef.current = 0;
+      const target = targetRef.current;
+      const current = transformRef.current;
+      if (dragRef.current.active) {
+        const dx = target.x - current.x;
+        const dy = target.y - current.y;
+        if (Math.abs(dx) > 0.05 || Math.abs(dy) > 0.05) {
+          commitTransform({ x: current.x + dx * 0.65, y: current.y + dy * 0.65, scale: target.scale });
+          applyGraphTransform();
+          return;
+        }
+      }
+      commitTransform(target);
+    });
+  }
+
+  function fitGraph() {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const rect = viewport.getBoundingClientRect();
+    const rawScale = Math.min((rect.width - 48) / model.bounds.width, (rect.height - 48) / model.bounds.height);
+    const minFitScale = rect.width < 560 ? 0.18 : 0.34;
+    const scale = clampGraphScale(Math.min(1.08, Math.max(rawScale, minFitScale)));
+    targetRef.current = {
+      scale,
+      x: (rect.width - model.bounds.width * scale) / 2 - model.bounds.x * scale,
+      y: (rect.height - model.bounds.height * scale) / 2 - model.bounds.y * scale,
+    };
+    commitTransform(targetRef.current);
+  }
+
+  function zoomGraph(factor: number, clientX?: number, clientY?: number) {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const rect = viewport.getBoundingClientRect();
+    const oldScale = targetRef.current.scale || transformRef.current.scale;
+    const nextScale = clampGraphScale(oldScale * factor);
+    if (Math.abs(nextScale - oldScale) < 0.0001) return;
+    const focusX = Number.isFinite(clientX) ? (clientX as number) - rect.left : rect.width / 2;
+    const focusY = Number.isFinite(clientY) ? (clientY as number) - rect.top : rect.height / 2;
+    const baseX = targetRef.current.x;
+    const baseY = targetRef.current.y;
+    const localX = (focusX - baseX) / oldScale;
+    const localY = (focusY - baseY) / oldScale;
+    setGraphTarget({
+      scale: nextScale,
+      x: focusX - localX * nextScale,
+      y: focusY - localY * nextScale,
+    });
+  }
+
+  useEffect(() => {
+    drawGraphCanvas(canvasRef.current, model);
+    const id = window.requestAnimationFrame(fitGraph);
+    return () => window.cancelAnimationFrame(id);
+  }, [model]);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => fitGraph());
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [model]);
+
+  useEffect(() => () => {
+    if (frameRef.current) window.cancelAnimationFrame(frameRef.current);
+  }, []);
+
+  if (!modules.length) {
+    return (
+      <div className="rounded-xl border border-tm-border bg-tm-card-alt p-4 text-sm text-tm-secondary">
+        {labels.emptyModules}
+      </div>
+    );
+  }
+
   return (
     <div>
-      <div className="mb-3 flex items-center gap-2 rounded-xl border border-tm-border bg-tm-card-alt px-3 py-2 text-xs text-tm-tertiary">
-        <Search size={14} className="text-tm-accent" />
-        {hint}
+      <div className="mb-3 grid gap-3 rounded-xl border border-tm-border bg-tm-card-alt px-3 py-2 text-xs text-tm-tertiary md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+        <div className="flex min-w-0 items-center gap-2">
+          <Search size={14} className="shrink-0 text-tm-accent" />
+          <span className="min-w-0 truncate">{hint}</span>
+        </div>
+        <div className="flex items-center justify-end gap-2">
+          <button type="button" onClick={() => zoomGraph(0.84)} className="rounded-lg border border-tm-border bg-tm-card px-2 py-1">{labels.zoomOut}</button>
+          <span className="w-12 text-center font-bold">{Math.round(transform.scale * 100)}%</span>
+          <button type="button" onClick={() => zoomGraph(1.18)} className="rounded-lg border border-tm-border bg-tm-card px-2 py-1">{labels.zoomIn}</button>
+          <button type="button" onClick={fitGraph} className="rounded-lg border border-tm-border bg-tm-card px-2 py-1">适配</button>
+          <button type="button" onClick={fitGraph} className="rounded-lg border border-tm-border bg-tm-card px-2 py-1">{labels.reset}</button>
+        </div>
       </div>
-      <div className="relative h-[560px] overflow-auto rounded-2xl border border-tm-border bg-tm-card-alt p-4">
-        <motion.div
-          className="relative min-w-[980px] origin-top-left"
-          animate={{ scale: zoom }}
-          transition={{ type: "spring", stiffness: 260, damping: 30 }}
+      <div
+        id="canvas-graph-viewport"
+        ref={viewportRef}
+        className={`relative h-[560px] overflow-hidden rounded-2xl border border-tm-border bg-tm-card-alt ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
+        onWheel={(event) => {
+          event.preventDefault();
+          const factor = Math.min(1.18, Math.max(0.84, Math.exp(-event.deltaY * 0.00075)));
+          zoomGraph(factor, event.clientX, event.clientY);
+        }}
+        onPointerDown={(event) => {
+          if ((event.target as HTMLElement).closest("[data-graph-node], [data-graph-control]")) return;
+          dragRef.current = { active: true, moved: false, lastX: event.clientX, lastY: event.clientY };
+          setIsDragging(true);
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerMove={(event) => {
+          if (!dragRef.current.active) return;
+          const dx = event.clientX - dragRef.current.lastX;
+          const dy = event.clientY - dragRef.current.lastY;
+          if (Math.abs(dx) + Math.abs(dy) > 1) dragRef.current.moved = true;
+          dragRef.current.lastX = event.clientX;
+          dragRef.current.lastY = event.clientY;
+          setGraphTarget({ x: targetRef.current.x + dx, y: targetRef.current.y + dy });
+        }}
+        onPointerUp={(event) => {
+          dragRef.current.active = false;
+          setIsDragging(false);
+          try { event.currentTarget.releasePointerCapture(event.pointerId); } catch {}
+        }}
+        onPointerCancel={() => {
+          dragRef.current.active = false;
+          setIsDragging(false);
+        }}
+      >
+        <div
+          id="canvas-graph-world"
+          className="absolute left-0 top-0 origin-top-left"
+          style={{
+            width: model.world.width,
+            height: model.world.height,
+            transform: `translate3d(${transform.x}px, ${transform.y}px, 0) scale(${transform.scale})`,
+            transition: isDragging ? "none" : "transform 0.15s cubic-bezier(0.2, 0.8, 0.2, 1)",
+          }}
         >
-          <div className="grid grid-cols-[220px_repeat(4,180px)] items-start gap-4">
-            <div className="sticky left-0 top-24 z-10 rounded-2xl border border-tm-accent bg-tm-card p-4 text-center shadow-[0_12px_30px_rgba(168,123,34,0.16)]">
-              <LayoutDashboard className="mx-auto mb-2 text-tm-accent" size={24} />
-              <div className="text-sm font-extrabold text-tm-primary">Project Canvas</div>
-              <div className="mt-1 text-xs text-tm-tertiary">{visible.length} visible modules</div>
-              <div className="mt-4 h-px bg-tm-accent" />
-              <div className="mt-3 text-[11px] leading-5 text-tm-tertiary">按状态分支组织，点击模块查看详情。</div>
-            </div>
-            {groups.map((group) => (
-              <section key={group.key} className="min-h-[500px] rounded-2xl border border-tm-border bg-tm-card/80 p-3">
-                <div className="mb-3 flex items-center justify-between gap-2 border-b border-tm-border pb-2">
-                  <div className="text-sm font-bold text-tm-primary">{group.label}</div>
-                  <StatusPill status={group.tone} label={`${group.items.length}`} />
-                </div>
-                <div className="space-y-2">
-                  {group.items.length ? group.items.map((node) => (
-                    <motion.button
-                      key={`${node.module.module || "module"}-${node.index}`}
-                      type="button"
-                      onClick={() => onSelect(node.index)}
-                      whileHover={{ x: 3 }}
-                      className={`w-full rounded-xl border bg-tm-card px-3 py-2 text-left shadow-sm transition-shadow hover:shadow-md ${selectedIndex === node.index ? "border-tm-accent" : "border-tm-border"}`}
-                    >
-                      <div className="mb-1 flex items-center justify-between gap-2">
-                        <span className="line-clamp-2 text-xs font-bold leading-4 text-tm-primary">{text(node.module.module)}</span>
-                        <span className={`h-2 w-2 shrink-0 rounded-full ${node.tone === "done" ? "bg-tm-ok" : node.tone === "current" ? "bg-tm-warn" : node.tone === "blocked" ? "bg-tm-fail" : "bg-tm-tertiary"}`} />
-                      </div>
-                      <div className="line-clamp-2 text-[11px] leading-4 text-tm-tertiary">{text(node.module.status)}</div>
-                    </motion.button>
-                  )) : (
-                    <div className="rounded-xl border border-dashed border-tm-border bg-tm-card-alt p-3 text-xs text-tm-tertiary">暂无模块</div>
-                  )}
-                </div>
-              </section>
-            ))}
+          <canvas
+            id="canvas-graph-canvas"
+            ref={canvasRef}
+            className="absolute inset-0"
+            role="img"
+            aria-label="项目状态图"
+          />
+          <div id="canvas-graph-dom-overlay" className="absolute inset-0">
+            {model.nodes.map((node) => {
+              const selected = node.type === "module" && node.index === selectedIndex;
+              return (
+                <button
+                  key={`${node.type}-${node.index}`}
+                  type="button"
+                  data-graph-node
+                  onClick={() => node.type === "center" ? fitGraph() : onSelect(node.index)}
+                  className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-2xl border bg-tm-card text-left shadow-[0_10px_24px_rgba(31,29,27,0.10)] transition-shadow hover:shadow-[0_14px_32px_rgba(168,123,34,0.16)] ${
+                    node.type === "center" ? "border-tm-accent p-5 text-center" : selected ? "border-tm-accent p-3" : "border-tm-border p-3"
+                  }`}
+                  style={{ left: node.x, top: node.y, width: node.box.width, minHeight: node.box.height }}
+                >
+                  {node.type === "center" && <LayoutDashboard className="mx-auto mb-2 text-tm-accent" size={24} />}
+                  <div className="mb-1 flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-normal text-tm-tertiary">
+                    <span>{node.type === "center" ? "Project Canvas" : "Module"}</span>
+                    {node.type === "module" && <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${node.kind === "done" ? "bg-tm-ok" : node.kind === "current" ? "bg-tm-warn" : node.kind === "blocked" ? "bg-tm-fail" : "bg-tm-tertiary"}`} />}
+                  </div>
+                  <div className={`${node.type === "center" ? "text-sm" : "text-xs"} line-clamp-2 font-extrabold leading-5 text-tm-primary`}>
+                    {node.titleLines.join(" ")}
+                  </div>
+                  <div className={`${node.type === "center" ? "mt-2 text-xs" : "mt-1 text-[11px]"} line-clamp-2 leading-4 text-tm-tertiary`}>
+                    {node.subLines.join(" / ")}
+                  </div>
+                </button>
+              );
+            })}
           </div>
-        </motion.div>
+        </div>
       </div>
     </div>
   );
+}
+
+function buildGraphModel(modules: CanvasModule[], labels: typeof copy.zh): GraphModel {
+  const world = { ...graphWorld };
+  const center = { x: world.width / 2, y: world.height / 2 };
+  const visible = modules.slice(0, 32);
+  const statusCounts = visible.reduce(
+    (acc, item) => {
+      const kind = statusTone(item.status);
+      if (kind === "done" || kind === "current" || kind === "blocked" || kind === "pending") acc[kind] += 1;
+      return acc;
+    },
+    { done: 0, current: 0, blocked: 0, pending: 0 },
+  );
+  const centerNode: GraphNode = {
+    type: "center",
+    index: -1,
+    kind: "center",
+    x: center.x,
+    y: center.y,
+    titleLines: ["Project Canvas"],
+    subLines: [
+      format(labels.moduleCount, { count: visible.length }),
+      `${statusCounts.done} done / ${statusCounts.current + statusCounts.blocked} active`,
+    ],
+    box: { width: 244, height: 122 },
+  };
+  const moduleNodes = visible.map((item, index) => {
+    const ring = Math.floor(index / 18);
+    const ringIndex = index % 18;
+    const ringSize = Math.min(18, visible.length - ring * 18);
+    const angle = -Math.PI / 2 + (Math.PI * 2 * ringIndex) / Math.max(ringSize, 1) + ring * 0.19;
+    const radius = 355 + ring * 205;
+    const titleLines = labelLines(item.module || "-", 16, 2);
+    const cleanStatus = text(item.status, "").replace(/^[✅🟡⚪🔴]\s*/, "").trim();
+    const subLines = labelLines(cleanStatus || item.owner || "-", 26, 1);
+    return {
+      type: "module" as const,
+      index,
+      module: item,
+      kind: statusTone(item.status),
+      x: center.x + Math.cos(angle) * radius,
+      y: center.y + Math.sin(angle) * radius,
+      titleLines,
+      subLines,
+      box: nodeBox(titleLines, subLines),
+    };
+  });
+  const nodes = [centerNode, ...moduleNodes];
+  relaxGraphNodes(nodes);
+  const minX = Math.min(...nodes.map((node) => node.x - node.box.width / 2)) - 54;
+  const maxX = Math.max(...nodes.map((node) => node.x + node.box.width / 2)) + 54;
+  const minY = Math.min(...nodes.map((node) => node.y - node.box.height / 2)) - 54;
+  const maxY = Math.max(...nodes.map((node) => node.y + node.box.height / 2)) + 54;
+  const shiftX = minX < 0 ? Math.abs(minX) + 50 : 0;
+  const shiftY = minY < 0 ? Math.abs(minY) + 50 : 0;
+  if (shiftX || shiftY) {
+    nodes.forEach((node) => {
+      node.x += shiftX;
+      node.y += shiftY;
+    });
+    center.x += shiftX;
+    center.y += shiftY;
+  }
+  world.width = Math.max(graphWorld.width, maxX + shiftX + 50);
+  world.height = Math.max(graphWorld.height, maxY + shiftY + 50);
+  return { world, center, radius: 355, nodes, moduleNodes, bounds: { x: 0, y: 0, width: world.width, height: world.height } };
+}
+
+function textUnits(value: string) {
+  return Array.from(value).reduce((total, char) => {
+    if (/[\u4e00-\u9fff]/.test(char)) return total + 1.05;
+    if (/[A-Z0-9]/.test(char)) return total + 0.72;
+    if (/\s/.test(char)) return total + 0.35;
+    return total + 0.58;
+  }, 0);
+}
+
+function labelLines(value: string, max = 18, maxLines = 2) {
+  const clean = value.trim();
+  if (!clean) return ["-"];
+  if (clean.length <= max) return [clean];
+  const parts = clean.split(/\s+/).filter(Boolean);
+  if (parts.length > 1) {
+    const lines: string[] = [];
+    let current = "";
+    for (const part of parts) {
+      const next = current ? `${current} ${part}` : part;
+      if (next.length > max && current) {
+        lines.push(current);
+        current = part;
+      } else {
+        current = next;
+      }
+      if (lines.length >= maxLines) break;
+    }
+    if (current) lines.push(current);
+    const clipped = lines.slice(0, maxLines);
+    if (clipped.join(" ").length < clean.length && clipped.length) {
+      clipped[clipped.length - 1] = `${clipped[clipped.length - 1].slice(0, Math.max(1, max - 1))}...`;
+    }
+    return clipped;
+  }
+  const lines: string[] = [];
+  for (let index = 0; index < clean.length && lines.length < maxLines; index += max) {
+    lines.push(clean.slice(index, index + max));
+  }
+  if (lines.join("").length < clean.length && lines.length) {
+    lines[lines.length - 1] = `${lines[lines.length - 1].slice(0, Math.max(1, max - 1))}...`;
+  }
+  return lines;
+}
+
+function nodeBox(titleLines: string[], subLines: string[]): GraphBox {
+  const longestTitle = Math.max(...titleLines.map(textUnits), 1) * 12.5;
+  const longestSub = Math.max(...subLines.map(textUnits), 0) * 7;
+  const width = Math.min(224, Math.max(166, Math.max(longestTitle, longestSub) + 40));
+  const height = Math.max(96, 52 + titleLines.length * 17 + subLines.length * 14);
+  return { width, height };
+}
+
+function relaxGraphNodes(nodes: GraphNode[]) {
+  const spacing = 64;
+  const iterations = 96;
+  for (let iter = 0; iter < iterations; iter += 1) {
+    let moved = false;
+    for (let i = 0; i < nodes.length; i += 1) {
+      const nodeA = nodes[i];
+      for (let j = i + 1; j < nodes.length; j += 1) {
+        const nodeB = nodes[j];
+        const minDx = nodeA.box.width / 2 + nodeB.box.width / 2 + spacing;
+        const minDy = nodeA.box.height / 2 + nodeB.box.height / 2 + spacing;
+        let dx = nodeB.x - nodeA.x;
+        let dy = nodeB.y - nodeA.y;
+        if (dx === 0 && dy === 0) {
+          const angle = ((j + 1) * 2.399963229728653) % (Math.PI * 2);
+          nodeB.x += Math.cos(angle) * 0.75;
+          nodeB.y += Math.sin(angle) * 0.75;
+          dx = nodeB.x - nodeA.x;
+          dy = nodeB.y - nodeA.y;
+        }
+        const absDx = Math.abs(dx);
+        const absDy = Math.abs(dy);
+        if (absDx < minDx && absDy < minDy) {
+          const overlapX = minDx - absDx;
+          const overlapY = minDy - absDy;
+          const pushX = overlapX < overlapY ? overlapX * (dx >= 0 ? 1 : -1) : 0;
+          const pushY = overlapX < overlapY ? 0 : overlapY * (dy >= 0 ? 1 : -1);
+          if (nodeA.type === "center") {
+            nodeB.x += pushX;
+            nodeB.y += pushY;
+          } else if (nodeB.type === "center") {
+            nodeA.x -= pushX;
+            nodeA.y -= pushY;
+          } else {
+            nodeA.x -= pushX * 0.5;
+            nodeA.y -= pushY * 0.5;
+            nodeB.x += pushX * 0.5;
+            nodeB.y += pushY * 0.5;
+          }
+          moved = true;
+        }
+      }
+    }
+    if (!moved) break;
+  }
+}
+
+function drawGraphCanvas(canvas: HTMLCanvasElement | null, model: GraphModel) {
+  if (!canvas) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const width = model.world.width;
+  const height = model.world.height;
+  if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+  }
+  const ctx = canvas.getContext("2d", { alpha: true });
+  if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  drawGraphHalo(ctx, model.center.x, model.center.y, model.radius);
+  drawGraphHalo(ctx, model.center.x, model.center.y, model.radius + 205);
+  for (const node of model.moduleNodes) {
+    drawGraphCurve(ctx, model.center, node, node.index === 0 || node.index === 1);
+  }
+}
+
+function drawGraphHalo(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.setLineDash([8, 12]);
+  ctx.lineWidth = 1.2;
+  ctx.strokeStyle = "rgba(200, 165, 96, .18)";
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawGraphCurve(ctx: CanvasRenderingContext2D, from: { x: number; y: number }, to: { x: number; y: number }, strong: boolean) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  ctx.bezierCurveTo(from.x, to.y, to.x, from.y, to.x, to.y);
+  ctx.lineWidth = strong ? 2.1 : 1.35;
+  ctx.strokeStyle = strong ? "rgba(200, 165, 96, .42)" : "rgba(138, 130, 117, .22)";
+  ctx.stroke();
+  ctx.restore();
 }
 
 function ModuleDetail({ module, labels, onBack }: { module: CanvasModule | null; labels: typeof copy.zh; onBack: () => void }) {
