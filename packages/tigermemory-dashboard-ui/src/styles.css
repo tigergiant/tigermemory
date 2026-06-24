@@ -962,9 +962,9 @@ code {
   --border-strong: rgba(200, 165, 96, 0.32);
   --border-divider: rgba(255, 255, 255, 0.08);
 
-  --text-primary: #f4f1ea;
-  --text-secondary: #b8b0a4;
-  --text-tertiary: #7d7568;
+  --text-primary: #f6f4ef;
+  --text-secondary: #d4cec2;
+  --text-tertiary: #9c9486;
   --text-inverse: #0a0e1a;
 
   --accent-tiger: #e6c378;
