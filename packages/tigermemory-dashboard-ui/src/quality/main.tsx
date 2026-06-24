@@ -328,8 +328,8 @@ function MemoryFlowDiagram({
 
       const next: Array<{ id: string; d: string; tone: FlowTone; delay: number }> = [];
       const pathFor = (x1: number, y1: number, x2: number, y2: number) => {
-        const c1x = x1 + (x2 - x1) * 0.48;
-        const c2x = x1 + (x2 - x1) * 0.52;
+        const c1x = x1 + (x2 - x1) * 0.36;
+        const c2x = x1 + (x2 - x1) * 0.64;
         return `M ${x1} ${y1} C ${c1x} ${y1}, ${c2x} ${y2}, ${x2} ${y2}`;
       };
 
@@ -375,7 +375,7 @@ function MemoryFlowDiagram({
   }, [sources, outputs]);
 
   return (
-    <div ref={boardRef} className="relative mt-5 min-h-[540px] overflow-hidden rounded-2xl border border-tm-border bg-tm-card-alt p-5">
+    <div ref={boardRef} className="relative mt-5 min-h-[520px] overflow-hidden rounded-2xl border border-tm-border bg-tm-card-alt p-5">
       <svg className="pointer-events-none absolute inset-0 z-[1] hidden h-full w-full lg:block" aria-hidden="true">
         <defs>
           <filter id="memoryFlowGlow">
@@ -389,8 +389,8 @@ function MemoryFlowDiagram({
         {paths.map((path) => <FlowPath key={path.id} id={`flow-${path.id}`} path={path.d} delay={path.delay} tone={path.tone} active={activeFlow === path.id} />)}
       </svg>
 
-      <div className="relative z-10 grid min-h-[500px] gap-4 md:grid-cols-[minmax(150px,0.82fr)_minmax(190px,1fr)_minmax(150px,0.82fr)]">
-        <section className="space-y-3">
+      <div className="relative z-10 grid min-h-[480px] gap-4 md:grid-cols-[minmax(130px,150px)_minmax(240px,1fr)_minmax(130px,150px)] md:items-center md:justify-between">
+        <section className="space-y-2 self-start">
           <div>
             <div className="text-base font-semibold text-tm-primary">输入池</div>
             <div className="text-xs text-tm-tertiary">写入候选与回答质检来源</div>
@@ -400,17 +400,17 @@ function MemoryFlowDiagram({
           ))}
         </section>
 
-        <section className="flex min-h-[360px] items-center justify-center">
+        <section className="flex min-h-[320px] items-center justify-center">
           <motion.div
             data-flow-id="engine"
             onMouseEnter={() => setActiveFlow(null)}
             whileHover={{ scale: 1.03 }}
-            className="relative rounded-2xl border border-tm-border-strong bg-tm-card px-7 py-6 text-center shadow-[0_16px_42px_rgba(168,123,34,0.16)]"
+            className="relative flex w-40 flex-col items-center text-center"
           >
             <motion.img
               src="/static/cute_tiger_guard.png"
               alt=""
-              className="mx-auto h-32 w-32 object-contain drop-shadow-xl"
+              className="h-32 w-32 object-contain drop-shadow-xl"
               animate={{ y: [0, -4, 0] }}
               transition={{ duration: 3.2, repeat: Infinity, ease: "easeInOut" }}
             />
@@ -419,7 +419,7 @@ function MemoryFlowDiagram({
           </motion.div>
         </section>
 
-        <section className="space-y-3">
+        <section className="space-y-2 self-start">
           <div>
             <div className="text-base font-semibold text-tm-primary">输出去向</div>
             <div className="text-xs text-tm-tertiary">四条写入路线同时展示，不把 0 项隐藏</div>
@@ -437,7 +437,7 @@ function FlowPath({ id, path, delay, tone, active }: { id: string; path: string;
   const stroke = tone === "ok" ? "#52733a" : tone === "warn" ? "#c8a560" : "#6f8ea0";
   return (
     <>
-      <motion.path
+      <path
         id={id}
         data-flow-path-for={id.replace(/^flow-/, "")}
         d={path}
@@ -447,9 +447,6 @@ function FlowPath({ id, path, delay, tone, active }: { id: string; path: string;
         strokeOpacity={active ? "0.86" : "0.62"}
         strokeWidth={active ? "3.8" : "2.8"}
         filter="url(#memoryFlowGlow)"
-        initial={{ pathLength: 0.15 }}
-        animate={{ pathLength: [0.15, 1, 0.15] }}
-        transition={{ duration: 3.6, delay, repeat: Infinity, ease: "easeInOut" }}
       />
       <circle r={active ? "5" : "4"} fill={stroke} opacity={active ? "0.95" : "0.82"}>
         <animateMotion dur="3.8s" repeatCount="indefinite" begin={`${delay}s`}>
@@ -484,19 +481,19 @@ function RouteChip({
       data-flow-id={flowId}
       onMouseEnter={() => onHover(flowId)}
       onMouseLeave={() => onHover(null)}
-      className={cx("rounded-xl border px-3 py-3 shadow-sm transition-shadow hover:shadow-md", toneClass(tone))}
+      className={cx("rounded-xl border px-2.5 py-2 shadow-sm transition-shadow hover:shadow-md", toneClass(tone))}
     >
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
-          <div className="text-sm font-semibold">{label}</div>
+          <div className="text-[13px] font-semibold leading-4">{label}</div>
           {description && <div className="mt-0.5 text-[11px] opacity-80">{description}</div>}
         </div>
         <div className="shrink-0 text-right">
-          <div className="text-base font-bold">{value === null ? "缺日志" : numberText(value)}</div>
+          <div className="text-sm font-bold leading-4">{value === null ? "缺日志" : numberText(value)}</div>
           <div className="text-[11px] opacity-80">{pct === null ? "--" : `${pct}%`}</div>
         </div>
       </div>
-      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-tm-card/70">
+      <div className="mt-2 h-1 overflow-hidden rounded-full bg-tm-card/70">
         <motion.div layout className="h-full rounded-full bg-current" style={{ width: `${pct ?? 0}%` }} />
       </div>
     </motion.article>
