@@ -12,6 +12,7 @@
     "build:settings": "node build-all.mjs settings",
     "build:agent-tools": "node build-all.mjs agent-tools",
     "build:canvas": "node build-all.mjs canvas",
+    "build:self-evolution": "node build-all.mjs self-evolution",
     "dev": "vite --host 127.0.0.1 --port 2000"
   },
   "dependencies": {

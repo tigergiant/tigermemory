@@ -4580,6 +4580,10 @@ def _render_canvas_page(data: dict[str, Any]) -> str:
 
 def _render_self_evolution_page(data: dict[str, Any]) -> str:
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    react_entry = STATIC_DIR / "react" / "self-evolution" / "self-evolution.html"
+    if react_entry.exists():
+        html = react_entry.read_text(encoding="utf-8")
+        return html.replace("__TM_SELF_EVOLUTION_JSON__", payload)
     return _render_template("self-evolution.html", {"__SELF_EVOLUTION_JSON__": payload})
 
 

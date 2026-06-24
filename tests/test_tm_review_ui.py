@@ -1603,8 +1603,10 @@ def test_self_evolution_page_returns_fast_loading_shell(tmp_path, monkeypatch):
 
     assert page.status_code == 200
     assert '"loading": true' in page.text
-    assert "window.tmPages.selfEvolution.init" in page.text
-    assert "self-evolution-data" in page.text
+    assert 'data-tm-react-self-evolution' in page.text
+    assert "/static/react/self-evolution/assets/" in page.text
+    assert "tm-self-evolution-data" in page.text
+    assert "window.tmPages.selfEvolution.init" not in page.text
 
 
 def test_self_evolution_data_uses_dedicated_cache_ttl(monkeypatch):
@@ -1674,6 +1676,7 @@ def test_react_dashboard_pages_use_shared_shell_components():
     settings = (ui_src / "settings" / "main.tsx").read_text(encoding="utf-8")
     agent_tools = (ui_src / "agent-tools" / "main.tsx").read_text(encoding="utf-8")
     canvas = (ui_src / "canvas" / "main.tsx").read_text(encoding="utf-8")
+    self_evolution = (ui_src / "self-evolution" / "main.tsx").read_text(encoding="utf-8")
 
     assert shell.exists()
     shell_text = shell.read_text(encoding="utf-8")
@@ -1687,6 +1690,7 @@ def test_react_dashboard_pages_use_shared_shell_components():
     assert "../components/DashboardShell" in settings
     assert "../components/DashboardShell" in agent_tools
     assert "../components/DashboardShell" in canvas
+    assert "../components/DashboardShell" in self_evolution
     assert "const nav =" not in start
     assert "const NAV =" not in digest
     assert "const NAV =" not in health
@@ -1694,6 +1698,7 @@ def test_react_dashboard_pages_use_shared_shell_components():
     assert "const NAV =" not in settings
     assert "const NAV =" not in agent_tools
     assert "const NAV =" not in canvas
+    assert "const NAV =" not in self_evolution
 
 
 def test_dashboard_modularization_rules(tmp_path, monkeypatch):
@@ -1705,9 +1710,9 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     client.get("/", headers=HOST, follow_redirects=False)
 
-    # dashboard shell pages — /digest、/health、/quality、/settings、/agent-tools、/canvas 已迁移为 React island，不再引用旧 dashboard-common.js。
+    # dashboard shell pages — /digest、/health、/quality、/settings、/agent-tools、/canvas、/self-evolution 已迁移为 React island，不再引用旧 dashboard-common.js。
     legacy_pages: list[str] = []
-    react_pages = ["/digest/2026-05-21", "/health", "/quality", "/settings", "/agent-tools", "/canvas"]
+    react_pages = ["/digest/2026-05-21", "/health", "/quality", "/settings", "/agent-tools", "/canvas", "/self-evolution"]
     pages = react_pages + legacy_pages
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_digest(tmp_path)
@@ -1721,7 +1726,7 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
         res = client.get(route, headers=HOST)
         assert "/static/dashboard-common.js" in res.text
 
-    # 2. /start、/digest、/health、/quality、/settings、/agent-tools 与 /canvas 均已迁移为 React island，
+    # 2. /start、/digest、/health、/quality、/settings、/agent-tools、/canvas 与 /self-evolution 均已迁移为 React island，
     # 不再依赖旧 dashboard-pages.js 控制器。
     digest = client.get("/digest/2026-05-21", headers=HOST)
     start = client.get("/start", headers=HOST)
@@ -1730,6 +1735,7 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     settings = client.get("/settings", headers=HOST)
     agent_tools = client.get("/agent-tools", headers=HOST)
     canvas = client.get("/canvas", headers=HOST)
+    self_evolution = client.get("/self-evolution", headers=HOST)
     assert "/static/dashboard-pages.js" not in digest.text
     assert "/static/react/digest/assets/" in digest.text
     assert "/static/dashboard-pages.js" not in start.text
@@ -1748,6 +1754,9 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "/static/dashboard-pages.js" not in canvas.text
     assert "/static/react/canvas/assets/" in canvas.text
     assert 'data-tm-react-canvas' in canvas.text
+    assert "/static/dashboard-pages.js" not in self_evolution.text
+    assert "/static/react/self-evolution/assets/" in self_evolution.text
+    assert 'data-tm-react-self-evolution' in self_evolution.text
 
     # 3. service-worker.js 仍保留旧 JS 以服务暂未迁移页面。
     sw_res = client.get("/service-worker.js", headers=HOST)
@@ -1769,6 +1778,7 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "window.tmPages.quality.init" not in quality.text
     assert "window.tmPages.settings.init" not in settings.text
     assert "function renderDepth" not in settings.text
+    assert "window.tmPages.selfEvolution.init" not in self_evolution.text
     assert "function renderChips" not in settings.text
     assert "async function fetchSettings" not in settings.text
     assert "window.tmPages.agentTools.init" not in agent_tools.text
@@ -1989,6 +1999,7 @@ def test_dashboard_pages_share_identical_header(tmp_path, monkeypatch):
         "health": client.get("/health", headers=HOST),
         "quality": client.get("/quality", headers=HOST),
         "settings": client.get("/settings", headers=HOST),
+        "self-evolution": client.get("/self-evolution", headers=HOST),
         "start": client.get("/start", headers=HOST),
     }
     legacy_responses: dict[str, Any] = {}
