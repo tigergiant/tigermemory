@@ -309,6 +309,7 @@ function MemoryFlowDiagram({
 }) {
   const boardRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef(0);
+  const settleUntilRef = useRef(0);
   const [paths, setPaths] = useState<Array<{ id: string; d: string; tone: FlowTone; delay: number }>>([]);
   const [activeFlow, setActiveFlow] = useState<string | null>(null);
 
@@ -362,20 +363,27 @@ function MemoryFlowDiagram({
         });
       });
       setPaths(next);
+      if (performance.now() < settleUntilRef.current) schedule();
     };
 
     const schedule = () => {
       if (frameRef.current) return;
       frameRef.current = window.requestAnimationFrame(draw);
     };
+    const trackSettling = (duration = 850) => {
+      settleUntilRef.current = Math.max(settleUntilRef.current, performance.now() + duration);
+      schedule();
+    };
+    const handleResize = () => trackSettling(260);
 
-    schedule();
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
+    trackSettling();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => trackSettling(260));
     observer?.observe(board);
     board.querySelectorAll<HTMLElement>("[data-flow-id]").forEach((node) => observer?.observe(node));
-    window.addEventListener("resize", schedule);
+    window.addEventListener("resize", handleResize);
     return () => {
-      window.removeEventListener("resize", schedule);
+      settleUntilRef.current = 0;
+      window.removeEventListener("resize", handleResize);
       observer?.disconnect();
       if (frameRef.current) window.cancelAnimationFrame(frameRef.current);
     };
@@ -902,7 +910,7 @@ function App() {
   const empty = Boolean(memory.fallback_mode && numeric(asRecord(memory.counts).mem0) === null && Number(asRecord(memory.counts).inbox || 0) <= 0 && traceTotal <= 0);
 
   return (
-    <DashboardShell active="/quality" lang={lang} onToggleLang={toggleLang} tagline={t("tagline")} badge={t("badge")}>
+    <DashboardShell active="/quality" lang={lang} onToggleLang={toggleLang} tagline={t("tagline")} badge={t("badge")} background="galaxy">
       <main className="relative z-10 mx-auto max-w-6xl px-5 py-6">
         <DashboardCard>
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
