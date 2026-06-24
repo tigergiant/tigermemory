@@ -1066,10 +1066,10 @@ def test_ledger_route_is_dashboard_module_and_delegates_api(tmp_path, monkeypatc
     page = client.get("/ledger", headers=HOST)
 
     assert page.status_code == 200
-    assert 'body data-page="ledger"' in page.text
-    assert 'data-target-page="ledger"' in page.text
-    assert "/static/dashboard-common.js" in page.text
-    assert "/api/ledger/review" in page.text
+    assert 'data-tm-react-ledger' in page.text
+    assert "/static/react/ledger/assets/" in page.text
+    assert "/static/dashboard-pages.js" not in page.text
+    assert "tm-ledger-data" in page.text
     assert "记账审批" in page.text
 
     result = ledger.core.expense_write(
@@ -1671,6 +1671,7 @@ def test_react_dashboard_pages_use_shared_shell_components():
     shell = ui_src / "components" / "DashboardShell.tsx"
     start = (ui_src / "main.tsx").read_text(encoding="utf-8")
     digest = (ui_src / "digest" / "main.tsx").read_text(encoding="utf-8")
+    ledger = (ui_src / "ledger" / "main.tsx").read_text(encoding="utf-8")
     health = (ui_src / "health" / "main.tsx").read_text(encoding="utf-8")
     quality = (ui_src / "quality" / "main.tsx").read_text(encoding="utf-8")
     settings = (ui_src / "settings" / "main.tsx").read_text(encoding="utf-8")
@@ -1685,6 +1686,7 @@ def test_react_dashboard_pages_use_shared_shell_components():
 
     assert "./components/DashboardShell" in start
     assert "../components/DashboardShell" in digest
+    assert "../components/DashboardShell" in ledger
     assert "../components/DashboardShell" in health
     assert "../components/DashboardShell" in quality
     assert "../components/DashboardShell" in settings
@@ -1693,6 +1695,7 @@ def test_react_dashboard_pages_use_shared_shell_components():
     assert "../components/DashboardShell" in self_evolution
     assert "const nav =" not in start
     assert "const NAV =" not in digest
+    assert "const NAV =" not in ledger
     assert "const NAV =" not in health
     assert "const NAV =" not in quality
     assert "const NAV =" not in settings
@@ -1710,9 +1713,9 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     client.get("/", headers=HOST, follow_redirects=False)
 
-    # dashboard shell pages — /digest、/health、/quality、/settings、/agent-tools、/canvas、/self-evolution 已迁移为 React island，不再引用旧 dashboard-common.js。
+    # dashboard shell pages — /digest、/ledger、/health、/quality、/settings、/agent-tools、/canvas、/self-evolution 已迁移为 React island，不再引用旧 dashboard-common.js。
     legacy_pages: list[str] = []
-    react_pages = ["/digest/2026-05-21", "/health", "/quality", "/settings", "/agent-tools", "/canvas", "/self-evolution"]
+    react_pages = ["/digest/2026-05-21", "/ledger", "/health", "/quality", "/settings", "/agent-tools", "/canvas", "/self-evolution"]
     pages = react_pages + legacy_pages
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_digest(tmp_path)
@@ -1726,10 +1729,11 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
         res = client.get(route, headers=HOST)
         assert "/static/dashboard-common.js" in res.text
 
-    # 2. /start、/digest、/health、/quality、/settings、/agent-tools、/canvas 与 /self-evolution 均已迁移为 React island，
+    # 2. /start、/digest、/ledger、/health、/quality、/settings、/agent-tools、/canvas 与 /self-evolution 均已迁移为 React island，
     # 不再依赖旧 dashboard-pages.js 控制器。
     digest = client.get("/digest/2026-05-21", headers=HOST)
     start = client.get("/start", headers=HOST)
+    ledger = client.get("/ledger", headers=HOST)
     health = client.get("/health", headers=HOST)
     quality = client.get("/quality", headers=HOST)
     settings = client.get("/settings", headers=HOST)
@@ -1740,6 +1744,9 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "/static/react/digest/assets/" in digest.text
     assert "/static/dashboard-pages.js" not in start.text
     assert "/static/react/start/assets/" in start.text
+    assert "/static/dashboard-pages.js" not in ledger.text
+    assert "/static/react/ledger/assets/" in ledger.text
+    assert 'data-tm-react-ledger' in ledger.text
     assert "/static/dashboard-pages.js" not in health.text
     assert "/static/react/health/assets/" in health.text
     assert "/static/dashboard-pages.js" not in quality.text
@@ -1773,6 +1780,8 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "function renderInbox" not in digest.text
     assert "function openWikiModal" not in digest.text
     assert "async function fetchDigest" not in digest.text
+    assert "data-tm-react-ledger" in ledger.text
+    assert "const API_BASE = '/api/ledger/review'" not in ledger.text
     assert "setInterval(fetchHealth" not in health.text
     assert "setInterval(fetchQuality" not in quality.text
     assert "window.tmPages.quality.init" not in quality.text
@@ -1997,6 +2006,7 @@ def test_dashboard_pages_share_identical_header(tmp_path, monkeypatch):
         "canvas": client.get("/canvas", headers=HOST),
         "digest": client.get("/digest/2026-05-21", headers=HOST),
         "health": client.get("/health", headers=HOST),
+        "ledger": client.get("/ledger", headers=HOST),
         "quality": client.get("/quality", headers=HOST),
         "settings": client.get("/settings", headers=HOST),
         "self-evolution": client.get("/self-evolution", headers=HOST),

@@ -4559,7 +4559,16 @@ def _render_agent_tools_page(data: dict[str, Any]) -> str:
     return _render_template("agent-tools.html", {"__AGENT_TOOLS_JSON__": payload})
 
 
-def _render_ledger_page() -> str:
+def _ledger_shell() -> dict[str, Any]:
+    return {"ok": True, "month": today()[:7]}
+
+
+def _render_ledger_page(data: dict[str, Any] | None = None) -> str:
+    payload = json.dumps(data or _ledger_shell(), ensure_ascii=False).replace("</", "<\\/")
+    react_entry = STATIC_DIR / "react" / "ledger" / "ledger.html"
+    if react_entry.exists():
+        html = react_entry.read_text(encoding="utf-8")
+        return html.replace("__TM_LEDGER_JSON__", payload)
     return _render_template("ledger.html", {})
 
 

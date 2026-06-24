@@ -7,6 +7,7 @@
     "build": "node build-all.mjs",
     "build:start": "node build-all.mjs start",
     "build:digest": "node build-all.mjs digest",
+    "build:ledger": "node build-all.mjs ledger",
     "build:health": "node build-all.mjs health",
     "build:quality": "node build-all.mjs quality",
     "build:settings": "node build-all.mjs settings",

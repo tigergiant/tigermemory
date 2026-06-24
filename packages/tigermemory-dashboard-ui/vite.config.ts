@@ -8,6 +8,7 @@ import { defineConfig } from "vite";
 // output directory. Select the target via the TM_PAGE env var (default: start).
 //   TM_PAGE=start   ->  src/index.html            ->  static/react/start/
 //   TM_PAGE=digest  ->  src/digest/index.html     ->  static/react/digest/
+//   TM_PAGE=ledger  ->  ledger.html               ->  static/react/ledger/
 //   TM_PAGE=health  ->  src/health/index.html     ->  static/react/health/
 //   TM_PAGE=quality ->  src/quality/index.html    ->  static/react/quality/
 //   TM_PAGE=settings -> src/settings/index.html    ->  static/react/settings/
@@ -15,25 +16,27 @@ import { defineConfig } from "vite";
 //   TM_PAGE=canvas -> canvas.html                 ->  static/react/canvas/
 //   TM_PAGE=self-evolution -> self-evolution.html ->  static/react/self-evolution/
 // The base path must match the FastAPI static mount so hashed assets resolve.
-const pages = new Set(["start", "digest", "health", "quality", "settings", "agent-tools", "canvas", "self-evolution"]);
+const pages = new Set(["start", "digest", "ledger", "health", "quality", "settings", "agent-tools", "canvas", "self-evolution"]);
 const requestedPage = process.env.TM_PAGE || "start";
 const page = pages.has(requestedPage) ? requestedPage : "start";
 
 const entry =
   page === "digest"
     ? path.resolve(__dirname, "digest.html")
-    : page === "health"
-      ? path.resolve(__dirname, "health.html")
-      : page === "quality"
-        ? path.resolve(__dirname, "quality.html")
-        : page === "settings"
-          ? path.resolve(__dirname, "settings.html")
-          : page === "agent-tools"
-            ? path.resolve(__dirname, "agent-tools.html")
-            : page === "canvas"
-              ? path.resolve(__dirname, "canvas.html")
-              : page === "self-evolution"
-                ? path.resolve(__dirname, "self-evolution.html")
+    : page === "ledger"
+      ? path.resolve(__dirname, "ledger.html")
+      : page === "health"
+        ? path.resolve(__dirname, "health.html")
+        : page === "quality"
+          ? path.resolve(__dirname, "quality.html")
+          : page === "settings"
+            ? path.resolve(__dirname, "settings.html")
+            : page === "agent-tools"
+              ? path.resolve(__dirname, "agent-tools.html")
+              : page === "canvas"
+                ? path.resolve(__dirname, "canvas.html")
+                : page === "self-evolution"
+                  ? path.resolve(__dirname, "self-evolution.html")
     : path.resolve(__dirname, "index.html");
 
 const outDir = path.resolve(

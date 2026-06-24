@@ -1,0 +1,11 @@
+{
+  "ledger.html": {
+    "file": "assets/ledger-BWDfjOZ_.js",
+    "name": "ledger",
+    "src": "ledger.html",
+    "isEntry": true,
+    "css": [
+      "assets/ledger-BlcEmQm4.css"
+    ]
+  }
+}
