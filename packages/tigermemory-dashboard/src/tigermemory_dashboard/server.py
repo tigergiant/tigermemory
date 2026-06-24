@@ -4550,6 +4550,15 @@ def _render_settings_page(data: dict[str, Any]) -> str:
     return _render_template("settings.html", {"__SETTINGS_JSON__": payload})
 
 
+def _render_agent_tools_page(data: dict[str, Any]) -> str:
+    payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    react_entry = STATIC_DIR / "react" / "agent-tools" / "agent-tools.html"
+    if react_entry.exists():
+        html = react_entry.read_text(encoding="utf-8")
+        return html.replace("__TM_AGENT_TOOLS_JSON__", payload).replace("__GIT_SHA__", git_sha())
+    return _render_template("agent-tools.html", {"__AGENT_TOOLS_JSON__": payload})
+
+
 def _render_ledger_page() -> str:
     return _render_template("ledger.html", {})
 
@@ -5250,7 +5259,7 @@ async def api_start_agent_connect_apply(req: StartAgentConnectRequest):
 @app.get("/agent-tools")
 async def agent_tools_page():
     """渲染并返回智能体接入与体检 Dashboard v2 主页面"""
-    return HTMLResponse(_render_template("agent-tools.html", {}))
+    return _no_store(HTMLResponse(_render_agent_tools_page({})))
 
 
 @app.get("/api/agent/status")

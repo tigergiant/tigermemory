@@ -1672,6 +1672,7 @@ def test_react_dashboard_pages_use_shared_shell_components():
     health = (ui_src / "health" / "main.tsx").read_text(encoding="utf-8")
     quality = (ui_src / "quality" / "main.tsx").read_text(encoding="utf-8")
     settings = (ui_src / "settings" / "main.tsx").read_text(encoding="utf-8")
+    agent_tools = (ui_src / "agent-tools" / "main.tsx").read_text(encoding="utf-8")
 
     assert shell.exists()
     shell_text = shell.read_text(encoding="utf-8")
@@ -1683,11 +1684,13 @@ def test_react_dashboard_pages_use_shared_shell_components():
     assert "../components/DashboardShell" in health
     assert "../components/DashboardShell" in quality
     assert "../components/DashboardShell" in settings
+    assert "../components/DashboardShell" in agent_tools
     assert "const nav =" not in start
     assert "const NAV =" not in digest
     assert "const NAV =" not in health
     assert "const NAV =" not in quality
     assert "const NAV =" not in settings
+    assert "const NAV =" not in agent_tools
 
 
 def test_dashboard_modularization_rules(tmp_path, monkeypatch):
@@ -1699,9 +1702,9 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     client.get("/", headers=HOST, follow_redirects=False)
 
-    # dashboard shell pages — /digest、/health、/quality、/settings 已迁移为 React island，不再引用旧 dashboard-common.js。
-    legacy_pages = ["/agent-tools"]
-    react_pages = ["/digest/2026-05-21", "/health", "/quality", "/settings"]
+    # dashboard shell pages — /digest、/health、/quality、/settings、/agent-tools 已迁移为 React island，不再引用旧 dashboard-common.js。
+    legacy_pages: list[str] = []
+    react_pages = ["/digest/2026-05-21", "/health", "/quality", "/settings", "/agent-tools"]
     pages = react_pages + legacy_pages
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_digest(tmp_path)
@@ -1710,13 +1713,13 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
         res = client.get(route, headers=HOST)
         assert res.status_code == 200
 
-    # 1. dashboard-common.js 仍被未迁移页引用
+    # 1. 当前测试覆盖范围内不再有依赖 dashboard-common.js 的旧页。
     for route in legacy_pages:
         res = client.get(route, headers=HOST)
         assert "/static/dashboard-common.js" in res.text
 
-    # 2. dashboard-pages.js 被 agent-tools 引用；
-    # /start、/digest、/health、/quality 与 /settings 均已迁移为 React island，不再依赖旧 dashboard-pages.js 控制器。
+    # 2. /start、/digest、/health、/quality、/settings 与 /agent-tools 均已迁移为 React island，
+    # 不再依赖旧 dashboard-pages.js 控制器。
     digest = client.get("/digest/2026-05-21", headers=HOST)
     start = client.get("/start", headers=HOST)
     health = client.get("/health", headers=HOST)
@@ -1735,9 +1738,11 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "/static/dashboard-pages.js" not in settings.text
     assert "/static/react/settings/assets/" in settings.text
     assert 'data-tm-react-settings' in settings.text
-    assert "/static/dashboard-pages.js" in agent_tools.text
+    assert "/static/dashboard-pages.js" not in agent_tools.text
+    assert "/static/react/agent-tools/assets/" in agent_tools.text
+    assert 'data-tm-react-agent-tools' in agent_tools.text
 
-    # 3. service-worker.js 缓存新增 JS
+    # 3. service-worker.js 仍保留旧 JS 以服务暂未迁移页面。
     sw_res = client.get("/service-worker.js", headers=HOST)
     assert sw_res.status_code == 200
     assert "/static/dashboard-common.js" in sw_res.text
@@ -1759,7 +1764,7 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "function renderDepth" not in settings.text
     assert "function renderChips" not in settings.text
     assert "async function fetchSettings" not in settings.text
-    assert "window.tmPages.agentTools.init" in agent_tools.text
+    assert "window.tmPages.agentTools.init" not in agent_tools.text
     assert "async function checkAgentStatus" not in agent_tools.text
     assert "async function runDoctor" not in agent_tools.text
     assert "async function runEval" not in agent_tools.text
@@ -1967,15 +1972,14 @@ def test_dashboard_pages_share_identical_header(tmp_path, monkeypatch):
     client.get("/", headers=HOST, follow_redirects=False)
 
     react_responses = {
+        "agent-tools": client.get("/agent-tools", headers=HOST),
         "digest": client.get("/digest/2026-05-21", headers=HOST),
         "health": client.get("/health", headers=HOST),
         "quality": client.get("/quality", headers=HOST),
         "settings": client.get("/settings", headers=HOST),
         "start": client.get("/start", headers=HOST),
     }
-    legacy_responses = {
-        "agent-tools": client.get("/agent-tools", headers=HOST),
-    }
+    legacy_responses: dict[str, Any] = {}
 
     for page, response in react_responses.items():
         assert response.status_code == 200
@@ -2824,9 +2828,12 @@ def test_agent_tools_page_returns_correct_html(tmp_path, monkeypatch):
     response = client.get("/agent-tools", headers=HOST)
 
     assert response.status_code == 200
-    assert "智能体" in response.text or "Agent" in response.text
-    assert "/static/assets/tailwindcss.min.js" in response.text
-    assert "/static/assets/lucide.min.js" in response.text
+    assert 'data-tm-react-agent-tools' in response.text
+    assert '<script id="tm-agent-tools-data" type="application/json">' in response.text
+    assert "/static/react/agent-tools/assets/" in response.text
+    assert "/static/dashboard-pages.js" not in response.text
+    assert "/static/assets/tailwindcss.min.js" not in response.text
+    assert "/static/assets/lucide.min.js" not in response.text
     assert "https://cdn.tailwindcss.com" not in response.text
     assert "https://unpkg.com" not in response.text
 
