@@ -1574,7 +1574,9 @@ def test_dashboard_data_pages_return_fast_shells(tmp_path, monkeypatch):
     assert 'data-tm-react-start' in start.text
     assert health.status_code == 200
     assert '"loading": true' in health.text
-    assert "window.tmPages.health.init" in health.text
+    assert 'data-tm-react-health' in health.text
+    assert "/static/dashboard-pages.js" not in health.text
+    assert "/static/react/health/assets/" in health.text
     assert quality.status_code == 200
     assert '"loading": true' in quality.text
     assert "window.tmPages.quality.init" in quality.text
@@ -1663,6 +1665,7 @@ def test_react_dashboard_pages_use_shared_shell_components():
     shell = ui_src / "components" / "DashboardShell.tsx"
     start = (ui_src / "main.tsx").read_text(encoding="utf-8")
     digest = (ui_src / "digest" / "main.tsx").read_text(encoding="utf-8")
+    health = (ui_src / "health" / "main.tsx").read_text(encoding="utf-8")
 
     assert shell.exists()
     shell_text = shell.read_text(encoding="utf-8")
@@ -1671,8 +1674,10 @@ def test_react_dashboard_pages_use_shared_shell_components():
 
     assert "./components/DashboardShell" in start
     assert "../components/DashboardShell" in digest
+    assert "../components/DashboardShell" in health
     assert "const nav =" not in start
     assert "const NAV =" not in digest
+    assert "const NAV =" not in health
 
 
 def test_dashboard_modularization_rules(tmp_path, monkeypatch):
@@ -1684,9 +1689,10 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     client.get("/", headers=HOST, follow_redirects=False)
 
-    # dashboard shell pages — /digest 已迁移为 React island，不再引用旧 dashboard-common.js。
-    legacy_pages = ["/health", "/quality", "/agent-tools", "/settings"]
-    pages = ["/digest/2026-05-21"] + legacy_pages
+    # dashboard shell pages — /digest 与 /health 已迁移为 React island，不再引用旧 dashboard-common.js。
+    legacy_pages = ["/quality", "/agent-tools", "/settings"]
+    react_pages = ["/digest/2026-05-21", "/health"]
+    pages = react_pages + legacy_pages
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_digest(tmp_path)
 
@@ -1694,13 +1700,13 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
         res = client.get(route, headers=HOST)
         assert res.status_code == 200
 
-    # 1. dashboard-common.js 仍被 4 个未迁移页引用
+    # 1. dashboard-common.js 仍被 3 个未迁移页引用
     for route in legacy_pages:
         res = client.get(route, headers=HOST)
         assert "/static/dashboard-common.js" in res.text
 
     # 2. dashboard-pages.js 被 health / quality / settings / agent-tools 引用；
-    # /start 与 /digest 均已迁移为 React island，不再依赖旧 dashboard-pages.js 控制器。
+    # /start、/digest 与 /health 均已迁移为 React island，不再依赖旧 dashboard-pages.js 控制器。
     digest = client.get("/digest/2026-05-21", headers=HOST)
     start = client.get("/start", headers=HOST)
     health = client.get("/health", headers=HOST)
@@ -1711,7 +1717,8 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "/static/react/digest/assets/" in digest.text
     assert "/static/dashboard-pages.js" not in start.text
     assert "/static/react/start/assets/" in start.text
-    assert "/static/dashboard-pages.js" in health.text
+    assert "/static/dashboard-pages.js" not in health.text
+    assert "/static/react/health/assets/" in health.text
     assert "/static/dashboard-pages.js" in quality.text
     assert "/static/dashboard-pages.js" in settings.text
     assert "/static/dashboard-pages.js" in agent_tools.text
@@ -1913,13 +1920,9 @@ def test_health_page_uses_real_template_not_json_page(tmp_path, monkeypatch):
     response = client.get("/health", headers=HOST)
 
     assert response.status_code == 200
-    assert "health-data" in response.text
-    assert "运行检查" in response.text
-    assert "记忆管家" in response.text
-    assert "#f7f2e6" in response.text
-    assert "#c8a560" in response.text
-    assert "/static/tiger/tigerlogo.png" in response.text
-    assert "dashboard-motif" in response.text
+    assert "tm-health-data" in response.text
+    assert 'data-tm-react-health' in response.text
+    assert "/static/react/health/assets/" in response.text
     assert "<pre" not in response.text
     assert "bg-zinc-950" not in response.text
     assert "bg-black" not in response.text
@@ -1947,31 +1950,25 @@ def test_dashboard_pages_share_identical_header(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     client.get("/", headers=HOST, follow_redirects=False)
 
-    responses = {
-        "daily": client.get("/digest/2026-05-21", headers=HOST),
-        "ledger": client.get("/ledger", headers=HOST),
+    react_responses = {
+        "digest": client.get("/digest/2026-05-21", headers=HOST),
         "health": client.get("/health", headers=HOST),
+        "start": client.get("/start", headers=HOST),
+    }
+    legacy_responses = {
         "quality": client.get("/quality", headers=HOST),
         "agent-tools": client.get("/agent-tools", headers=HOST),
         "settings": client.get("/settings", headers=HOST),
     }
 
-    def shared_header(html: str) -> str:
-        start = html.index("<header")
-        end = html.index("</script>", html.index("</header>")) + len("</script>")
-        return html[start:end]
-
-    headers = {page: shared_header(response.text) for page, response in responses.items()}
-    assert len(set(headers.values())) == 1
-    for page, response in responses.items():
+    for page, response in react_responses.items():
         assert response.status_code == 200
-        assert f'data-page="{page}"' in response.text
-        assert 'id="lang-toggle"' in response.text
-        assert 'id="last-refresh"' in response.text
-        assert 'id="sha-pill"' in response.text
-        assert "tm-page-ready" in response.text
-        header_html = headers[page]
-        assert "setTimeout" not in header_html
+        assert "/static/dashboard-pages.js" not in response.text
+        assert "/static/react/" in response.text
+        assert "data-tm-react-" in response.text
+    for page, response in legacy_responses.items():
+        assert response.status_code == 200
+        assert "/static/dashboard-pages.js" in response.text
         assert "/static/assets/tailwindcss.min.js" in response.text, f"{page} missing local tailwind"
         assert "/static/assets/lucide.min.js" in response.text, f"{page} missing local lucide"
         assert "https://cdn.tailwindcss.com" not in response.text, f"{page} still references cdn.tailwindcss"

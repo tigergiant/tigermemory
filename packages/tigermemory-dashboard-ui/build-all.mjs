@@ -1,11 +1,11 @@
 // Build orchestrator for multi-page React dashboard UI.
-// Runs vite build once per page (start, digest) by setting TM_PAGE before each
+// Runs vite build once per page by setting TM_PAGE before each
 // invocation, so both output dirs are regenerated. Works cross-platform without
 // extra deps (avoids cross-env).
 import { spawn } from "node:child_process";
 
-const target = process.argv[2]; // optional: "start" | "digest"
-const pages = target ? [target] : ["start", "digest"];
+const target = process.argv[2]; // optional: "start" | "digest" | "health"
+const pages = target ? [target] : ["start", "digest", "health"];
 
 for (const page of pages) {
   console.log(`\n=== building ${page} ===`);

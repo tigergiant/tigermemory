@@ -8,12 +8,17 @@ import { defineConfig } from "vite";
 // output directory. Select the target via the TM_PAGE env var (default: start).
 //   TM_PAGE=start   ->  src/index.html            ->  static/react/start/
 //   TM_PAGE=digest  ->  src/digest/index.html     ->  static/react/digest/
+//   TM_PAGE=health  ->  src/health/index.html     ->  static/react/health/
 // The base path must match the FastAPI static mount so hashed assets resolve.
-const page = process.env.TM_PAGE === "digest" ? "digest" : "start";
+const pages = new Set(["start", "digest", "health"]);
+const requestedPage = process.env.TM_PAGE || "start";
+const page = pages.has(requestedPage) ? requestedPage : "start";
 
 const entry =
   page === "digest"
     ? path.resolve(__dirname, "digest.html")
+    : page === "health"
+      ? path.resolve(__dirname, "health.html")
     : path.resolve(__dirname, "index.html");
 
 const outDir = path.resolve(
