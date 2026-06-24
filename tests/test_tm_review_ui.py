@@ -1867,6 +1867,9 @@ def test_digest_react_source_keeps_daily_review_actions():
     assert "runWikiLedgerAction" in source
     assert "investment_archive" in source
     assert "markCompletedIfPathGoneAfterError" in source
+    assert "ActionQueueDock" in source
+    assert "setBusyActions" in source
+    assert "已加入归档队列" in source
     assert "fetch(`/api/digest/${date}`" in source
     assert "按每条提案自己的推荐目标写入" in source
 
@@ -3852,6 +3855,11 @@ def test_quality_page_flow_panel_keeps_all_routes_visible():
     assert '"wiki"' in quality_react
     assert '"inbox"' in quality_react
     assert '"discard"' in quality_react
+    assert "MemoryFlowDiagram" in quality_react
+    assert "FlowPath" in quality_react
+    assert "animateMotion" in quality_react
+    assert "Mem0：" in quality_react
+    assert "Wiki：" in quality_react
     assert "['即时记忆', sourceValues.daily" in pages_js
     assert "'缺日志'" in pages_js
     assert "flowPayload.flow_source === 'route_events'" in pages_js
@@ -3887,6 +3895,24 @@ def test_canvas_star_map_uses_stable_compact_layout():
     assert "const minFitScale = rect.width < 560 ? 0.18 : 0.34" in pages_js
     assert "const spacing = 64" in pages_js
     assert "const iterations = 96" in pages_js
+
+
+def test_canvas_react_prefers_legacy_mermaid_canvas():
+    canvas_react = (
+        REPO_ROOT
+        / "packages"
+        / "tigermemory-dashboard-ui"
+        / "src"
+        / "canvas"
+        / "main.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert "MermaidCanvas" in canvas_react
+    assert "/static/assets/mermaid.min.js" in canvas_react
+    assert "window.mermaid.render" in canvas_react
+    assert "ProjectStarMap" in canvas_react
+    assert 'fallback={<ProjectStarMap' in canvas_react
+    assert "画布" in canvas_react
 
 
 def test_canvas_payload_includes_canvas_update_candidates(monkeypatch):

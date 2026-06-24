@@ -19,6 +19,7 @@ import "../styles.css";
 type Lang = "zh" | "en";
 type AnyRecord = Record<string, unknown>;
 type RangeKey = "today" | "7d" | "30d";
+type FlowTone = "ok" | "warn" | "info";
 
 type QualityEnvelope = {
   memory?: QualityData;
@@ -220,6 +221,24 @@ function RoutePanel({ memory, rangeKey }: { memory: QualityData; rangeKey: Range
   ];
   const flowTotal = outputRows.reduce((sum, row) => sum + (row[3] as number | null ?? 0), 0);
   const history = asRecord(flow.history);
+  const mem0Status = asRecord(memory.mem0_status);
+  const mem0Ok = mem0Status.ok !== false && outputValues.mem0 !== null;
+  const wikiOk = outputValues.wiki !== null;
+  const sourceCards = sourceRows.map(([label, value, tone], index) => ({
+    key: `source-${index}`,
+    label: String(label),
+    value: value as number | null,
+    total: inputTotal,
+    tone: tone as FlowTone,
+  }));
+  const outputCards = outputRows.map(([key, label, description, value, tone]) => ({
+    key: String(key),
+    label: String(label),
+    description: String(description),
+    value: value as number | null,
+    total: flowTotal,
+    tone: tone as FlowTone,
+  }));
 
   return (
     <DashboardCard icon={<Route size={20} />} title={`${range.label}记忆分流`} count={range.trace_label}>
@@ -232,39 +251,114 @@ function RoutePanel({ memory, rangeKey }: { memory: QualityData; rangeKey: Range
           {text(history.note)}
         </div>
       )}
+      <div className="mb-3 flex flex-wrap gap-2">
+        <StatusPill tone={mem0Ok ? "ok" : "fail"}>Mem0：{mem0Ok ? "已连接" : text(mem0Status.error, "不可达")}</StatusPill>
+        <StatusPill tone={wikiOk ? "ok" : "warn"}>Wiki：{wikiOk ? "有写入/提案日志" : "缺写入日志"}</StatusPill>
+      </div>
       <div className="grid gap-3 md:grid-cols-4">
         <MetricCard label={isLogged ? `${range.label}流水` : `${range.label}候选`} value={numberText(inputTotal)} subline={isLogged ? "已记录路线" : "输入池"} tone="info" />
         <MetricCard label="自动处理" value={numberText([outputValues.mem0, outputValues.wiki, outputValues.discard].reduce((sum, value) => sum + (value ?? 0), 0))} subline="即时记忆 / Wiki / 忽略" tone="ok" />
         <MetricCard label="人工审核" value={numberText(outputValues.inbox)} subline={isLogged ? "真实退回人工" : "需要确认的内容"} tone="warn" />
         <MetricCard label="回答失败" value={numberText(outputValues.issue)} subline="未找到另看状态分布" tone={outputValues.issue ? "fail" : "ok"} />
       </div>
-      <div className="mt-4 grid gap-4 rounded-2xl border border-tm-border bg-tm-card-alt p-4 lg:grid-cols-[1fr_auto_1fr]">
-        <div className="space-y-3">
+      <MemoryFlowDiagram sources={sourceCards} outputs={outputCards} />
+    </DashboardCard>
+  );
+}
+
+function MemoryFlowDiagram({
+  sources,
+  outputs,
+}: {
+  sources: Array<{ key: string; label: string; value: number | null; total: number; tone: FlowTone }>;
+  outputs: Array<{ key: string; label: string; description: string; value: number | null; total: number; tone: FlowTone }>;
+}) {
+  const sourceYs = [58, 138, 218];
+  const outputYs = [44, 104, 164, 224];
+  return (
+    <div className="relative mt-4 overflow-hidden rounded-2xl border border-tm-border bg-tm-card-alt p-4">
+      <svg className="pointer-events-none absolute inset-0 hidden h-full w-full lg:block" viewBox="0 0 1000 300" preserveAspectRatio="none" aria-hidden="true">
+        <defs>
+          <filter id="memoryFlowGlow">
+            <feGaussianBlur stdDeviation="3" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+        {sources.map((source, index) => {
+          const path = `M 275 ${sourceYs[index] || 138} C 390 ${sourceYs[index] || 138}, 405 150, 485 150`;
+          return <FlowPath key={source.key} id={`flow-${source.key}`} path={path} delay={index * 0.18} />;
+        })}
+        {outputs.map((output, index) => {
+          const path = `M 515 150 C 600 150, 625 ${outputYs[index] || 150}, 725 ${outputYs[index] || 150}`;
+          return <FlowPath key={output.key} id={`flow-${output.key}`} path={path} delay={0.45 + index * 0.18} />;
+        })}
+      </svg>
+
+      <div className="relative z-10 grid gap-4 lg:grid-cols-[minmax(0,1fr)_190px_minmax(0,1fr)]">
+        <section className="space-y-3">
           <div>
             <div className="text-base font-semibold text-tm-primary">输入池</div>
             <div className="text-xs text-tm-tertiary">写入候选与回答质检来源</div>
           </div>
-          {sourceRows.map(([label, value, tone]) => (
-            <RouteChip key={String(label)} label={String(label)} value={value as number | null} total={inputTotal} tone={tone as "ok" | "warn" | "info"} />
+          {sources.map((source) => (
+            <RouteChip key={source.key} label={source.label} value={source.value} total={source.total} tone={source.tone} />
           ))}
-        </div>
-        <div className="flex items-center justify-center">
-          <div className="rounded-2xl border border-tm-border-strong bg-tm-card px-5 py-4 text-center shadow-[0_10px_30px_rgba(168,123,34,0.12)]">
-            <img src="/static/cute_tiger_guard.png" alt="" className="mx-auto h-24 w-24 object-contain" />
+        </section>
+
+        <section className="flex items-center justify-center">
+          <motion.div
+            whileHover={{ scale: 1.03 }}
+            className="rounded-2xl border border-tm-border-strong bg-tm-card px-5 py-4 text-center shadow-[0_10px_30px_rgba(168,123,34,0.14)]"
+          >
+            <motion.img
+              src="/static/cute_tiger_guard.png"
+              alt=""
+              className="mx-auto h-28 w-28 object-contain drop-shadow-xl"
+              animate={{ y: [0, -4, 0] }}
+              transition={{ duration: 3.2, repeat: Infinity, ease: "easeInOut" }}
+            />
             <div className="mt-2 text-sm font-bold text-tm-primary">记忆管理虎</div>
-          </div>
-        </div>
-        <div className="space-y-3">
+          </motion.div>
+        </section>
+
+        <section className="space-y-3">
           <div>
             <div className="text-base font-semibold text-tm-primary">输出去向</div>
             <div className="text-xs text-tm-tertiary">四条写入路线同时展示，不把 0 项隐藏</div>
           </div>
-          {outputRows.map(([key, label, description, value, tone]) => (
-            <RouteChip key={String(key)} label={String(label)} description={String(description)} value={value as number | null} total={flowTotal} tone={tone as "ok" | "warn" | "info"} />
+          {outputs.map((output) => (
+            <RouteChip key={output.key} label={output.label} description={output.description} value={output.value} total={output.total} tone={output.tone} />
           ))}
-        </div>
+        </section>
       </div>
-    </DashboardCard>
+    </div>
+  );
+}
+
+function FlowPath({ id, path, delay }: { id: string; path: string; delay: number }) {
+  return (
+    <>
+      <motion.path
+        id={id}
+        d={path}
+        fill="none"
+        stroke="#c8a560"
+        strokeOpacity="0.34"
+        strokeWidth="2"
+        filter="url(#memoryFlowGlow)"
+        initial={{ pathLength: 0.15 }}
+        animate={{ pathLength: [0.15, 1, 0.15] }}
+        transition={{ duration: 3.6, delay, repeat: Infinity, ease: "easeInOut" }}
+      />
+      <circle r="4" fill="#c8a560" opacity="0.82">
+        <animateMotion dur="3.8s" repeatCount="indefinite" begin={`${delay}s`}>
+          <mpath href={`#${id}`} />
+        </animateMotion>
+      </circle>
+    </>
   );
 }
 

@@ -40,6 +40,16 @@ type WikiTarget = {
   similar?: Array<{ path?: string; reason?: string }>;
 };
 
+type ActionQueueItem = {
+  id: number;
+  label: string;
+  detail: string;
+  status: "queued" | "running" | "done" | "failed";
+  paths: string[];
+  progress: number;
+  message?: string;
+};
+
 type InboxRow = {
   path: string;
   group?: string;
@@ -314,6 +324,86 @@ function Toast({ msg }: { msg: { text: string; ok: boolean } | null }) {
   );
 }
 
+function ActionQueueDock({ items, onClear }: { items: ActionQueueItem[]; onClear: () => void }) {
+  const active = items.filter((item) => item.status === "queued" || item.status === "running").length;
+  const failed = items.filter((item) => item.status === "failed").length;
+  const done = items.filter((item) => item.status === "done").length;
+  const summary = active ? `${active} 项正在处理` : failed ? `${failed} 项需要查看` : `${done} 项已完成`;
+  const latest = items.slice(-6).reverse();
+  if (!items.length) return null;
+  return (
+    <motion.aside
+      initial={{ opacity: 0, y: 18, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: 18, scale: 0.98 }}
+      className={classNames(
+        "group fixed bottom-5 right-5 z-40 w-[min(360px,calc(100vw-32px))] overflow-hidden rounded-2xl border bg-tm-card shadow-2xl",
+        failed ? "border-tm-fail-border" : active ? "border-tm-accent" : "border-tm-border",
+      )}
+      aria-live="polite"
+    >
+      <div className="flex items-center gap-3 px-4 py-3">
+        <span className="relative flex size-3">
+          {active ? <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-tm-accent opacity-60" /> : null}
+          <span className={classNames("relative inline-flex size-3 rounded-full", failed ? "bg-tm-fail" : active ? "bg-tm-accent" : "bg-tm-ok")} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-bold text-tm-primary">处理队列</div>
+          <div className="truncate text-xs text-tm-tertiary">{summary}</div>
+        </div>
+        <div className="text-[11px] font-semibold text-tm-tertiary">悬停展开</div>
+      </div>
+      <div className="max-h-0 overflow-hidden border-t border-transparent transition-all duration-300 group-hover:max-h-[360px] group-hover:border-tm-border">
+        <div className="space-y-2 p-3">
+          <div className="flex justify-end">
+            <button type="button" onClick={onClear} className="rounded-md bg-tm-card-alt px-2 py-1 text-xs text-tm-secondary hover:bg-tm-overlay">
+              清理完成项
+            </button>
+          </div>
+          <AnimatePresence initial={false}>
+            {latest.map((item) => (
+              <motion.div
+                layout
+                key={item.id}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                className={classNames(
+                  "rounded-xl border bg-tm-card-alt p-3",
+                  item.status === "failed" ? "border-tm-fail-border" : item.status === "done" ? "border-tm-ok-border" : "border-tm-border",
+                )}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-tm-primary">{item.label}</div>
+                    <div className="truncate text-xs text-tm-tertiary">{item.message || item.detail}</div>
+                  </div>
+                  <div className="shrink-0 text-xs font-semibold text-tm-secondary">{queueStatusLabel(item.status)}</div>
+                </div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-tm-border">
+                  <motion.div
+                    layout
+                    className={classNames("h-full rounded-full", item.status === "failed" ? "bg-tm-fail" : item.status === "done" ? "bg-tm-ok" : "bg-tm-accent")}
+                    animate={{ width: `${item.progress}%` }}
+                    transition={{ type: "spring", stiffness: 220, damping: 26 }}
+                  />
+                </div>
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        </div>
+      </div>
+    </motion.aside>
+  );
+}
+
+function queueStatusLabel(status: ActionQueueItem["status"]) {
+  if (status === "running") return "处理中";
+  if (status === "done") return "完成";
+  if (status === "failed") return "失败";
+  return "排队中";
+}
+
 // ---------------------------------------------------------------------------
 // Inbox row card
 // ---------------------------------------------------------------------------
@@ -344,6 +434,7 @@ function InboxCard({
   onToggle,
   onAction,
   busy,
+  busyAction,
   done,
   t,
 }: {
@@ -353,6 +444,7 @@ function InboxCard({
   onToggle: () => void;
   onAction: (action: string) => void;
   busy: boolean;
+  busyAction: string | null;
   done: boolean;
   t: TFn;
 }) {
@@ -360,6 +452,7 @@ function InboxCard({
   const hardRule = Boolean(row.route_hard_rule);
   const stale = Boolean(row.stale_archive);
   const recommended = row.action || "";
+  const archiveBusy = busyAction === "archive";
 
   const isDisabled = (action: string) => hardRule && action !== mapAction(recommended);
 
@@ -367,15 +460,27 @@ function InboxCard({
     <motion.article
       layout
       initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: done ? 0.5 : 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.97 }}
+      animate={{ opacity: done ? 0 : 1, y: done ? -8 : 0, scale: done ? 0.985 : 1 }}
+      exit={{ opacity: 0, height: 0, marginTop: 0, scale: 0.97 }}
       transition={{ duration: 0.22 }}
       className={classNames(
-        "rounded-xl border bg-tm-card p-3 transition-colors",
+        "relative overflow-hidden rounded-xl border bg-tm-card p-3 transition-colors",
         stale ? "border-l-4 border-tm-fail-border border-tm-border" : "border-tm-border",
+        archiveBusy && "border-tm-fail-border bg-tm-fail-bg",
         done && "line-through",
       )}
     >
+      <AnimatePresence>
+        {busy && (
+          <motion.div
+            initial={{ x: "-100%" }}
+            animate={{ x: "100%" }}
+            exit={{ opacity: 0 }}
+            transition={{ repeat: Infinity, duration: archiveBusy ? 1.1 : 1.5, ease: "easeInOut" }}
+            className="pointer-events-none absolute inset-y-0 w-1/3 bg-tm-accent/20"
+          />
+        )}
+      </AnimatePresence>
       <div className="flex items-start gap-3">
         <input
           type="checkbox"
@@ -417,6 +522,7 @@ function InboxCard({
       <div className="mt-2.5 flex flex-wrap items-center gap-2 pl-7">
         {(["archive", "promote_mem0", "promote_wiki", "keep"] as const).map((action) => {
           const isRec = action === mapAction(recommended);
+          const isActive = busyAction === action;
           return (
             <button
               key={action}
@@ -432,7 +538,7 @@ function InboxCard({
                     : "bg-tm-card-alt text-tm-secondary hover:bg-tm-overlay",
               )}
             >
-              {busy && isRec && <Loader2 size={12} className="animate-spin" />}
+              {isActive && <Loader2 size={12} className="animate-spin" />}
               {actionLabel(action, t)}
             </button>
           );
@@ -460,6 +566,18 @@ function InboxCard({
             <pre className="mt-2 whitespace-pre-wrap pl-7 text-xs leading-5 text-tm-tertiary">
               {row.raw_summary}
             </pre>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {(busy || done) && (
+          <motion.div
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 6 }}
+            className={classNames("mt-2 pl-7 text-xs", done ? "text-tm-ok" : archiveBusy ? "text-tm-fail" : "text-tm-warn")}
+          >
+            {done ? "协助成功，正在移出列表。" : archiveBusy ? "已加入归档队列，正在写入并刷新列表..." : "已加入处理队列，正在写入..."}
           </motion.div>
         )}
       </AnimatePresence>
@@ -986,10 +1104,13 @@ function App() {
   );
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busyPaths, setBusyPaths] = useState<Set<string>>(new Set());
+  const [busyActions, setBusyActions] = useState<Record<string, string>>({});
   const [donePaths, setDonePaths] = useState<Set<string>>(new Set());
+  const [actionQueue, setActionQueue] = useState<ActionQueueItem[]>([]);
   const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [wikiModal, setWikiModal] = useState<WikiModalState | null>(null);
+  const queueSeq = useRef(0);
 
   const date = digest.date || "";
   const t: TFn = (key) => copy[lang][key] || copy.zh[key];
@@ -1002,6 +1123,55 @@ function App() {
   function notify(text: string, ok = true) {
     setToast({ text, ok });
     window.setTimeout(() => setToast(null), 3500);
+  }
+
+  function rowTitle(path: string) {
+    const rows = [...(digestRef.current.inbox_rows || []), ...(digestRef.current.hidden_inbox_rows || [])];
+    const row = rows.find((item) => item.path === path);
+    return row?.title_cn || row?.summary || path;
+  }
+
+  function enqueueAction(label: string, detail: string, paths: string[]) {
+    const id = ++queueSeq.current;
+    setActionQueue((prev) => [
+      ...prev,
+      {
+        id,
+        label,
+        detail,
+        paths,
+        status: "queued",
+        progress: 18,
+      },
+    ].slice(-8));
+    window.setTimeout(() => updateQueueItem(id, { status: "running", progress: 58, message: "正在处理..." }), 80);
+    return id;
+  }
+
+  function updateQueueItem(id: number, patch: Partial<ActionQueueItem>) {
+    setActionQueue((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  }
+
+  function setPathsBusy(paths: string[], action: string) {
+    setBusyPaths((prev) => new Set([...prev, ...paths]));
+    setBusyActions((prev) => {
+      const next = { ...prev };
+      paths.forEach((path) => { next[path] = action; });
+      return next;
+    });
+  }
+
+  function clearPathsBusy(paths: string[]) {
+    setBusyPaths((prev) => {
+      const next = new Set(prev);
+      paths.forEach((path) => next.delete(path));
+      return next;
+    });
+    setBusyActions((prev) => {
+      const next = { ...prev };
+      paths.forEach((path) => { delete next[path]; });
+      return next;
+    });
   }
 
   function toggleLang() {
@@ -1095,7 +1265,9 @@ function App() {
   }
 
   async function runInboxAction(path: string, action: string, target?: WikiTarget) {
-    setBusyPaths((prev) => new Set(prev).add(path));
+    const label = actionLabel(action, t);
+    const queueId = enqueueAction(label, rowTitle(path), [path]);
+    setPathsBusy([path], action);
     try {
       const body = target
         ? { path, action, date, partition: target.partition, slug: target.slug }
@@ -1108,28 +1280,32 @@ function App() {
           next.delete(path);
           return next;
         });
-        notify(`${actionLabel(action, t)} ${t("done")}`);
+        updateQueueItem(queueId, { status: "done", progress: 100, message: `${label}完成` });
+        notify(`${label} ${t("done")}`);
+        await sleep(action === "archive" ? 700 : 260);
         await fetchDigest(true);
       } else {
+        updateQueueItem(queueId, { status: "failed", progress: 100, message: String(res.error || t("actionFailed")) });
         notify(res.error || t("actionFailed"), false);
       }
     } catch (e) {
-      if (!(await markCompletedIfPathGoneAfterError(e, path, actionLabel(action, t)))) {
+      if (await markCompletedIfPathGoneAfterError(e, path, label)) {
+        updateQueueItem(queueId, { status: "done", progress: 100, message: `${label}完成` });
+      } else {
+        updateQueueItem(queueId, { status: "failed", progress: 100, message: String((e as Error).message || t("actionFailed")) });
         notify(String((e as Error).message || t("actionFailed")), false);
       }
     } finally {
-      setBusyPaths((prev) => {
-        const next = new Set(prev);
-        next.delete(path);
-        return next;
-      });
+      clearPathsBusy([path]);
     }
   }
 
   async function runBatchAction(action: string, explicitPaths?: string[], target?: WikiTarget | null) {
     const paths = explicitPaths || Array.from(selected);
     if (!paths.length) return;
-    setBusyPaths((prev) => new Set([...prev, ...paths]));
+    const label = `批量${actionLabel(action, t)}`;
+    const queueId = enqueueAction(label, `${paths.length} 条待处理`, paths);
+    setPathsBusy(paths, action);
     try {
       const body = target
         ? { paths, action, date, partition: target.partition, slug_prefix: target.slug }
@@ -1140,8 +1316,11 @@ function App() {
         notify(`${t("selectedPrefix")} ${success} 条：${actionLabel(action, t)} ${t("done")}`);
         setDonePaths((prev) => new Set([...prev, ...paths]));
         setSelected(new Set());
+        updateQueueItem(queueId, { status: "done", progress: 100, message: `${success} 条处理完成` });
+        await sleep(action === "archive" ? 700 : 260);
         await fetchDigest(true);
       } else {
+        updateQueueItem(queueId, { status: "failed", progress: 100, message: String(res.error || t("batchFailed")) });
         notify(res.error || t("batchFailed"), false);
       }
     } catch (e) {
@@ -1150,31 +1329,40 @@ function App() {
         if (await markCompletedIfPathGone(path, actionLabel(action, t))) reconciled.push(path);
       }
       if (reconciled.length !== paths.length) {
+        updateQueueItem(queueId, { status: "failed", progress: 100, message: String((e as Error).message || t("batchFailed")) });
         notify(String((e as Error).message || t("batchFailed")), false);
+      } else {
+        updateQueueItem(queueId, { status: "done", progress: 100, message: `${reconciled.length} 条已复查完成` });
       }
     } finally {
-      setBusyPaths((prev) => {
-        const next = new Set(prev);
-        paths.forEach((p) => next.delete(p));
-        return next;
-      });
+      clearPathsBusy(paths);
     }
   }
 
   async function archiveAllStale() {
     if (!staleCount) return;
+    const stalePaths = visibleRows.filter((row) => row.stale_archive).map((row) => row.path);
+    const queueId = enqueueAction(t("archiveAll"), `${staleCount} 条过期待归档`, stalePaths);
+    if (stalePaths.length) setPathsBusy(stalePaths, "archive");
     setRefreshing(true);
     try {
       const res = await postJson("/api/batch/archive-stale", { date });
       if (res.ok !== false) {
-        notify(`已归档 ${Number(res.archived?.length || 0)} 条过期收件箱`);
+        const archived = Number(res.archived?.length || 0);
+        notify(`已归档 ${archived} 条过期收件箱`);
+        if (stalePaths.length) setDonePaths((prev) => new Set([...prev, ...stalePaths]));
+        updateQueueItem(queueId, { status: "done", progress: 100, message: `已归档 ${archived} 条` });
+        await sleep(700);
         await fetchDigest(true);
       } else {
+        updateQueueItem(queueId, { status: "failed", progress: 100, message: String(res.error || t("archiveFailed")) });
         notify(res.error || t("archiveFailed"), false);
       }
     } catch (e) {
+      updateQueueItem(queueId, { status: "failed", progress: 100, message: String((e as Error).message || t("archiveFailed")) });
       notify(String((e as Error).message || t("archiveFailed")), false);
     } finally {
+      if (stalePaths.length) clearPathsBusy(stalePaths);
       setRefreshing(false);
     }
   }
@@ -1358,6 +1546,7 @@ function App() {
                     }
                     onAction={(action) => action === "promote_wiki" ? openWikiModalForInbox(row) : runInboxAction(row.path, action)}
                     busy={busyPaths.has(row.path)}
+                    busyAction={busyActions[row.path] || null}
                     done={donePaths.has(row.path)}
                     t={t}
                   />
@@ -1437,6 +1626,10 @@ function App() {
       </main>
 
       <Toast msg={toast} />
+      <ActionQueueDock
+        items={actionQueue}
+        onClear={() => setActionQueue((prev) => prev.filter((item) => item.status === "queued" || item.status === "running"))}
+      />
       <WikiTargetModal
         state={wikiModal}
         busy={busyPaths.size > 0}

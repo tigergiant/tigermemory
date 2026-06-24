@@ -15,7 +15,7 @@ import {
   Workflow,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { DashboardCard, DashboardShell } from "../components/DashboardShell";
@@ -65,12 +65,22 @@ type CanvasData = {
   repo_dirty?: boolean;
 };
 
+declare global {
+  interface Window {
+    mermaid?: {
+      initialize: (config: AnyRecord) => void;
+      render: (id: string, source: string, container?: Element) => Promise<string | { svg?: string }>;
+    };
+    __tmMermaidLoadPromise?: Promise<void>;
+  }
+}
+
 const copy = {
   zh: {
     tagline: "你的 AI 第二大脑",
     badge: "项目进展",
     title: "项目进展",
-    intro: "渲染 project-canvas.md 的项目星图、活跃模块和待纳入候选。当前为只读视图。",
+    intro: "渲染 project-canvas.md 的项目画布、活跃模块和待纳入候选。当前为只读视图。",
     steward: "记忆管家",
     loaded: "已加载",
     unavailable: "不可用",
@@ -79,7 +89,7 @@ const copy = {
     refresh: "刷新",
     refreshing: "正在刷新",
     statusMap: "项目状态图",
-    overview: "星图",
+    overview: "画布",
     modules: "模块视图",
     technical: "技术图",
     candidates: "待纳入星图",
@@ -99,11 +109,11 @@ const copy = {
     reason: "原因",
     evidence: "证据",
     confidence: "置信度",
-    graphHint: "点击节点查看详情；可用按钮缩放星图。",
+    graphHint: "按旧版 Mermaid 项目画布渲染；可用按钮缩放查看。",
     zoomIn: "放大",
     zoomOut: "缩小",
     reset: "复位",
-    technicalHint: "React 版先展示 Mermaid 源码作为技术视图；星图总览由同一份数据生成。",
+    technicalHint: "技术视图展示 project-canvas.md 中的 Mermaid 源码；总览使用同一份源码渲染。",
     warnings: "提示",
     errors: "错误",
   },
@@ -111,7 +121,7 @@ const copy = {
     tagline: "Your AI second brain",
     badge: "Projects",
     title: "Project Canvas",
-    intro: "Render project-canvas.md as a read-only star map, active module list, and candidate shelf.",
+    intro: "Render project-canvas.md as a read-only project canvas, active module list, and candidate shelf.",
     steward: "Memory steward",
     loaded: "Loaded",
     unavailable: "Unavailable",
@@ -140,11 +150,11 @@ const copy = {
     reason: "Reason",
     evidence: "Evidence",
     confidence: "Confidence",
-    graphHint: "Click a node to inspect it; use controls to zoom.",
+    graphHint: "Rendered from the legacy Mermaid project canvas; use controls to zoom.",
     zoomIn: "Zoom in",
     zoomOut: "Zoom out",
     reset: "Reset",
-    technicalHint: "The React view shows Mermaid source here while the star map is generated from the same data.",
+    technicalHint: "Technical view shows the Mermaid source from project-canvas.md; overview renders the same source.",
     warnings: "Warnings",
     errors: "Errors",
   },
@@ -296,7 +306,12 @@ function App() {
             <AnimatePresence mode="wait">
               {view === "overview" && (
                 <motion.div key="overview" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-                  <ProjectStarMap modules={modules} zoom={zoom} selectedIndex={selectedIndex} onSelect={(index) => { setSelectedIndex(index); setView("module"); }} hint={t("graphHint")} />
+                  <MermaidCanvas
+                    source={data.mermaid_src || ""}
+                    zoom={zoom}
+                    hint={t("graphHint")}
+                    fallback={<ProjectStarMap modules={modules} zoom={zoom} selectedIndex={selectedIndex} onSelect={(index) => { setSelectedIndex(index); setView("module"); }} hint={t("graphHint")} />}
+                  />
                 </motion.div>
               )}
               {view === "module" && (
@@ -348,6 +363,81 @@ function MessageList({ title, items, tone }: { title: string; items: unknown[]; 
       {clean.map((item) => <div key={item}>{item}</div>)}
     </div>
   );
+}
+
+function MermaidCanvas({ source, zoom, hint, fallback }: { source: string; zoom: number; hint: string; fallback: React.ReactNode }) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const tokenRef = useRef(0);
+  const [svg, setSvg] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const token = ++tokenRef.current;
+    const cleanSource = source.trim();
+    setSvg("");
+    setError("");
+    if (!cleanSource) return;
+    loadMermaid()
+      .then(async () => {
+        if (!window.mermaid || token !== tokenRef.current) return;
+        window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "base" });
+        const result = await window.mermaid.render(`tm-canvas-react-${token}-${Date.now()}`, cleanSource, hostRef.current || undefined);
+        if (token !== tokenRef.current) return;
+        const rendered = typeof result === "string" ? result : result.svg;
+        if (!rendered) throw new Error("Mermaid 渲染返回空");
+        setSvg(rendered);
+      })
+      .catch((err: unknown) => {
+        if (token !== tokenRef.current) return;
+        setError(String((err as Error).message || "Mermaid 渲染失败"));
+      });
+  }, [source]);
+
+  if (!source.trim()) return <>{fallback}</>;
+
+  return (
+    <div>
+      <div className="mb-3 flex items-center gap-2 rounded-xl border border-tm-border bg-tm-card-alt px-3 py-2 text-xs text-tm-tertiary">
+        <Search size={14} className="text-tm-accent" />
+        {hint}
+      </div>
+      <div className="relative h-[560px] overflow-auto rounded-2xl border border-tm-border bg-tm-card-alt p-5">
+        <div ref={hostRef} className="hidden" />
+        {svg ? (
+          <motion.div
+            className="mx-auto min-w-[820px] origin-top-left rounded-xl bg-tm-card p-4 shadow-sm [&_svg]:h-auto [&_svg]:max-w-none [&_svg]:min-w-[760px] [&_svg]:text-tm-primary"
+            animate={{ scale: zoom }}
+            transition={{ type: "spring", stiffness: 260, damping: 30 }}
+            dangerouslySetInnerHTML={{ __html: svg }}
+          />
+        ) : error ? (
+          <div className="rounded-xl border border-tm-fail-border bg-tm-fail-bg p-4 text-sm leading-6 text-tm-fail">
+            {error}
+            <div className="mt-2 text-xs text-tm-tertiary">已保留模块列表；可切到“技术图”查看源码。</div>
+          </div>
+        ) : (
+          <div className="flex h-full items-center justify-center gap-2 text-sm text-tm-tertiary">
+            <Loader2 size={16} className="animate-spin" />
+            正在渲染项目画布...
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function loadMermaid() {
+  if (window.mermaid) return Promise.resolve();
+  if (window.__tmMermaidLoadPromise) return window.__tmMermaidLoadPromise;
+  window.__tmMermaidLoadPromise = new Promise<void>((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "/static/assets/mermaid.min.js";
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Mermaid 资源加载失败"));
+    document.head.appendChild(script);
+  });
+  return window.__tmMermaidLoadPromise;
 }
 
 function ProjectStarMap({
