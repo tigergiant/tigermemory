@@ -182,6 +182,14 @@ function text(value: unknown, fallback = "-") {
   return String(value);
 }
 
+function friendlyCanvasWarning(value: unknown) {
+  const message = text(value, "");
+  if (message.includes("mem0_request blocked") || message.includes("local profile")) {
+    return "当前是 local profile，本地模式不会请求高级 Mem0 HTTP；待纳入候选已降级读取 inbox/wiki_proposal。";
+  }
+  return message;
+}
+
 function format(template: string, values: Record<string, string | number>) {
   return Object.entries(values).reduce((current, [key, value]) => current.replace(`{${key}}`, String(value)), template);
 }
@@ -587,7 +595,7 @@ function CandidateShelf({ candidates, warnings, labels }: { candidates: CanvasCa
   return (
     <div className="space-y-3">
       {warnings.map((warning) => (
-        <div key={warning} className="rounded-xl border border-tm-warn-border bg-tm-warn-bg p-3 text-xs leading-5 text-tm-warn">{warning}</div>
+        <div key={warning} className="rounded-xl border border-tm-warn-border bg-tm-warn-bg p-3 text-xs leading-5 text-tm-warn">{friendlyCanvasWarning(warning)}</div>
       ))}
       <AnimatePresence>
         {candidates.map((item, index) => {

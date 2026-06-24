@@ -129,6 +129,11 @@ function numberText(value: unknown, suffix = "") {
   return `${n.toLocaleString()}${suffix}`;
 }
 
+function isLocalMem0Blocked(value: unknown) {
+  const message = text(value, "").toLowerCase();
+  return message.includes("local profile") || message.includes("mem0_request blocked");
+}
+
 function asRecord(value: unknown): AnyRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as AnyRecord) : {};
 }
@@ -222,6 +227,7 @@ function RoutePanel({ memory, rangeKey }: { memory: QualityData; rangeKey: Range
   const flowTotal = outputRows.reduce((sum, row) => sum + (row[3] as number | null ?? 0), 0);
   const history = asRecord(flow.history);
   const mem0Status = asRecord(memory.mem0_status);
+  const mem0Blocked = isLocalMem0Blocked(mem0Status.error);
   const mem0Ok = mem0Status.ok !== false && outputValues.mem0 !== null;
   const wikiOk = outputValues.wiki !== null;
   const sourceCards = sourceRows.map(([label, value, tone], index) => ({
@@ -252,7 +258,7 @@ function RoutePanel({ memory, rangeKey }: { memory: QualityData; rangeKey: Range
         </div>
       )}
       <div className="mb-3 flex flex-wrap gap-2">
-        <StatusPill tone={mem0Ok ? "ok" : "fail"}>Mem0：{mem0Ok ? "已连接" : text(mem0Status.error, "不可达")}</StatusPill>
+        <StatusPill tone={mem0Ok ? "ok" : mem0Blocked ? "warn" : "fail"}>Mem0：{mem0Ok ? "已连接" : mem0Blocked ? "local profile 已关闭高级 Mem0" : text(mem0Status.error, "不可达")}</StatusPill>
         <StatusPill tone={wikiOk ? "ok" : "warn"}>Wiki：{wikiOk ? "有写入/提案日志" : "缺写入日志"}</StatusPill>
       </div>
       <div className="grid gap-3 md:grid-cols-4">
@@ -397,14 +403,15 @@ function KpiGrid({ memory, rangeKey }: { memory: QualityData; rangeKey: RangeKey
   const hasDuration = p95 !== null && traceTotal > 0;
   const mem0Status = asRecord(memory.mem0_status);
   const mem0Count = numeric(counts.mem0);
-  const mem0Value = mem0Count !== null ? numberText(mem0Count) : numeric(mem0Status.count) !== null ? numberText(mem0Status.count) : mem0Status.ok === false ? "不可达" : "未接入";
+  const mem0Blocked = isLocalMem0Blocked(mem0Status.error);
+  const mem0Value = mem0Count !== null ? numberText(mem0Count) : numeric(mem0Status.count) !== null ? numberText(mem0Status.count) : mem0Status.ok === false ? (mem0Blocked ? "本地模式" : "不可达") : "未接入";
   const rangeSpan = range.start_date && range.end_date ? `${range.start_date} 至 ${range.end_date}` : text(memory.date, "-");
   const issueValue = traceTotal ? numberText(answerFailures) : "等待记录";
 
   return (
     <div className="grid gap-3 md:grid-cols-4">
       <MetricCard label="待确认内容" value={numberText(counts.inbox ?? 0)} subline={Number(counts.review_hidden || 0) ? `已折叠低价值 ${counts.review_hidden} 项` : `${range.label}审核队列`} tone={Number(counts.inbox || 0) ? "warn" : "ok"} />
-      <MetricCard label={mem0Count !== null ? `${range.label}进入即时记忆` : "即时记忆连接"} value={mem0Value} subline={mem0Count !== null ? `统计 ${rangeSpan}` : mem0Status.ok === false ? text(mem0Status.error, "服务暂时不可连接") : "当前总量待同步"} tone={mem0Status.ok === false ? "fail" : "ok"} />
+      <MetricCard label={mem0Count !== null ? `${range.label}进入即时记忆` : "即时记忆连接"} value={mem0Value} subline={mem0Count !== null ? `统计 ${rangeSpan}` : mem0Blocked ? "local profile 下不请求高级 Mem0 HTTP" : mem0Status.ok === false ? text(mem0Status.error, "服务暂时不可连接") : "当前总量待同步"} tone={mem0Status.ok === false ? (mem0Blocked ? "warn" : "fail") : "ok"} />
       <MetricCard label="回答耗时 P95" value={hasDuration ? numberText(Math.round(p95 || 0), " ms") : "无记录"} subline={hasDuration ? `P50 ${numberText(Math.round(p50 || 0), " ms")} · 未命中 ${notFound}` : "有回答记录后显示耗时"} tone={hasDuration && (p95 || 0) > 5000 ? "warn" : "ok"} />
       <MetricCard label="回答失败" value={issueValue} subline={traceTotal ? (answerFailures ? "模型或链路错误，需要复核" : notFound ? `未命中 ${notFound} 条，属于证据不足拒答` : `${range.trace_label}未见失败项`) : "有回答记录后显示失败项"} tone={answerFailures ? "warn" : "ok"} />
     </div>
