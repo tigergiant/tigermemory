@@ -131,20 +131,18 @@ export function DashboardHeader({
           <button
             type="button"
             onClick={onToggleTheme}
-            className="inline-flex items-center gap-1 rounded-full bg-tm-card-alt px-2 py-1 text-xs font-semibold text-tm-tertiary hover:text-tm-secondary"
+            className="inline-flex items-center justify-center rounded-full p-1.5 text-tm-tertiary transition-colors hover:bg-tm-card-alt hover:text-tm-secondary"
             aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
           >
-            {theme === "dark" ? <Sun size={13} /> : <Moon size={13} />}
-            {theme === "dark" ? (lang === "zh" ? "日间" : "Light") : (lang === "zh" ? "夜间" : "Dark")}
+            {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
           </button>
           <button
             type="button"
             onClick={onToggleLang}
-            className="inline-flex items-center gap-1 rounded-full bg-tm-card-alt px-2 py-1 text-xs font-semibold text-tm-tertiary hover:text-tm-secondary"
+            className="inline-flex items-center justify-center rounded-full p-1.5 text-tm-tertiary transition-colors hover:bg-tm-card-alt hover:text-tm-secondary"
             aria-label="Toggle language"
           >
-            <Globe2 size={13} />
-            {lang === "zh" ? "中" : "EN"}
+            <Globe2 size={15} />
           </button>
           {versionLabel && (
             <code className="min-w-[4.75rem] rounded-full bg-tm-card-alt px-2 py-1 text-center text-xs text-tm-tertiary">
