@@ -3864,6 +3864,13 @@ def test_quality_page_flow_panel_keeps_all_routes_visible():
     assert "MemoryFlowDiagram" in quality_react
     assert "FlowPath" in quality_react
     assert "animateMotion" in quality_react
+    assert "QualitySignalsPanel" in quality_react
+    assert "记忆分类与质量信号" in quality_react
+    assert "ResizeObserver" in quality_react
+    assert "getBoundingClientRect" in quality_react
+    assert "data-flow-id" in quality_react
+    assert "querySelectorAll<HTMLElement>('[data-flow-id^=\"source-\"]')" in quality_react
+    assert "querySelectorAll<HTMLElement>('[data-flow-id^=\"output-\"]')" in quality_react
     assert "Mem0：" in quality_react
     assert "Wiki：" in quality_react
     assert "['即时记忆', sourceValues.daily" in pages_js

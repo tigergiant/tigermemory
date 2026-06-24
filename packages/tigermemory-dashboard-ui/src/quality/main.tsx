@@ -1,7 +1,6 @@
 import {
   Activity,
   BarChart3,
-  Database,
   Loader2,
   Radar,
   RefreshCcw,
@@ -159,11 +158,11 @@ function StatusPill({ tone, children }: { tone: "ok" | "warn" | "fail" | "info";
   return <span className={cx("rounded-full border px-2.5 py-1 text-xs font-semibold", toneClass(tone))}>{children}</span>;
 }
 
-function MetricCard({ label, value, subline, tone = "info" }: { label: string; value: unknown; subline: string; tone?: "ok" | "warn" | "fail" | "info" }) {
+function MetricCard({ label, value, subline, tone = "info", compact = false }: { label: string; value: unknown; subline: string; tone?: "ok" | "warn" | "fail" | "info"; compact?: boolean }) {
   return (
-    <motion.article layout className="rounded-xl border border-tm-border bg-tm-card-alt p-3">
+    <motion.article layout className={cx("rounded-xl border border-tm-border bg-tm-card-alt", compact ? "px-3 py-2.5" : "p-3")}>
       <div className="text-xs font-bold text-tm-tertiary">{label}</div>
-      <div className="mt-1 text-2xl font-extrabold text-tm-primary">{value}</div>
+      <div className={cx("mt-1 font-extrabold text-tm-primary", compact ? "text-xl leading-6" : "text-2xl")}>{value}</div>
       <div className={cx("mt-1 text-xs", tone === "ok" ? "text-tm-ok" : tone === "fail" ? "text-tm-fail" : tone === "warn" ? "text-tm-warn" : "text-tm-secondary")}>{subline}</div>
     </motion.article>
   );
@@ -185,7 +184,19 @@ function ProgressBar({ label, value, total, tone = "warn" }: { label: string; va
   );
 }
 
-function RoutePanel({ memory, rangeKey }: { memory: QualityData; rangeKey: RangeKey }) {
+function RoutePanel({
+  memory,
+  rangeKey,
+  refreshing,
+  updatingRange,
+  onRangeChange,
+}: {
+  memory: QualityData;
+  rangeKey: RangeKey;
+  refreshing: boolean;
+  updatingRange: RangeKey | null;
+  onRangeChange: (range: RangeKey) => void;
+}) {
   const counts = asRecord(memory.counts);
   const flow = asRecord(memory.route_flow || memory.flow);
   const range = qualityRange(memory, rangeKey);
@@ -247,27 +258,44 @@ function RoutePanel({ memory, rangeKey }: { memory: QualityData; rangeKey: Range
   }));
 
   return (
-    <DashboardCard icon={<Route size={20} />} title={`${range.label}记忆分流`} count={range.trace_label}>
-      <div className="mb-3 text-sm leading-6 text-tm-secondary">
-        {Array.isArray(memory.available_dates) ? `已纳入 ${memory.available_dates.length} 天数据` : "实时查看输入、分流规则和输出结果"}
-        {Array.isArray(memory.missing_dates) && memory.missing_dates.length ? `，缺 ${memory.missing_dates.length} 天日报` : ""}；mem0 / Wiki / inbox / discard 四条路线同时展示。
+    <DashboardCard icon={<Route size={20} />} title={`${range.label}记忆分流`} count={range.trace_label} className="min-h-[720px]">
+      <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+        <div className="min-w-0">
+          <p className="text-sm leading-6 text-tm-secondary">
+            {Array.isArray(memory.available_dates) ? `已纳入 ${memory.available_dates.length} 天数据` : "实时查看输入、分流规则和输出结果"}
+            {Array.isArray(memory.missing_dates) && memory.missing_dates.length ? `，缺 ${memory.missing_dates.length} 天日报` : ""}；mem0 / Wiki / inbox / discard 四条路线同时展示。
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <StatusPill tone={mem0Ok ? "ok" : mem0Blocked ? "warn" : "fail"}>Mem0：{mem0Ok ? "已连接" : mem0Blocked ? "local profile 已关闭高级 Mem0" : text(mem0Status.error, "不可达")}</StatusPill>
+            <StatusPill tone={wikiOk ? "ok" : "warn"}>Wiki：{wikiOk ? "有写入/提案日志" : "缺写入日志"}</StatusPill>
+          </div>
+        </div>
+        <div className="inline-flex shrink-0 rounded-full border border-tm-border bg-tm-card-alt p-1 text-xs font-semibold text-tm-secondary">
+          {(Object.keys(rangeFallback) as RangeKey[]).map((item) => (
+            <button
+              key={item}
+              type="button"
+              onClick={() => onRangeChange(item)}
+              className={cx("rounded-full px-3 py-1.5 transition-colors", range.key === item ? "bg-tm-accent text-tm-primary shadow-sm" : "text-tm-secondary hover:bg-tm-card")}
+              disabled={refreshing && updatingRange === item}
+            >
+              {rangeFallback[item].label}
+            </button>
+          ))}
+        </div>
       </div>
       {history.note && (
         <div className="mb-3 rounded-xl border border-tm-border bg-tm-card-alt px-3 py-2 text-xs leading-5 text-tm-secondary">
           {text(history.note)}
         </div>
       )}
-      <div className="mb-3 flex flex-wrap gap-2">
-        <StatusPill tone={mem0Ok ? "ok" : mem0Blocked ? "warn" : "fail"}>Mem0：{mem0Ok ? "已连接" : mem0Blocked ? "local profile 已关闭高级 Mem0" : text(mem0Status.error, "不可达")}</StatusPill>
-        <StatusPill tone={wikiOk ? "ok" : "warn"}>Wiki：{wikiOk ? "有写入/提案日志" : "缺写入日志"}</StatusPill>
-      </div>
-      <div className="grid gap-3 md:grid-cols-4">
-        <MetricCard label={isLogged ? `${range.label}流水` : `${range.label}候选`} value={numberText(inputTotal)} subline={isLogged ? "已记录路线" : "输入池"} tone="info" />
-        <MetricCard label="自动处理" value={numberText([outputValues.mem0, outputValues.wiki, outputValues.discard].reduce((sum, value) => sum + (value ?? 0), 0))} subline="即时记忆 / Wiki / 忽略" tone="ok" />
-        <MetricCard label="人工审核" value={numberText(outputValues.inbox)} subline={isLogged ? "真实退回人工" : "需要确认的内容"} tone="warn" />
-        <MetricCard label="回答失败" value={numberText(outputValues.issue)} subline="未找到另看状态分布" tone={outputValues.issue ? "fail" : "ok"} />
-      </div>
       <MemoryFlowDiagram sources={sourceCards} outputs={outputCards} />
+      <div className="mt-4 grid gap-3 md:grid-cols-4">
+        <MetricCard compact label={isLogged ? `${range.label}流水` : `${range.label}候选`} value={numberText(inputTotal)} subline={isLogged ? "已记录路线" : "输入池"} tone="info" />
+        <MetricCard compact label="自动处理" value={numberText([outputValues.mem0, outputValues.wiki, outputValues.discard].reduce((sum, value) => sum + (value ?? 0), 0))} subline="即时记忆 / Wiki / 忽略" tone="ok" />
+        <MetricCard compact label="人工审核" value={numberText(outputValues.inbox)} subline={isLogged ? "真实退回人工" : "需要确认的内容"} tone="warn" />
+        <MetricCard compact label="回答失败" value={numberText(outputValues.issue)} subline="未找到另看状态分布" tone={outputValues.issue ? "fail" : "ok"} />
+      </div>
     </DashboardCard>
   );
 }
@@ -279,11 +307,76 @@ function MemoryFlowDiagram({
   sources: Array<{ key: string; label: string; value: number | null; total: number; tone: FlowTone }>;
   outputs: Array<{ key: string; label: string; description: string; value: number | null; total: number; tone: FlowTone }>;
 }) {
-  const sourceYs = [58, 138, 218];
-  const outputYs = [44, 104, 164, 224];
+  const boardRef = useRef<HTMLDivElement | null>(null);
+  const frameRef = useRef(0);
+  const [paths, setPaths] = useState<Array<{ id: string; d: string; tone: FlowTone; delay: number }>>([]);
+  const [activeFlow, setActiveFlow] = useState<string | null>(null);
+
+  useEffect(() => {
+    const board = boardRef.current;
+    if (!board) return;
+
+    const draw = () => {
+      frameRef.current = 0;
+      const rect = board.getBoundingClientRect();
+      const engine = board.querySelector<HTMLElement>('[data-flow-id="engine"]');
+      if (!engine) return;
+      const engineRect = engine.getBoundingClientRect();
+      const engineLeft = engineRect.left - rect.left;
+      const engineRight = engineRect.right - rect.left;
+      const engineCenterY = engineRect.top - rect.top + engineRect.height / 2;
+
+      const next: Array<{ id: string; d: string; tone: FlowTone; delay: number }> = [];
+      const pathFor = (x1: number, y1: number, x2: number, y2: number) => {
+        const c1x = x1 + (x2 - x1) * 0.48;
+        const c2x = x1 + (x2 - x1) * 0.52;
+        return `M ${x1} ${y1} C ${c1x} ${y1}, ${c2x} ${y2}, ${x2} ${y2}`;
+      };
+
+      board.querySelectorAll<HTMLElement>('[data-flow-id^="source-"]').forEach((node, index) => {
+        const nodeRect = node.getBoundingClientRect();
+        const flowId = node.dataset.flowId || `source-${index}`;
+        next.push({
+          id: flowId,
+          d: pathFor(nodeRect.right - rect.left, nodeRect.top - rect.top + nodeRect.height / 2, engineLeft + 8, engineCenterY),
+          tone: sources[index]?.tone || "info",
+          delay: index * 0.16,
+        });
+      });
+
+      board.querySelectorAll<HTMLElement>('[data-flow-id^="output-"]').forEach((node, index) => {
+        const nodeRect = node.getBoundingClientRect();
+        const flowId = node.dataset.flowId || `output-${index}`;
+        next.push({
+          id: flowId,
+          d: pathFor(engineRight - 8, engineCenterY, nodeRect.left - rect.left, nodeRect.top - rect.top + nodeRect.height / 2),
+          tone: outputs[index]?.tone || "info",
+          delay: 0.42 + index * 0.16,
+        });
+      });
+      setPaths(next);
+    };
+
+    const schedule = () => {
+      if (frameRef.current) return;
+      frameRef.current = window.requestAnimationFrame(draw);
+    };
+
+    schedule();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
+    observer?.observe(board);
+    board.querySelectorAll<HTMLElement>("[data-flow-id]").forEach((node) => observer?.observe(node));
+    window.addEventListener("resize", schedule);
+    return () => {
+      window.removeEventListener("resize", schedule);
+      observer?.disconnect();
+      if (frameRef.current) window.cancelAnimationFrame(frameRef.current);
+    };
+  }, [sources, outputs]);
+
   return (
-    <div className="relative mt-4 overflow-hidden rounded-2xl border border-tm-border bg-tm-card-alt p-4">
-      <svg className="pointer-events-none absolute inset-0 hidden h-full w-full lg:block" viewBox="0 0 1000 300" preserveAspectRatio="none" aria-hidden="true">
+    <div ref={boardRef} className="relative mt-5 min-h-[540px] overflow-hidden rounded-2xl border border-tm-border bg-tm-card-alt p-5">
+      <svg className="pointer-events-none absolute inset-0 z-[1] hidden h-full w-full lg:block" aria-hidden="true">
         <defs>
           <filter id="memoryFlowGlow">
             <feGaussianBlur stdDeviation="3" result="blur" />
@@ -293,40 +386,36 @@ function MemoryFlowDiagram({
             </feMerge>
           </filter>
         </defs>
-        {sources.map((source, index) => {
-          const path = `M 275 ${sourceYs[index] || 138} C 390 ${sourceYs[index] || 138}, 405 150, 485 150`;
-          return <FlowPath key={source.key} id={`flow-${source.key}`} path={path} delay={index * 0.18} />;
-        })}
-        {outputs.map((output, index) => {
-          const path = `M 515 150 C 600 150, 625 ${outputYs[index] || 150}, 725 ${outputYs[index] || 150}`;
-          return <FlowPath key={output.key} id={`flow-${output.key}`} path={path} delay={0.45 + index * 0.18} />;
-        })}
+        {paths.map((path) => <FlowPath key={path.id} id={`flow-${path.id}`} path={path.d} delay={path.delay} tone={path.tone} active={activeFlow === path.id} />)}
       </svg>
 
-      <div className="relative z-10 grid gap-4 lg:grid-cols-[minmax(0,1fr)_190px_minmax(0,1fr)]">
+      <div className="relative z-10 grid min-h-[500px] gap-4 md:grid-cols-[minmax(150px,0.82fr)_minmax(190px,1fr)_minmax(150px,0.82fr)]">
         <section className="space-y-3">
           <div>
             <div className="text-base font-semibold text-tm-primary">输入池</div>
             <div className="text-xs text-tm-tertiary">写入候选与回答质检来源</div>
           </div>
           {sources.map((source) => (
-            <RouteChip key={source.key} label={source.label} value={source.value} total={source.total} tone={source.tone} />
+            <RouteChip key={source.key} flowId={source.key} label={source.label} value={source.value} total={source.total} tone={source.tone} onHover={setActiveFlow} />
           ))}
         </section>
 
-        <section className="flex items-center justify-center">
+        <section className="flex min-h-[360px] items-center justify-center">
           <motion.div
+            data-flow-id="engine"
+            onMouseEnter={() => setActiveFlow(null)}
             whileHover={{ scale: 1.03 }}
-            className="rounded-2xl border border-tm-border-strong bg-tm-card px-5 py-4 text-center shadow-[0_10px_30px_rgba(168,123,34,0.14)]"
+            className="relative rounded-2xl border border-tm-border-strong bg-tm-card px-7 py-6 text-center shadow-[0_16px_42px_rgba(168,123,34,0.16)]"
           >
             <motion.img
               src="/static/cute_tiger_guard.png"
               alt=""
-              className="mx-auto h-28 w-28 object-contain drop-shadow-xl"
+              className="mx-auto h-32 w-32 object-contain drop-shadow-xl"
               animate={{ y: [0, -4, 0] }}
               transition={{ duration: 3.2, repeat: Infinity, ease: "easeInOut" }}
             />
             <div className="mt-2 text-sm font-bold text-tm-primary">记忆管理虎</div>
+            <div className="mt-1 text-[11px] leading-4 text-tm-tertiary">路由、去重、降级与人工回收</div>
           </motion.div>
         </section>
 
@@ -336,7 +425,7 @@ function MemoryFlowDiagram({
             <div className="text-xs text-tm-tertiary">四条写入路线同时展示，不把 0 项隐藏</div>
           </div>
           {outputs.map((output) => (
-            <RouteChip key={output.key} label={output.label} description={output.description} value={output.value} total={output.total} tone={output.tone} />
+            <RouteChip key={output.key} flowId={`output-${output.key}`} label={output.label} description={output.description} value={output.value} total={output.total} tone={output.tone} onHover={setActiveFlow} />
           ))}
         </section>
       </div>
@@ -344,22 +433,25 @@ function MemoryFlowDiagram({
   );
 }
 
-function FlowPath({ id, path, delay }: { id: string; path: string; delay: number }) {
+function FlowPath({ id, path, delay, tone, active }: { id: string; path: string; delay: number; tone: FlowTone; active: boolean }) {
+  const stroke = tone === "ok" ? "#52733a" : tone === "warn" ? "#c8a560" : "#6f8ea0";
   return (
     <>
       <motion.path
         id={id}
+        data-flow-path-for={id.replace(/^flow-/, "")}
         d={path}
         fill="none"
-        stroke="#c8a560"
-        strokeOpacity="0.34"
-        strokeWidth="2"
+        stroke={stroke}
+        strokeLinecap="round"
+        strokeOpacity={active ? "0.86" : "0.62"}
+        strokeWidth={active ? "3.8" : "2.8"}
         filter="url(#memoryFlowGlow)"
         initial={{ pathLength: 0.15 }}
         animate={{ pathLength: [0.15, 1, 0.15] }}
         transition={{ duration: 3.6, delay, repeat: Infinity, ease: "easeInOut" }}
       />
-      <circle r="4" fill="#c8a560" opacity="0.82">
+      <circle r={active ? "5" : "4"} fill={stroke} opacity={active ? "0.95" : "0.82"}>
         <animateMotion dur="3.8s" repeatCount="indefinite" begin={`${delay}s`}>
           <mpath href={`#${id}`} />
         </animateMotion>
@@ -368,10 +460,32 @@ function FlowPath({ id, path, delay }: { id: string; path: string; delay: number
   );
 }
 
-function RouteChip({ label, description, value, total, tone }: { label: string; description?: string; value: number | null; total: number; tone: "ok" | "warn" | "info" }) {
+function RouteChip({
+  flowId,
+  label,
+  description,
+  value,
+  total,
+  tone,
+  onHover,
+}: {
+  flowId: string;
+  label: string;
+  description?: string;
+  value: number | null;
+  total: number;
+  tone: "ok" | "warn" | "info";
+  onHover: (id: string | null) => void;
+}) {
   const pct = value !== null && total > 0 ? Math.round((value * 100) / total) : value !== null ? 0 : null;
   return (
-    <motion.article layout className={cx("rounded-xl border px-3 py-3", toneClass(tone))}>
+    <motion.article
+      layout
+      data-flow-id={flowId}
+      onMouseEnter={() => onHover(flowId)}
+      onMouseLeave={() => onHover(null)}
+      className={cx("rounded-xl border px-3 py-3 shadow-sm transition-shadow hover:shadow-md", toneClass(tone))}
+    >
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <div className="text-sm font-semibold">{label}</div>
@@ -410,10 +524,10 @@ function KpiGrid({ memory, rangeKey }: { memory: QualityData; rangeKey: RangeKey
 
   return (
     <div className="grid gap-3 md:grid-cols-4">
-      <MetricCard label="待确认内容" value={numberText(counts.inbox ?? 0)} subline={Number(counts.review_hidden || 0) ? `已折叠低价值 ${counts.review_hidden} 项` : `${range.label}审核队列`} tone={Number(counts.inbox || 0) ? "warn" : "ok"} />
-      <MetricCard label={mem0Count !== null ? `${range.label}进入即时记忆` : "即时记忆连接"} value={mem0Value} subline={mem0Count !== null ? `统计 ${rangeSpan}` : mem0Blocked ? "local profile 下不请求高级 Mem0 HTTP" : mem0Status.ok === false ? text(mem0Status.error, "服务暂时不可连接") : "当前总量待同步"} tone={mem0Status.ok === false ? (mem0Blocked ? "warn" : "fail") : "ok"} />
-      <MetricCard label="回答耗时 P95" value={hasDuration ? numberText(Math.round(p95 || 0), " ms") : "无记录"} subline={hasDuration ? `P50 ${numberText(Math.round(p50 || 0), " ms")} · 未命中 ${notFound}` : "有回答记录后显示耗时"} tone={hasDuration && (p95 || 0) > 5000 ? "warn" : "ok"} />
-      <MetricCard label="回答失败" value={issueValue} subline={traceTotal ? (answerFailures ? "模型或链路错误，需要复核" : notFound ? `未命中 ${notFound} 条，属于证据不足拒答` : `${range.trace_label}未见失败项`) : "有回答记录后显示失败项"} tone={answerFailures ? "warn" : "ok"} />
+      <MetricCard compact label="待确认内容" value={numberText(counts.inbox ?? 0)} subline={Number(counts.review_hidden || 0) ? `已折叠低价值 ${counts.review_hidden} 项` : `${range.label}审核队列`} tone={Number(counts.inbox || 0) ? "warn" : "ok"} />
+      <MetricCard compact label={mem0Count !== null ? `${range.label}进入即时记忆` : "即时记忆连接"} value={mem0Value} subline={mem0Count !== null ? `统计 ${rangeSpan}` : mem0Blocked ? "local profile 下不请求高级 Mem0 HTTP" : mem0Status.ok === false ? text(mem0Status.error, "服务暂时不可连接") : "当前总量待同步"} tone={mem0Status.ok === false ? (mem0Blocked ? "warn" : "fail") : "ok"} />
+      <MetricCard compact label="回答耗时 P95" value={hasDuration ? numberText(Math.round(p95 || 0), " ms") : "无记录"} subline={hasDuration ? `P50 ${numberText(Math.round(p50 || 0), " ms")} · 未命中 ${notFound}` : "有回答记录后显示耗时"} tone={hasDuration && (p95 || 0) > 5000 ? "warn" : "ok"} />
+      <MetricCard compact label="回答失败" value={issueValue} subline={traceTotal ? (answerFailures ? "模型或链路错误，需要复核" : notFound ? `未命中 ${notFound} 条，属于证据不足拒答` : `${range.trace_label}未见失败项`) : "有回答记录后显示失败项"} tone={answerFailures ? "warn" : "ok"} />
     </div>
   );
 }
@@ -592,6 +706,121 @@ function Failures({ memory, rangeKey }: { memory: QualityData; rangeKey: RangeKe
   );
 }
 
+function QualitySignalsPanel({ memory, rangeKey }: { memory: QualityData; rangeKey: RangeKey }) {
+  const range = qualityRange(memory, rangeKey);
+  const trace = asRecord(memory.trace_summary);
+  const statusCounts = asRecord(trace.status_counts);
+  const statusRows = [
+    ["成功", Number(statusCounts.ok || 0), "ok" as const],
+    ["未找到", Number(statusCounts.not_found || 0), "warn" as const],
+    ["冲突", Number(statusCounts.conflict || 0), "warn" as const],
+    ["错误", Number(statusCounts.error || 0), "fail" as const],
+  ];
+  const statusTotal = statusRows.reduce((sum, row) => sum + row[1], 0);
+  const quality = asRecord(trace.recommendation_quality);
+  const topNoisy = asArray(quality.top_noisy_reasons).slice(0, 3);
+  const feedback = asRecord(quality.feedback_summary);
+  const actionCounts = asRecord(feedback.action_counts);
+  const intake = asRecord(trace.real_failure_intake);
+  const latestFailures = (asArray(intake.latest).length ? asArray(intake.latest) : asArray(trace.latest).filter((item) => item.status && item.status !== "ok")).slice(0, 3);
+  const candidateCount = Number(intake.candidate_count || latestFailures.length || 0);
+  const release = asRecord(memory.retrieval_release);
+  const enabled = Boolean(release.default_enabled) || release.decision === "service_default_enabled" || release.decision === "default_candidate";
+  const hasRecommendation = Number(quality.recommendation_shown_count || 0) > 0 || Number(quality.recommendation_candidate_count || 0) > 0 || topNoisy.length > 0;
+
+  return (
+    <DashboardCard icon={<Radar size={20} />} title="记忆分类与质量信号" count={range.trace_label} className="xl:sticky xl:top-24">
+      <div className="space-y-4">
+        <section className="rounded-2xl border border-tm-border bg-tm-card-alt p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-tm-primary">回答分类</div>
+              <div className="mt-1 text-xs text-tm-tertiary">成功、拒答和异常合并展示，避免重复占用卡片。</div>
+            </div>
+            <StatusPill tone={statusTotal ? "ok" : "warn"}>{statusTotal ? `${statusTotal} 条` : "等待记录"}</StatusPill>
+          </div>
+          <div className="mt-4 space-y-3">
+            {statusTotal ? statusRows.filter(([, value]) => value > 0).map(([label, value, tone]) => (
+              <ProgressBar key={label as string} label={label as string} value={value as number} total={statusTotal} tone={tone as "ok" | "warn" | "fail"} />
+            )) : (
+              <div className="rounded-xl border border-tm-border bg-tm-card p-3 text-xs leading-5 text-tm-tertiary">有回答记录后显示成功、未找到、冲突和错误占比。</div>
+            )}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-tm-border bg-tm-card-alt p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-tm-primary">相关证据推荐质量</div>
+              <div className="mt-1 text-xs text-tm-tertiary">把 sidecar、门禁和人工反馈压缩在同一面板。</div>
+            </div>
+            <StatusPill tone={hasRecommendation ? "warn" : "ok"}>{hasRecommendation ? "有信号" : "暂无噪音"}</StatusPill>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            {[
+              ["展示", quality.recommendation_shown_count || 0],
+              ["采用", quality.recommendation_used_as_evidence_count || 0],
+              ["拦截", quality.recommendation_blocked_by_gate_count || 0],
+            ].map(([label, value]) => (
+              <div key={String(label)} className="rounded-xl border border-tm-border bg-tm-card px-2 py-2 text-center">
+                <div className="text-[11px] text-tm-tertiary">{label}</div>
+                <div className="mt-1 text-lg font-extrabold text-tm-primary">{numberText(value)}</div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 grid gap-2 text-xs">
+            {topNoisy.length ? topNoisy.map((row, index) => (
+              <div key={`${row.reason_category}-${index}`} className="rounded-lg border border-tm-border bg-tm-card px-2 py-1.5 text-tm-secondary">{text(row.reason_category)} × {numberText(row.count || 0)}</div>
+            )) : (
+              <div className="rounded-lg border border-tm-border bg-tm-card px-2 py-1.5 text-tm-tertiary">最近未出现门禁拦截噪音。</div>
+            )}
+            {Object.keys(actionCounts).length > 0 && (
+              <div className="rounded-lg border border-tm-border bg-tm-card px-2 py-1.5 text-tm-secondary">
+                显式反馈：clicked {numberText(actionCounts.clicked || 0)} / ignored {numberText(actionCounts.ignored || 0)} / selected {numberText(actionCounts.selected || 0)}
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-tm-border bg-tm-card-alt p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-tm-primary">P5 真实失败池</div>
+              <div className="mt-1 text-xs text-tm-tertiary">{candidateCount ? "仅展示 trace/hash 摘要，不展开原始 query。" : "P5 真实失败池暂无样本。"}</div>
+            </div>
+            <StatusPill tone={candidateCount ? "warn" : "ok"}>{numberText(candidateCount)}</StatusPill>
+          </div>
+          <div className="mt-3 space-y-2">
+            {latestFailures.length ? latestFailures.map((item, index) => (
+              <div key={`${item.trace_id || index}`} className="rounded-xl border border-tm-border bg-tm-card px-3 py-2 text-xs leading-5 text-tm-secondary">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-tm-primary">{text(item.status, "warn")}</span>
+                  <code>{text(item.trace_id, "未记录")}</code>
+                </div>
+                <div className="mt-1 text-tm-tertiary">query hash {text(item.query_hash, "未记录")} · {numeric(item.duration_ms) !== null ? `${text(item.duration_ms)} ms` : "耗时未记录"}</div>
+              </div>
+            )) : (
+              <div className="rounded-xl border border-tm-border bg-tm-card px-3 py-2 text-xs text-tm-tertiary">有未找到、冲突、错误或失败记录后会进入这里。</div>
+            )}
+          </div>
+        </section>
+
+        {release.schema_version && (
+          <section className="rounded-2xl border border-tm-border bg-tm-card-alt p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-tm-primary">检索放行状态</div>
+                <div className="mt-1 line-clamp-3 text-xs leading-5 text-tm-secondary">{text(release.summary, "等待下一次 holdout 证据。")}</div>
+              </div>
+              <StatusPill tone={enabled ? "ok" : "warn"}>{enabled ? "运行中" : "未默认"}</StatusPill>
+            </div>
+          </section>
+        )}
+      </div>
+    </DashboardCard>
+  );
+}
+
 function App() {
   const initialData = useMemo(() => readJsonScript("tm-quality-data") as QualityEnvelope, []);
   const initialMemory = initialData.memory || (initialData as QualityData);
@@ -688,43 +917,23 @@ function App() {
           )}
         </AnimatePresence>
 
-        <KpiGrid memory={memory} rangeKey={range.key} />
-
-        <section className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.75fr)]">
+        <section className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1.68fr)_360px]">
           <div className="min-w-0">
-            <DashboardCard icon={<Database size={20} />} title={t("systemQuality")} count={hasTrace ? "响应耗时已接入" : "等待真实回答记录"}>
-              <div className="mb-3 inline-flex rounded-full border border-tm-border bg-tm-card-alt p-1 text-sm font-semibold text-tm-secondary">
-                <span className="rounded-full bg-tm-accent px-4 py-2 text-tm-primary">{t("systemQuality")}</span>
-              </div>
-              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                <div>
-                  <div className="flex items-start gap-2">
-                    <Route size={20} className="mt-1 shrink-0 text-tm-accent" />
-                    <div>
-                      <h2 className="text-xl font-semibold text-tm-primary">{range.label}{t("routeFlow")}</h2>
-                      <p className="text-sm leading-6 text-tm-secondary">{t("routeSub")}</p>
-                    </div>
-                  </div>
-                  <div className="mt-3 inline-flex rounded-full border border-tm-border bg-tm-card-alt p-1 text-xs font-semibold text-tm-secondary">
-                    {(Object.keys(rangeFallback) as RangeKey[]).map((item) => (
-                      <button key={item} type="button" onClick={() => { setRangeKey(item); fetchQuality(item, false); }} className={cx("rounded-full px-3 py-1.5 transition-colors", range.key === item ? "bg-tm-accent text-tm-primary shadow-sm" : "text-tm-secondary hover:bg-tm-card")} disabled={refreshing && updatingRange === item}>
-                        {rangeFallback[item].label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <StatusPill tone={hasTrace ? "ok" : "warn"}>{hasTrace ? "响应耗时已接入" : "等待真实回答记录"}</StatusPill>
-              </div>
-              {empty && <div className="mt-6 rounded-2xl border border-tm-warn-border bg-tm-warn-bg p-4 text-sm leading-6 text-tm-warn">{range.label}{t("empty")}</div>}
-            </DashboardCard>
-            <RoutePanel memory={memory} rangeKey={range.key} />
+            {empty && <div className="mb-5 rounded-2xl border border-tm-warn-border bg-tm-warn-bg p-4 text-sm leading-6 text-tm-warn">{range.label}{t("empty")}</div>}
+            <RoutePanel
+              memory={memory}
+              rangeKey={range.key}
+              refreshing={refreshing}
+              updatingRange={updatingRange}
+              onRangeChange={(item) => {
+                setRangeKey(item);
+                fetchQuality(item, false);
+              }}
+            />
           </div>
 
           <aside className="min-w-0">
-            <StatusSection memory={memory} rangeKey={range.key} />
-            <RecommendationQuality memory={memory} rangeKey={range.key} />
-            <RetrievalRelease memory={memory} />
-            <Failures memory={memory} rangeKey={range.key} />
+            <QualitySignalsPanel memory={memory} rangeKey={range.key} />
           </aside>
         </section>
       </main>
