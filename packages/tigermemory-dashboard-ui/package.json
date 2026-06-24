@@ -8,6 +8,7 @@
     "build:start": "node build-all.mjs start",
     "build:digest": "node build-all.mjs digest",
     "build:quality": "node build-all.mjs quality",
+    "build:settings": "node build-all.mjs settings",
     "dev": "vite --host 127.0.0.1 --port 2000"
   },
   "dependencies": {

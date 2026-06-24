@@ -1,0 +1,11 @@
+{
+  "settings.html": {
+    "file": "assets/settings-W-_Av690.js",
+    "name": "settings",
+    "src": "settings.html",
+    "isEntry": true,
+    "css": [
+      "assets/settings-kzYXDDQv.css"
+    ]
+  }
+}

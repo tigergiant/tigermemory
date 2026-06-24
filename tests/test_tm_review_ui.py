@@ -1584,7 +1584,9 @@ def test_dashboard_data_pages_return_fast_shells(tmp_path, monkeypatch):
     assert "/static/react/quality/assets/" in quality.text
     assert settings.status_code == 200
     assert '"loading": true' in settings.text
-    assert "window.tmPages.settings.init" in settings.text
+    assert 'data-tm-react-settings' in settings.text
+    assert "/static/dashboard-pages.js" not in settings.text
+    assert "/static/react/settings/assets/" in settings.text
 
 
 def test_self_evolution_page_returns_fast_loading_shell(tmp_path, monkeypatch):
@@ -1669,6 +1671,7 @@ def test_react_dashboard_pages_use_shared_shell_components():
     digest = (ui_src / "digest" / "main.tsx").read_text(encoding="utf-8")
     health = (ui_src / "health" / "main.tsx").read_text(encoding="utf-8")
     quality = (ui_src / "quality" / "main.tsx").read_text(encoding="utf-8")
+    settings = (ui_src / "settings" / "main.tsx").read_text(encoding="utf-8")
 
     assert shell.exists()
     shell_text = shell.read_text(encoding="utf-8")
@@ -1679,10 +1682,12 @@ def test_react_dashboard_pages_use_shared_shell_components():
     assert "../components/DashboardShell" in digest
     assert "../components/DashboardShell" in health
     assert "../components/DashboardShell" in quality
+    assert "../components/DashboardShell" in settings
     assert "const nav =" not in start
     assert "const NAV =" not in digest
     assert "const NAV =" not in health
     assert "const NAV =" not in quality
+    assert "const NAV =" not in settings
 
 
 def test_dashboard_modularization_rules(tmp_path, monkeypatch):
@@ -1694,9 +1699,9 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     client.get("/", headers=HOST, follow_redirects=False)
 
-    # dashboard shell pages — /digest、/health、/quality 已迁移为 React island，不再引用旧 dashboard-common.js。
-    legacy_pages = ["/agent-tools", "/settings"]
-    react_pages = ["/digest/2026-05-21", "/health", "/quality"]
+    # dashboard shell pages — /digest、/health、/quality、/settings 已迁移为 React island，不再引用旧 dashboard-common.js。
+    legacy_pages = ["/agent-tools"]
+    react_pages = ["/digest/2026-05-21", "/health", "/quality", "/settings"]
     pages = react_pages + legacy_pages
     monkeypatch.setattr(tm_review_ui, "REPO_ROOT", tmp_path)
     _write_digest(tmp_path)
@@ -1705,13 +1710,13 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
         res = client.get(route, headers=HOST)
         assert res.status_code == 200
 
-    # 1. dashboard-common.js 仍被 2 个未迁移页引用
+    # 1. dashboard-common.js 仍被未迁移页引用
     for route in legacy_pages:
         res = client.get(route, headers=HOST)
         assert "/static/dashboard-common.js" in res.text
 
-    # 2. dashboard-pages.js 被 settings / agent-tools 引用；
-    # /start、/digest、/health 与 /quality 均已迁移为 React island，不再依赖旧 dashboard-pages.js 控制器。
+    # 2. dashboard-pages.js 被 agent-tools 引用；
+    # /start、/digest、/health、/quality 与 /settings 均已迁移为 React island，不再依赖旧 dashboard-pages.js 控制器。
     digest = client.get("/digest/2026-05-21", headers=HOST)
     start = client.get("/start", headers=HOST)
     health = client.get("/health", headers=HOST)
@@ -1727,7 +1732,9 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "/static/dashboard-pages.js" not in quality.text
     assert "/static/react/quality/assets/" in quality.text
     assert 'data-tm-react-quality' in quality.text
-    assert "/static/dashboard-pages.js" in settings.text
+    assert "/static/dashboard-pages.js" not in settings.text
+    assert "/static/react/settings/assets/" in settings.text
+    assert 'data-tm-react-settings' in settings.text
     assert "/static/dashboard-pages.js" in agent_tools.text
 
     # 3. service-worker.js 缓存新增 JS
@@ -1748,6 +1755,7 @@ def test_dashboard_modularization_rules(tmp_path, monkeypatch):
     assert "setInterval(fetchHealth" not in health.text
     assert "setInterval(fetchQuality" not in quality.text
     assert "window.tmPages.quality.init" not in quality.text
+    assert "window.tmPages.settings.init" not in settings.text
     assert "function renderDepth" not in settings.text
     assert "function renderChips" not in settings.text
     assert "async function fetchSettings" not in settings.text
@@ -1962,11 +1970,11 @@ def test_dashboard_pages_share_identical_header(tmp_path, monkeypatch):
         "digest": client.get("/digest/2026-05-21", headers=HOST),
         "health": client.get("/health", headers=HOST),
         "quality": client.get("/quality", headers=HOST),
+        "settings": client.get("/settings", headers=HOST),
         "start": client.get("/start", headers=HOST),
     }
     legacy_responses = {
         "agent-tools": client.get("/agent-tools", headers=HOST),
-        "settings": client.get("/settings", headers=HOST),
     }
 
     for page, response in react_responses.items():
@@ -2005,12 +2013,12 @@ def test_quality_and_settings_no_longer_use_raw_json_page(tmp_path, monkeypatch)
     assert "tm-quality-data" in quality.text
     assert 'data-tm-react-quality' in quality.text
     assert "/static/react/quality/assets/" in quality.text
-    assert "settings-data" in settings.text
+    assert "tm-settings-data" in settings.text
+    assert 'data-tm-react-settings' in settings.text
+    assert "/static/react/settings/assets/" in settings.text
     assert "/static/dashboard-pages.js" not in quality.text
+    assert "/static/dashboard-pages.js" not in settings.text
     assert "沟通规则执行度" not in quality.text
-    assert "AI 回复详细程度" in settings.text
-    assert "记忆管家" in settings.text
-    assert "保存在本机" in settings.text
     combined = quality.text + settings.text
     assert "阶段 2 占位" not in combined
     assert "bg-zinc-950" not in combined
