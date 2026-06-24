@@ -2522,7 +2522,8 @@ def _compact_report_from_answer_trace(path: pathlib.Path) -> dict[str, Any]:
     if not path.exists():
         result["issues"].append("answer trace json missing")
         return result
-    data = json.loads(path.read_text(encoding="utf-8"))
+    raw_text = path.read_text(encoding="utf-8-sig")
+    data = json.loads(raw_text)
     failure_count = _int(data.get("failure_count")) or 0
     invalid_row_count = _int(data.get("invalid_row_count")) or 0
     duration = data.get("duration_ms") if isinstance(data.get("duration_ms"), dict) else {}
@@ -2551,7 +2552,7 @@ def _compact_report_from_answer_trace(path: pathlib.Path) -> dict[str, Any]:
         "issues": issues,
         "action_required": ["inspect answer-trace failures"] if issues else [],
         "source_paths": [str(path)],
-        "evidence": _compact_evidence_ids(path.read_text(encoding="utf-8")),
+        "evidence": _compact_evidence_ids(raw_text),
     })
     return result
 

@@ -558,6 +558,19 @@ def test_build_compact_report_answer_trace_preserves_counts(tmp_path):
     assert any("1 failure" in item for item in result["issues"])
 
 
+def test_build_compact_report_answer_trace_accepts_utf8_bom(tmp_path):
+    trace = tmp_path / "answer-trace-summary.json"
+    trace.write_text(
+        "\ufeff" + json.dumps({"row_count": 1, "failure_count": 0}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    result = reflection.build_compact_report(kind="answer-trace", path=trace)
+
+    assert result["status"] == "ok"
+    assert result["summary"]["row_count"] == 1
+
+
 def test_build_compact_report_memory_digest_promotes_count_issues_to_actions(tmp_path):
     operations = tmp_path / "wiki" / "operations"
     operations.mkdir(parents=True)
