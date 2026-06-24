@@ -2040,7 +2040,8 @@ def _section_body(text: str, heading_contains: str) -> str:
 
 def _is_section_heading(line: str, marker: str) -> bool:
     stripped = line.strip()
-    if stripped.startswith("## ") and marker in stripped:
+    heading = _markdown_heading_text(stripped)
+    if heading and marker in heading:
         return True
     if stripped.startswith("**") and stripped.endswith("**") and marker in stripped.strip("*").strip():
         return True
@@ -2049,11 +2050,24 @@ def _is_section_heading(line: str, marker: str) -> bool:
 
 def _is_section_boundary(line: str) -> bool:
     stripped = line.strip()
-    if stripped.startswith("## "):
+    if _markdown_heading_text(stripped):
         return True
     if stripped.startswith("**") and stripped.endswith("**") and 2 <= len(stripped.strip("*").strip()) <= 40:
         return True
     return False
+
+
+def _markdown_heading_text(stripped: str) -> str:
+    count = 0
+    for char in stripped:
+        if char != "#":
+            break
+        count += 1
+    if count == 0 or count > 6:
+        return ""
+    if len(stripped) <= count or stripped[count] != " ":
+        return ""
+    return stripped[count + 1 :].strip()
 
 
 def _compact_section_lines(section: str, *, limit: int = 8) -> list[str]:

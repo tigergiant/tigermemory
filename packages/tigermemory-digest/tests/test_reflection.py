@@ -338,6 +338,34 @@ def test_build_cron_intake_accepts_bold_ai_radar_sections(tmp_path):
     assert all("investment" not in report["kind"] for report in result["reports"])
 
 
+def test_build_cron_intake_accepts_h1_ai_radar_sections(tmp_path):
+    codex_home = tmp_path / ".codex"
+    (codex_home / "reports").mkdir(parents=True)
+    (codex_home / "reports" / "daily-ai-agent-radar-2026-06-24.md").write_text(
+        "\n".join([
+            "# 今日结论",
+            "- 有高信号。",
+            "",
+            "# AI 雷达学习台账候选",
+            "- 项目: codebase-memory-mcp | 分类: 立即评估 | 学习点: repo graph | 本地影响: retrieval | 建议状态: 待评估 | 证据: https://example.com",
+            "",
+            "# 建议动作",
+            "- 立即评估 codebase-memory-mcp。",
+            "",
+            "# 记忆友好收尾摘要",
+            "2026-06-24 AI 雷达发现 codebase-memory-mcp 可对照本地检索链路。",
+        ]),
+        encoding="utf-8",
+    )
+
+    result = reflection.build_cron_intake(date="2026-06-24", window="ai-radar", codex_home=codex_home)
+
+    radar = result["reports"][0]
+    assert "codebase-memory-mcp" in "\n".join(radar["friendly_closeout"])
+    assert any("AI 雷达建议：立即评估 codebase-memory-mcp" in item for item in result["action_items"])
+    assert not any("missing 记忆友好收尾摘要" in warning for warning in result["warnings"])
+
+
 def test_build_cron_intake_filters_reports_by_window(tmp_path):
     operations = tmp_path / "wiki" / "operations"
     operations.mkdir(parents=True)
