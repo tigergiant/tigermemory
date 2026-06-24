@@ -946,11 +946,12 @@ code {
 }
 
 /* ============================================================
-   Dark glass theme — scoped to .tm-dark-shell (start sample page).
-   Everything else stays on the legacy light tokens above.
+   Dark glass theme — tokens defined on <html data-theme="dark">
+   so body and ALL descendants inherit dark values directly.
+   .tm-dark-shell kept as alias for scoped glass/card overrides.
    ============================================================ */
 
-.tm-dark-shell {
+:root[data-theme="dark"] {
   color-scheme: dark;
 
   --bg-primary: #0a0e1a;
@@ -962,9 +963,9 @@ code {
   --border-strong: rgba(200, 165, 96, 0.32);
   --border-divider: rgba(255, 255, 255, 0.08);
 
-  --text-primary: #f6f4ef;
-  --text-secondary: #d4cec2;
-  --text-tertiary: #9c9486;
+  --text-primary: #f8f6f1;
+  --text-secondary: #ddd8ce;
+  --text-tertiary: #b5ada0;
   --text-inverse: #0a0e1a;
 
   --accent-tiger: #e6c378;
@@ -986,6 +987,29 @@ code {
   --status-fail-bg: rgba(200, 90, 70, 0.14);
   --status-fail-border: rgba(220, 120, 100, 0.32);
 
+  background: #0a0e1a;
+  color: var(--text-primary);
+}
+
+/* Dark mode: boost font-weight so text doesn't look thin on dark bg */
+:root[data-theme="dark"] body {
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+:root[data-theme="dark"] .text-sm,
+:root[data-theme="dark"] .text-xs,
+:root[data-theme="dark"] .text-lg,
+:root[data-theme="dark"] .text-xl,
+:root[data-theme="dark"] .text-2xl {
+  font-weight: 450;
+}
+
+/* .tm-dark-shell alias: scoped overrides for glass cards inside the shell div */
+.tm-dark-shell {
+  color-scheme: dark;
   background:
     radial-gradient(circle at 78% 12%, rgba(70, 55, 120, 0.28), transparent 42%),
     radial-gradient(circle at 12% 88%, rgba(26, 59, 110, 0.34), transparent 46%),

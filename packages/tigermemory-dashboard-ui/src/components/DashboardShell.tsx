@@ -33,13 +33,18 @@ function useTheme() {
   const [theme, setTheme] = useState<Theme>(() => {
     try {
       const stored = window.localStorage.getItem(THEME_KEY);
-      if (stored === "dark" || stored === "light") return stored;
+      if (stored === "dark" || stored === "light") {
+        document.documentElement.dataset.theme = stored;
+        return stored;
+      }
     } catch { /* noop */ }
+    document.documentElement.dataset.theme = "dark";
     return "dark";
   });
 
   useEffect(() => {
     window.localStorage.setItem(THEME_KEY, theme);
+    document.documentElement.dataset.theme = theme;
     const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
     if (meta) meta.content = THEME_COLORS[theme];
   }, [theme]);

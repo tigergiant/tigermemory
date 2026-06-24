@@ -618,7 +618,7 @@ function SectionTitle({ icon, eyebrow, title, lead }: { icon: React.ReactNode; e
         {icon}
         {eyebrow}
       </span>
-      <h1>{title}</h1>
+      <h1 className="text-tm-primary">{title}</h1>
       <p>{lead}</p>
     </div>
   );
@@ -683,13 +683,13 @@ function ModeStep({ t }: { t: (key: keyof typeof copy.zh) => string }) {
       <div className="tm-mode-grid">
         <article className="tm-choice-card selected">
           <span>{t("modeRecommended")}</span>
-          <h2>{t("modeLocalTitle")}</h2>
+          <h2 className="text-tm-primary">{t("modeLocalTitle")}</h2>
           <p>{t("modeLocalDesc")}</p>
           <div className="tm-stack">Python + Git + Markdown + SQLite</div>
         </article>
         <article className="tm-choice-card">
           <span>{t("modeAdvanced")}</span>
-          <h2>{t("modeHybridTitle")}</h2>
+          <h2 className="text-tm-primary">{t("modeHybridTitle")}</h2>
           <p>{t("modeHybridDesc")}</p>
           <div className="tm-stack">MCP + realtime memory + gateway</div>
         </article>
@@ -740,7 +740,7 @@ function StyleStep({
         </div>
         <div className="tm-preview-card">
           <span>{current.chip}</span>
-          <h2>{current.name}</h2>
+          <h2 className="text-tm-primary">{current.name}</h2>
           <p>{current.answer}</p>
           <small>{current.note}</small>
         </div>
