@@ -6,6 +6,7 @@ import {
   CircleHelp,
   Code2,
   Database,
+  ExternalLink,
   Gauge,
   KeyRound,
   Laptop,
@@ -157,9 +158,10 @@ const copy = {
     agentSupported: "可一键应用",
     agentPlanned: "计划支持",
     agentMissing: "未检测到",
-    agentMissingToggle: "查看未检测到的软件",
+    agentMissingToggle: "展开全部",
     agentNoDetected: "暂未检测到可接入工具，仍可稍后手动配置。",
     agentSignals: "检测依据",
+    agentManageLink: "完整管理 →",
     pagesEyebrow: "熟悉控制台",
     pagesTitle: "这些页面分别做什么",
     pagesLead: "不用一次全部学会。先记住三个入口：今日待确认、运行检查、AI 连接。",
@@ -293,9 +295,10 @@ const copy = {
     agentSupported: "Ready to apply",
     agentPlanned: "Planned",
     agentMissing: "Not detected",
-    agentMissingToggle: "Show tools not detected",
+    agentMissingToggle: "Expand all",
     agentNoDetected: "No connectable tools detected yet. You can configure them later.",
     agentSignals: "Signals",
+    agentManageLink: "Full management →",
     pagesEyebrow: "Meet the dashboard",
     pagesTitle: "What each page is for",
     pagesLead: "You do not need to learn everything now. Start with Review, Health, and AI Tools.",
@@ -884,6 +887,10 @@ function AgentStep({
               </motion.div>
             )}
           </AnimatePresence>
+          <a className="tm-manage-link" href="/agent-tools">
+            <ExternalLink size={13} />
+            {t("agentManageLink")}
+          </a>
         </div>
       </div>
     </>

@@ -277,6 +277,10 @@ code {
   max-width: 1152px; /* matches legacy main container */
   margin: 0 auto;
   padding: 24px 20px 56px; /* py-6-ish */
+  /* make wizard fill remaining viewport so card height is predictable */
+  height: calc(100vh - 80px);
+  min-height: 620px;
+  max-height: 880px;
 }
 
 /* No giant outer frame: the wizard "card" is the same surface treatment as a
@@ -290,6 +294,8 @@ code {
   background: var(--bg-card);
   box-shadow: 0 1px 2px rgba(31, 29, 27, 0.04), 0 12px 32px rgba(168, 123, 34, 0.06);
   overflow: hidden;
+  /* fill the .tm-wizard container so buttons stay pinned */
+  height: 100%;
 }
 
 .tm-wizard-head,
@@ -367,6 +373,7 @@ code {
   gap: 28px;
   align-items: start; /* P1: stable title position regardless of right-column height */
   padding: 20px; /* matches legacy card p-4 density */
+  overflow-y: auto;
 }
 
 .tm-section-title {
@@ -529,6 +536,11 @@ code {
 .tm-two-column {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
   align-items: stretch;
+  overflow-y: auto;
+}
+
+.tm-two-column.llm {
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
 }
 
 .tm-option-list {
@@ -575,6 +587,24 @@ code {
   color: var(--text-primary);
 }
 
+.tm-manage-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-divider);
+  color: var(--accent-tiger-hi);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  align-self: start;
+}
+
+.tm-manage-link:hover {
+  text-decoration: underline;
+}
+
 .tm-form {
   padding: 16px;
   display: grid;
@@ -603,6 +633,14 @@ code {
   background: #fff;
   color: var(--text-primary);
   font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tm-form input[type="text"],
+.tm-form input[type="password"],
+.tm-form input[type="url"] {
+  font-size: 12px;
 }
 
 .tm-form input:focus,
@@ -667,6 +705,8 @@ code {
 .tm-missing-list {
   display: grid;
   gap: 8px;
+  max-height: 340px;
+  overflow-y: auto;
 }
 
 .tm-agent-row {
@@ -697,7 +737,22 @@ code {
 }
 
 .tm-agent-row.compact {
-  padding: 10px 12px;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.tm-agent-row.compact strong {
+  font-size: 12px;
+}
+
+.tm-agent-row.compact small {
+  font-size: 11px;
+  margin-top: 1px;
+}
+
+.tm-agent-row.compact .tm-status-pill {
+  font-size: 11px;
+  padding: 2px 8px;
 }
 
 .tm-status-pill {
