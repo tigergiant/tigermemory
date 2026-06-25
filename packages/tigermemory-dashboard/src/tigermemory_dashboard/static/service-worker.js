@@ -1,11 +1,10 @@
-﻿const CACHE_NAME = 'tigermemory-memory-ops-v83';
+const CACHE_NAME = 'tigermemory-memory-ops-v84';
 const OFFLINE_URL = '/offline.html';
 const DASHBOARD_PATHS = new Set([
   '/start',
   '/health',
   '/quality',
   '/canvas',
-  '/self-evolution',
   '/agent-tools',
   '/settings'
 ]);
@@ -17,7 +16,6 @@ const APP_SHELL = [
   '/static/i18n.json',
   '/static/i18n.js',
   '/static/dashboard-common.js',
-  '/static/dashboard-pages.js',
   '/static/tiger/tigermemory_tiger_logo.svg',
   '/static/tiger/tigerlogo.png',
   '/static/tiger/tigermemory_tiger_logo_192.png',

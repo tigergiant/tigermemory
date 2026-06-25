@@ -75,6 +75,7 @@ PORT = int(os.getenv("TM_DASHBOARD_PORT", "9777"))
 REPO_ROOT = tm_core.REPO_ROOT
 UI_REPO_ROOT = REPO_ROOT
 STATIC_DIR = pathlib.Path(str(resources.files("tigermemory_dashboard") / "static"))
+PRIVATE_STATIC_DIR = pathlib.Path(str(resources.files("tigermemory_dashboard") / "private_static"))
 DASHBOARD_GIT_STATUS_TIMEOUT = float(os.getenv("TM_DASHBOARD_GIT_STATUS_TIMEOUT", "12"))
 PREFS_DB = (
     tm_dashboard_prefs.PREFS_DB
@@ -4513,6 +4514,18 @@ def _render_template(template_name: str, replacements: dict[str, str]) -> str:
     return html
 
 
+def _render_private_template(template_name: str, replacements: dict[str, str]) -> str:
+    path = PRIVATE_STATIC_DIR / template_name
+    html = path.read_text(encoding="utf-8")
+    parts = STATIC_DIR / "_components"
+    html = html.replace("__HEADER__", (parts / "header.html").read_text(encoding="utf-8"))
+    html = html.replace("__STYLE__", (parts / "style.css").read_text(encoding="utf-8"))
+    html = html.replace("__GIT_SHA__", git_sha())
+    for key, value in replacements.items():
+        html = html.replace(key, value)
+    return html
+
+
 def _template() -> str:
     return _render_template("review.html", {})
 
@@ -4589,11 +4602,11 @@ def _render_canvas_page(data: dict[str, Any]) -> str:
 
 def _render_self_evolution_page(data: dict[str, Any]) -> str:
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
-    react_entry = STATIC_DIR / "react" / "self-evolution" / "self-evolution.html"
+    react_entry = PRIVATE_STATIC_DIR / "react" / "self-evolution" / "self-evolution.html"
     if react_entry.exists():
         html = react_entry.read_text(encoding="utf-8")
         return html.replace("__TM_SELF_EVOLUTION_JSON__", payload).replace("__GIT_SHA__", git_sha())
-    return _render_template("self-evolution.html", {"__SELF_EVOLUTION_JSON__": payload})
+    return _render_private_template("self-evolution.html", {"__SELF_EVOLUTION_JSON__": payload})
 
 
 def _start_shell() -> dict[str, Any]:

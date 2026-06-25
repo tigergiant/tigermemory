@@ -6,14 +6,12 @@ import {
   CheckCircle2,
   CircleDot,
   ClipboardCheck,
-  ExternalLink,
   GitCommit,
   Loader2,
   Play,
   RefreshCcw,
   SearchCheck,
   ShieldCheck,
-  Sparkles,
   TerminalSquare,
   XCircle,
 } from "lucide-react";
@@ -49,18 +47,6 @@ type ActivityItem = {
   title?: string;
   created_at?: string;
   sha?: string;
-};
-
-type TradingNode = {
-  ok?: boolean;
-  status?: string;
-  date?: string;
-  account_scope?: string;
-  blockers?: string[];
-  summary?: AnyRecord;
-  adapter?: AnyRecord;
-  tasks?: AnyRecord[];
-  error?: string;
 };
 
 type DoctorCheck = {
@@ -111,7 +97,6 @@ const copy = {
     readOnly: "只读模式",
     readOnlyHint: "这些操作不会修改文件或配置。",
     recent: "最近活跃",
-    trading: "投资模拟交易员",
     connections: "连接状态",
     doctor: "工作区健康诊断",
     eval: "搜索召回测试",
@@ -150,7 +135,6 @@ const copy = {
     evalHintHigh: "Wiki 召回稳定，可以继续观察 Mem0 通道是否需要打开完整评测。",
     evalHintMed: "Wiki 召回可用但仍有提升空间，建议检查低排名用例的标题与别名。",
     evalHintLow: "Wiki 召回偏低，建议优先复查索引、别名和最近改动。",
-    openInvestment: "打开投资面板",
   },
   en: {
     tagline: "Your AI second brain",
@@ -160,7 +144,6 @@ const copy = {
     readOnly: "Read-only",
     readOnlyHint: "These actions do not modify files or configuration.",
     recent: "Recent activity",
-    trading: "Investment trading node",
     connections: "Connections",
     doctor: "Workspace doctor",
     eval: "Search recall test",
@@ -199,7 +182,6 @@ const copy = {
     evalHintHigh: "Wiki recall is stable; keep watching whether Mem0 needs full evaluation.",
     evalHintMed: "Wiki recall is usable but can improve. Check aliases and titles for lower-ranked cases.",
     evalHintLow: "Wiki recall is low. Review indexes, aliases, and recent changes first.",
-    openInvestment: "Open investment panel",
   },
 } as const;
 
@@ -259,8 +241,6 @@ function App() {
   const [agentStatus, setAgentStatus] = useState<AgentStatus>((initialData.agent_status as AgentStatus) || {});
   const [activities, setActivities] = useState<ActivityItem[]>([]);
   const [activityError, setActivityError] = useState("");
-  const [tradingNode, setTradingNode] = useState<TradingNode | null>(null);
-  const [tradingError, setTradingError] = useState("");
   const [doctor, setDoctor] = useState<DoctorReport | null>(null);
   const [doctorError, setDoctorError] = useState("");
   const [doctorLoading, setDoctorLoading] = useState(false);
@@ -281,10 +261,9 @@ function App() {
   async function refreshStatus(signal?: AbortSignal, quiet = false) {
     if (!quiet) setRefreshing(true);
     try {
-      const [status, activity, trading] = await Promise.allSettled([
+      const [status, activity] = await Promise.allSettled([
         fetchJson<AgentStatus>("/api/agent/status", signal),
         fetchJson<{ ok?: boolean; items?: ActivityItem[]; error?: string }>("/api/agent/recent-activity", signal),
-        fetchJson<TradingNode>("/api/investment/trading-node/status", signal),
       ]);
       if (status.status === "fulfilled") setAgentStatus(status.value);
       if (activity.status === "fulfilled" && activity.value.ok) {
@@ -294,12 +273,6 @@ function App() {
         setActivityError(activity.value.error || t("unavailable"));
       } else if (activity.reason?.name !== "AbortError") {
         setActivityError(text(activity.reason?.message, t("unavailable")));
-      }
-      if (trading.status === "fulfilled") {
-        setTradingNode(trading.value);
-        setTradingError(trading.value.ok ? "" : text(trading.value.error || trading.value.status, t("unavailable")));
-      } else if (trading.reason?.name !== "AbortError") {
-        setTradingError(text(trading.reason?.message, t("unavailable")));
       }
     } finally {
       if (!quiet) setRefreshing(false);
@@ -371,9 +344,6 @@ function App() {
             <DashboardCard icon={<Activity size={20} />} title={t("recent")} count={activityError || `${t("total")} ${activities.length} ${t("activities")}`}>
               <RecentActivity items={activities} error={activityError} emptyText={t("emptyActivity")} />
             </DashboardCard>
-            <DashboardCard icon={<Sparkles size={20} />} title={t("trading")}>
-              <TradingNodeCard data={tradingNode} error={tradingError} labels={copy[lang]} />
-            </DashboardCard>
           </div>
 
           <div>
@@ -387,7 +357,7 @@ function App() {
                   <TerminalSquare size={15} className="text-tm-accent" />
                   {t("command")}
                 </div>
-                <code className="mt-2 block rounded-lg border border-tm-border bg-tm-bg px-3 py-2 text-xs text-tm-primary">py tools/tm_agent_connect.py connect</code>
+                <code className="mt-2 block rounded-lg border border-tm-border bg-tm-bg px-3 py-2 text-xs text-tm-primary">tm agent-connect</code>
                 <p className="mt-2 text-xs text-tm-secondary">{t("readOnlyHint")}</p>
               </div>
             </DashboardCard>
@@ -459,59 +429,6 @@ function RecentActivity({ items, error, emptyText }: { items: ActivityItem[]; er
           </motion.article>
         ))}
       </AnimatePresence>
-    </div>
-  );
-}
-
-function TradingNodeCard({ data, error, labels }: { data: TradingNode | null; error: string; labels: typeof copy.zh }) {
-  if (!data && !error) {
-    return <div className="rounded-xl border border-tm-border bg-tm-card-alt p-3 text-sm text-tm-secondary">{labels.loading}</div>;
-  }
-  if (error || !data?.ok) {
-    return <div className="rounded-xl border border-tm-warn-border bg-tm-warn-bg p-3 text-sm text-tm-warn">{error || labels.unavailable}</div>;
-  }
-  const summary = data.summary || {};
-  const adapter = data.adapter || {};
-  const caps = (adapter.capabilities as AnyRecord) || {};
-  const blockers = Array.isArray(data.blockers) ? data.blockers : [];
-  const tasks = Array.isArray(data.tasks) ? data.tasks : [];
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <StatusPill tone={blockers.length ? "warn" : toneFromStatus(data.status)} label={text(data.status, labels.status)} />
-            <span className="rounded-full border border-tm-border bg-tm-card-alt px-2.5 py-1 text-xs text-tm-tertiary">{text(data.account_scope, "B_qmt simulation")}</span>
-          </div>
-          <p className="mt-2 text-xs text-tm-secondary">{text(data.date, "-")}</p>
-        </div>
-        <a
-          href="http://127.0.0.1:8888/#miniqmt"
-          className="inline-flex items-center gap-1 rounded-xl border border-tm-border bg-tm-card-alt px-3 py-2 text-xs font-semibold text-tm-secondary hover:border-tm-accent"
-        >
-          {labels.openInvestment}
-          <ExternalLink size={13} />
-        </a>
-      </div>
-      <div className="grid grid-cols-3 gap-2">
-        <MiniMetric label="Intent" value={summary.intent_count} />
-        <MiniMetric label="Orders" value={summary.active_order_count} />
-        <MiniMetric label="Trades" value={summary.trade_count} />
-      </div>
-      <div className="rounded-xl border border-tm-border bg-tm-card-alt p-3 text-xs text-tm-secondary">
-        9100: simulation={text(adapter.simulation_mode)} query={text(adapter.query_ready)} place={text(adapter.can_place_orders ?? caps.can_place_orders)} cancel=
-        {text(adapter.can_cancel_orders ?? caps.can_cancel_orders)}
-      </div>
-      {tasks.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {tasks.map((task, index) => (
-            <span key={`${task.name || "task"}-${index}`} className="rounded-full border border-tm-border bg-tm-card-alt px-2.5 py-1 text-xs text-tm-secondary">
-              {text(task.name)}={text(task.last_result)}
-            </span>
-          ))}
-        </div>
-      )}
-      {blockers.length > 0 && <div className="rounded-xl border border-tm-warn-border bg-tm-warn-bg p-3 text-xs text-tm-warn">{blockers.join("；")}</div>}
     </div>
   );
 }

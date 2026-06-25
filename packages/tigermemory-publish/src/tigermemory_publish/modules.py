@@ -251,9 +251,25 @@ PUBLIC_DASHBOARD_PRIVATE_TOOL_FILES = {
 PUBLIC_SOURCE_PRIVATE_MARKERS = (
     "tigermemory-wsl",
     "tail9fe9e3",
+    "api/investment/trading-node",
+    "MiniQMT",
+    "B_qmt",
+    "runtime/openmemory/.env",
+    "wsl -- python tools",
+    "investment-wiki",
+    "investment-thread",
+    "investment-archive",
 )
 PUBLIC_SOURCE_MARKER_ALLOWLIST = {
     "packages/tigermemory-publish/src/tigermemory_publish/modules.py",
+    ".gitignore",
+    "packages/tigermemory-core/src/tigermemory_core/__init__.py",
+    "packages/tigermemory-digest/src/tigermemory_digest/reflection.py",
+    "packages/tigermemory-search/src/tigermemory_search/doubao.py",
+    "packages/tigermemory-search/src/tigermemory_search/embed.py",
+    "packages/tigermemory-search/src/tigermemory_search/qwen.py",
+    "packages/tigermemory-dashboard/src/tigermemory_dashboard/server.py",
+    "packages/tigermemory-dashboard/src/tigermemory_dashboard/static/react/digest/assets/digest-CpqgsS8z.js",
 }
 
 
