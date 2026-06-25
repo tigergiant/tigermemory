@@ -219,7 +219,7 @@ def render_5min(lessons: list[Lesson]) -> str:
     )
     write_boundaries = _bullet_lines(
         [
-            "除 `wiki/person/` 外所有 wiki 分区，所有常规 agent（claude-code / cascade / codex / chatgpt / openclaw / hermes / deerflow / kimi / gemini / linter）均可直写，由 L2 评审分数 ≥ 30 把关；< 30 降级写 inbox 提案。详见 AGENTS.md §4。",
+            "除 `wiki/person/` 外所有 wiki 分区，所有常规 agent（claude-code / cascade / codex / chatgpt / openclaw / hermes / deerflow / kimi / gemini / linter / trae）均可直写，由 L2 评审分数 ≥ 30 把关；< 30 降级写 inbox 提案。详见 AGENTS.md §4。",
             "`AGENTS.md`、`schemas/`、根 `index.md` 属元规则，只有 `claude-code` / `cascade` / `human` 可改。",
             "`log.md` 不手写，由 `claude-code compile` 从 git log 汇总。",
             "跨分区、不确定、需人工二审内容写 inbox；self-evolution 的 inbox topic key 是 `selfevolution`。",

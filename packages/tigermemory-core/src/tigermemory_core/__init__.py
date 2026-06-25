@@ -199,7 +199,7 @@ REPO_ROOT = _detect_repo_root()
 # Regular agents who may author commits and own pages (AGENTS.md §3).
 COMMIT_AGENTS = {
     "claude-code", "cascade", "codex", "chatgpt", "openclaw",
-    "hermes", "deerflow", "human", "linter", "kimi", "gemini",
+    "hermes", "deerflow", "human", "linter", "kimi", "gemini", "trae",
 }
 # Special data-source identities: appear only in inbox `source` / Mem0
 # `metadata.source` fields. They MUST NOT be used as commit prefix or page
@@ -224,7 +224,7 @@ TOPICS = {"brand", "investment", "operations", "production", "systems", "person"
 # downstream guards (tm_guard_ci, lint partition-mismatch) keep working without
 # code churn — we just expanded the owner sets.
 _ALL_REGULAR_AGENTS: set[str] = {
-    "claude-code", "cascade", "codex", "chatgpt", "openclaw", "hermes", "deerflow", "kimi", "gemini",
+    "claude-code", "cascade", "codex", "chatgpt", "openclaw", "hermes", "deerflow", "kimi", "gemini", "trae",
 }
 PARTITION_OWNERS: dict[str, set[str]] = {
     "brand":          set(_ALL_REGULAR_AGENTS),
