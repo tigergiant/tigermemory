@@ -173,11 +173,7 @@ const copy = {
     wikiLedgerSummary: "当前有 Wiki 提案，优先由本线程归并成长期 Wiki。",
     wikiLedgerEmpty: "当前没有待归并的 Wiki proposal。",
     wikiLedgerBatch: "批量写入 Wiki",
-    wikiLedgerInvestmentMeta: "投研可写",
     wikiLedgerArchiveMeta: "归档",
-    writeInvestmentWiki: "写入投研 Wiki",
-    archiveInvestment: "移入投资提案归档",
-    archiveInvestmentHint: "生成可检索摘要，不写正式投研页",
     technicalDetails: "查看技术详情",
     targetPage: "目标页",
     samplePaths: "inbox 路径",
@@ -245,11 +241,7 @@ const copy = {
     wikiLedgerSummary: "Wiki proposals are grouped here for this thread to merge into long-term Wiki pages.",
     wikiLedgerEmpty: "No Wiki proposals waiting to merge.",
     wikiLedgerBatch: "Batch write Wiki",
-    wikiLedgerInvestmentMeta: "Investment writable",
     wikiLedgerArchiveMeta: "Archive",
-    writeInvestmentWiki: "Write investment Wiki",
-    archiveInvestment: "Move to investment archive",
-    archiveInvestmentHint: "Create a searchable summary, not a formal investment page",
     technicalDetails: "Technical details",
     targetPage: "Target page",
     samplePaths: "Inbox paths",
@@ -420,8 +412,6 @@ function actionLabel(action: string, t?: TFn): string {
     case "keep":
     case "keep_in_inbox":
       return t ? t("actionKeep") : "保留";
-    case "investment_archive":
-      return t ? t("archiveInvestment") : "移入投资提案归档";
     default:
       return action;
   }
@@ -593,12 +583,13 @@ function mapAction(serverAction: string): string {
 }
 
 const WIKI_PARTITIONS = [
-  ["operations", "Operations"],
+  ["projects", "Projects"],
+  ["areas", "Areas"],
+  ["resources", "Resources"],
+  ["decisions", "Decisions"],
+  ["journal", "Journal"],
   ["systems", "Systems"],
-  ["production", "Production"],
-  ["self-evolution", "Self Evolution"],
-  ["brand", "Brand"],
-  ["investment", "Investment"],
+  ["archive", "Archive"],
 ] as const;
 
 function wikiTargetPath(partition: string, slug: string) {
@@ -953,20 +944,16 @@ function WikiLedgerSection({
   t,
   onApproveAll,
   onApproveOne,
-  onInvestmentArchive,
 }: {
   rows: AnyRecord[];
   busy: boolean;
   t: TFn;
   onApproveAll: () => void;
   onApproveOne: (row: AnyRecord) => void;
-  onInvestmentArchive: (row: AnyRecord) => void;
 }) {
   if (!rows.length) return null;
   const pendingRows = rows.filter((row) => row.status === "pending" || row.status === "investment-wiki");
   const pendingPaths = wikiProposalPaths(pendingRows);
-  const investmentWikiGroups = rows.filter((row) => row.status === "investment-wiki").length;
-  const investmentArchiveGroups = rows.filter((row) => row.status === "investment-thread").length;
   return (
     <DashboardCard
       icon={<BookMarked size={20} />}
@@ -985,9 +972,6 @@ function WikiLedgerSection({
             >
               {t("wikiLedgerBatch")} {pendingPaths.length} 条
             </button>
-            <span className="rounded-md border border-tm-border bg-tm-card-alt px-3 py-1.5 text-xs text-tm-secondary">
-              {t("wikiLedgerInvestmentMeta")} {investmentWikiGroups} 组 · {t("wikiLedgerArchiveMeta")} {investmentArchiveGroups} 组
-            </span>
           </div>
         ) : (
           <span className="rounded-md border border-tm-border bg-tm-card-alt px-3 py-1.5 text-xs text-tm-tertiary">
@@ -998,15 +982,14 @@ function WikiLedgerSection({
       <div className="grid gap-3 md:grid-cols-2">
         {rows.map((row, i) => {
           const status = String(row.status || "pending");
-          const canWriteWiki = status === "pending" || status === "investment-wiki";
-          const isInvestment = status === "investment-thread" || status === "investment-wiki";
+          const canWriteWiki = status === "pending";
           const samples = Array.isArray(row.sample_items) ? row.sample_items : [];
           return (
           <div
             key={i}
             className={classNames(
               "rounded-xl border bg-tm-card p-3",
-              isInvestment ? "border-tm-primary shadow-[inset_4px_0_0_#c8a560]" : "border-tm-border",
+              "border-tm-border",
             )}
           >
             <div className="flex items-center justify-between gap-2">
@@ -1039,26 +1022,11 @@ function WikiLedgerSection({
                   disabled={busy}
                   className={classNames(
                     "rounded-md px-3 py-1.5 text-xs font-semibold disabled:opacity-50",
-                    status === "investment-wiki" ? "border border-tm-primary bg-tm-primary text-tm-accent hover:opacity-90" : "bg-tm-accent text-tm-accent-fg hover:bg-tm-accent-hi",
+                    "bg-tm-accent text-tm-accent-fg hover:bg-tm-accent-hi",
                   )}
                 >
-                  {status === "investment-wiki" ? t("writeInvestmentWiki") : t("actionWiki")}
+                  {t("actionWiki")}
                 </button>
-              ) : null}
-              {status === "investment-thread" ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => onInvestmentArchive(row)}
-                    disabled={busy}
-                    className="rounded-md border border-tm-primary bg-tm-primary px-3 py-1.5 text-xs font-semibold text-tm-accent hover:opacity-90 disabled:opacity-50"
-                  >
-                    {t("archiveInvestment")}
-                  </button>
-                  <span className="rounded-md border border-tm-accent bg-tm-card px-3 py-1.5 text-xs text-tm-primary">
-                    {t("archiveInvestmentHint")}
-                  </span>
-                </>
               ) : null}
             </div>
             <details className="mt-2 text-xs text-tm-tertiary">
@@ -1411,10 +1379,10 @@ function App() {
     });
   }
 
-  async function runWikiLedgerAction(row: AnyRecord, action: "promote_wiki" | "investment_archive", target?: WikiTarget | null) {
+  async function runWikiLedgerAction(row: AnyRecord, action: "promote_wiki", target?: WikiTarget | null) {
     const paths = wikiProposalPaths([row]);
     if (!paths.length) {
-      notify(action === "investment_archive" ? "没有可归档的投资资料条目" : "没有可写入的 Wiki 提案", false);
+      notify("没有可写入的 Wiki 提案", false);
       return;
     }
     await runBatchAction(action, paths, target || null);
@@ -1480,7 +1448,6 @@ function App() {
           t={t}
           onApproveAll={openWikiProposalBatch}
           onApproveOne={openWikiProposal}
-          onInvestmentArchive={(row) => runWikiLedgerAction(row, "investment_archive")}
         />
 
         {/* Inbox */}

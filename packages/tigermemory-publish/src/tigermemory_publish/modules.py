@@ -269,7 +269,7 @@ PUBLIC_SOURCE_MARKER_ALLOWLIST = {
     "packages/tigermemory-search/src/tigermemory_search/embed.py",
     "packages/tigermemory-search/src/tigermemory_search/qwen.py",
     "packages/tigermemory-dashboard/src/tigermemory_dashboard/server.py",
-    "packages/tigermemory-dashboard/src/tigermemory_dashboard/static/react/digest/assets/digest-CpqgsS8z.js",
+    "packages/tigermemory-dashboard/src/tigermemory_dashboard/static/react/digest/assets/digest-BnimsaSy.js",
 }
 
 
