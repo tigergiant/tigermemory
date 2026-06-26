@@ -33,7 +33,7 @@ test = ["pytest>=7"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-tigermemory_dashboard = ["static/**/*"]
+tigermemory_dashboard = ["static/**/*", "private_static/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

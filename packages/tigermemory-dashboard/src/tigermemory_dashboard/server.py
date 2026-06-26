@@ -4751,6 +4751,26 @@ def self_evolution_data(date: str | None = None) -> dict[str, Any]:
     if cached:
         return cached
 
+    if tm_self_evolution is None:
+        return {
+            "ok": False,
+            "date": report_date,
+            "generated_at": _now_iso(),
+            "mode": "propose_only",
+            "summary": _empty_self_evolution_payload(report_date),
+            "proposal_summary": {"total": 0, "eligible": 0, "min_repeats": 3, "min_confidence": 0.75},
+            "proposals": [],
+            "baseline": {"status": "unavailable", "counts": {}, "rates": {}},
+            "evidence_sources": {"events": [], "telemetry": [], "env": ""},
+            "warnings": [],
+            "errors": ["tm_self_evolution module not installed; self-evolution data unavailable."],
+            "latency_ms": 0,
+            "cached": False,
+            "stale": False,
+            "source": "self-evolution evidence",
+            "cache": {"hit": False, "ttl_seconds": SELF_EVOLUTION_CACHE_TTL, "cached_at": _now_iso(), "source": "self-evolution evidence"},
+        }
+
     start = time.time()
     summary = _build_self_evolution_payload(report_date)
     proposals_payload = tm_self_evolution.build_repeated_event_proposals(report_date, root=REPO_ROOT)
@@ -4822,6 +4842,7 @@ def _self_evolution_shell() -> dict[str, Any]:
     cached, _ = _run_cache_get(f"api:self-evolution:{today()}", SELF_EVOLUTION_CACHE_TTL)
     if cached:
         return cached
+    evidence_env = getattr(tm_self_evolution, "EXTRA_EVIDENCE_ROOTS_ENV", "") if tm_self_evolution else ""
     return {
         "ok": True,
         "loading": True,
@@ -4832,7 +4853,7 @@ def _self_evolution_shell() -> dict[str, Any]:
         "proposal_summary": {"total": 0, "eligible": 0, "min_repeats": 3, "min_confidence": 0.75},
         "proposals": [],
         "baseline": {"status": "loading", "counts": {}, "rates": {}},
-        "evidence_sources": {"events": [], "telemetry": [], "env": tm_self_evolution.EXTRA_EVIDENCE_ROOTS_ENV},
+        "evidence_sources": {"events": [], "telemetry": [], "env": evidence_env},
         "warnings": [],
         "errors": [],
     }
