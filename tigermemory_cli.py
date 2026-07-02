@@ -34,6 +34,7 @@ PASSTHROUGH_COMMANDS = {
     "persona": ("tools/tm_persona.py", []),
     "index": ("tools/tm_compile_index.py", []),
     "install-ide-hooks": ("tools/tm_install_ide_hooks.py", []),
+    "service-health": ("tools/tm_service_health.py", []),
 }
 
 try:
