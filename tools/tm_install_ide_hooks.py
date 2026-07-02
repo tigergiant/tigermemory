@@ -323,6 +323,129 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+CLAUDE_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
+STOP_HOOK_SCRIPT = REPO_ROOT / "tools" / "claude-code-stop-hook.py"
+STOP_HOOK_MARKER = "claude-code-stop-hook.py"
+
+
+def _stop_hook_command() -> str:
+    """Build the command string for the Stop hook. Uses forward slashes for JSON safety."""
+    script = str(STOP_HOOK_SCRIPT).replace("\\", "/")
+    return f"py {script}"
+
+
+def _install_claude_code_hook(dry_run: bool) -> int:
+    """Append a Stop hook entry to ~/.claude/settings.json without touching other fields.
+
+    Safety:
+    - Backs up settings.json to .tmp/gate3-backup/claude-code/ before write.
+    - Only appends to hooks.Stop[].hooks[]; never removes existing hooks.
+    - Idempotent: if our command already present, reports 'already-installed'.
+    """
+    if not CLAUDE_SETTINGS_PATH.exists():
+        print(f"error: {CLAUDE_SETTINGS_PATH} not found; configure Claude Code first.", file=sys.stderr)
+        return 2
+    if not STOP_HOOK_SCRIPT.exists():
+        print(f"error: {STOP_HOOK_SCRIPT} missing; cannot install.", file=sys.stderr)
+        return 2
+
+    raw = CLAUDE_SETTINGS_PATH.read_text(encoding="utf-8")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(f"error: settings.json is not valid JSON: {exc}", file=sys.stderr)
+        return 2
+
+    hooks = data.setdefault("hooks", {})
+    stop_list = hooks.setdefault("Stop", [])
+    target_cmd = _stop_hook_command()
+
+    # Find an existing entry with empty matcher (default catch-all Stop).
+    entry = next((e for e in stop_list if e.get("matcher", "") == ""), None)
+    if entry is None:
+        entry = {"matcher": "", "hooks": []}
+        stop_list.append(entry)
+    hook_list = entry.setdefault("hooks", [])
+
+    already = any(h.get("command", "").endswith(STOP_HOOK_MARKER) for h in hook_list)
+    if already:
+        print(f"claude-code stop-hook: already-installed (command ends with {STOP_HOOK_MARKER})")
+        return 0
+
+    if dry_run:
+        print(f"claude-code stop-hook: preview (would append command: {target_cmd})")
+        return 0
+
+    # Backup before write.
+    backup = _backup_existing(CLAUDE_SETTINGS_PATH, "claude-code")
+    hook_list.append({"type": "command", "command": target_cmd})
+    CLAUDE_SETTINGS_PATH.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(f"claude-code stop-hook: installed")
+    print(f"  target={CLAUDE_SETTINGS_PATH}")
+    print(f"  command={target_cmd}")
+    if backup:
+        print(f"  backup={backup}")
+    return 0
+
+
+def _uninstall_claude_code_hook(dry_run: bool) -> int:
+    """Remove our Stop hook entry from ~/.claude/settings.json. Preserves all other hooks."""
+    if not CLAUDE_SETTINGS_PATH.exists():
+        print(f"claude-code stop-hook: not-installed (settings.json absent)")
+        return 0
+
+    raw = CLAUDE_SETTINGS_PATH.read_text(encoding="utf-8")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(f"error: settings.json is not valid JSON: {exc}", file=sys.stderr)
+        return 2
+
+    hooks = data.get("hooks", {})
+    stop_list = hooks.get("Stop", [])
+    removed: list[dict] = []
+
+    for entry in stop_list:
+        hook_list = entry.get("hooks", [])
+        keep: list[dict] = []
+        for h in hook_list:
+            if STOP_HOOK_MARKER in h.get("command", ""):
+                removed.append(h)
+            else:
+                keep.append(h)
+        if keep:
+            entry["hooks"] = keep
+        else:
+            entry.clear()
+    # Drop emptied entries.
+    hooks["Stop"] = [e for e in stop_list if e]
+    if not hooks["Stop"]:
+        del hooks["Stop"]
+    if not hooks:
+        del data["hooks"]
+
+    if not removed:
+        print(f"claude-code stop-hook: not-installed (no command contains {STOP_HOOK_MARKER})")
+        return 0
+
+    if dry_run:
+        print(f"claude-code stop-hook: preview (would remove {len(removed)} entry/entries)")
+        return 0
+
+    backup = _backup_existing(CLAUDE_SETTINGS_PATH, "claude-code")
+    CLAUDE_SETTINGS_PATH.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(f"claude-code stop-hook: uninstalled ({len(removed)} entry/entries removed)")
+    if backup:
+        print(f"  backup={backup}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="tm install-ide-hooks",
@@ -333,12 +456,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--all", action="store_true", help="Install all registered IDEs.")
     parser.add_argument("--preview", action="store_true", help="Preview only; do not write files.")
     parser.add_argument("--status", action="store_true", help="Show install status for all IDEs.")
+    parser.add_argument("--install-claude-code-hook", action="store_true",
+                        help="Install the optional Stop hook into ~/.claude/settings.json. "
+                             "Only triggers a handoff card when git has unpushed commits or dirty files; "
+                             "read-only review sessions are not disturbed.")
+    parser.add_argument("--uninstall-claude-code-hook", action="store_true",
+                        help="Remove the TigerMemory Stop hook from ~/.claude/settings.json.")
     parser.add_argument("--workspace", default=None, help="Workspace root (default: repo root).")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
     if args.status:
         return cmd_status(args)
+    if args.install_claude_code_hook:
+        return _install_claude_code_hook(args.preview)
+    if args.uninstall_claude_code_hook:
+        return _uninstall_claude_code_hook(args.preview)
     return cmd_install(args)
 
 
