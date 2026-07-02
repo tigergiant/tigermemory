@@ -33,6 +33,7 @@ PASSTHROUGH_COMMANDS = {
     "lessons": ("tools/tm_lessons.py", []),
     "persona": ("tools/tm_persona.py", []),
     "index": ("tools/tm_compile_index.py", []),
+    "install-ide-hooks": ("tools/tm_install_ide_hooks.py", []),
 }
 
 try:
