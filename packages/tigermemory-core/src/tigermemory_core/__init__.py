@@ -363,13 +363,20 @@ def git_pull_rebase() -> None:
     dirty from dashboard rebuild). --autostash stashes dirty before rebase
     and pops after; rebase conflicts still abort per AGENTS.md §5.1.
 
-    2026-07-04: added timeout=30s. WSL git proxy sometimes hangs on fetch;
-    without timeout, push-retry path blocks indefinitely. Timeout raises
-    GitError, caught by git_commit_push's try/except (push failure path
-    does not raise to caller — commit is already persisted).
+    2026-07-04: added http.lowSpeedLimit/lowSpeedTime + subprocess timeout=30s.
+    WSL git proxy sometimes hangs on fetch; subprocess timeout alone doesn't
+    kill grandchild (git-remote-https), so git's own lowSpeed timeout is the
+    primary mechanism (10s < 1000 bytes/sec → git aborts fetch). subprocess
+    timeout=30 is the fallback.
     """
+    cmd = [
+        "git",
+        "-c", "http.lowSpeedLimit=1000",
+        "-c", "http.lowSpeedTime=10",
+        "pull", "--rebase", "--autostash", "origin", "master",
+    ]
     try:
-        r = run(["git", "pull", "--rebase", "--autostash", "origin", "master"], check=False, timeout=30)
+        r = run(cmd, check=False, timeout=30)
     except GitError as e:
         run(["git", "rebase", "--abort"], check=False)
         raise GitError(f"git pull --rebase timed out after 30s; rebase aborted. stderr: {e}")
@@ -446,7 +453,16 @@ def git_commit_push(files: list[str], msg: str, *, force_add: bool = False) -> s
     # hangs on fetch; without timeout, write_memory blocks indefinitely.
     # Timeout → don't raise; commit+push proceed (local commit needs no network).
     try:
-        pull_r = run(["git", "pull", "--rebase", "--autostash", "origin", "master"], check=False, timeout=30)
+        pull_r = run(
+            [
+                "git",
+                "-c", "http.lowSpeedLimit=1000",
+                "-c", "http.lowSpeedTime=10",
+                "pull", "--rebase", "--autostash", "origin", "master",
+            ],
+            check=False,
+            timeout=30,
+        )
     except GitError as e:
         # Timeout. Abort any partial rebase, then continue to commit+push.
         run(["git", "rebase", "--abort"], check=False)
@@ -490,7 +506,13 @@ def git_commit_push(files: list[str], msg: str, *, force_add: bool = False) -> s
         )
 
     sha = run(["git", "rev-parse", "--short", "HEAD"]).stdout.strip()
-    push_r = run(["git", "push"], check=False)
+    push_cmd = [
+        "git",
+        "-c", "http.lowSpeedLimit=1000",
+        "-c", "http.lowSpeedTime=10",
+        "push",
+    ]
+    push_r = run(push_cmd, check=False, timeout=60)
     push_retried = False
     push_ok = push_r.returncode == 0
     push_err = push_r.stderr.strip() or push_r.stdout.strip()
@@ -498,7 +520,7 @@ def git_commit_push(files: list[str], msg: str, *, force_add: bool = False) -> s
         push_retried = True
         try:
             git_pull_rebase()
-            push2 = run(["git", "push"], check=False)
+            push2 = run(push_cmd, check=False, timeout=60)
             push_ok = push2.returncode == 0
             push_err = push2.stderr.strip() or push2.stdout.strip()
         except GitError as e:

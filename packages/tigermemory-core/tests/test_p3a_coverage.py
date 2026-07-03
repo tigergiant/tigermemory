@@ -342,18 +342,20 @@ def test_refine_and_save_wiki_patches(monkeypatch, tmp_path):
 def test_git_commit_push_success_with_retry(tmp_path, monkeypatch):
     monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(tmp_path / "events"))
     calls = []
+    push_count = [0]
 
     def fake_run(cmd, check=True, timeout=None):
         calls.append(cmd)
-        if cmd[:3] == ["git", "pull", "--rebase"]:
+        if cmd[0] == "git" and "pull" in cmd:
             return subprocess.CompletedProcess(cmd, 0, "", "")
         if cmd[:2] == ["git", "add"]:
             return subprocess.CompletedProcess(cmd, 0, "", "")
         if cmd[:2] == ["git", "commit"]:
             return subprocess.CompletedProcess(cmd, 0, "committed", "")
-        if cmd == ["git", "push"] and calls.count(["git", "push"]) == 1:
-            return subprocess.CompletedProcess(cmd, 1, "", "rejected")
-        if cmd == ["git", "push"]:
+        if cmd[0] == "git" and "push" in cmd:
+            push_count[0] += 1
+            if push_count[0] == 1:
+                return subprocess.CompletedProcess(cmd, 1, "", "rejected")
             return subprocess.CompletedProcess(cmd, 0, "", "")
         if cmd[:2] == ["git", "rev-parse"]:
             return subprocess.CompletedProcess(cmd, 0, "abc123\n", "")
@@ -364,8 +366,8 @@ def test_git_commit_push_success_with_retry(tmp_path, monkeypatch):
     monkeypatch.setattr(tm_core, "run", fake_run)
 
     assert tm_core.git_commit_push(["inbox/x.md"], "[codex] create: x") == "abc123"
-    assert ["git", "pull", "--rebase", "--autostash", "origin", "master"] in calls
-    assert calls.count(["git", "push"]) == 2
+    assert any("pull" in c for c in calls)
+    assert sum(1 for c in calls if "push" in c) == 2
     events = tm_runtime_events.load_events(dates=[tm_runtime_events._date_key()], event_root=tmp_path / "events")
     assert events[-1]["event_type"] == "git_commit_push"
     assert events[-1]["outcome"] == "success"
@@ -380,13 +382,13 @@ def test_git_commit_push_push_failure_returns_sha_not_raise(tmp_path, monkeypatc
     monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(tmp_path / "events"))
 
     def fake_run(cmd, check=True, timeout=None):
-        if cmd[:3] == ["git", "pull", "--rebase"]:
+        if cmd[0] == "git" and "pull" in cmd:
             return subprocess.CompletedProcess(cmd, 0, "", "")
         if cmd[:2] == ["git", "add"]:
             return subprocess.CompletedProcess(cmd, 0, "", "")
         if cmd[:2] == ["git", "commit"]:
             return subprocess.CompletedProcess(cmd, 0, "committed", "")
-        if cmd == ["git", "push"]:
+        if cmd[0] == "git" and "push" in cmd:
             # Both push attempts fail (e.g. remote down, or rebase can't
             # resolve untracked-file block).
             return subprocess.CompletedProcess(cmd, 1, "", "rejected")
@@ -414,7 +416,7 @@ def test_git_commit_push_unstages_on_commit_failure(monkeypatch):
 
     def fake_run(cmd, check=True, timeout=None):
         calls.append(cmd)
-        if cmd[:3] == ["git", "pull", "--rebase"] or cmd[:2] in (["git", "add"], ["git", "restore"]):
+        if (cmd[0] == "git" and "pull" in cmd) or cmd[:2] in (["git", "add"], ["git", "restore"]):
             return subprocess.CompletedProcess(cmd, 0, "", "")
         if cmd[:2] == ["git", "commit"]:
             return subprocess.CompletedProcess(cmd, 1, "", "guard rejected")
