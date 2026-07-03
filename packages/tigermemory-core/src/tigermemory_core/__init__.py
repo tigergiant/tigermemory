@@ -370,9 +370,15 @@ def git_pull_rebase() -> None:
 def git_commit_push(files: list[str], msg: str, *, force_add: bool = False) -> str:
     """pull --rebase → add → commit → push (retry 1x). Returns short SHA.
 
-    Raises GitError on failure. On rebase conflict at any point, aborts the
-    rebase first. Callers are responsible for rolling back on-disk changes
-    if they want a clean working tree after failure.
+    Raises GitError on commit failure (memory NOT persisted). On push failure
+    after retry, does NOT raise: commit is already in local git history, so
+    memory is persisted; returns sha and emits a warn event. Push self-heals
+    on next operation's entry pull, or via manual `git push`.
+
+    Rationale (2026-07-04): write_memory's contract is "persist memory", not
+    "sync to remote". Blocking writes on push/rebase state caused repeated
+    write_memory failures when D:\\ had untracked files or dirty working tree.
+    Commit success = memory persisted; push is best-effort sync.
 
     2026-05-03: pull --rebase at entry to self-heal cross-worktree drift
     (WSL MCP writes vs D:\\ human edits). Without this, the F2 pre-commit
@@ -459,19 +465,38 @@ def git_commit_push(files: list[str], msg: str, *, force_add: bool = False) -> s
     sha = run(["git", "rev-parse", "--short", "HEAD"]).stdout.strip()
     push_r = run(["git", "push"], check=False)
     push_retried = False
-    if push_r.returncode != 0:
+    push_ok = push_r.returncode == 0
+    push_err = push_r.stderr.strip() or push_r.stdout.strip()
+    if not push_ok:
         push_retried = True
-        git_pull_rebase()
-        push2 = run(["git", "push"], check=False)
-        if push2.returncode != 0:
-            runtime_git_event(
-                ok=False,
-                outcome="push_failed",
-                commit_sha=sha,
-                error=push2.stderr.strip() or push2.stdout.strip(),
-                extra={"push_retry": True},
-            )
-            raise GitError(f"push failed after rebase retry: {push2.stderr.strip()}")
+        try:
+            git_pull_rebase()
+            push2 = run(["git", "push"], check=False)
+            push_ok = push2.returncode == 0
+            push_err = push2.stderr.strip() or push2.stdout.strip()
+        except GitError as e:
+            # Rebase failed (e.g. untracked file blocks checkout, or real
+            # conflict). Don't raise: commit is already in local git history,
+            # memory is persisted. Next write's entry pull --rebase --autostash
+            # will self-heal, or a manual `git push` will sync. Raising here
+            # would unlink the inbox file and lose the memory, which is the
+            # opposite of what write_memory should do.
+            # See 2026-07-04 lesson: write_memory must not fail on git sync state.
+            push_ok = False
+            push_err = str(e)
+
+    if not push_ok:
+        runtime_git_event(
+            ok=False,
+            outcome="commit_ok_push_failed",
+            severity="warn",
+            commit_sha=sha,
+            error=push_err,
+            extra={"push_retry": push_retried},
+        )
+        # Memory is persisted locally; return sha so caller treats write as
+        # successful. Push self-heals on next operation.
+        return sha
 
     runtime_git_event(
         ok=True,

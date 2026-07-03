@@ -372,6 +372,43 @@ def test_git_commit_push_success_with_retry(tmp_path, monkeypatch):
     assert events[-1]["target_ref"]["commit_sha"] == "abc123"
 
 
+def test_git_commit_push_push_failure_returns_sha_not_raise(tmp_path, monkeypatch):
+    """2026-07-04: push failure after retry must NOT raise. Commit is already
+    in local git history, so memory is persisted. Raising would unlink the
+    inbox file and lose the memory. Push self-heals on next operation.
+    """
+    monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(tmp_path / "events"))
+
+    def fake_run(cmd, check=True):
+        if cmd[:3] == ["git", "pull", "--rebase"]:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        if cmd[:2] == ["git", "add"]:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        if cmd[:2] == ["git", "commit"]:
+            return subprocess.CompletedProcess(cmd, 0, "committed", "")
+        if cmd == ["git", "push"]:
+            # Both push attempts fail (e.g. remote down, or rebase can't
+            # resolve untracked-file block).
+            return subprocess.CompletedProcess(cmd, 1, "", "rejected")
+        if cmd[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(cmd, 0, "abc123\n", "")
+        if cmd[:2] == ["git", "rebase"]:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(tm_core, "run", fake_run)
+
+    # Must NOT raise; returns sha because commit succeeded.
+    sha = tm_core.git_commit_push(["inbox/x.md"], "[codex] create: x")
+    assert sha == "abc123"
+
+    events = tm_runtime_events.load_events(dates=[tm_runtime_events._date_key()], event_root=tmp_path / "events")
+    assert events[-1]["outcome"] == "commit_ok_push_failed"
+    assert events[-1]["ok"] is False
+    assert events[-1]["severity"] == "warn"
+    assert events[-1]["target_ref"]["commit_sha"] == "abc123"
+
+
 def test_git_commit_push_unstages_on_commit_failure(monkeypatch):
     calls = []
 
