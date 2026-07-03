@@ -541,10 +541,16 @@ def git_commit_push(files: list[str], msg: str, *, force_add: bool = False) -> s
         "-c", "http.lowSpeedTime=10",
         "push",
     ]
-    push_r = run(push_cmd, check=False, timeout=60)
     push_retried = False
-    push_ok = push_r.returncode == 0
-    push_err = push_r.stderr.strip() or push_r.stdout.strip()
+    try:
+        push_r = run(push_cmd, check=False, timeout=60)
+        push_ok = push_r.returncode == 0
+        push_err = push_r.stderr.strip() or push_r.stdout.strip()
+    except GitError as e:
+        # Push timed out (coreutils timeout killed whole process group).
+        # Don't raise: commit is already in local git history, memory persisted.
+        push_ok = False
+        push_err = str(e)
     if not push_ok:
         push_retried = True
         try:
