@@ -560,6 +560,7 @@ def propose_wiki_page(
             sha = tm_core.git_commit_push(
                 [inbox_rel],
                 f"[{agent}] create: L2-block propose wiki/{partition}/{slug}.md",
+                force_add=True,
             )
         except Exception as exc:
             try:
@@ -637,6 +638,7 @@ def propose_wiki_page(
             sha = tm_core.git_commit_push(
                 [inbox_rel],
                 f"[{agent}] create: propose wiki/{partition}/{slug}.md" + commit_suffix,
+                force_add=True,
             )
         except Exception as exc:
             try:
@@ -1397,7 +1399,8 @@ def review_digest(date: str | None = None, action: str | None = None) -> dict[st
                 return {"ok": False, "error": error}
             digest_path = f"inbox/daily/{date}.md"
             sha = tm_core.git_commit_push(
-                [digest_path], f"[human] update: mark {date} digest as reviewed"
+                [digest_path], f"[human] update: mark {date} digest as reviewed",
+                force_add=True,
             )
             _record_mcp_event(
                 "mcp_review_digest",

@@ -361,7 +361,7 @@ def git_pull_rebase() -> None:
         )
 
 
-def git_commit_push(files: list[str], msg: str) -> str:
+def git_commit_push(files: list[str], msg: str, *, force_add: bool = False) -> str:
     """pull --rebase → add → commit → push (retry 1x). Returns short SHA.
 
     Raises GitError on failure. On rebase conflict at any point, aborts the
@@ -373,6 +373,12 @@ def git_commit_push(files: list[str], msg: str) -> str:
     drift guard rejects every write after the peer worktree pushes, forcing
     manual `git pull` on the MCP host. The target files are written to disk
     but untracked at this point, so rebase cannot conflict on them.
+
+    2026-07-03: force_add=True bypasses .gitignore for paths that are
+    intentionally ignored but still tracked via signed commits (inbox/).
+    See .gitignore line 34: inbox/ is ignored, but pre-commit hook
+    requires `routed_by: tigermemory` signature, so inbox writes must
+    use `git add -f`.
     """
     start = time.monotonic()
 
@@ -422,7 +428,12 @@ def git_commit_push(files: list[str], msg: str) -> str:
         )
         # Don't raise: maybe offline. Let commit+push attempt proceed;
         # the pre-commit hook will surface a clean error if truly stale.
-    run(["git", "add", "--"] + files)
+    add_cmd = ["git", "add"]
+    if force_add:
+        add_cmd.append("-f")
+    add_cmd.append("--")
+    add_cmd += files
+    run(add_cmd)
     commit_r = run(["git", "commit", "-m", msg], check=False)
     if commit_r.returncode != 0:
         # Unstage what we just added so failed commits don't pollute the index
@@ -3883,7 +3894,7 @@ def write_and_commit_inbox(
     rel = write_inbox_file(agent, topic, title, body, frontmatter_extra=frontmatter_extra)
     path = REPO_ROOT / rel
     try:
-        sha = git_commit_push([rel], f"[{agent}] create: {title}")
+        sha = git_commit_push([rel], f"[{agent}] create: {title}", force_add=True)
     except Exception:
         try:
             path.unlink()
