@@ -358,9 +358,11 @@ def run(cmd: list[str], check: bool = True, timeout: float | None = None) -> sub
     )
     if use_timeout_wrapper:
         # `timeout -k 5 {t}` : send SIGTERM at t, SIGKILL 5s later if still alive.
-        # `--foreground` so it doesn't fork into its own session (we want
-        # subprocess.run to track it directly).
-        wrapped = ["timeout", "--foreground", "-k", "5", str(int(timeout))] + cmd
+        # Without --foreground, timeout creates a new process group and kills
+        # the entire group on timeout — this is what we want (kills
+        # git-remote-https grandchildren). subprocess.run uses capture_output
+        # (pipes), not TTY, so no --foreground needed.
+        wrapped = ["timeout", "-k", "5", str(int(timeout))] + cmd
         try:
             r = subprocess.run(wrapped, cwd=REPO_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace")
         except subprocess.TimeoutExpired:
