@@ -608,7 +608,7 @@ code {
 .tm-form {
   padding: 16px;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -626,6 +626,8 @@ code {
 
 .tm-form input,
 .tm-form select {
+  width: 100%;
+  min-width: 0;
   min-height: 38px; /* dashboard input density, not 46px */
   border: 1px solid var(--border-soft);
   border-radius: 8px;

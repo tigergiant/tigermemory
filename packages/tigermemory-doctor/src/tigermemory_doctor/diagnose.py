@@ -182,7 +182,7 @@ def check_update_status() -> dict[str, Any]:
     }
 
 
-def check_tm_http(base_url: str | None = None, *, timeout: int = 3) -> dict[str, Any]:
+def check_tm_http(base_url: str | None = None, *, timeout: int = 10) -> dict[str, Any]:
     url = _http_health_url(base_url)
     start = time.time()
     try:

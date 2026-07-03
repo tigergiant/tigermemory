@@ -84,3 +84,11 @@ dist/
 # Python package build artifacts (setuptools 'pip install -e .' produces
 # packages/<name>/build/lib/* as a 1:1 copy of src/; not source of truth).
 packages/*/build/
+
+# Dev-only screenshot / probe scripts (not part of shipped package)
+packages/tigermemory-dashboard-ui/.tmp-shot.cjs
+packages/tigermemory-dashboard-ui/nul
+
+# Windows reserved device name files (cleanup accidents)
+nul
+
