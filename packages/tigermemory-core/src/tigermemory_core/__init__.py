@@ -352,8 +352,14 @@ def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
 # ---------- Git ----------
 
 def git_pull_rebase() -> None:
-    """pull --rebase; on conflict/failure, abort and raise GitError (AGENTS.md §5.1)."""
-    r = run(["git", "pull", "--rebase"], check=False)
+    """pull --rebase; on conflict/failure, abort and raise GitError (AGENTS.md §5.1).
+
+    2026-07-04: added --autostash to match git_commit_push entry pull. Without
+    it, push-retry path fails on dirty working trees (e.g. WSL has foreign
+    dirty from dashboard rebuild). --autostash stashes dirty before rebase
+    and pops after; rebase conflicts still abort per AGENTS.md §5.1.
+    """
+    r = run(["git", "pull", "--rebase", "--autostash", "origin", "master"], check=False)
     if r.returncode != 0:
         run(["git", "rebase", "--abort"], check=False)
         raise GitError(
