@@ -32,6 +32,7 @@ import os
 import ipaddress
 import pathlib
 import re
+import shutil
 import sqlite3
 import socket
 import subprocess
@@ -341,11 +342,37 @@ def _log_llm_call(
 
 def run(cmd: list[str], check: bool = True, timeout: float | None = None) -> subprocess.CompletedProcess:
     """Run a command in REPO_ROOT, capturing output. Raises GitError if check=True and rc!=0,
-    or if timeout expires (subprocess.TimeoutExpired → GitError)."""
-    try:
-        r = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        raise GitError(f"cmd timed out after {timeout}s: {' '.join(cmd)}")
+    or if timeout expires.
+
+    2026-07-04: On Unix, when timeout is set, wrap cmd with `timeout -k 5 {t}`
+    (coreutils). This kills the entire process group including grandchildren
+    (git-remote-https), which subprocess.run's timeout cannot reach. Without
+    this, git fetch hanging on a dead proxy blocks write_memory indefinitely
+    even with subprocess timeout. On Windows, subprocess.run timeout is
+    sufficient (no grandchild-forking issue for git there).
+    """
+    use_timeout_wrapper = (
+        timeout is not None
+        and sys.platform != "win32"
+        and shutil.which("timeout") is not None
+    )
+    if use_timeout_wrapper:
+        # `timeout -k 5 {t}` : send SIGTERM at t, SIGKILL 5s later if still alive.
+        # `--foreground` so it doesn't fork into its own session (we want
+        # subprocess.run to track it directly).
+        wrapped = ["timeout", "--foreground", "-k", "5", str(int(timeout))] + cmd
+        try:
+            r = subprocess.run(wrapped, cwd=REPO_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        except subprocess.TimeoutExpired:
+            raise GitError(f"cmd timed out after {timeout}s: {' '.join(cmd)}")
+        # `timeout` returns 124 on timeout, 137 on SIGKILL.
+        if r.returncode in (124, 137):
+            raise GitError(f"cmd timed out after {timeout}s (coreutils timeout): {' '.join(cmd)}")
+    else:
+        try:
+            r = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise GitError(f"cmd timed out after {timeout}s: {' '.join(cmd)}")
     if check and r.returncode != 0:
         raise GitError(
             f"cmd failed: {' '.join(cmd)}\nstderr: {r.stderr.strip()}\nstdout: {r.stdout.strip()}"
