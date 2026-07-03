@@ -343,7 +343,7 @@ def test_git_commit_push_success_with_retry(tmp_path, monkeypatch):
     monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(tmp_path / "events"))
     calls = []
 
-    def fake_run(cmd, check=True):
+    def fake_run(cmd, check=True, timeout=None):
         calls.append(cmd)
         if cmd[:3] == ["git", "pull", "--rebase"]:
             return subprocess.CompletedProcess(cmd, 0, "", "")
@@ -379,7 +379,7 @@ def test_git_commit_push_push_failure_returns_sha_not_raise(tmp_path, monkeypatc
     """
     monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(tmp_path / "events"))
 
-    def fake_run(cmd, check=True):
+    def fake_run(cmd, check=True, timeout=None):
         if cmd[:3] == ["git", "pull", "--rebase"]:
             return subprocess.CompletedProcess(cmd, 0, "", "")
         if cmd[:2] == ["git", "add"]:
@@ -412,7 +412,7 @@ def test_git_commit_push_push_failure_returns_sha_not_raise(tmp_path, monkeypatc
 def test_git_commit_push_unstages_on_commit_failure(monkeypatch):
     calls = []
 
-    def fake_run(cmd, check=True):
+    def fake_run(cmd, check=True, timeout=None):
         calls.append(cmd)
         if cmd[:3] == ["git", "pull", "--rebase"] or cmd[:2] in (["git", "add"], ["git", "restore"]):
             return subprocess.CompletedProcess(cmd, 0, "", "")
@@ -428,7 +428,7 @@ def test_git_commit_push_unstages_on_commit_failure(monkeypatch):
 
 
 def test_git_remote_and_staged_helpers(monkeypatch):
-    def fake_run(cmd, check=True):
+    def fake_run(cmd, check=True, timeout=None):
         if cmd[:3] == ["git", "config", "--get"]:
             return subprocess.CompletedProcess(cmd, 0, "git@github.com:tiger/tigermemory.git\n", "")
         if cmd[:4] == ["git", "diff", "--cached", "--name-status"]:

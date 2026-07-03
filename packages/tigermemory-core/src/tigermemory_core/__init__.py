@@ -339,9 +339,13 @@ def _log_llm_call(
 
 # ---------- Subprocess ----------
 
-def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
-    """Run a command in REPO_ROOT, capturing output. Raises GitError if check=True and rc!=0."""
-    r = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace")
+def run(cmd: list[str], check: bool = True, timeout: float | None = None) -> subprocess.CompletedProcess:
+    """Run a command in REPO_ROOT, capturing output. Raises GitError if check=True and rc!=0,
+    or if timeout expires (subprocess.TimeoutExpired → GitError)."""
+    try:
+        r = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        raise GitError(f"cmd timed out after {timeout}s: {' '.join(cmd)}")
     if check and r.returncode != 0:
         raise GitError(
             f"cmd failed: {' '.join(cmd)}\nstderr: {r.stderr.strip()}\nstdout: {r.stdout.strip()}"
@@ -352,14 +356,23 @@ def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
 # ---------- Git ----------
 
 def git_pull_rebase() -> None:
-    """pull --rebase; on conflict/failure, abort and raise GitError (AGENTS.md §5.1).
+    """pull --rebase; on conflict/failure/timeout, abort and raise GitError (AGENTS.md §5.1).
 
     2026-07-04: added --autostash to match git_commit_push entry pull. Without
     it, push-retry path fails on dirty working trees (e.g. WSL has foreign
     dirty from dashboard rebuild). --autostash stashes dirty before rebase
     and pops after; rebase conflicts still abort per AGENTS.md §5.1.
+
+    2026-07-04: added timeout=30s. WSL git proxy sometimes hangs on fetch;
+    without timeout, push-retry path blocks indefinitely. Timeout raises
+    GitError, caught by git_commit_push's try/except (push failure path
+    does not raise to caller — commit is already persisted).
     """
-    r = run(["git", "pull", "--rebase", "--autostash", "origin", "master"], check=False)
+    try:
+        r = run(["git", "pull", "--rebase", "--autostash", "origin", "master"], check=False, timeout=30)
+    except GitError as e:
+        run(["git", "rebase", "--abort"], check=False)
+        raise GitError(f"git pull --rebase timed out after 30s; rebase aborted. stderr: {e}")
     if r.returncode != 0:
         run(["git", "rebase", "--abort"], check=False)
         raise GitError(
@@ -428,9 +441,23 @@ def git_commit_push(files: list[str], msg: str, *, force_add: bool = False) -> s
             pass
 
     # Self-heal: if origin is ahead (peer worktree pushed), pull first.
-    # Skip silently if offline / no upstream; the hook will handle it.
-    pull_r = run(["git", "pull", "--rebase", "--autostash", "origin", "master"], check=False)
-    if pull_r.returncode != 0:
+    # Skip silently if offline / no upstream / proxy hangs; the hook will handle it.
+    # 2026-07-04: added timeout=30s. WSL git proxy (172.31.64.1:7890) sometimes
+    # hangs on fetch; without timeout, write_memory blocks indefinitely.
+    # Timeout → don't raise; commit+push proceed (local commit needs no network).
+    try:
+        pull_r = run(["git", "pull", "--rebase", "--autostash", "origin", "master"], check=False, timeout=30)
+    except GitError as e:
+        # Timeout. Abort any partial rebase, then continue to commit+push.
+        run(["git", "rebase", "--abort"], check=False)
+        runtime_git_event(
+            ok=False,
+            outcome="autopull_timeout_continue",
+            severity="warn",
+            error=str(e),
+        )
+        pull_r = None
+    if pull_r is not None and pull_r.returncode != 0:
         run(["git", "rebase", "--abort"], check=False)
         runtime_git_event(
             ok=False,
