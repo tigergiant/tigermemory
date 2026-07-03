@@ -156,6 +156,24 @@ _WRITER_ONLY_TOOLS = {
     "expense_record",
     "expense_write",
 }
+
+# sources/ subdirs that are .gitignore'd (local-only mirrors; cannot be
+# committed via write_sources). See .gitignore lines 20-24.
+_SOURCES_GITIGNORED_SUBDIRS = frozenset({
+    "documents",
+    "external",
+    "internal-analysis",
+    "assets",
+})
+
+# wiki partitions that are .gitignore'd (private surfaces; cannot be
+# promoted via execute_promote). See .gitignore lines 36-38.
+_WIKI_GITIGNORED_PARTITIONS = frozenset({
+    "investment",
+    "person",
+    "operations",
+})
+
 _TOOL_PROFILE_ALIASES = {
     "": "memory",
     "default": "memory",
@@ -867,6 +885,12 @@ def write_sources(
     tm_core.validate_agent(agent)
     if not re.fullmatch(r"[a-z0-9\-]+", subdir):
         raise ValueError(f"invalid subdir '{subdir}' (lowercase letters/digits/hyphens)")
+    if subdir in _SOURCES_GITIGNORED_SUBDIRS:
+        raise ValueError(
+            f"subdir '{subdir}' is git-ignored (local-only mirror); "
+            f"pick a tracked subdir like 'huawei-celia' or create a new one. "
+            f"See .gitignore lines 20-24."
+        )
     if not re.fullmatch(r"[a-z0-9\-]+", slug):
         raise ValueError(f"invalid slug '{slug}' (lowercase letters/digits/hyphens)")
     if not (source_url.startswith("http://") or source_url.startswith("https://")):
