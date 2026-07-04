@@ -340,7 +340,7 @@ class NormalizedMemory:
     metadata_json: str
     created_at: int
     updated_at: int
-    backend_origin: str = "openmemory"
+    backend_origin: str = "openmemory-import"
     vector_status: str = "not_migrated"
     vector_explicit: bool = False
     content_sha256: str = ""
@@ -574,12 +574,14 @@ def _read_memory_count_by_ids(conn: sqlite3.Connection, ids: Iterable[str]) -> d
         placeholders = ",".join(["?"] * len(chunk))
         sql = f"""
             SELECT id, content, topic, metadata_json, content_sha256, created_at,
-                   backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
+                   state, backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
             FROM memories
-            WHERE id IN ({placeholders})
+            WHERE id IN ({placeholders}) OR legacy_mem0_id IN ({placeholders})
         """
-        for row in conn.execute(sql, chunk).fetchall():
+        for row in conn.execute(sql, chunk + chunk).fetchall():
             out[row["id"]] = dict(row)
+            if row["legacy_mem0_id"]:
+                out[row["legacy_mem0_id"]] = dict(row)
     return out
 
 
@@ -714,9 +716,11 @@ def cmd_compare(args: argparse.Namespace) -> int:
     source_ids: list[str] = []
     source_rows: list[tuple[str, int, str, str]] = []
     source_vector_expectation: dict[str, bool] = {}
+    source_sha_keys: set[str] = set()
     for item in source_records:
         source_topics[item.topic] = source_topics.get(item.topic, 0) + 1
         source_ids.append(item.id)
+        source_sha_keys.add(f"{item.content_sha256}:{item.topic}")
         should_have_vector = item.vector_explicit and _has_vector_capability(item.vector_status)
         if should_have_vector:
             source_vector_expected += 1
@@ -741,6 +745,21 @@ def cmd_compare(args: argparse.Namespace) -> int:
         conn.close()
 
     missing_ids = [memory_id for memory_id in source_ids if memory_id not in db_ids_map]
+    matched_rows = [
+        db_ids_map[memory_id]
+        for memory_id in source_ids
+        if memory_id in db_ids_map
+    ]
+    active_imported_count = sum(1 for row in matched_rows if str(row.get("state") or "") == "active")
+    superseded_dup_count = sum(1 for row in matched_rows if str(row.get("state") or "") == "superseded_dup")
+    invalid_count = sum(1 for row in matched_rows if str(row.get("state") or "").startswith("invalid"))
+    conservation_right_count = active_imported_count + superseded_dup_count + invalid_count
+    db_sha_keys = {
+        f"{row.get('content_sha256') or hashlib.sha256(str(row.get('content') or '').encode('utf-8')).hexdigest()}:{row.get('topic')}"
+        for row in matched_rows
+    }
+    source_minus_db_sha = sorted(source_sha_keys - db_sha_keys)
+    db_minus_source_sha = sorted(db_sha_keys - source_sha_keys)
     vector_mismatch_ids = []
     lexical_mismatch_ids = []
     recent_samples = sorted(source_rows, key=lambda item: item[1], reverse=True)[:DEFAULT_TOPICS_SAMPLE]
@@ -782,6 +801,24 @@ def cmd_compare(args: argparse.Namespace) -> int:
             "missing": len(missing_ids),
             "missing_ids": missing_ids[:10],
         },
+        "conservation": {
+            "left_source_count": source_count,
+            "right_active_imported_count": active_imported_count,
+            "right_superseded_dup_count": superseded_dup_count,
+            "right_invalid_count": invalid_count,
+            "right_total": conservation_right_count,
+            "balanced": source_count == conservation_right_count,
+            "missing_ids": missing_ids[:10],
+        },
+        "sha_diff": {
+            "source_unique_sha_topic_count": len(source_sha_keys),
+            "db_unique_sha_topic_count": len(db_sha_keys),
+            "source_minus_db_count": len(source_minus_db_sha),
+            "db_minus_source_count": len(db_minus_source_sha),
+            "symmetric_diff_count": len(source_minus_db_sha) + len(db_minus_source_sha),
+            "source_minus_db": source_minus_db_sha[:10],
+            "db_minus_source": db_minus_source_sha[:10],
+        },
         "lexical": {
             "sample_checked": len(sample_checks),
             "mismatch_ids": lexical_mismatch_ids,
@@ -804,6 +841,12 @@ def cmd_compare(args: argparse.Namespace) -> int:
     if missing_ids:
         result["ok"] = False
         result["counts"]["status"] = "readback_mismatch"
+    if not result["conservation"]["balanced"]:
+        result["ok"] = False
+        result["counts"]["status"] = "conservation_mismatch"
+    if result["sha_diff"]["symmetric_diff_count"]:
+        result["ok"] = False
+        result["counts"]["status"] = "sha_mismatch"
     if lexical_mismatch_ids:
         result["ok"] = False
         result["counts"]["status"] = "lexical_mismatch"

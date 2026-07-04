@@ -109,7 +109,7 @@ def test_import_dry_run_stats_only_and_actual_import_with_schema(tmp_path, monke
         row = conn.execute("SELECT source_agent, route_score, backend_origin, vector_status, metadata_json FROM memories WHERE id='m1'").fetchone()
         assert row["source_agent"] == "codex"
         assert row["route_score"] == 42
-        assert row["backend_origin"] == "openmemory"
+        assert row["backend_origin"] == "openmemory-import"
         assert row["vector_status"] == "not_migrated"
         metadata = json.loads(row["metadata_json"])
         assert metadata["source"] == "codex"
@@ -119,7 +119,7 @@ def test_import_dry_run_stats_only_and_actual_import_with_schema(tmp_path, monke
         conn.close()
 
 
-def test_compare_detects_lexical_and_semantic_regressions(tmp_path) -> None:
+def test_compare_detects_lexical_and_semantic_regressions(tmp_path, capsys) -> None:
     source = tmp_path / "source.jsonl"
     _write_jsonl(
         source,
@@ -129,9 +129,13 @@ def test_compare_detects_lexical_and_semantic_regressions(tmp_path) -> None:
     )
     db = tmp_path / "mem.sqlite"
     tm_local_memory.main(["import", "--input", str(source), "--db", str(db)])
+    capsys.readouterr()
 
     rc = tm_local_memory.main(["compare", "--input", str(source), "--db", str(db)])
+    payload = json.loads(capsys.readouterr().out)
     assert rc == 0
+    assert payload["conservation"]["balanced"] is True
+    assert payload["sha_diff"]["symmetric_diff_count"] == 0
 
     _write_jsonl(
         source,
@@ -140,6 +144,8 @@ def test_compare_detects_lexical_and_semantic_regressions(tmp_path) -> None:
         ],
     )
     assert tm_local_memory.main(["compare", "--input", str(source), "--db", str(db)]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["sha_diff"]["symmetric_diff_count"] == 2
 
     _write_jsonl(
         source,
@@ -148,6 +154,37 @@ def test_compare_detects_lexical_and_semantic_regressions(tmp_path) -> None:
         ],
     )
     assert tm_local_memory.main(["compare", "--input", str(source), "--db", str(db)]) == 1
+
+
+def test_compare_uses_legacy_mem0_id_mapping(tmp_path, capsys) -> None:
+    source = tmp_path / "source.jsonl"
+    _write_jsonl(
+        source,
+        [
+            {
+                "id": "legacy-1",
+                "content": "legacy mapped content",
+                "metadata": {"source": "codex", "topic": "systems"},
+            },
+        ],
+    )
+    db = tmp_path / "mem.sqlite"
+    tm_local_memory.main(["import", "--input", str(source), "--db", str(db)])
+    capsys.readouterr()
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("UPDATE memories SET id='local-1' WHERE id='legacy-1'")
+        conn.commit()
+    finally:
+        conn.close()
+
+    rc = tm_local_memory.main(["compare", "--input", str(source), "--db", str(db)])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert payload["direct_readback"]["missing"] == 0
+    assert payload["conservation"]["balanced"] is True
+    assert payload["sha_diff"]["symmetric_diff_count"] == 0
 
 
 def test_verify_reads_back_memory_and_term_search(tmp_path) -> None:
