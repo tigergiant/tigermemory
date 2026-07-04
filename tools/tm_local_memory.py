@@ -60,6 +60,16 @@ CJK_STOP_TERMS = {
     "需要",
 }
 
+# Phase 0 shadow search (read-only bypass comparison; never changes online return values)
+TZ_CN = dt.timezone(dt.timedelta(hours=8))
+SHADOW_SEARCH_ENV = "TM_SHADOW_SEARCH_ENABLED"
+SHADOW_SEARCH_DEFAULT_LOG_DIR = REPO_ROOT / ".tmp" / "search-shadow"
+SHADOW_LOCAL_DB_ENV = "TIGERMEMORY_LOCAL_DB"
+SHADOW_LOCAL_DB_DEFAULT = REPO_ROOT / "data" / "tigermemory" / "memory.sqlite"
+SHADOW_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
 
 def _read_runtime_env() -> dict[str, str]:
     env: dict[str, str] = {}
@@ -991,6 +1001,303 @@ def cmd_verify(args: argparse.Namespace) -> int:
         conn.close()
 
 
+def shadow_search_enabled() -> bool:
+    """Return True only when TM_SHADOW_SEARCH_ENABLED is explicitly truthy.
+
+    Phase 0 shadow comparison is disabled by default; the automatic hook
+    (maybe_log_shadow_search) is a no-op unless this returns True.
+    """
+    raw = os.environ.get(SHADOW_SEARCH_ENV, "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _shadow_log_path(log_dir: Path | None = None) -> Path:
+    today = dt.datetime.now(TZ_CN).strftime("%Y-%m-%d")
+    root = Path(log_dir) if log_dir is not None else SHADOW_SEARCH_DEFAULT_LOG_DIR
+    return root / f"{today}.jsonl"
+
+
+def _shadow_local_db_path() -> Path:
+    override = os.environ.get(SHADOW_LOCAL_DB_ENV)
+    if override:
+        return Path(override)
+    return SHADOW_LOCAL_DB_DEFAULT
+
+
+def _extract_ids_from_openmemory_body(body: str | dict[str, Any] | None) -> list[str]:
+    """Extract memory ids from an OpenMemory search response body (str or parsed dict)."""
+    if body is None:
+        return []
+    if isinstance(body, str):
+        if not body.strip():
+            return []
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            return []
+    else:
+        data = body
+    if not isinstance(data, dict):
+        return []
+    items = data.get("items")
+    if items is None:
+        items = data.get("results")
+    if items is None:
+        items = data.get("memories")
+    if not isinstance(items, list):
+        return []
+    ids: list[str] = []
+    for item in items:
+        if isinstance(item, dict) and item.get("id"):
+            ids.append(str(item["id"]))
+    return ids
+
+
+def _shadow_local_search_ids(conn: sqlite3.Connection, query: str, *, size: int = 5) -> list[str]:
+    """Run a local SQLite lexical search and return ordered ids.
+
+    Mirrors _local_search_local_memory in tigermemory_core: UUID direct lookup,
+    then FTS5, then CJK/latin term fallback. Read-only.
+    """
+    limit = max(1, int(size))
+    q = (query or "").strip()
+    if not q:
+        return []
+    if SHADOW_UUID_RE.fullmatch(q):
+        row = _read_memory_by_id(conn, q)
+        if row is None:
+            row = _read_memory_by_legacy_id(conn, q)
+        return [str(row["id"])] if row else []
+    fts_query = _build_fts_query(q)
+    rows: list[sqlite3.Row] = []
+    if fts_query:
+        try:
+            rows = conn.execute(
+                """
+                SELECT id FROM memories
+                WHERE id IN (
+                    SELECT id FROM memories_fts WHERE memories_fts MATCH ?
+                )
+                  AND state = 'active'
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (fts_query, limit),
+            ).fetchall()
+        except sqlite3.Error:
+            rows = []
+    seen = {str(row["id"]) for row in rows}
+    out = [str(row["id"]) for row in rows]
+    if len(out) < limit:
+        for memory_id in _fallback_ids_by_terms(conn, q, limit=limit):
+            if memory_id in seen:
+                continue
+            out.append(memory_id)
+            seen.add(memory_id)
+            if len(out) >= limit:
+                break
+    return out
+
+
+def _shadow_openmemory_search_ids(
+    query: str,
+    *,
+    size: int = 5,
+    base_url: str | None = None,
+    bearer: str | None = None,
+    user_id: str | None = None,
+    timeout: int = 15,
+) -> tuple[list[str], list[str]]:
+    """Call OpenMemory search and return (ids, warnings). Does not raise."""
+    warnings: list[str] = []
+    try:
+        url = (base_url or _env_value("MEM0_URL", DEFAULT_MEM0_URL)).rstrip("/")
+        api_key = bearer or _env_value("MEM0_API_KEY", "")
+        uid = user_id or _env_value("MEM0_USER_ID", DEFAULT_MEM0_USER)
+        qs = urllib.parse.urlencode(
+            {
+                "user_id": uid,
+                "search_query": query,
+                "page": 1,
+                "size": size,
+                "match_mode": "id_first",
+            }
+        )
+        payload = _http_json(
+            f"{url}/api/v1/memories/?{qs}",
+            timeout=timeout,
+            bearer=api_key or None,
+        )
+        items = _extract_items(payload)
+        ids = [
+            str(item.get("id"))
+            for item in items
+            if isinstance(item, dict) and item.get("id")
+        ]
+        return ids, warnings
+    except Exception as exc:
+        warnings.append(f"openmemory_search_error: {exc}")
+        return [], warnings
+
+
+def run_shadow_search(
+    query: str,
+    *,
+    db_path: Path,
+    size: int = 5,
+    openmemory_fetch=None,
+    log_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Run one shadow comparison and append a JSONL log entry.
+
+    This is the explicit entry point (CLI or direct call). It calls OpenMemory
+    search (or the openmemory_fetch override) for old_ids, runs local SQLite
+    search for local_ids, and writes a JSONL record to
+    .tmp/search-shadow/YYYY-MM-DD.jsonl. Never raises; warnings capture errors.
+    Does NOT change any online return value.
+    """
+    warnings: list[str] = []
+
+    if openmemory_fetch is not None:
+        old_t0 = time.monotonic()
+        try:
+            old_ids, om_warnings = openmemory_fetch(query, size=size)
+            if not isinstance(old_ids, list):
+                old_ids = []
+            if isinstance(om_warnings, list):
+                warnings.extend(om_warnings)
+        except Exception as exc:
+            old_ids = []
+            warnings.append(f"openmemory_fetch_exception: {exc}")
+        old_latency_ms = (time.monotonic() - old_t0) * 1000.0
+    else:
+        old_t0 = time.monotonic()
+        old_ids, om_warnings = _shadow_openmemory_search_ids(query, size=size)
+        old_latency_ms = (time.monotonic() - old_t0) * 1000.0
+        warnings.extend(om_warnings)
+
+    local_t0 = time.monotonic()
+    local_ids: list[str] = []
+    local_db = Path(db_path)
+    try:
+        if not local_db.exists():
+            warnings.append(f"local_db_missing: {local_db}")
+        else:
+            conn = _conn(local_db)
+            try:
+                local_ids = _shadow_local_search_ids(conn, query, size=size)
+            finally:
+                conn.close()
+    except sqlite3.Error as exc:
+        warnings.append(f"local_db_error: {exc}")
+    except Exception as exc:
+        warnings.append(f"local_search_exception: {exc}")
+    local_latency_ms = (time.monotonic() - local_t0) * 1000.0
+
+    intersection = set(old_ids) & set(local_ids)
+    record: dict[str, Any] = {
+        "timestamp": dt.datetime.now(TZ_CN).isoformat(),
+        "query": query,
+        "size": size,
+        "old_ids": old_ids,
+        "local_ids": local_ids,
+        "intersection_count": len(intersection),
+        "old_count": len(old_ids),
+        "local_count": len(local_ids),
+        "old_latency_ms": round(old_latency_ms, 2),
+        "local_latency_ms": round(local_latency_ms, 2),
+        "warnings": warnings,
+    }
+
+    try:
+        log_path = _shadow_log_path(log_dir)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False))
+            f.write("\n")
+    except Exception as exc:
+        record["warnings"] = record.get("warnings", []) + [f"log_write_error: {exc}"]
+
+    return record
+
+
+def maybe_log_shadow_search(
+    query: str,
+    old_response_body: str,
+    *,
+    db_path: Path | None = None,
+    size: int = 5,
+    log_dir: Path | None = None,
+) -> None:
+    """Best-effort shadow comparison hook for the main search path.
+
+    - No-op when TM_SHADOW_SEARCH_ENABLED is not set (default off).
+    - Accepts the already-fetched OpenMemory response body so we never double-call.
+    - Never raises; swallows all exceptions internally.
+    - Does NOT modify old_response_body or return anything.
+    - Reads local DB (TIGERMEMORY_LOCAL_DB or data/tigermemory/memory.sqlite) for
+      comparison; never creates the production DB.
+    """
+    if not shadow_search_enabled():
+        return
+    try:
+        old_ids = _extract_ids_from_openmemory_body(old_response_body)
+        resolved_db = Path(db_path) if db_path is not None else _shadow_local_db_path()
+        warnings: list[str] = []
+        local_ids: list[str] = []
+        local_t0 = time.monotonic()
+        if not resolved_db.exists():
+            warnings.append(f"local_db_missing: {resolved_db}")
+            local_latency_ms = 0.0
+        else:
+            try:
+                conn = _conn(resolved_db)
+                try:
+                    local_ids = _shadow_local_search_ids(conn, query, size=size)
+                finally:
+                    conn.close()
+            except Exception as exc:
+                warnings.append(f"local_search_exception: {exc}")
+            local_latency_ms = (time.monotonic() - local_t0) * 1000.0
+
+        intersection = set(old_ids) & set(local_ids)
+        record = {
+            "timestamp": dt.datetime.now(TZ_CN).isoformat(),
+            "query": query,
+            "size": size,
+            "old_ids": old_ids,
+            "local_ids": local_ids,
+            "intersection_count": len(intersection),
+            "old_count": len(old_ids),
+            "local_count": len(local_ids),
+            "old_latency_ms": 0.0,  # caller already paid the fetch cost; not measured here
+            "local_latency_ms": round(local_latency_ms, 2),
+            "warnings": warnings,
+        }
+        log_path = _shadow_log_path(log_dir)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False))
+            f.write("\n")
+    except Exception:
+        pass  # shadow hook must never raise into the main search path
+
+
+def cmd_shadow_search(args: argparse.Namespace) -> int:
+    db_path = Path(args.db).resolve()
+    if not db_path.exists():
+        print(f"shadow-search failed: db missing {db_path}", file=sys.stderr)
+        return 2
+    record = run_shadow_search(
+        args.query,
+        db_path=db_path,
+        size=args.size,
+        log_dir=Path(args.log_dir) if args.log_dir else None,
+    )
+    print(json.dumps(record, ensure_ascii=False))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="OpenMemory/local memory migration helpers")
     sub = ap.add_subparsers(dest="command", required=True)
@@ -1022,6 +1329,15 @@ def build_parser() -> argparse.ArgumentParser:
     ve.add_argument("--id", required=True)
     ve.add_argument("--terms", nargs="*", default=[])
 
+    ss = sub.add_parser(
+        "shadow-search",
+        help="Phase 0 read-only shadow comparison: OpenMemory vs local SQLite ids",
+    )
+    ss.add_argument("--query", required=True)
+    ss.add_argument("--db", required=True)
+    ss.add_argument("--size", type=int, default=5)
+    ss.add_argument("--log-dir", default=None)
+
     return ap
 
 
@@ -1035,6 +1351,7 @@ def main(argv: list[str] | None = None) -> int:
         "backup": cmd_backup,
         "restore": cmd_restore,
         "verify": cmd_verify,
+        "shadow-search": cmd_shadow_search,
     }
     start = time.monotonic()
     try:

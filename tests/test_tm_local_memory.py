@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import pathlib
@@ -256,3 +257,255 @@ def test_local_memory_main_records_runtime_event(tmp_path, monkeypatch) -> None:
     assert events[-1]["event_type"] == "local_memory_import"
     assert events[-1]["target_ref"]["db"] == str(db)
     assert events[-1]["target_ref"]["input"] == str(source)
+
+
+# --- Phase 0 shadow search tests ---
+
+
+def _today_cn_date_str() -> str:
+    tz_cn = dt.timezone(dt.timedelta(hours=8))
+    return dt.datetime.now(tz_cn).strftime("%Y-%m-%d")
+
+
+def _seed_shadow_db(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Create a temp SQLite db with three memories for shadow comparison."""
+    source = tmp_path / "shadow_source.jsonl"
+    _write_jsonl(
+        source,
+        [
+            {
+                "id": "s1",
+                "content": "shadow search alpha beta",
+                "metadata": {"source": "codex", "topic": "systems"},
+                "created_at": 1717500000,
+            },
+            {
+                "id": "s2",
+                "content": "shadow search gamma delta",
+                "metadata": {"source": "codex", "topic": "systems"},
+                "created_at": 1717600000,
+            },
+            {
+                "id": "s3",
+                "content": "unrelated memory item",
+                "metadata": {"source": "codex", "topic": "systems"},
+                "created_at": 1717700000,
+            },
+        ],
+    )
+    db = tmp_path / "shadow.sqlite"
+    assert tm_local_memory.main(["import", "--input", str(source), "--db", str(db)]) == 0
+    return db
+
+
+def test_shadow_search_enabled_respects_env(monkeypatch) -> None:
+    monkeypatch.delenv(tm_local_memory.SHADOW_SEARCH_ENV, raising=False)
+    assert tm_local_memory.shadow_search_enabled() is False
+
+    monkeypatch.setenv(tm_local_memory.SHADOW_SEARCH_ENV, "1")
+    assert tm_local_memory.shadow_search_enabled() is True
+
+    monkeypatch.setenv(tm_local_memory.SHADOW_SEARCH_ENV, "false")
+    assert tm_local_memory.shadow_search_enabled() is False
+
+    monkeypatch.setenv(tm_local_memory.SHADOW_SEARCH_ENV, "yes")
+    assert tm_local_memory.shadow_search_enabled() is True
+
+
+def test_run_shadow_search_writes_log_with_required_fields(tmp_path) -> None:
+    db = _seed_shadow_db(tmp_path)
+    log_dir = tmp_path / "search-shadow"
+
+    def fake_openmemory_fetch(query: str, *, size: int = 5):
+        # Pretend OpenMemory returned s1 and an id not in local db
+        return (["s1", "zzz-not-in-local"], [])
+
+    record = tm_local_memory.run_shadow_search(
+        "shadow search alpha",
+        db_path=db,
+        size=5,
+        openmemory_fetch=fake_openmemory_fetch,
+        log_dir=log_dir,
+    )
+
+    # Required fields per acceptance criteria
+    for field in (
+        "query",
+        "old_ids",
+        "local_ids",
+        "intersection_count",
+        "old_latency_ms",
+        "local_latency_ms",
+        "warnings",
+    ):
+        assert field in record, f"missing field: {field}"
+
+    assert record["query"] == "shadow search alpha"
+    assert record["old_ids"] == ["s1", "zzz-not-in-local"]
+    assert "s1" in record["local_ids"]
+    assert record["intersection_count"] == 1
+    assert record["old_latency_ms"] >= 0
+    assert record["local_latency_ms"] >= 0
+    assert isinstance(record["warnings"], list)
+
+    # Log file written to <log_dir>/<YYYY-MM-DD>.jsonl
+    expected_log = log_dir / f"{_today_cn_date_str()}.jsonl"
+    assert expected_log.exists()
+    lines = expected_log.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    logged = json.loads(lines[0])
+    assert logged["query"] == "shadow search alpha"
+    assert logged["intersection_count"] == 1
+    assert logged["old_ids"] == ["s1", "zzz-not-in-local"]
+
+
+def test_run_shadow_search_captures_openmemory_fetch_exception(tmp_path) -> None:
+    db = _seed_shadow_db(tmp_path)
+    log_dir = tmp_path / "search-shadow"
+
+    def broken_fetch(query: str, *, size: int = 5):
+        raise RuntimeError("openmemory down")
+
+    record = tm_local_memory.run_shadow_search(
+        "shadow search",
+        db_path=db,
+        openmemory_fetch=broken_fetch,
+        log_dir=log_dir,
+    )
+    assert record["old_ids"] == []
+    assert any("openmemory_fetch_exception" in w for w in record["warnings"])
+
+
+def test_run_shadow_search_does_not_create_missing_db(tmp_path) -> None:
+    missing_db = tmp_path / "missing.sqlite"
+    log_dir = tmp_path / "search-shadow"
+
+    record = tm_local_memory.run_shadow_search(
+        "shadow search",
+        db_path=missing_db,
+        openmemory_fetch=lambda query, *, size=5: (["old-id"], []),
+        log_dir=log_dir,
+    )
+
+    assert missing_db.exists() is False
+    assert record["old_ids"] == ["old-id"]
+    assert record["local_ids"] == []
+    assert any("local_db_missing" in w for w in record["warnings"])
+
+
+def test_maybe_log_shadow_search_noop_when_disabled(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv(tm_local_memory.SHADOW_SEARCH_ENV, raising=False)
+    log_dir = tmp_path / "search-shadow"
+    db = _seed_shadow_db(tmp_path)
+
+    tm_local_memory.maybe_log_shadow_search(
+        "shadow search alpha",
+        json.dumps({"items": [{"id": "s1"}]}),
+        db_path=db,
+        log_dir=log_dir,
+    )
+    # No log file should be created when disabled
+    assert not log_dir.exists()
+
+
+def test_maybe_log_shadow_search_logs_when_enabled(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv(tm_local_memory.SHADOW_SEARCH_ENV, "1")
+    log_dir = tmp_path / "search-shadow"
+    db = _seed_shadow_db(tmp_path)
+
+    old_body = json.dumps({"items": [{"id": "s1"}, {"id": "missing-from-local"}]})
+
+    tm_local_memory.maybe_log_shadow_search(
+        "shadow search alpha",
+        old_body,
+        db_path=db,
+        log_dir=log_dir,
+    )
+
+    expected_log = log_dir / f"{_today_cn_date_str()}.jsonl"
+    assert expected_log.exists()
+    logged = json.loads(expected_log.read_text(encoding="utf-8").splitlines()[-1])
+    assert logged["old_ids"] == ["s1", "missing-from-local"]
+    assert "s1" in logged["local_ids"]
+    assert logged["intersection_count"] == 1
+    assert logged["old_latency_ms"] == 0.0  # caller already paid fetch cost
+    assert logged["local_latency_ms"] >= 0
+
+
+def test_maybe_log_shadow_search_does_not_create_missing_db(tmp_path, monkeypatch) -> None:
+    """The hook must never create the production DB; it warns instead."""
+    monkeypatch.setenv(tm_local_memory.SHADOW_SEARCH_ENV, "1")
+    log_dir = tmp_path / "search-shadow"
+    missing_db = tmp_path / "never-exists.sqlite"
+    assert not missing_db.exists()
+
+    tm_local_memory.maybe_log_shadow_search(
+        "anything",
+        json.dumps({"items": [{"id": "x"}]}),
+        db_path=missing_db,
+        log_dir=log_dir,
+    )
+    # DB file must not have been created
+    assert not missing_db.exists()
+
+    expected_log = log_dir / f"{_today_cn_date_str()}.jsonl"
+    assert expected_log.exists()
+    logged = json.loads(expected_log.read_text(encoding="utf-8").splitlines()[-1])
+    assert logged["local_ids"] == []
+    assert any("local_db_missing" in w for w in logged["warnings"])
+
+
+def test_maybe_log_shadow_search_never_raises_on_bad_input(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv(tm_local_memory.SHADOW_SEARCH_ENV, "1")
+    log_dir = tmp_path / "search-shadow"
+    db = _seed_shadow_db(tmp_path)
+
+    # Garbage body + valid db: must not raise
+    tm_local_memory.maybe_log_shadow_search(
+        "query",
+        "not valid json {{{",
+        db_path=db,
+        log_dir=log_dir,
+    )
+    expected_log = log_dir / f"{_today_cn_date_str()}.jsonl"
+    assert expected_log.exists()
+    logged = json.loads(expected_log.read_text(encoding="utf-8").splitlines()[-1])
+    assert logged["old_ids"] == []
+
+
+def test_shadow_search_cli_command(tmp_path, monkeypatch) -> None:
+    db = _seed_shadow_db(tmp_path)
+    log_dir = tmp_path / "search-shadow"
+
+    # Stub the OpenMemory HTTP path so the CLI doesn't need a live server
+    def fake_openmemory_search_ids(query, *, size=5, **kwargs):
+        return (["s1", "s2"], [])
+
+    monkeypatch.setattr(
+        tm_local_memory,
+        "_shadow_openmemory_search_ids",
+        fake_openmemory_search_ids,
+    )
+
+    rc = tm_local_memory.main([
+        "shadow-search",
+        "--query", "shadow search",
+        "--db", str(db),
+        "--size", "5",
+        "--log-dir", str(log_dir),
+    ])
+    assert rc == 0
+    expected_log = log_dir / f"{_today_cn_date_str()}.jsonl"
+    assert expected_log.exists()
+
+
+def test_shadow_search_cli_missing_db_returns_2(tmp_path, capsys) -> None:
+    missing = tmp_path / "nope.sqlite"
+    rc = tm_local_memory.main([
+        "shadow-search",
+        "--query", "x",
+        "--db", str(missing),
+    ])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "db missing" in err
