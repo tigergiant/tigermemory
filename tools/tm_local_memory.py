@@ -215,12 +215,20 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             route_decision TEXT NOT NULL,
             route_score INTEGER NOT NULL DEFAULT 0,
             metadata_json TEXT NOT NULL DEFAULT '{}',
+            content_sha256 TEXT,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             state TEXT NOT NULL DEFAULT 'active',
             backend_origin TEXT NOT NULL DEFAULT 'local',
-            vector_status TEXT NOT NULL DEFAULT 'fts5_only'
+            vector_status TEXT NOT NULL DEFAULT 'fts5_only',
+            legacy_mem0_id TEXT,
+            shadow_state TEXT,
+            verified_at INTEGER
         );
+        CREATE INDEX IF NOT EXISTS idx_memories_content_sha_topic
+            ON memories(content_sha256, topic);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_legacy_mem0_id
+            ON memories(legacy_mem0_id) WHERE legacy_mem0_id IS NOT NULL;
         CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
             id UNINDEXED,
             content
@@ -241,6 +249,30 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             DELETE FROM memories_fts WHERE id = old.id;
             INSERT INTO memories_fts(id, content) VALUES (new.id, new.content);
         END;
+        """
+    )
+    existing_columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(memories)").fetchall()
+    }
+    for column_name, column_ddl in (
+        ("content_sha256", "ALTER TABLE memories ADD COLUMN content_sha256 TEXT"),
+        ("legacy_mem0_id", "ALTER TABLE memories ADD COLUMN legacy_mem0_id TEXT"),
+        ("shadow_state", "ALTER TABLE memories ADD COLUMN shadow_state TEXT"),
+        ("verified_at", "ALTER TABLE memories ADD COLUMN verified_at INTEGER"),
+    ):
+        if column_name not in existing_columns:
+            conn.execute(column_ddl)
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_memories_content_sha_topic
+        ON memories(content_sha256, topic)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_legacy_mem0_id
+        ON memories(legacy_mem0_id) WHERE legacy_mem0_id IS NOT NULL
         """
     )
     conn.execute(
@@ -311,6 +343,9 @@ class NormalizedMemory:
     backend_origin: str = "openmemory"
     vector_status: str = "not_migrated"
     vector_explicit: bool = False
+    content_sha256: str = ""
+    legacy_mem0_id: str | None = None
+    shadow_state: str | None = None
 
 
 def _normalize_item(item: dict[str, Any]) -> NormalizedMemory:
@@ -342,6 +377,9 @@ def _normalize_item(item: dict[str, Any]) -> NormalizedMemory:
         vector_status, vector_explicit = _normalize_vector_status(metadata.get("vector_status"))
     metadata.setdefault("source", source)
     metadata.setdefault("topic", topic)
+    legacy_mem0_id = str(item.get("legacy_mem0_id") or item.get("legacy_id") or memory_id).strip() or None
+    if legacy_mem0_id:
+        metadata.setdefault("legacy_mem0_id", legacy_mem0_id)
     if route_score is not None:
         metadata["route_score"] = route_score
     metadata.setdefault("route_decision", route_decision)
@@ -358,6 +396,9 @@ def _normalize_item(item: dict[str, Any]) -> NormalizedMemory:
         updated_at=updated_at,
         vector_status=vector_status,
         vector_explicit=vector_explicit,
+        content_sha256=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        legacy_mem0_id=legacy_mem0_id,
+        shadow_state="pending",
     )
 
 
@@ -500,11 +541,26 @@ def _read_memory_by_id(conn: sqlite3.Connection, memory_id: str) -> dict[str, An
     row = conn.execute(
         """
         SELECT id, content, topic, source_agent, route_decision, route_score,
-               metadata_json, created_at, updated_at, state, backend_origin, vector_status
+               metadata_json, content_sha256, created_at, updated_at, state,
+               backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
         FROM memories
         WHERE id = ?
         """,
         (memory_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _read_memory_by_legacy_id(conn: sqlite3.Connection, legacy_mem0_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT id, content, topic, source_agent, route_decision, route_score,
+               metadata_json, content_sha256, created_at, updated_at, state,
+               backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
+        FROM memories
+        WHERE legacy_mem0_id = ?
+        """,
+        (legacy_mem0_id,),
     ).fetchone()
     return dict(row) if row else None
 
@@ -517,8 +573,8 @@ def _read_memory_count_by_ids(conn: sqlite3.Connection, ids: Iterable[str]) -> d
     for chunk in _chunked(id_list, 400):
         placeholders = ",".join(["?"] * len(chunk))
         sql = f"""
-            SELECT id, content, topic, metadata_json, created_at,
-                   backend_origin, vector_status
+            SELECT id, content, topic, metadata_json, content_sha256, created_at,
+                   backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
             FROM memories
             WHERE id IN ({placeholders})
         """
@@ -593,8 +649,9 @@ def cmd_import(args: argparse.Namespace) -> int:
                 """
                 INSERT INTO memories (
                     id, content, topic, source_agent, route_decision, route_score,
-                    metadata_json, created_at, updated_at, state, backend_origin, vector_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    metadata_json, content_sha256, created_at, updated_at, state,
+                    backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     content=excluded.content,
                     topic=excluded.topic,
@@ -602,11 +659,15 @@ def cmd_import(args: argparse.Namespace) -> int:
                     route_decision=excluded.route_decision,
                     route_score=excluded.route_score,
                     metadata_json=excluded.metadata_json,
+                    content_sha256=excluded.content_sha256,
                     created_at=excluded.created_at,
                     updated_at=excluded.updated_at,
                     state=excluded.state,
                     backend_origin=excluded.backend_origin,
-                    vector_status=excluded.vector_status
+                    vector_status=excluded.vector_status,
+                    legacy_mem0_id=excluded.legacy_mem0_id,
+                    shadow_state=excluded.shadow_state,
+                    verified_at=excluded.verified_at
                 """,
                 (
                     item.id,
@@ -616,11 +677,15 @@ def cmd_import(args: argparse.Namespace) -> int:
                     item.route_decision,
                     item.route_score,
                     item.metadata_json,
+                    item.content_sha256,
                     item.created_at,
                     item.updated_at,
                     "active",
                     item.backend_origin,
                     item.vector_status,
+                    item.legacy_mem0_id,
+                    item.shadow_state,
+                    int(time.time()),
                 ),
             )
         conn.commit()
@@ -820,8 +885,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
     try:
         row = _read_memory_by_id(conn, args.id)
         if not row:
+            row = _read_memory_by_legacy_id(conn, args.id)
+        if not row:
             result = {
                 "id": args.id,
+                "queried_id": args.id,
+                "resolved_id": None,
+                "legacy_mem0_id": None,
                 "exists": False,
                 "direct_readback_ok": False,
                 "search_by_id_self_hit": False,
@@ -829,16 +899,21 @@ def cmd_verify(args: argparse.Namespace) -> int:
             }
             print(json.dumps(result, ensure_ascii=False))
             return 2
-        search_by_id_ids = [args.id]
+        resolved_id = str(row["id"])
+        legacy_mem0_id = row.get("legacy_mem0_id") if isinstance(row, dict) else None
+        search_by_id_ids = [resolved_id]
         result = {
-            "id": args.id,
+            "id": resolved_id,
+            "queried_id": args.id,
+            "resolved_id": resolved_id,
+            "legacy_mem0_id": legacy_mem0_id,
             "exists": True,
             "direct_readback_ok": True,
             "state": row["state"],
             "backend_origin": row["backend_origin"],
             "vector_status": row["vector_status"],
             "created_at": row["created_at"],
-            "search_by_id_self_hit": args.id in search_by_id_ids,
+            "search_by_id_self_hit": resolved_id in search_by_id_ids,
             "search_by_id_ids": search_by_id_ids,
             "search_by_id_count": len(search_by_id_ids),
             "search_by_terms_self_hit": None,
@@ -858,13 +933,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
                     (fts_query,),
                 ).fetchall()
                 found = [r["id"] for r in rows]
-            if args.id not in found:
+            if resolved_id not in found:
                 for memory_id in _fallback_ids_by_terms(conn, joined_terms):
                     if memory_id not in found:
                         found.append(memory_id)
             result["search_by_terms_ids"] = found
             result["search_by_terms_count"] = len(found)
-            result["search_by_terms_self_hit"] = args.id in found
+            result["search_by_terms_self_hit"] = resolved_id in found
         print(json.dumps(result, ensure_ascii=False))
         if args.terms and result["search_by_terms_self_hit"] is False:
             return 2

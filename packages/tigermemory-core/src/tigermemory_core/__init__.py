@@ -933,7 +933,7 @@ MEM0_UUID_RE = re.compile(
 )
 
 _LOCAL_DB_DEFAULT_REL_PATH = pathlib.Path("data") / "tigermemory" / "memory.sqlite"
-_LOCAL_MEMORY_SCHEMA_VERSION = 1
+_LOCAL_MEMORY_SCHEMA_VERSION = 2
 _LOCAL_CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
 _LOCAL_LATIN_TERM_RE = re.compile(r"[a-z0-9][a-z0-9._:/\\-]*", re.IGNORECASE)
 _LOCAL_CJK_STOP_TERMS = {
@@ -997,12 +997,20 @@ def _local_schema_ddl() -> str:
         route_decision TEXT NOT NULL,
         route_score INTEGER NOT NULL DEFAULT 0,
         metadata_json TEXT NOT NULL DEFAULT '{}',
+        content_sha256 TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         state TEXT NOT NULL DEFAULT 'active',
         backend_origin TEXT NOT NULL DEFAULT 'local',
-        vector_status TEXT NOT NULL DEFAULT 'fts5_only'
+        vector_status TEXT NOT NULL DEFAULT 'fts5_only',
+        legacy_mem0_id TEXT,
+        shadow_state TEXT,
+        verified_at INTEGER
     );
+    CREATE INDEX IF NOT EXISTS idx_memories_content_sha_topic
+        ON memories(content_sha256, topic);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_legacy_mem0_id
+        ON memories(legacy_mem0_id) WHERE legacy_mem0_id IS NOT NULL;
     CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
         id UNINDEXED,
         content
@@ -1028,6 +1036,30 @@ def _local_schema_ddl() -> str:
 
 def _ensure_local_memory_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_local_schema_ddl())
+    existing_columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(memories)").fetchall()
+    }
+    for column_name, column_ddl in (
+        ("content_sha256", "ALTER TABLE memories ADD COLUMN content_sha256 TEXT"),
+        ("legacy_mem0_id", "ALTER TABLE memories ADD COLUMN legacy_mem0_id TEXT"),
+        ("shadow_state", "ALTER TABLE memories ADD COLUMN shadow_state TEXT"),
+        ("verified_at", "ALTER TABLE memories ADD COLUMN verified_at INTEGER"),
+    ):
+        if column_name not in existing_columns:
+            conn.execute(column_ddl)
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_memories_content_sha_topic
+        ON memories(content_sha256, topic)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_legacy_mem0_id
+        ON memories(legacy_mem0_id) WHERE legacy_mem0_id IS NOT NULL
+        """
+    )
     conn.execute(
         """
         INSERT OR REPLACE INTO schema_meta (key, value, updated_at)
@@ -1035,6 +1067,10 @@ def _ensure_local_memory_schema(conn: sqlite3.Connection) -> None:
         """,
         (str(_LOCAL_MEMORY_SCHEMA_VERSION), datetime.datetime.now(TZ_CN).isoformat()),
     )
+
+
+def _row_value(row: sqlite3.Row, key: str, default: Any = None) -> Any:
+    return row[key] if key in row.keys() else default
 
 
 def _ensure_local_metadata_json(raw: Any) -> tuple[dict[str, Any], bool]:
@@ -1116,7 +1152,8 @@ def _local_memory_fallback_rows(conn: sqlite3.Connection, query: str, size: int)
     rows = conn.execute(
         """
         SELECT id, content, topic, source_agent, route_decision, route_score,
-               metadata_json, created_at, updated_at, state, backend_origin, vector_status
+               metadata_json, content_sha256, created_at, updated_at, state,
+               backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
         FROM memories
         WHERE state = 'active'
         ORDER BY created_at DESC
@@ -1165,6 +1202,10 @@ def _local_memory_row_to_item(row: sqlite3.Row, *, include_route_info: bool = Tr
         "metadata": meta,
         "backend_origin": row["backend_origin"],
         "vector_status": row["vector_status"],
+        "content_sha256": _row_value(row, "content_sha256"),
+        "legacy_mem0_id": _row_value(row, "legacy_mem0_id"),
+        "shadow_state": _row_value(row, "shadow_state"),
+        "verified_at": _row_value(row, "verified_at"),
     }
     if include_route_info:
         item["route_decision"] = route_decision
@@ -1182,11 +1223,28 @@ def _local_read_memory_by_id(conn: sqlite3.Connection, memory_id: str) -> dict[s
     row = conn.execute(
         """
         SELECT id, content, topic, source_agent, route_decision, route_score,
-               metadata_json, created_at, updated_at, state, backend_origin, vector_status
+               metadata_json, content_sha256, created_at, updated_at, state,
+               backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
         FROM memories
         WHERE id = ?
         """,
         (memory_id,),
+    ).fetchone()
+    if not row:
+        return None
+    return _local_memory_row_to_item(row, include_route_info=True)
+
+
+def _local_read_memory_by_legacy_id(conn: sqlite3.Connection, legacy_mem0_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT id, content, topic, source_agent, route_decision, route_score,
+               metadata_json, content_sha256, created_at, updated_at, state,
+               backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
+        FROM memories
+        WHERE legacy_mem0_id = ?
+        """,
+        (legacy_mem0_id,),
     ).fetchone()
     if not row:
         return None
@@ -1206,7 +1264,8 @@ def _local_search_local_memory(conn: sqlite3.Connection, query: str, size: int =
             rows = conn.execute(
                 """
                 SELECT m.id, m.content, m.topic, m.source_agent, m.route_decision, m.route_score,
-                       m.metadata_json, m.created_at, m.updated_at, m.state, m.backend_origin, m.vector_status
+                       m.metadata_json, m.content_sha256, m.created_at, m.updated_at, m.state,
+                       m.backend_origin, m.vector_status, m.legacy_mem0_id, m.shadow_state, m.verified_at
                 FROM memories AS m
                 WHERE m.id IN (
                     SELECT id FROM memories_fts WHERE memories_fts MATCH ?
@@ -1408,12 +1467,16 @@ def mem0_write(
 
             metadata_payload["routed_from"] = "mem0_write"
             metadata_payload["source_agent"] = metadata_payload.get("source_agent", agent)
+            content_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            legacy_mem0_id = str(metadata_payload.get("legacy_mem0_id") or "").strip() or None
+            shadow_state = str(metadata_payload.get("shadow_state") or "").strip() or None
             conn.execute(
                 """
                 INSERT INTO memories(
                     id, content, topic, source_agent, route_decision, route_score,
-                    metadata_json, created_at, updated_at, state, backend_origin, vector_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    metadata_json, content_sha256, created_at, updated_at, state,
+                    backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     memory_id,
@@ -1423,11 +1486,15 @@ def mem0_write(
                     route_decision_value,
                     route_score_value,
                     json.dumps(metadata_payload, ensure_ascii=False),
+                    content_sha256,
                     now_ts,
                     now_ts,
                     "active",
                     TIGERMEMORY_PROFILE_LOCAL,
                     "fts5_only",
+                    legacy_mem0_id,
+                    shadow_state,
+                    now_ts,
                 ),
             )
             conn.commit()
@@ -1673,8 +1740,13 @@ def verify_memory_record(
             _ensure_local_memory_schema(conn)
             data = _local_read_memory_by_id(conn, mem_id)
             if not data:
+                data = _local_read_memory_by_legacy_id(conn, mem_id)
+            if not data:
                 return {
                     "id": mem_id,
+                    "queried_id": mem_id,
+                    "resolved_id": None,
+                    "legacy_mem0_id": None,
                     "status": "not_found",
                     "exists": False,
                     "direct_readback_ok": False,
@@ -1696,11 +1768,16 @@ def verify_memory_record(
                 }
 
             text = str(data.get("content") or "")
+            resolved_id = str(data.get("id") or mem_id)
+            legacy_mem0_id = data.get("legacy_mem0_id")
             created_dt, created_local = _mem0_created_at_local(data.get("created_at"))
             effective_digest_date = digest_date or (created_dt.strftime("%Y-%m-%d") if created_dt else None)
 
             result: dict[str, Any] = {
-                "id": mem_id,
+                "id": resolved_id,
+                "queried_id": mem_id,
+                "resolved_id": resolved_id,
+                "legacy_mem0_id": legacy_mem0_id,
                 "status": "exists_active" if str(data.get("state") or "") == "active" else "exists_inactive",
                 "exists": True,
                 "direct_readback_ok": True,
@@ -1719,6 +1796,9 @@ def verify_memory_record(
                 "search_by_terms_ids": [],
                 "backend_origin": data.get("backend_origin"),
                 "vector_status": data.get("vector_status"),
+                "content_sha256": data.get("content_sha256"),
+                "shadow_state": data.get("shadow_state"),
+                "verified_at": data.get("verified_at"),
                 "warnings": [],
                 "digest_date": None,
                 "digest_path": None,
@@ -1727,11 +1807,11 @@ def verify_memory_record(
             }
 
             try:
-                ids = [item.get("id") for item in _local_search_local_memory(conn, mem_id, size=20)]
+                ids = [item.get("id") for item in _local_search_local_memory(conn, resolved_id, size=20)]
                 ids = [item_id for item_id in ids if isinstance(item_id, str)]
                 result["search_by_id_ids"] = ids
                 result["search_by_id_count"] = len(ids)
-                result["search_by_id_self_hit"] = mem_id in ids
+                result["search_by_id_self_hit"] = resolved_id in ids
             except Exception as exc:
                 result["search_by_id_self_hit"] = False
                 result["warnings"].append(f"search_by_id failed: {exc}")
@@ -1743,7 +1823,7 @@ def verify_memory_record(
                     ids = [item_id for item_id in ids if isinstance(item_id, str)]
                     result["search_by_terms_ids"] = ids
                     result["search_by_terms_count"] = len(ids)
-                    result["search_by_terms_self_hit"] = mem_id in ids
+                    result["search_by_terms_self_hit"] = resolved_id in ids
                 except Exception as exc:
                     result["search_by_terms_self_hit"] = False
                     result["warnings"].append(f"search_by_terms failed: {exc}")

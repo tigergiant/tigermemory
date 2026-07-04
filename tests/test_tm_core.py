@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import json
 import pathlib
+import sqlite3
 import sys
 from urllib.parse import parse_qs, urlparse
 
@@ -260,6 +261,52 @@ def test_verify_memory_id_distinguishes_not_found_and_unreachable(monkeypatch):
 
     monkeypatch.setattr(tm_core, "mem0_get", lambda _id: "{not-json")
     assert tm_core.verify_memory_id(mem_id)["status"] == "mem0_unreachable"
+
+
+def test_local_verify_memory_id_resolves_legacy_mem0_id(monkeypatch, tmp_path):
+    monkeypatch.setenv("TIGERMEMORY_PROFILE", tm_core.TIGERMEMORY_PROFILE_LOCAL)
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(tmp_path / "memory.sqlite"))
+    legacy_id = "22222222-2222-4222-8222-222222222222"
+    raw = tm_core.mem0_write(
+        "codex",
+        "systems",
+        "legacy id compatibility local sqlite readback",
+        metadata_extra={"legacy_mem0_id": legacy_id, "shadow_state": "pending"},
+    )
+    local_id = json.loads(raw)["id"]
+
+    result = tm_core.verify_memory_id(legacy_id, key_terms="legacy id compatibility")
+
+    assert result["queried_id"] == legacy_id
+    assert result["id"] == local_id
+    assert result["resolved_id"] == local_id
+    assert result["legacy_mem0_id"] == legacy_id
+    assert result["direct_readback_ok"] is True
+    assert result["search_by_id_self_hit"] is True
+    assert result["search_by_terms_self_hit"] is True
+
+
+def test_local_schema_v2_has_migration_fields(monkeypatch, tmp_path):
+    monkeypatch.setenv("TIGERMEMORY_PROFILE", tm_core.TIGERMEMORY_PROFILE_LOCAL)
+    db_path = tmp_path / "memory.sqlite"
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(db_path))
+
+    tm_core.mem0_write("codex", "systems", "schema v2 migration field smoke")
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(memories)").fetchall()
+        }
+        assert {"content_sha256", "legacy_mem0_id", "shadow_state", "verified_at"} <= columns
+        row = conn.execute(
+            "SELECT content_sha256, verified_at FROM memories LIMIT 1"
+        ).fetchone()
+        assert isinstance(row[0], str) and len(row[0]) == 64
+        assert isinstance(row[1], int)
+    finally:
+        conn.close()
 
 
 def test_mem0_update_content_puts_content_only(monkeypatch):
