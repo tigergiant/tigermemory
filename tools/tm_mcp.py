@@ -742,12 +742,11 @@ def propose_wiki_page(
     try:
         sha = tm_core.git_commit_push(files_to_add, f"[{agent}] {action}: {wiki_rel}" + commit_suffix)
     except Exception as exc:
-        # Roll back disk changes so working tree stays clean.
+        # Roll back disk changes so working tree stays clean, but preserve
+        # the new wiki content in .tmp/wiki-recovery/ for retry (2026-07-04:
+        # previously unlinked, losing memory on hook reject / drift / mojibake).
         if prior_wiki is None:
-            try:
-                wiki_path.unlink()
-            except OSError:
-                pass
+            tm_core._recover_to_tmp(wiki_path, "wiki-recovery")
         else:
             wiki_path.write_text(prior_wiki, encoding="utf-8")
         if prior_index is not None:
@@ -932,11 +931,10 @@ def write_sources(
     try:
         sha = tm_core.git_commit_push([rel], f"[{agent}] ingest: {rel}")
     except Exception as exc:
+        # Preserve new content in .tmp/sources-recovery/ for retry (2026-07-04:
+        # previously unlinked, losing source content on hook reject).
         if prior is None:
-            try:
-                full_path.unlink()
-            except OSError:
-                pass
+            tm_core._recover_to_tmp(full_path, "sources-recovery")
         else:
             full_path.write_text(prior, encoding="utf-8")
         _record_mcp_event(

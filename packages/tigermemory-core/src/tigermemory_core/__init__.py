@@ -4004,19 +4004,40 @@ def write_and_commit_inbox(
 ) -> tuple[str, str]:
     """Atomic: write inbox file + commit-push. Returns (rel_path, short_sha).
 
-    On git failure, removes the on-disk file so working tree stays clean.
+    On git failure, moves the on-disk file to .tmp/inbox-recovery/ so the
+    working tree stays clean AND the memory content is preserved for retry.
+    2026-07-04: previously unlinked the file, losing memory on any commit
+    failure (hook reject, mojibake false positive, git internal error).
     """
     rel = write_inbox_file(agent, topic, title, body, frontmatter_extra=frontmatter_extra)
     path = REPO_ROOT / rel
     try:
         sha = git_commit_push([rel], f"[{agent}] create: {title}", force_add=True)
     except Exception:
+        _recover_to_tmp(path, "inbox-recovery")
+        raise
+    return rel, sha
+
+
+def _recover_to_tmp(path: pathlib.Path, subdir: str) -> None:
+    """Move a failed-write file to .tmp/{subdir}/ for recovery instead of unlinking.
+
+    Preserves memory content for manual retry / audit. Best-effort: if move
+    fails, falls back to unlink (working-tree cleanliness takes priority).
+    """
+    if not path.exists():
+        return
+    recovery_dir = REPO_ROOT / ".tmp" / subdir
+    try:
+        recovery_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        dest = recovery_dir / f"{ts}-{path.name}"
+        path.rename(dest)
+    except OSError:
         try:
             path.unlink()
         except OSError:
             pass
-        raise
-    return rel, sha
 
 
 # ---------- P6.1 Fact refinement (DeepSeek) ----------
