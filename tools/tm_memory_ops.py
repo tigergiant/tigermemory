@@ -496,6 +496,19 @@ def _topic_from_wiki_partition(partition: str, fallback: str) -> str:
     return fallback if fallback in tm_core.TOPICS else "systems"
 
 
+def write_memory_retry_error_result(agent: str, topic: str, exc: Exception) -> dict[str, Any]:
+    return {
+        "route": "retry_error",
+        "ok": False,
+        "stored": False,
+        "retryable": True,
+        "agent": agent,
+        "topic": topic,
+        "error": str(exc)[:500],
+        "warnings": ["write_memory infrastructure failure; caller may retry later"],
+    }
+
+
 def _default_wiki_partition(
     requested_topic: str,
     decision: tm_route.RouteDecision,

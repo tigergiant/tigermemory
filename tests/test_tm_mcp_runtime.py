@@ -148,6 +148,25 @@ def test_write_memory_uses_shared_memory_ops(monkeypatch):
     assert captured["kwargs"]["include_readback"] is True
 
 
+def test_write_memory_returns_retry_error_on_infrastructure_exception(monkeypatch):
+    monkeypatch.setattr(
+        tm_mcp.tm_memory_ops,
+        "write_memory_with_review",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("git push unavailable")),
+    )
+    old = tm_mcp._ROLE
+    try:
+        tm_mcp._ROLE = "writer"
+        result = tm_mcp.write_memory("codex", "systems", "body")
+    finally:
+        tm_mcp._ROLE = old
+
+    assert result["route"] == "retry_error"
+    assert result["ok"] is False
+    assert result["retryable"] is True
+    assert "git push unavailable" in result["error"]
+
+
 def test_approve_fact_promote_uses_deferred_unified_commit(tmp_path, monkeypatch):
     import tm_review_tools  # type: ignore[import-not-found]
 
@@ -228,7 +247,7 @@ def test_propose_wiki_page_owner_schedules_embed_refresh(tmp_path, monkeypatch):
         "review_draft",
         lambda _body: {"score": 80, "issues": [], "suggestions": [], "review_skipped": False},
     )
-    monkeypatch.setattr(tm_mcp.tm_core, "git_commit_push", lambda _files, _msg: "abc123")
+    monkeypatch.setattr(tm_mcp.tm_core, "git_commit_push", lambda _files, _msg, **_kwargs: "abc123")
     monkeypatch.setattr(
         tm_mcp.tm_memory_ops,
         "schedule_embed_refresh",
@@ -265,7 +284,7 @@ def test_write_sources_schedules_wiki_embed_refresh(tmp_path, monkeypatch):
     monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(event_root))
     calls = []
     monkeypatch.setattr(tm_mcp.tm_core, "REPO_ROOT", tmp_path)
-    monkeypatch.setattr(tm_mcp.tm_core, "git_commit_push", lambda _files, _msg: "abc123")
+    monkeypatch.setattr(tm_mcp.tm_core, "git_commit_push", lambda _files, _msg, **_kwargs: "abc123")
     monkeypatch.setattr(
         tm_mcp.tm_memory_ops,
         "schedule_embed_refresh",
@@ -313,7 +332,7 @@ def test_propose_wiki_page_l2_fallback_schedules_digest_refresh(tmp_path, monkey
         "review_draft",
         lambda _body: {"score": 10, "issues": [], "suggestions": [], "review_skipped": False},
     )
-    monkeypatch.setattr(tm_mcp.tm_core, "git_commit_push", lambda _files, _msg: "abc123")
+    monkeypatch.setattr(tm_mcp.tm_core, "git_commit_push", lambda _files, _msg, **_kwargs: "abc123")
     monkeypatch.setattr(tm_mcp.tm_memory_ops, "schedule_digest_refresh", lambda: calls.append("digest"))
     monkeypatch.setattr(
         tm_mcp.tm_memory_ops,
@@ -350,7 +369,7 @@ def test_propose_wiki_page_non_owner_fallback_schedules_digest_refresh(tmp_path,
         "review_draft",
         lambda _body: {"score": 80, "issues": [], "suggestions": [], "review_skipped": False},
     )
-    monkeypatch.setattr(tm_mcp.tm_core, "git_commit_push", lambda _files, _msg: "abc123")
+    monkeypatch.setattr(tm_mcp.tm_core, "git_commit_push", lambda _files, _msg, **_kwargs: "abc123")
     monkeypatch.setattr(tm_mcp.tm_memory_ops, "schedule_digest_refresh", lambda: calls.append("digest"))
     monkeypatch.setattr(
         tm_mcp.tm_memory_ops,
@@ -434,6 +453,30 @@ def test_reader_role_allows_memory_answer(monkeypatch):
         assert result["trace_id"] == "trace-test"
     finally:
         tm_mcp._ROLE = old
+
+
+def test_memory_answer_tool_omits_trace_by_default(monkeypatch):
+    captured = {}
+
+    def fake_core(query, **kwargs):
+        captured.update(kwargs)
+        return {
+            "status": "not_found",
+            "answer": "",
+            "summary": query,
+            "claims": [],
+            "evidence": [],
+            "warnings": [],
+            "trace_id": "trace-test",
+            "trace": None,
+        }
+
+    monkeypatch.setattr(tm_mcp.tm_answer, "memory_answer_core", fake_core)
+
+    result = tm_mcp.memory_answer("missing query")
+
+    assert result["trace_id"] == "trace-test"
+    assert captured["include_trace"] is False
 
 
 def test_reader_role_allows_get_user_preferences(monkeypatch):

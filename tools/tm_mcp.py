@@ -1095,7 +1095,7 @@ def memory_answer(
     scope: str = "auto",
     top_k: int = 5,
     max_evidence: int = 6,
-    include_trace: bool = True,
+    include_trace: bool = False,
     run_id: str | None = None,
     evidence_char_budget: int = 2000,
     task_context: dict[str, Any] | None = None,
@@ -1115,7 +1115,7 @@ def memory_answer(
         scope: auto | all | wiki | lessons | onboarding | mem0.
         top_k: Per-source search limit, clamped to 1..10.
         max_evidence: Evidence items to expand/read, clamped to 1..12.
-        include_trace: Include trace details in the response.
+        include_trace: Include full trace details in the response. Defaults to false so ordinary answers return only trace_id.
         run_id: Optional run id for grouping trace rows from one eval or scan.
         evidence_char_budget: Max total excerpt characters sent to the answer LLM.
         task_context: Optional L3 task context dict with task, intent, and optional state.
@@ -1160,15 +1160,18 @@ def write_memory(agent: str, topic: str, text: str, force_inbox: bool = False, l
         {"route": "mem0", "id": "..."} or {"route": "wiki_proposal"|"human_review"|"retry_error",
         "path": "...", "commit_sha": "..."} or {"route": "discard", "score": int, "issues": [...]}
     """
-    return tm_memory_ops.write_memory_with_review(
-        agent,
-        topic,
-        text,
-        force_inbox=force_inbox,
-        light=light,
-        total_budget_s=None,
-        include_readback=True,
-    )
+    try:
+        return tm_memory_ops.write_memory_with_review(
+            agent,
+            topic,
+            text,
+            force_inbox=force_inbox,
+            light=light,
+            total_budget_s=None,
+            include_readback=True,
+        )
+    except Exception as exc:
+        return tm_memory_ops.write_memory_retry_error_result(agent, topic, exc)
 
 
 @mcp.tool()

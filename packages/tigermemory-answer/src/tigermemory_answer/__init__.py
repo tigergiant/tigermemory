@@ -5002,8 +5002,21 @@ def memory_answer_core(
         trace["calls"].append(planner_call)
 
     search_results: list[dict[str, Any]] = []
+    search_errors: list[str] = []
     for search_query in trace["expanded_queries"]:
-        result = search_tigermemory(search_query, scope=scope, top_k=limit)
+        try:
+            result = search_tigermemory(search_query, scope=scope, top_k=limit)
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            search_errors.append(error)
+            trace["calls"].append({
+                "tool": "search_tigermemory",
+                "query_hash": query_hash(search_query),
+                "scope": scope,
+                "ok": False,
+                "error": error[:300],
+            })
+            continue
         search_results.append(result)
         trace["calls"].append({
             "tool": "search_tigermemory",
@@ -5012,6 +5025,34 @@ def memory_answer_core(
             "primary_scope": result.get("primary_scope"),
             "group_counts": {k: len(v) for k, v in (result.get("groups") or {}).items()},
         })
+    if not search_results and search_errors:
+        warnings = [f"search_tigermemory failed: {search_errors[0][:240]}"]
+        if len(search_errors) > 1:
+            warnings.append(f"{len(search_errors)} search attempts failed")
+        trace["duration_ms"] = round((time.monotonic() - started) * 1000, 2)
+        result = {
+            "status": "error",
+            "answer": "",
+            "summary": "记忆检索暂时不可用，未阻断调用。",
+            "claims": [],
+            "evidence": [],
+            "warnings": warnings,
+            "run_id": normalized_run_id,
+            "trace_id": trace_id,
+            "trace": trace if include_trace else None,
+        }
+        _attach_context_pack_fields(
+            result,
+            task_context=task_context,
+            evidence=[],
+            conflicts=None,
+            warnings=warnings,
+            evidence_gate=[],
+        )
+        _attach_related_evidence_candidates(result, trace, [])
+        if write_trace:
+            _write_result_trace(result, trace, q)
+        return result
     evidence_query = _planner_evidence_query(q, planner)
     search_result = _merge_search_results(q, search_results)
     trace["planner"]["evidence_query_hash"] = query_hash(evidence_query)

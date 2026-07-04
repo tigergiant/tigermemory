@@ -231,7 +231,7 @@ class MemoryAnswerRequest(BaseModel):
     scope: str = Field(default="auto", pattern=r"^(auto|all|wiki|lessons|onboarding|mem0)$")
     top_k: int = Field(default=5, ge=1, le=10)
     max_evidence: int = Field(default=6, ge=1, le=12)
-    include_trace: bool = True
+    include_trace: bool = False
     run_id: Optional[str] = Field(default=None, max_length=120)
     evidence_char_budget: int = Field(default=2000, ge=1, le=20000)
     task_context: Optional[dict[str, Any]] = None
@@ -809,7 +809,7 @@ async def write_memory(req: WriteMemoryRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         log_json("error", trace_id, "/write_memory", 502, (time.time() - start) * 1000, detail=str(e))
-        raise HTTPException(status_code=502, detail=f"write_memory failed: {e}")
+        return tm_memory_ops.write_memory_retry_error_result(req.agent, req.topic, e)
     finally:
         log_json("info", trace_id, "/write_memory", 200, (time.time() - start) * 1000, text_len=len(req.text))
 

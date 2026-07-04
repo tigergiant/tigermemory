@@ -286,6 +286,27 @@ def test_memory_answer_core_not_found_skips_llm(monkeypatch):
     assert calls == []
 
 
+def test_memory_answer_core_search_exception_returns_degraded_result(monkeypatch, tmp_path):
+    calls: list[str] = []
+    monkeypatch.setattr(answer, "TRACE_LOG", tmp_path / "trace.jsonl")
+
+    def broken_search(*_args, **_kwargs):
+        raise RuntimeError("index unavailable")
+
+    monkeypatch.setattr(answer, "search_tigermemory", broken_search)
+    monkeypatch.setattr(answer, "_call_memory_answer_llm", lambda *_args: calls.append("llm"))
+
+    result = answer.memory_answer_core("runtime route status", scope="wiki", include_trace=False)
+
+    assert result["status"] == "error"
+    assert result["summary"] == "记忆检索暂时不可用，未阻断调用。"
+    assert result["trace"] is None
+    assert result["trace_id"]
+    assert any("search_tigermemory failed" in warning for warning in result["warnings"])
+    assert calls == []
+    assert (tmp_path / "trace.jsonl").exists()
+
+
 def test_memory_answer_core_disable_trace_write(monkeypatch, tmp_path):
     trace_path = tmp_path / "trace.jsonl"
     monkeypatch.setattr(answer, "TRACE_LOG", trace_path)

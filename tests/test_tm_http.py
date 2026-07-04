@@ -91,6 +91,12 @@ def test_memory_answer_endpoint_delegates_to_core(monkeypatch):
     }
 
 
+def test_memory_answer_request_omits_trace_by_default():
+    req = tm_http.MemoryAnswerRequest(query="普通记忆问题")
+
+    assert req.include_trace is False
+
+
 def test_log_json_also_writes_unified_runtime_event(tmp_path, monkeypatch):
     monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(tmp_path))
 
@@ -164,6 +170,25 @@ def test_write_memory_endpoint_rejects_force_inbox_light_conflict(monkeypatch):
 
     assert exc.value.status_code == 400
     assert calls == []
+
+
+def test_write_memory_endpoint_returns_retry_error_on_infrastructure_exception(monkeypatch):
+    def broken_write(*_args, **_kwargs):
+        raise RuntimeError("git push unavailable")
+
+    monkeypatch.setattr(tm_http, "_write_memory_with_review", broken_write)
+
+    req = tm_http.WriteMemoryRequest(
+        agent="codex",
+        topic="systems",
+        text="durable status summary",
+    )
+    result = asyncio.run(tm_http.write_memory(req))
+
+    assert result["route"] == "retry_error"
+    assert result["ok"] is False
+    assert result["retryable"] is True
+    assert "git push unavailable" in result["error"]
 
 
 def test_write_inbox_discards_low_value_openclaw_turn_capture(monkeypatch):
