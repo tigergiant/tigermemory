@@ -365,6 +365,144 @@ def test_local_schema_v2_has_migration_fields(monkeypatch, tmp_path):
         conn.close()
 
 
+def test_local_schema_has_migration_audit_and_outbox(monkeypatch, tmp_path):
+    monkeypatch.setenv("TIGERMEMORY_PROFILE", tm_core.TIGERMEMORY_PROFILE_LOCAL)
+    db_path = tmp_path / "memory.sqlite"
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(db_path))
+
+    tm_core.mem0_write("codex", "systems", "schema migration support smoke")
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert {"migration_audit", "outbox"} <= tables
+
+        audit_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(migration_audit)").fetchall()
+        }
+        assert {
+            "legacy_mem0_id",
+            "new_id",
+            "content_sha256",
+            "disposition",
+            "imported_at",
+            "verified",
+        } <= audit_columns
+
+        outbox_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(outbox)").fetchall()
+        }
+        assert {
+            "id",
+            "kind",
+            "memory_id",
+            "payload_json",
+            "status",
+            "attempts",
+            "next_attempt_at",
+            "last_error",
+            "created_at",
+            "done_at",
+        } <= outbox_columns
+
+        indexes = {
+            row[1]
+            for row in conn.execute("PRAGMA index_list(outbox)").fetchall()
+        }
+        assert "idx_outbox_pending" in indexes
+
+        schema_version = conn.execute(
+            "SELECT value FROM schema_meta WHERE key='schema_version'"
+        ).fetchone()[0]
+        assert schema_version == "3"
+
+        outbox_count = conn.execute("SELECT COUNT(1) FROM outbox").fetchone()[0]
+        assert outbox_count == 0
+    finally:
+        conn.close()
+
+
+def test_local_schema_migrates_existing_db_without_dropping_rows(monkeypatch, tmp_path):
+    monkeypatch.setenv("TIGERMEMORY_PROFILE", tm_core.TIGERMEMORY_PROFILE_LOCAL)
+    db_path = tmp_path / "memory.sqlite"
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(db_path))
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE schema_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE memories (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                source_agent TEXT NOT NULL,
+                route_decision TEXT NOT NULL,
+                route_score INTEGER NOT NULL DEFAULT 0,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                content_sha256 TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                state TEXT NOT NULL DEFAULT 'active',
+                backend_origin TEXT NOT NULL DEFAULT 'local',
+                vector_status TEXT NOT NULL DEFAULT 'fts5_only',
+                legacy_mem0_id TEXT,
+                shadow_state TEXT,
+                verified_at INTEGER
+            );
+            INSERT INTO schema_meta (key, value, updated_at)
+            VALUES ('schema_version', '2', '2026-07-04T00:00:00+08:00');
+            INSERT INTO memories (
+                id, content, topic, source_agent, route_decision, route_score,
+                metadata_json, content_sha256, created_at, updated_at, state,
+                backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
+            )
+            VALUES (
+                'old-local-id', 'existing local memory row', 'systems', 'codex',
+                'mem0', 80, '{}',
+                'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                1717500000, 1717500000, 'active', 'local', 'fts5_only',
+                NULL, NULL, 1717500000
+            );
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    raw = tm_core.mem0_search("existing local memory row", size=5)
+    payload = json.loads(raw)
+
+    assert [item["id"] for item in payload["items"]] == ["old-local-id"]
+    conn = sqlite3.connect(str(db_path))
+    try:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert {"migration_audit", "outbox"} <= tables
+        assert conn.execute("SELECT COUNT(1) FROM memories").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(1) FROM outbox").fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT value FROM schema_meta WHERE key='schema_version'"
+        ).fetchone()[0] == "3"
+    finally:
+        conn.close()
+
+
 def test_mem0_update_content_puts_content_only(monkeypatch):
     _use_hybrid_profile(monkeypatch)
     mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"

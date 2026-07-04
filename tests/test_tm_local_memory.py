@@ -120,6 +120,70 @@ def test_import_dry_run_stats_only_and_actual_import_with_schema(tmp_path, monke
         conn.close()
 
 
+def test_import_creates_migration_audit_and_outbox_tables(tmp_path) -> None:
+    source = tmp_path / "source.jsonl"
+    _write_jsonl(
+        source,
+        [
+            {
+                "id": "m1",
+                "content": "schema support sample",
+                "metadata": {"source": "codex", "topic": "systems"},
+                "created_at": 1717500000,
+            },
+        ],
+    )
+    db = tmp_path / "mem.sqlite"
+
+    assert tm_local_memory.main(["import", "--input", str(source), "--db", str(db)]) == 0
+
+    conn = sqlite3.connect(db)
+    try:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert {"migration_audit", "outbox"} <= tables
+
+        audit_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(migration_audit)").fetchall()
+        }
+        assert {
+            "legacy_mem0_id",
+            "new_id",
+            "content_sha256",
+            "disposition",
+            "imported_at",
+            "verified",
+        } <= audit_columns
+
+        outbox_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(outbox)").fetchall()
+        }
+        assert {
+            "id",
+            "kind",
+            "memory_id",
+            "payload_json",
+            "status",
+            "attempts",
+            "next_attempt_at",
+            "last_error",
+            "created_at",
+            "done_at",
+        } <= outbox_columns
+        assert conn.execute("SELECT COUNT(1) FROM outbox").fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT value FROM schema_meta WHERE key='schema_version'"
+        ).fetchone()[0] == "3"
+    finally:
+        conn.close()
+
+
 def test_compare_detects_lexical_and_semantic_regressions(tmp_path, capsys) -> None:
     source = tmp_path / "source.jsonl"
     _write_jsonl(

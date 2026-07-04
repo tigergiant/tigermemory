@@ -933,7 +933,7 @@ MEM0_UUID_RE = re.compile(
 )
 
 _LOCAL_DB_DEFAULT_REL_PATH = pathlib.Path("data") / "tigermemory" / "memory.sqlite"
-_LOCAL_MEMORY_SCHEMA_VERSION = 2
+_LOCAL_MEMORY_SCHEMA_VERSION = 3
 _SHADOW_SEARCH_ENV = "TM_SHADOW_SEARCH_ENABLED"
 _SHADOW_SEARCH_LOG_REL_PATH = pathlib.Path(".tmp") / "search-shadow"
 _LOCAL_CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
@@ -1084,6 +1084,28 @@ def _local_schema_ddl() -> str:
         ON memories(content_sha256, topic);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_legacy_mem0_id
         ON memories(legacy_mem0_id) WHERE legacy_mem0_id IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS migration_audit (
+        legacy_mem0_id TEXT PRIMARY KEY,
+        new_id TEXT,
+        content_sha256 TEXT NOT NULL,
+        disposition TEXT NOT NULL,
+        imported_at TEXT NOT NULL,
+        verified INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS outbox (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL,
+        memory_id TEXT,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        done_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_outbox_pending
+        ON outbox(status, next_attempt_at);
     CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
         id UNINDEXED,
         content
@@ -1135,11 +1157,46 @@ def _ensure_local_memory_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS migration_audit (
+            legacy_mem0_id TEXT PRIMARY KEY,
+            new_id TEXT,
+            content_sha256 TEXT NOT NULL,
+            disposition TEXT NOT NULL,
+            imported_at TEXT NOT NULL,
+            verified INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS outbox (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            memory_id TEXT,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'pending',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at TEXT,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            done_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_outbox_pending
+        ON outbox(status, next_attempt_at)
+        """
+    )
+    conn.execute(
+        """
         INSERT OR REPLACE INTO schema_meta (key, value, updated_at)
         VALUES ('schema_version', ?, ?)
         """,
         (str(_LOCAL_MEMORY_SCHEMA_VERSION), datetime.datetime.now(TZ_CN).isoformat()),
     )
+    conn.commit()
 
 
 def _row_value(row: sqlite3.Row, key: str, default: Any = None) -> Any:
