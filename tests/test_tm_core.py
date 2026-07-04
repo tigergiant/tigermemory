@@ -44,6 +44,10 @@ def _use_hybrid_profile(monkeypatch):
     monkeypatch.setenv("TIGERMEMORY_PROFILE", tm_core.TIGERMEMORY_PROFILE_HYBRID)
 
 
+def _today_cn_date_str() -> str:
+    return datetime.datetime.now(tm_core.TZ_CN).strftime("%Y-%m-%d")
+
+
 def test_env_positive_int_uses_valid_override(monkeypatch):
     monkeypatch.setenv("TM_TEST_POSITIVE_INT", "17")
     assert tm_core._env_positive_int("TM_TEST_POSITIVE_INT", 5) == 17
@@ -189,6 +193,58 @@ def test_mem0_search_allows_explicit_substring_match_mode(monkeypatch):
 
     qs = parse_qs(urlparse(captured["url"]).query)
     assert qs["match_mode"] == ["substring"]
+
+
+def test_mem0_search_writes_shadow_log_when_enabled(monkeypatch, tmp_path):
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+    db_path = tmp_path / "memory.sqlite"
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(db_path))
+    monkeypatch.setenv("TIGERMEMORY_PROFILE", tm_core.TIGERMEMORY_PROFILE_LOCAL)
+    local_id = json.loads(tm_core.mem0_write("codex", "systems", "shadow center alpha"))["id"]
+
+    _use_hybrid_profile(monkeypatch)
+    monkeypatch.setenv("TM_SHADOW_SEARCH_ENABLED", "1")
+    monkeypatch.setattr(tm_core, "mem0_base", lambda: "http://localhost:8765")
+    monkeypatch.setattr(
+        tm_core,
+        "mem0_request",
+        lambda url, *, timeout: json.dumps({"items": [{"id": local_id}, {"id": "old-only"}]}),
+    )
+
+    raw = tm_core.mem0_search("shadow center alpha", size=5)
+
+    assert json.loads(raw)["items"][0]["id"] == local_id
+    log_path = tmp_path / ".tmp" / "search-shadow" / f"{_today_cn_date_str()}.jsonl"
+    assert log_path.exists()
+    record = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert record["query"] == "shadow center alpha"
+    assert record["old_ids"] == [local_id, "old-only"]
+    assert local_id in record["local_ids"]
+    assert record["intersection_count"] == 1
+
+
+def test_mem0_search_shadow_log_missing_db_does_not_create_db(monkeypatch, tmp_path):
+    _use_hybrid_profile(monkeypatch)
+    missing_db = tmp_path / "missing.sqlite"
+    monkeypatch.setattr(tm_core, "REPO_ROOT", tmp_path)
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(missing_db))
+    monkeypatch.setenv("TM_SHADOW_SEARCH_ENABLED", "1")
+    monkeypatch.setattr(tm_core, "mem0_base", lambda: "http://localhost:8765")
+    monkeypatch.setattr(
+        tm_core,
+        "mem0_request",
+        lambda url, *, timeout: json.dumps({"items": [{"id": "old-id"}]}),
+    )
+
+    raw = tm_core.mem0_search("shadow missing db", size=5)
+
+    assert json.loads(raw)["items"][0]["id"] == "old-id"
+    assert missing_db.exists() is False
+    log_path = tmp_path / ".tmp" / "search-shadow" / f"{_today_cn_date_str()}.jsonl"
+    assert log_path.exists()
+    record = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert record["local_ids"] == []
+    assert any("local_db_missing" in warning for warning in record["warnings"])
 
 
 def test_verify_memory_id_active_hit_with_digest(monkeypatch, tmp_path):

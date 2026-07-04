@@ -934,6 +934,8 @@ MEM0_UUID_RE = re.compile(
 
 _LOCAL_DB_DEFAULT_REL_PATH = pathlib.Path("data") / "tigermemory" / "memory.sqlite"
 _LOCAL_MEMORY_SCHEMA_VERSION = 2
+_SHADOW_SEARCH_ENV = "TM_SHADOW_SEARCH_ENABLED"
+_SHADOW_SEARCH_LOG_REL_PATH = pathlib.Path(".tmp") / "search-shadow"
 _LOCAL_CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
 _LOCAL_LATIN_TERM_RE = re.compile(r"[a-z0-9][a-z0-9._:/\\-]*", re.IGNORECASE)
 _LOCAL_CJK_STOP_TERMS = {
@@ -980,6 +982,77 @@ def _local_db_conn() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     return conn
+
+
+def _shadow_search_enabled() -> bool:
+    raw = os.environ.get(_SHADOW_SEARCH_ENV, "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _shadow_search_log_path() -> pathlib.Path:
+    today = datetime.datetime.now(TZ_CN).strftime("%Y-%m-%d")
+    return REPO_ROOT / _SHADOW_SEARCH_LOG_REL_PATH / f"{today}.jsonl"
+
+
+def _readonly_local_db_conn(path: pathlib.Path) -> sqlite3.Connection:
+    uri = f"{path.resolve().as_uri()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _maybe_log_mem0_shadow_search(query: str, old_response_body: str, *, size: int) -> None:
+    """Best-effort Phase 0 comparison for Mem0 search vs local SQLite search.
+
+    The hook must never change the online return value and must not create or
+    migrate the local SQLite DB. All failures are captured in the shadow log or
+    swallowed if even logging is unavailable.
+    """
+    if not _shadow_search_enabled():
+        return
+    try:
+        old_ids = _mem0_item_ids(old_response_body)
+        db_path = _local_db_path()
+        warnings: list[str] = []
+        local_ids: list[str] = []
+        local_t0 = time.monotonic()
+        if not db_path.exists():
+            warnings.append(f"local_db_missing: {db_path}")
+        else:
+            try:
+                conn = _readonly_local_db_conn(db_path)
+                try:
+                    local_ids = [
+                        str(item.get("id"))
+                        for item in _local_search_local_memory(conn, query, size=size)
+                        if isinstance(item, dict) and item.get("id")
+                    ]
+                finally:
+                    conn.close()
+            except Exception as exc:
+                warnings.append(f"local_search_exception: {exc}")
+        local_latency_ms = (time.monotonic() - local_t0) * 1000.0
+        intersection = set(old_ids) & set(local_ids)
+        record = {
+            "timestamp": datetime.datetime.now(TZ_CN).isoformat(),
+            "query": query,
+            "size": size,
+            "old_ids": old_ids,
+            "local_ids": local_ids,
+            "intersection_count": len(intersection),
+            "old_count": len(old_ids),
+            "local_count": len(local_ids),
+            "old_latency_ms": 0.0,
+            "local_latency_ms": round(local_latency_ms, 2),
+            "warnings": warnings,
+        }
+        log_path = _shadow_search_log_path()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False))
+            f.write("\n")
+    except Exception:
+        pass
 
 
 def _local_schema_ddl() -> str:
@@ -1628,10 +1701,12 @@ def mem0_search(
             "match_mode": match_mode,
         }
     )
-    return mem0_request(
+    raw = mem0_request(
         f"{mem0_base()}/api/v1/memories/?{params}",
         timeout=MEM0_READ_TIMEOUT,
     )
+    _maybe_log_mem0_shadow_search(query, raw, size=size)
+    return raw
 
 
 def _mem0_item_text(item: dict[str, Any]) -> str:
