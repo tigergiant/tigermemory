@@ -212,6 +212,7 @@ def test_write_inbox_discards_low_value_openclaw_turn_capture(monkeypatch):
 
 def test_mem0_api_probe_reports_latency_and_error(monkeypatch):
     calls = {}
+    tm_http._MEM0_API_HEALTH_CACHE.clear()
 
     def fake_request(url, **kwargs):
         calls["url"] = url
@@ -235,11 +236,39 @@ def test_mem0_api_probe_reports_latency_and_error(monkeypatch):
         "mem0_request",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("Mem0 timeout: timed out")),
     )
+    tm_http._MEM0_API_HEALTH_CACHE.clear()
 
     fail = tm_http._probe_mem0_api(timeout=3)
 
     assert fail["reachable"] is False
     assert "timed out" in fail["error"]
+    tm_http._MEM0_API_HEALTH_CACHE.clear()
+
+
+def test_mem0_api_probe_reuses_recent_result(monkeypatch):
+    tm_http._MEM0_API_HEALTH_CACHE.clear()
+    calls = {"count": 0}
+    clock = {"value": 1000.0}
+
+    def fake_request(*_args, **_kwargs):
+        calls["count"] += 1
+        return '{"items":[],"total":0}'
+
+    monkeypatch.setattr(tm_http.time, "time", lambda: clock["value"])
+    monkeypatch.setattr(tm_http.tm_core, "mem0_base", lambda: "http://localhost:8765")
+    monkeypatch.setattr(tm_http.tm_core, "mem0_user_id", lambda: "tiger")
+    monkeypatch.setattr(tm_http.tm_core, "mem0_request", fake_request)
+
+    first = tm_http._probe_mem0_api(timeout=3)
+    second = tm_http._probe_mem0_api(timeout=3)
+    clock["value"] += tm_http._MEM0_API_HEALTH_TTL_S + 0.1
+    third = tm_http._probe_mem0_api(timeout=3)
+
+    assert first["reachable"] is True
+    assert second["reachable"] is True
+    assert third["reachable"] is True
+    assert calls["count"] == 2
+    tm_http._MEM0_API_HEALTH_CACHE.clear()
 
 
 def test_agent_doctor_endpoint_delegates(monkeypatch):

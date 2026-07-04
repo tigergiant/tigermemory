@@ -441,6 +441,8 @@ def log_json(level: str, trace_id: str, endpoint: str, status: int, duration_ms:
 # ---------- Lifespan ----------
 
 _start_time = time.time()
+_MEM0_API_HEALTH_TTL_S = 5.0
+_MEM0_API_HEALTH_CACHE: dict[str, Any] = {}
 
 
 def _probe_mem0_reachable() -> bool:
@@ -461,7 +463,13 @@ def _probe_mem0_reachable() -> bool:
 
 def _probe_mem0_api(timeout: int = 2) -> dict[str, Any]:
     """Cheap API-level probe for cases where the port is open but the app is hung."""
-    start = time.time()
+    now = time.time()
+    cached = _MEM0_API_HEALTH_CACHE.get("result")
+    cached_at = float(_MEM0_API_HEALTH_CACHE.get("at") or 0)
+    if cached is not None and now - cached_at < _MEM0_API_HEALTH_TTL_S:
+        return dict(cached)
+
+    start = now
     try:
         params = urlencode({
             "user_id": tm_core.mem0_user_id(),
@@ -473,17 +481,21 @@ def _probe_mem0_api(timeout: int = 2) -> dict[str, Any]:
             f"{tm_core.mem0_base().rstrip()}/api/v1/memories/?{params}",
             timeout=timeout,
         )
-        return {
+        result = {
             "reachable": True,
             "latency_ms": round((time.time() - start) * 1000, 1),
             "error": None,
         }
+        _MEM0_API_HEALTH_CACHE.update({"at": time.time(), "result": result})
+        return result
     except Exception as exc:
-        return {
+        result = {
             "reachable": False,
             "latency_ms": round((time.time() - start) * 1000, 1),
             "error": str(exc)[:200],
         }
+        _MEM0_API_HEALTH_CACHE.update({"at": time.time(), "result": result})
+        return result
 
 
 def _memory_backend_status(profile: str, mem0_reachable: bool, mem0_api_reachable: bool) -> str:
