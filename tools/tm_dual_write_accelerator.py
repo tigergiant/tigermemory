@@ -7,8 +7,10 @@ memories and verify that each write path creates a local SQLite shadow row.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import datetime as dt
 import json
+import os
 import pathlib
 import sqlite3
 import subprocess
@@ -261,6 +263,54 @@ def _run_tm_io(args: list[str], stdin_text: str) -> dict[str, Any]:
     return _parse_json(proc.stdout.strip())
 
 
+def _mcp_tool_result_payload(result: Any) -> dict[str, Any]:
+    content = getattr(result, "content", None)
+    if not content:
+        raise RuntimeError("MCP tool result has no content")
+    first = content[0]
+    text = getattr(first, "text", None)
+    if text is None and isinstance(first, dict):
+        text = first.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise RuntimeError(f"MCP tool result first content has no text: {type(first).__name__}")
+    return _parse_json(text)
+
+
+async def _call_tm_mcp_stdio_write_async(text: str) -> dict[str, Any]:
+    from mcp import ClientSession
+    from mcp.client.stdio import StdioServerParameters, stdio_client
+
+    env = os.environ.copy()
+    env.update({
+        "TIGERMEMORY_PROFILE": tm_core.TIGERMEMORY_PROFILE_HYBRID,
+        "TM_LOCAL_DUAL_WRITE": "1",
+        "TM_MCP_TOOL_PROFILE": "memory",
+    })
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(REPO_ROOT / "tools" / "tm_mcp.py"), "--stdio"],
+        cwd=str(REPO_ROOT),
+        env=env,
+    )
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(
+                "write_memory",
+                arguments={
+                    "agent": "codex",
+                    "topic": "systems",
+                    "text": text,
+                    "light": True,
+                },
+            )
+    return _mcp_tool_result_payload(result)
+
+
+def _call_tm_mcp_stdio_write(text: str) -> dict[str, Any]:
+    return asyncio.run(_call_tm_mcp_stdio_write_async(text))
+
+
 def _shadow_matches(shadow: dict[str, Any] | None, *, state: str | None = None, shadow_state: str | None = None) -> bool:
     if not shadow or shadow.get("backend_origin") != "local-shadow":
         return False
@@ -333,6 +383,14 @@ def run_live_canary(http_url: str) -> list[dict[str, Any]]:
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         record("tm-http /write_memory", json.loads(resp.read().decode("utf-8")))
+
+    try:
+        record(
+            "tm-mcp stdio write_memory",
+            _call_tm_mcp_stdio_write(_canary_text("tm_mcp_stdio_write_memory")),
+        )
+    except Exception as exc:
+        record_error("tm-mcp stdio write_memory", exc)
 
     try:
         record(

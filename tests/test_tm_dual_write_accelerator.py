@@ -100,3 +100,17 @@ def test_run_tm_io_parses_json_and_reports_stderr(monkeypatch, tmp_path):
     monkeypatch.setattr(accel.subprocess, "run", fake_fail)
     with pytest.raises(RuntimeError, match="bad input"):
         accel._run_tm_io(["mem0-write"], "body")
+
+
+def test_mcp_tool_result_payload_parses_text_content():
+    payload = accel._mcp_tool_result_payload(
+        types.SimpleNamespace(content=[types.SimpleNamespace(text='{"id": "abc"}')])
+    )
+
+    assert payload == {"id": "abc"}
+
+    with pytest.raises(RuntimeError, match="no content"):
+        accel._mcp_tool_result_payload(types.SimpleNamespace(content=[]))
+
+    with pytest.raises(RuntimeError, match="no text"):
+        accel._mcp_tool_result_payload(types.SimpleNamespace(content=[object()]))
