@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections import Counter
 import datetime as dt
 import json
 import os
@@ -409,6 +410,7 @@ def summarize_shadow_reconcile(
     if since and since_dt is None:
         return _gate("blocked", reason="invalid_shadow_reconcile_since", since=since)
     ids: list[str] = []
+    id_rows: dict[str, dict[str, Any]] = {}
     seen: set[str] = set()
     for row in rows:
         if since_dt is not None:
@@ -423,6 +425,7 @@ def summarize_shadow_reconcile(
         if tm_core.MEM0_UUID_RE.fullmatch(memory_id) and memory_id not in seen:
             seen.add(memory_id)
             ids.append(memory_id)
+            id_rows[memory_id] = row
     if not ids:
         return _gate(
             "pending",
@@ -478,6 +481,15 @@ def summarize_shadow_reconcile(
         found_ids=len(found),
         missing_count=len(missing),
         missing_samples=missing[:10],
+        missing_agents=dict(Counter(str(id_rows.get(memory_id, {}).get("agent") or "") for memory_id in missing).most_common()),
+        missing_sources=dict(Counter(str(id_rows.get(memory_id, {}).get("source") or "") for memory_id in missing).most_common()),
+        missing_topics=dict(Counter(str(id_rows.get(memory_id, {}).get("stored_topic") or "") for memory_id in missing).most_common()),
+        missing_ts_range=[
+            value for value in (
+                min((str(id_rows.get(memory_id, {}).get("ts") or "") for memory_id in missing), default=""),
+                max((str(id_rows.get(memory_id, {}).get("ts") or "") for memory_id in missing), default=""),
+            ) if value
+        ],
         wrong_origin_count=len(wrong_origin),
         wrong_origin_samples=wrong_origin[:10],
         days=days,

@@ -203,6 +203,9 @@ def test_summarize_shadow_reconcile_can_start_from_dual_write_enable_time(tmp_pa
     full_window = accel.summarize_shadow_reconcile(route_event_root=tmp_path / "events", db_path=db, days=1)
     assert full_window["status"] == "blocked"
     assert full_window["missing_count"] == 1
+    assert full_window["missing_agents"] == {"": 1}
+    assert full_window["missing_sources"] == {"": 1}
+    assert full_window["missing_topics"] == {"": 1}
 
     since_window = accel.summarize_shadow_reconcile(
         route_event_root=tmp_path / "events",
