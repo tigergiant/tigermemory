@@ -23,6 +23,7 @@ import _bootstrap_paths  # noqa: F401
 import tigermemory_core as tm_core
 from tigermemory_core import TZ_CN
 import tm_memory_ops
+import tm_review_tools
 
 
 REPO_ROOT = tm_core.REPO_ROOT
@@ -156,7 +157,8 @@ def _shadow_row(remote_id: str) -> dict[str, Any] | None:
     try:
         row = conn.execute(
             """
-            SELECT id, legacy_mem0_id, backend_origin, shadow_state, topic, source_agent, state
+            SELECT id, legacy_mem0_id, backend_origin, shadow_state, topic, source_agent, state,
+                   content, content_sha256
             FROM memories
             WHERE legacy_mem0_id=?
             """,
@@ -224,21 +226,66 @@ def _extract_id(payload: dict[str, Any]) -> str:
     return value
 
 
+def _parse_json(raw: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"expected JSON response, got {raw[:220]!r}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"expected object response, got {type(payload).__name__}")
+    return payload
+
+
+def _run_tm_io(args: list[str], stdin_text: str) -> dict[str, Any]:
+    proc = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "tools" / "tm_io.py"), *args],
+        cwd=REPO_ROOT,
+        input=stdin_text,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=60,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"tm_io {' '.join(args)} failed rc={proc.returncode}: {proc.stderr[:220]}")
+    return _parse_json(proc.stdout.strip())
+
+
+def _shadow_matches(shadow: dict[str, Any] | None, *, state: str | None = None, shadow_state: str | None = None) -> bool:
+    if not shadow or shadow.get("backend_origin") != "local-shadow":
+        return False
+    if state is not None and shadow.get("state") != state:
+        return False
+    if shadow_state is not None and shadow.get("shadow_state") != shadow_state:
+        return False
+    return True
+
+
 def run_live_canary(http_url: str) -> list[dict[str, Any]]:
     if tm_core.tigermemory_profile() != tm_core.TIGERMEMORY_PROFILE_HYBRID:
         raise RuntimeError("live canary requires TIGERMEMORY_PROFILE=hybrid")
     results: list[dict[str, Any]] = []
 
-    def record(name: str, raw_payload: dict[str, Any]) -> None:
+    def record(name: str, raw_payload: dict[str, Any]) -> str:
         remote_id = _extract_id(raw_payload)
         shadow = _shadow_row(remote_id)
         cleanup = _cleanup_remote_and_shadow(remote_id)
         results.append({
             "name": name,
             "remote_id": remote_id,
-            "shadow_ok": bool(shadow and shadow.get("backend_origin") == "local-shadow"),
+            "shadow_ok": _shadow_matches(shadow),
             "shadow": shadow,
             "cleanup": cleanup,
+        })
+        return remote_id
+
+    def record_error(name: str, exc: Exception) -> None:
+        results.append({
+            "name": name,
+            "shadow_ok": False,
+            "error": f"{type(exc).__name__}: {exc}"[:500],
         })
 
     raw = tm_core.mem0_write(
@@ -277,6 +324,137 @@ def run_live_canary(http_url: str) -> list[dict[str, Any]]:
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         record("tm-http /write_memory", json.loads(resp.read().decode("utf-8")))
+
+    try:
+        record(
+            "tm_io mem0-write",
+            _run_tm_io(
+                ["mem0-write", "--agent", "codex", "--topic", "systems"],
+                _canary_text("tm_io_mem0_write"),
+            ),
+        )
+    except Exception as exc:
+        record_error("tm_io mem0-write", exc)
+
+    try:
+        payload = _run_tm_io(
+            [
+                "write-inbox",
+                "--agent",
+                "codex",
+                "--topic",
+                "systems",
+                "--title",
+                "Dual write canary",
+            ],
+            _canary_text("tm_io_write_inbox_route_mem0"),
+        )
+        if payload.get("route") != "mem0":
+            results.append({"name": "tm_io write-inbox route=mem0", "shadow_ok": False, "error": payload})
+        else:
+            record("tm_io write-inbox route=mem0", payload)
+    except Exception as exc:
+        record_error("tm_io write-inbox route=mem0", exc)
+
+    try:
+        result = tm_review_tools.execute_promote_mem0(
+            {
+                "id": "tm-dual-write-canary-review-promote",
+                "topic": "systems",
+                "text": _canary_text("tm_review_tools_execute_promote_mem0"),
+                "source_type": "canary",
+            },
+            topic="systems",
+        )
+        if not result.get("ok") or not result.get("memory_id"):
+            results.append({"name": "tm_review_tools.execute_promote_mem0", "shadow_ok": False, "error": result})
+        else:
+            record("tm_review_tools.execute_promote_mem0", {"id": result["memory_id"]})
+    except Exception as exc:
+        record_error("tm_review_tools.execute_promote_mem0", exc)
+
+    try:
+        create_payload = _parse_json(tm_core.mem0_write(
+            "codex",
+            "systems",
+            _canary_text("tm_core_mem0_update_content_seed"),
+            metadata_extra={"canary_entrypoint": "tm_core_mem0_update_content"},
+        ))
+        remote_id = _extract_id(create_payload)
+        new_content = _canary_text("tm_core_mem0_update_content_replacement")
+        tm_core.mem0_update_content(remote_id, new_content)
+        shadow = _shadow_row(remote_id)
+        cleanup = _cleanup_remote_and_shadow(remote_id)
+        results.append({
+            "name": "tm_core.mem0_update_content",
+            "remote_id": remote_id,
+            "shadow_ok": _shadow_matches(shadow, shadow_state="mem0_updated") and shadow.get("content") == new_content,
+            "shadow": shadow,
+            "cleanup": cleanup,
+        })
+    except Exception as exc:
+        record_error("tm_core.mem0_update_content", exc)
+
+    try:
+        create_payload = _run_tm_io(
+            ["mem0-write", "--agent", "codex", "--topic", "systems"],
+            _canary_text("tm_io_mem0_update_content_seed"),
+        )
+        remote_id = _extract_id(create_payload)
+        new_content = _canary_text("tm_io_mem0_update_content_replacement")
+        _run_tm_io(["mem0-update-content", "--id", remote_id], new_content)
+        shadow = _shadow_row(remote_id)
+        cleanup = _cleanup_remote_and_shadow(remote_id)
+        results.append({
+            "name": "tm_io mem0-update-content",
+            "remote_id": remote_id,
+            "shadow_ok": _shadow_matches(shadow, shadow_state="mem0_updated") and shadow.get("content") == new_content,
+            "shadow": shadow,
+            "cleanup": cleanup,
+        })
+    except Exception as exc:
+        record_error("tm_io mem0-update-content", exc)
+
+    try:
+        create_payload = _parse_json(tm_core.mem0_write(
+            "codex",
+            "systems",
+            _canary_text("tm_core_mem0_delete_seed"),
+            metadata_extra={"canary_entrypoint": "tm_core_mem0_delete"},
+        ))
+        remote_id = _extract_id(create_payload)
+        delete_payload = _parse_json(tm_core.mem0_delete([remote_id]))
+        shadow = _shadow_row(remote_id)
+        results.append({
+            "name": "tm_core.mem0_delete",
+            "remote_id": remote_id,
+            "shadow_ok": _shadow_matches(shadow, state="deleted", shadow_state="mem0_deleted"),
+            "shadow": shadow,
+            "delete": delete_payload,
+            "cleanup": {"local_hard_deleted": _hard_delete_shadow(remote_id)},
+        })
+    except Exception as exc:
+        record_error("tm_core.mem0_delete", exc)
+
+    try:
+        create_payload = _parse_json(tm_core.mem0_write(
+            "codex",
+            "systems",
+            _canary_text("tm_review_tools_delete_seed"),
+            metadata_extra={"canary_entrypoint": "tm_review_tools_mem0_delete_by_id"},
+        ))
+        remote_id = _extract_id(create_payload)
+        deleted = tm_review_tools._mem0_delete_by_id(remote_id)
+        shadow = _shadow_row(remote_id)
+        results.append({
+            "name": "tm_review_tools._mem0_delete_by_id",
+            "remote_id": remote_id,
+            "shadow_ok": bool(deleted) and _shadow_matches(shadow, state="deleted", shadow_state="mem0_deleted"),
+            "shadow": shadow,
+            "cleanup": {"local_hard_deleted": _hard_delete_shadow(remote_id)},
+        })
+    except Exception as exc:
+        record_error("tm_review_tools._mem0_delete_by_id", exc)
 
     return results
 

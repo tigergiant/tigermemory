@@ -4,6 +4,7 @@ import datetime as dt
 import json
 import pathlib
 import sys
+import types
 
 import pytest
 
@@ -58,3 +59,44 @@ def test_live_canary_requires_hybrid_profile(monkeypatch):
 
     with pytest.raises(RuntimeError, match="requires TIGERMEMORY_PROFILE=hybrid"):
         accel.run_live_canary("http://127.0.0.1:8790")
+
+
+def test_parse_json_requires_object_response():
+    assert accel._parse_json('{"id": "x"}') == {"id": "x"}
+    with pytest.raises(RuntimeError, match="expected object response"):
+        accel._parse_json('["x"]')
+    with pytest.raises(RuntimeError, match="expected JSON response"):
+        accel._parse_json("not-json")
+
+
+def test_shadow_matches_checks_origin_state_and_shadow_state():
+    row = {"backend_origin": "local-shadow", "state": "deleted", "shadow_state": "mem0_deleted"}
+
+    assert accel._shadow_matches(row)
+    assert accel._shadow_matches(row, state="deleted", shadow_state="mem0_deleted")
+    assert not accel._shadow_matches(row, state="active")
+    assert not accel._shadow_matches(row, shadow_state="pending")
+    assert not accel._shadow_matches({"backend_origin": "openmemory"})
+
+
+def test_run_tm_io_parses_json_and_reports_stderr(monkeypatch, tmp_path):
+    monkeypatch.setattr(accel, "REPO_ROOT", tmp_path)
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        seen["input"] = kwargs["input"]
+        return types.SimpleNamespace(returncode=0, stdout='{"id": "abc"}\n', stderr="")
+
+    monkeypatch.setattr(accel.subprocess, "run", fake_run)
+
+    assert accel._run_tm_io(["mem0-write"], "body") == {"id": "abc"}
+    assert seen["input"] == "body"
+    assert pathlib.Path(seen["cmd"][1]).name == "tm_io.py"
+
+    def fake_fail(_cmd, **_kwargs):
+        return types.SimpleNamespace(returncode=2, stdout="", stderr="bad input")
+
+    monkeypatch.setattr(accel.subprocess, "run", fake_fail)
+    with pytest.raises(RuntimeError, match="bad input"):
+        accel._run_tm_io(["mem0-write"], "body")
