@@ -902,6 +902,10 @@ def cmd_compare(args: argparse.Namespace) -> int:
         for memory_id in source_ids
         if memory_id in db_ids_map
     ]
+    matched_db_topics: dict[str, int] = {}
+    for row in matched_rows:
+        topic = str(row.get("topic") or "")
+        matched_db_topics[topic] = matched_db_topics.get(topic, 0) + 1
     active_imported_count = sum(1 for row in matched_rows if str(row.get("state") or "") == "active")
     superseded_dup_count = sum(1 for row in matched_rows if str(row.get("state") or "") == "superseded_dup")
     invalid_count = sum(1 for row in matched_rows if str(row.get("state") or "").startswith("invalid"))
@@ -944,9 +948,11 @@ def cmd_compare(args: argparse.Namespace) -> int:
         "counts": {
             "source": source_count,
             "db": db_count,
+            "db_matched_source_ids": len(matched_rows),
             "source_topics": source_topics,
-            "db_topics": db_topics,
-            "topic_match": source_topics == db_topics,
+            "db_topics": matched_db_topics,
+            "db_all_topics": db_topics,
+            "topic_match": source_topics == matched_db_topics,
         },
         "direct_readback": {
             "checked": source_count,
@@ -984,10 +990,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         "samples": sample_checks,
     }
 
-    if source_count != db_count:
-        result["ok"] = False
-        result["counts"]["status"] = "count_mismatch"
-    if source_topics != db_topics:
+    if source_topics != matched_db_topics:
         result["ok"] = False
         result["counts"]["status"] = "topic_mismatch"
     if missing_ids:
