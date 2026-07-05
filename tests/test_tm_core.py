@@ -506,8 +506,11 @@ def test_local_schema_migrates_existing_db_without_dropping_rows(monkeypatch, tm
 def test_mem0_write_dual_write_default_off_does_not_create_local_db(monkeypatch, tmp_path):
     _use_hybrid_profile(monkeypatch)
     db_path = tmp_path / "local-shadow.sqlite"
+    env_path = tmp_path / "openmemory.env"
+    env_path.write_text("MEM0_URL=http://localhost:8765\nMEM0_API_KEY=test\n", encoding="utf-8")
     remote_id = "11111111-1111-4111-8111-111111111111"
     monkeypatch.delenv("TM_LOCAL_DUAL_WRITE", raising=False)
+    monkeypatch.setenv("TIGERMEMORY_OPENMEMORY_ENV", str(env_path))
     monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(db_path))
     monkeypatch.setattr(tm_core, "mem0_base", lambda: "http://localhost:8765")
     monkeypatch.setattr(
@@ -520,6 +523,38 @@ def test_mem0_write_dual_write_default_off_does_not_create_local_db(monkeypatch,
 
     assert json.loads(raw)["id"] == remote_id
     assert db_path.exists() is False
+
+
+def test_mem0_write_dual_write_reads_runtime_env_file(monkeypatch, tmp_path):
+    _use_hybrid_profile(monkeypatch)
+    db_path = tmp_path / "local-shadow.sqlite"
+    env_path = tmp_path / "openmemory.env"
+    env_path.write_text(
+        "MEM0_URL=http://localhost:8765\nMEM0_API_KEY=test\nTM_LOCAL_DUAL_WRITE=1\n",
+        encoding="utf-8",
+    )
+    remote_id = "44444444-4444-4444-8444-444444444444"
+    monkeypatch.delenv("TM_LOCAL_DUAL_WRITE", raising=False)
+    monkeypatch.setenv("TIGERMEMORY_OPENMEMORY_ENV", str(env_path))
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(db_path))
+    monkeypatch.setattr(tm_core, "mem0_base", lambda: "http://localhost:8765")
+    monkeypatch.setattr(
+        tm_core,
+        "mem0_request",
+        lambda *_args, **_kwargs: json.dumps({"id": remote_id}),
+    )
+
+    raw = tm_core.mem0_write("codex", "systems", "runtime env file dual write")
+
+    assert json.loads(raw)["id"] == remote_id
+    conn = sqlite3.connect(str(db_path))
+    try:
+        assert conn.execute(
+            "SELECT COUNT(1) FROM memories WHERE legacy_mem0_id=?",
+            (remote_id,),
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()
 
 
 def test_mem0_write_dual_write_persists_local_shadow(monkeypatch, tmp_path):

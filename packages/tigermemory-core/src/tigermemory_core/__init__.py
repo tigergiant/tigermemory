@@ -995,7 +995,13 @@ def _shadow_search_enabled() -> bool:
 
 
 def _local_dual_write_enabled() -> bool:
-    return _env_truthy(_LOCAL_DUAL_WRITE_ENV)
+    if os.environ.get(_LOCAL_DUAL_WRITE_ENV) is not None:
+        return _env_truthy(_LOCAL_DUAL_WRITE_ENV)
+    try:
+        raw = _env_value(_LOCAL_DUAL_WRITE_ENV)
+    except RuntimeError:
+        return False
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _shadow_search_log_path() -> pathlib.Path:
