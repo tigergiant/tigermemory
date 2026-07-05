@@ -283,6 +283,21 @@ def _gate(status: str, **kwargs: Any) -> dict[str, Any]:
     return {"status": status, **kwargs}
 
 
+def _parse_iso_datetime(value: str) -> dt.datetime | None:
+    raw = value.strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = dt.datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=TZ_CN)
+    return parsed.astimezone(TZ_CN)
+
+
 def summarize_reconcile_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not payload:
         return _gate("pending", reason="missing_reconcile_payload")
@@ -387,11 +402,19 @@ def summarize_shadow_reconcile(
     route_event_root: pathlib.Path,
     db_path: pathlib.Path,
     days: int,
+    since: str | None = None,
 ) -> dict[str, Any]:
     rows = _load_route_event_rows(route_event_root, days)
+    since_dt = _parse_iso_datetime(since) if since else None
+    if since and since_dt is None:
+        return _gate("blocked", reason="invalid_shadow_reconcile_since", since=since)
     ids: list[str] = []
     seen: set[str] = set()
     for row in rows:
+        if since_dt is not None:
+            row_ts = _parse_iso_datetime(str(row.get("ts") or ""))
+            if row_ts is None or row_ts < since_dt:
+                continue
         flow = str(row.get("outcome") or row.get("route") or row.get("flow_target") or "").lower()
         if flow != "mem0" and str(row.get("flow_target") or "").lower() != "mem0":
             continue
@@ -401,7 +424,13 @@ def summarize_shadow_reconcile(
             seen.add(memory_id)
             ids.append(memory_id)
     if not ids:
-        return _gate("pending", reason="no_mem0_route_event_ids", days=days, route_event_root=str(route_event_root))
+        return _gate(
+            "pending",
+            reason="no_mem0_route_event_ids",
+            days=days,
+            since=since,
+            route_event_root=str(route_event_root),
+        )
     if not db_path.exists():
         return _gate("blocked", reason="local_db_missing", local_db=str(db_path), checked_ids=len(ids))
     conn = sqlite3.connect(str(db_path))
@@ -452,6 +481,7 @@ def summarize_shadow_reconcile(
         wrong_origin_count=len(wrong_origin),
         wrong_origin_samples=wrong_origin[:10],
         days=days,
+        since=since,
         local_db=str(db_path),
     )
 
@@ -634,6 +664,7 @@ def phase_readiness(args: argparse.Namespace) -> dict[str, Any]:
             route_event_root=pathlib.Path(args.route_event_root),
             db_path=pathlib.Path(args.local_db),
             days=args.days,
+            since=args.shadow_reconcile_since,
         )
 
     gates["shadow_search"] = summarize_shadow_search_logs(
@@ -1236,6 +1267,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reconcile-out", default=None, help="optional path to write reconcile report when --reconcile-input is used")
     parser.add_argument("--shadow-log-dir", default=str(REPO_ROOT / ".tmp" / "search-shadow"), help="shadow-search log dir")
     parser.add_argument("--check-shadow-reconcile", action="store_true", help="check recent mem0 route ids against local-shadow rows")
+    parser.add_argument("--shadow-reconcile-since", default=None, help="only check route events at or after this ISO timestamp")
     parser.add_argument("--max-local-p95-ms", type=float, default=500.0, help="max allowed local shadow-search p95")
     parser.add_argument("--run-retrieval-eval", action="store_true", help="run tm_memory_eval in-process for readiness")
     parser.add_argument("--retrieval-eval-report", default=None, help="existing retrieval eval JSON report")
