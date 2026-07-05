@@ -61,6 +61,106 @@ def test_deferred_entrypoints_archive_openai_mcp_gate():
     assert rows["tm-openai-mcp write_memory"]["phase1_gate"] is False
 
 
+def test_summarize_reconcile_payload_requires_zero_diff():
+    payload = {
+        "ok": True,
+        "counts": {"source": 2, "db": 2},
+        "direct_readback": {"missing": 0},
+        "conservation": {"balanced": True},
+        "sha_diff": {"symmetric_diff_count": 0},
+        "semantic": {"status": "match"},
+    }
+
+    assert accel.summarize_reconcile_payload(payload)["status"] == "pass"
+
+    payload["sha_diff"]["symmetric_diff_count"] = 1
+    blocked = accel.summarize_reconcile_payload(payload)
+    assert blocked["status"] == "blocked"
+    assert "sha_symmetric_diff" in blocked["reasons"]
+
+
+def test_summarize_shadow_search_logs_flags_latency_and_empty_local(tmp_path):
+    today = dt.datetime.now(accel.TZ_CN).date().isoformat()
+    log = tmp_path / f"{today}.jsonl"
+    log.write_text(
+        "\n".join([
+            json.dumps({
+                "old_count": 1,
+                "local_count": 1,
+                "intersection_count": 1,
+                "local_latency_ms": 20.0,
+                "warnings": [],
+            }),
+            json.dumps({
+                "old_count": 1,
+                "local_count": 0,
+                "intersection_count": 0,
+                "local_latency_ms": 900.0,
+                "warnings": [],
+            }),
+        ]),
+        encoding="utf-8",
+    )
+
+    summary = accel.summarize_shadow_search_logs(tmp_path, days=1, max_local_p95_ms=500)
+
+    assert summary["status"] == "blocked"
+    assert "local_search_p95_too_high" in summary["reasons"]
+    assert "local_empty_for_old_hits" in summary["reasons"]
+
+
+def test_phase_readiness_combines_reconcile_shadow_and_eval_reports(tmp_path):
+    today = dt.datetime.now(accel.TZ_CN).date().isoformat()
+    shadow_dir = tmp_path / "shadow"
+    shadow_dir.mkdir()
+    (shadow_dir / f"{today}.jsonl").write_text(
+        json.dumps({
+            "old_count": 1,
+            "local_count": 1,
+            "intersection_count": 1,
+            "local_latency_ms": 10.0,
+            "warnings": [],
+        }) + "\n",
+        encoding="utf-8",
+    )
+    reconcile = tmp_path / "reconcile.json"
+    reconcile.write_text(json.dumps({
+        "ok": True,
+        "counts": {"source": 1, "db": 1},
+        "direct_readback": {"missing": 0},
+        "conservation": {"balanced": True},
+        "sha_diff": {"symmetric_diff_count": 0},
+        "semantic": {"status": "match"},
+    }), encoding="utf-8")
+    eval_report = tmp_path / "eval.json"
+    eval_report.write_text(json.dumps({
+        "case_count": 1,
+        "quality_hit5_rate": 1.0,
+        "runtime_unavailable_count": 0,
+        "contract_failure_count": 0,
+    }), encoding="utf-8")
+
+    result = accel.phase_readiness(types.SimpleNamespace(
+        reconcile_report=str(reconcile),
+        reconcile_input=None,
+        local_db=str(tmp_path / "memory.sqlite"),
+        reconcile_out=None,
+        shadow_log_dir=str(shadow_dir),
+        days=1,
+        max_local_p95_ms=500.0,
+        retrieval_eval_report=str(eval_report),
+        run_retrieval_eval=False,
+        retrieval_eval_cases=str(tmp_path / "cases.jsonl"),
+        eval_top_k=5,
+        min_hit5_rate=1.0,
+        max_eval_p95_ms=500.0,
+    ))
+
+    assert result["overall_status"] == "pass"
+    assert result["blockers"] == []
+    assert result["pending"] == []
+
+
 def test_timer_entrypoint_audit_classifies_bound_services(tmp_path, monkeypatch):
     monkeypatch.setattr(accel, "REPO_ROOT", tmp_path)
     deploy = tmp_path / "deploy" / "mcp"

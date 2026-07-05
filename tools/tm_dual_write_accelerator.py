@@ -25,6 +25,7 @@ import _bootstrap_paths  # noqa: F401
 
 import tigermemory_core as tm_core
 from tigermemory_core import TZ_CN
+import tm_memory_eval
 import tm_memory_ops
 import tm_review_tools
 
@@ -254,6 +255,271 @@ def route_event_replay(days: int) -> dict[str, Any]:
             {"signature": key, "count": count}
             for key, count in sorted(by_signature.items(), key=lambda item: (-item[1], item[0]))
         ],
+    }
+
+
+def _json_file(path: pathlib.Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"expected JSON object in {path}")
+    return payload
+
+
+def _percentile(values: list[float], percentile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return round(float(ordered[0]), 2)
+    rank = (len(ordered) - 1) * percentile
+    lower = int(rank)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = rank - lower
+    value = ordered[lower] * (1 - weight) + ordered[upper] * weight
+    return round(float(value), 2)
+
+
+def _gate(status: str, **kwargs: Any) -> dict[str, Any]:
+    return {"status": status, **kwargs}
+
+
+def summarize_reconcile_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if not payload:
+        return _gate("pending", reason="missing_reconcile_payload")
+    reasons: list[str] = []
+    if payload.get("ok") is not True:
+        reasons.append("reconcile_not_ok")
+    direct = payload.get("direct_readback") if isinstance(payload.get("direct_readback"), dict) else {}
+    conservation = payload.get("conservation") if isinstance(payload.get("conservation"), dict) else {}
+    sha_diff = payload.get("sha_diff") if isinstance(payload.get("sha_diff"), dict) else {}
+    semantic = payload.get("semantic") if isinstance(payload.get("semantic"), dict) else {}
+    if int(direct.get("missing") or 0) != 0:
+        reasons.append("direct_readback_missing")
+    if conservation.get("balanced") is not True:
+        reasons.append("conservation_unbalanced")
+    if int(sha_diff.get("symmetric_diff_count") or 0) != 0:
+        reasons.append("sha_symmetric_diff")
+    if semantic.get("status") == "downgraded":
+        reasons.append("semantic_downgrade")
+    status = "pass" if not reasons else "blocked"
+    return _gate(
+        status,
+        reasons=reasons,
+        source_count=(payload.get("counts") or {}).get("source") if isinstance(payload.get("counts"), dict) else None,
+        db_count=(payload.get("counts") or {}).get("db") if isinstance(payload.get("counts"), dict) else None,
+        direct_missing=direct.get("missing"),
+        conservation_balanced=conservation.get("balanced"),
+        sha_symmetric_diff_count=sha_diff.get("symmetric_diff_count"),
+        semantic_status=semantic.get("status"),
+    )
+
+
+def run_reconcile_check(input_path: pathlib.Path, db_path: pathlib.Path, out_path: pathlib.Path | None = None) -> dict[str, Any]:
+    cmd = [
+        sys.executable,
+        str(REPO_ROOT / "tools" / "tm_local_memory.py"),
+        "reconcile",
+        "--input",
+        str(input_path),
+        "--db",
+        str(db_path),
+    ]
+    if out_path is not None:
+        cmd.extend(["--out", str(out_path)])
+    proc = subprocess.run(
+        cmd,
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=120,
+        check=False,
+    )
+    try:
+        payload = _parse_json(proc.stdout.strip())
+    except Exception:
+        payload = {"ok": False, "error": proc.stderr.strip()[:500] or proc.stdout.strip()[:500]}
+    payload["_returncode"] = proc.returncode
+    return payload
+
+
+def _load_shadow_rows(log_dir: pathlib.Path, days: int) -> list[dict[str, Any]]:
+    today = dt.datetime.now(TZ_CN).date()
+    rows: list[dict[str, Any]] = []
+    for offset in range(days):
+        date = (today - dt.timedelta(days=offset)).isoformat()
+        path = log_dir / f"{date}.jsonl"
+        if not path.exists():
+            continue
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                item = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                item["_date"] = date
+                rows.append(item)
+    return rows
+
+
+def summarize_shadow_search_logs(log_dir: pathlib.Path, *, days: int, max_local_p95_ms: float) -> dict[str, Any]:
+    rows = _load_shadow_rows(log_dir, days)
+    if not rows:
+        return _gate("pending", reason="missing_shadow_search_logs", log_dir=str(log_dir), days=days)
+    latencies = [
+        float(row.get("local_latency_ms"))
+        for row in rows
+        if isinstance(row.get("local_latency_ms"), (int, float))
+    ]
+    warning_count = sum(1 for row in rows if row.get("warnings"))
+    local_empty_when_old_nonempty = sum(
+        1 for row in rows
+        if int(row.get("old_count") or 0) > 0 and int(row.get("local_count") or 0) == 0
+    )
+    intersection_empty_when_both_nonempty = sum(
+        1 for row in rows
+        if int(row.get("old_count") or 0) > 0
+        and int(row.get("local_count") or 0) > 0
+        and int(row.get("intersection_count") or 0) == 0
+    )
+    p95 = _percentile(latencies, 0.95)
+    reasons: list[str] = []
+    if p95 is not None and p95 > max_local_p95_ms:
+        reasons.append("local_search_p95_too_high")
+    if warning_count:
+        reasons.append("shadow_search_warnings_present")
+    if local_empty_when_old_nonempty:
+        reasons.append("local_empty_for_old_hits")
+    status = "pass" if not reasons else "blocked"
+    return _gate(
+        status,
+        reasons=reasons,
+        row_count=len(rows),
+        warning_count=warning_count,
+        local_empty_when_old_nonempty=local_empty_when_old_nonempty,
+        intersection_empty_when_both_nonempty=intersection_empty_when_both_nonempty,
+        local_latency_p95_ms=p95,
+        max_local_p95_ms=max_local_p95_ms,
+        days=days,
+        log_dir=str(log_dir),
+    )
+
+
+def summarize_retrieval_eval_payload(
+    payload: dict[str, Any],
+    *,
+    min_hit5_rate: float,
+    max_p95_ms: float,
+) -> dict[str, Any]:
+    if not payload:
+        return _gate("pending", reason="missing_retrieval_eval_payload")
+    hit5_rate = payload.get("quality_hit5_rate")
+    if hit5_rate is None:
+        hit5_rate = payload.get("hit5_rate")
+    try:
+        hit5_rate_float = float(hit5_rate)
+    except (TypeError, ValueError):
+        hit5_rate_float = -1.0
+    rows = payload.get("results") if isinstance(payload.get("results"), list) else []
+    latencies = [
+        float(row.get("latency_ms"))
+        for row in rows
+        if isinstance(row, dict) and isinstance(row.get("latency_ms"), (int, float))
+    ]
+    p95 = _percentile(latencies, 0.95)
+    reasons: list[str] = []
+    if hit5_rate_float < min_hit5_rate:
+        reasons.append("hit5_rate_below_threshold")
+    if int(payload.get("runtime_unavailable_count") or 0) > 0:
+        reasons.append("runtime_unavailable")
+    if int(payload.get("contract_failure_count") or 0) > 0:
+        reasons.append("contract_failures")
+    if p95 is not None and p95 > max_p95_ms:
+        reasons.append("retrieval_eval_p95_too_high")
+    status = "pass" if not reasons else "blocked"
+    return _gate(
+        status,
+        reasons=reasons,
+        case_count=payload.get("case_count"),
+        hit5_rate=hit5_rate_float,
+        min_hit5_rate=min_hit5_rate,
+        runtime_unavailable_count=payload.get("runtime_unavailable_count"),
+        contract_failure_count=payload.get("contract_failure_count"),
+        latency_p95_ms=p95,
+        max_p95_ms=max_p95_ms,
+    )
+
+
+def run_retrieval_eval_check(cases_path: pathlib.Path, *, top_k: int) -> dict[str, Any]:
+    cases = tm_memory_eval.load_cases(cases_path)
+    report = tm_memory_eval.evaluate(cases, top_k=top_k)
+    # Keep raw-query rows out of readiness output.
+    report.pop("results", None)
+    report.pop("probe_results", None)
+    return report
+
+
+def phase_readiness(args: argparse.Namespace) -> dict[str, Any]:
+    gates: dict[str, dict[str, Any]] = {}
+    if args.reconcile_report:
+        try:
+            gates["reconcile"] = summarize_reconcile_payload(_json_file(pathlib.Path(args.reconcile_report)))
+        except Exception as exc:
+            gates["reconcile"] = _gate("blocked", reason=f"reconcile_report_error: {exc}")
+    elif args.reconcile_input:
+        payload = run_reconcile_check(
+            pathlib.Path(args.reconcile_input),
+            pathlib.Path(args.local_db),
+            pathlib.Path(args.reconcile_out) if args.reconcile_out else None,
+        )
+        gates["reconcile"] = summarize_reconcile_payload(payload)
+    else:
+        gates["reconcile"] = _gate("pending", reason="provide --reconcile-input or --reconcile-report")
+
+    gates["shadow_search"] = summarize_shadow_search_logs(
+        pathlib.Path(args.shadow_log_dir),
+        days=args.days,
+        max_local_p95_ms=args.max_local_p95_ms,
+    )
+
+    if args.retrieval_eval_report:
+        try:
+            eval_payload = _json_file(pathlib.Path(args.retrieval_eval_report))
+            gates["retrieval_eval"] = summarize_retrieval_eval_payload(
+                eval_payload,
+                min_hit5_rate=args.min_hit5_rate,
+                max_p95_ms=args.max_eval_p95_ms,
+            )
+        except Exception as exc:
+            gates["retrieval_eval"] = _gate("blocked", reason=f"retrieval_eval_report_error: {exc}")
+    elif args.run_retrieval_eval:
+        try:
+            eval_payload = run_retrieval_eval_check(pathlib.Path(args.retrieval_eval_cases), top_k=args.eval_top_k)
+            gates["retrieval_eval"] = summarize_retrieval_eval_payload(
+                eval_payload,
+                min_hit5_rate=args.min_hit5_rate,
+                max_p95_ms=args.max_eval_p95_ms,
+            )
+        except Exception as exc:
+            gates["retrieval_eval"] = _gate("blocked", reason=f"retrieval_eval_error: {exc}")
+    else:
+        gates["retrieval_eval"] = _gate("pending", reason="provide --run-retrieval-eval or --retrieval-eval-report")
+
+    blockers = [name for name, gate in gates.items() if gate.get("status") == "blocked"]
+    pending = [name for name, gate in gates.items() if gate.get("status") == "pending"]
+    if blockers:
+        overall = "blocked"
+    elif pending:
+        overall = "pending"
+    else:
+        overall = "pass"
+    return {
+        "generated_at": dt.datetime.now(TZ_CN).isoformat(),
+        "overall_status": overall,
+        "blockers": blockers,
+        "pending": pending,
+        "gates": gates,
     }
 
 
@@ -796,7 +1062,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--days", type=int, default=14, help="route event replay window")
     parser.add_argument("--live-canary", action="store_true", help="create and clean live canary writes")
     parser.add_argument("--fault-drill", action="store_true", help="run local-only failure drills on temporary DBs")
+    parser.add_argument("--readiness", action="store_true", help="summarize Phase 1/2 reconcile and retrieval gates")
     parser.add_argument("--http-url", default="http://127.0.0.1:8790", help="tm-http base URL for live canary")
+    parser.add_argument("--local-db", default=str(tm_core._local_db_path()), help="local SQLite DB for readiness reconcile")
+    parser.add_argument("--reconcile-input", default=None, help="OpenMemory export JSONL for readiness reconcile")
+    parser.add_argument("--reconcile-report", default=None, help="existing tm_local_memory reconcile JSON report")
+    parser.add_argument("--reconcile-out", default=None, help="optional path to write reconcile report when --reconcile-input is used")
+    parser.add_argument("--shadow-log-dir", default=str(REPO_ROOT / ".tmp" / "search-shadow"), help="shadow-search log dir")
+    parser.add_argument("--max-local-p95-ms", type=float, default=500.0, help="max allowed local shadow-search p95")
+    parser.add_argument("--run-retrieval-eval", action="store_true", help="run tm_memory_eval in-process for readiness")
+    parser.add_argument("--retrieval-eval-report", default=None, help="existing retrieval eval JSON report")
+    parser.add_argument("--retrieval-eval-cases", default=str(REPO_ROOT / "tests" / "fixtures" / "memory_eval_cases.jsonl"))
+    parser.add_argument("--eval-top-k", type=int, default=5)
+    parser.add_argument("--min-hit5-rate", type=float, default=1.0)
+    parser.add_argument("--max-eval-p95-ms", type=float, default=500.0)
     args = parser.parse_args(argv)
 
     result: dict[str, Any] = {
@@ -813,11 +1092,14 @@ def main(argv: list[str] | None = None) -> int:
     }
     if args.fault_drill:
         result["fault_drill"] = run_fault_drill()
+    if args.readiness:
+        result["readiness"] = phase_readiness(args)
     if args.live_canary:
         result["live_canary"] = run_live_canary(args.http_url)
 
     if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        sys.stdout.buffer.write(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8"))
+        sys.stdout.buffer.write(b"\n")
         return 0
 
     print(f"generated_at: {result['generated_at']}")
@@ -848,6 +1130,16 @@ def main(argv: list[str] | None = None) -> int:
         for row in result["fault_drill"]:
             suffix = f" error={row.get('error')}" if row.get("error") else ""
             print(f"- {row['name']}: ok={row.get('ok')}{suffix}")
+    if args.readiness:
+        readiness = result["readiness"]
+        print("\nreadiness:")
+        print(
+            f"- overall={readiness['overall_status']} "
+            f"blockers={readiness['blockers']} pending={readiness['pending']}"
+        )
+        for name, gate in readiness["gates"].items():
+            detail = gate.get("reason") or gate.get("reasons") or ""
+            print(f"  - {name}: status={gate.get('status')} detail={detail}")
     if args.live_canary:
         print("\nlive_canary:")
         for row in result["live_canary"]:
