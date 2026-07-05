@@ -179,6 +179,25 @@ def test_summarize_retrieval_eval_payload_uses_preserved_latency_p95():
     assert "retrieval_eval_p95_too_high" in summary["reasons"]
 
 
+def test_summarize_retrieval_eval_payload_flags_missing_expected_paths():
+    summary = accel.summarize_retrieval_eval_payload(
+        {
+            "case_count": 2,
+            "quality_hit5_rate": 1.0,
+            "runtime_unavailable_count": 0,
+            "contract_failure_count": 0,
+            "expected_path_missing_count": 1,
+            "expected_path_missing_samples": [{"id": "case-1", "missing_expected_paths": ["wiki/missing.md"]}],
+        },
+        min_hit5_rate=1.0,
+        max_p95_ms=0.0,
+    )
+
+    assert summary["status"] == "blocked"
+    assert "eval_expected_paths_missing" in summary["reasons"]
+    assert summary["expected_path_missing_count"] == 1
+
+
 def test_timer_entrypoint_audit_classifies_bound_services(tmp_path, monkeypatch):
     monkeypatch.setattr(accel, "REPO_ROOT", tmp_path)
     deploy = tmp_path / "deploy" / "mcp"

@@ -438,6 +438,8 @@ def summarize_retrieval_eval_payload(
         reasons.append("runtime_unavailable")
     if int(payload.get("contract_failure_count") or 0) > 0:
         reasons.append("contract_failures")
+    if int(payload.get("expected_path_missing_count") or 0) > 0:
+        reasons.append("eval_expected_paths_missing")
     if max_p95_ms > 0 and p95 is not None and p95 > max_p95_ms:
         reasons.append("retrieval_eval_p95_too_high")
     status = "pass" if not reasons else "blocked"
@@ -449,13 +451,36 @@ def summarize_retrieval_eval_payload(
         min_hit5_rate=min_hit5_rate,
         runtime_unavailable_count=payload.get("runtime_unavailable_count"),
         contract_failure_count=payload.get("contract_failure_count"),
+        expected_path_missing_count=payload.get("expected_path_missing_count"),
+        expected_path_missing_samples=payload.get("expected_path_missing_samples") or [],
         latency_p95_ms=p95,
         max_p95_ms=max_p95_ms,
     )
 
 
+def _expected_path_exists(expected_path: str) -> bool:
+    clean = expected_path.split("#", 1)[0]
+    if clean.endswith("*"):
+        prefix = clean[:-1]
+        return any(path.as_posix().startswith(prefix) for path in REPO_ROOT.rglob("*") if path.is_file())
+    return (REPO_ROOT / clean).exists()
+
+
+def _missing_expected_paths(cases: list[Any]) -> list[dict[str, Any]]:
+    missing: list[dict[str, Any]] = []
+    for case in cases:
+        absent = [
+            path for path in getattr(case, "expected_paths", [])
+            if path and not _expected_path_exists(path)
+        ]
+        if absent:
+            missing.append({"id": getattr(case, "id", ""), "missing_expected_paths": absent})
+    return missing
+
+
 def run_retrieval_eval_check(cases_path: pathlib.Path, *, top_k: int) -> dict[str, Any]:
     cases = tm_memory_eval.load_cases(cases_path)
+    missing = _missing_expected_paths(cases)
     report = tm_memory_eval.evaluate(cases, top_k=top_k)
     rows = report.get("results") if isinstance(report.get("results"), list) else []
     report["latency_p95_ms"] = _percentile(
@@ -466,6 +491,8 @@ def run_retrieval_eval_check(cases_path: pathlib.Path, *, top_k: int) -> dict[st
         ],
         0.95,
     )
+    report["expected_path_missing_count"] = len(missing)
+    report["expected_path_missing_samples"] = missing[:10]
     # Keep raw-query rows out of readiness output.
     report.pop("results", None)
     report.pop("probe_results", None)
