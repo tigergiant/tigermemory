@@ -161,6 +161,24 @@ def test_phase_readiness_combines_reconcile_shadow_and_eval_reports(tmp_path):
     assert result["pending"] == []
 
 
+def test_summarize_retrieval_eval_payload_uses_preserved_latency_p95():
+    summary = accel.summarize_retrieval_eval_payload(
+        {
+            "case_count": 2,
+            "quality_hit5_rate": 1.0,
+            "runtime_unavailable_count": 0,
+            "contract_failure_count": 0,
+            "latency_p95_ms": 800.0,
+        },
+        min_hit5_rate=1.0,
+        max_p95_ms=500.0,
+    )
+
+    assert summary["status"] == "blocked"
+    assert summary["latency_p95_ms"] == 800.0
+    assert "retrieval_eval_p95_too_high" in summary["reasons"]
+
+
 def test_timer_entrypoint_audit_classifies_bound_services(tmp_path, monkeypatch):
     monkeypatch.setattr(accel, "REPO_ROOT", tmp_path)
     deploy = tmp_path / "deploy" / "mcp"

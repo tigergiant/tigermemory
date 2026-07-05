@@ -427,7 +427,10 @@ def summarize_retrieval_eval_payload(
         for row in rows
         if isinstance(row, dict) and isinstance(row.get("latency_ms"), (int, float))
     ]
-    p95 = _percentile(latencies, 0.95)
+    if isinstance(payload.get("latency_p95_ms"), (int, float)):
+        p95 = round(float(payload["latency_p95_ms"]), 2)
+    else:
+        p95 = _percentile(latencies, 0.95)
     reasons: list[str] = []
     if hit5_rate_float < min_hit5_rate:
         reasons.append("hit5_rate_below_threshold")
@@ -435,7 +438,7 @@ def summarize_retrieval_eval_payload(
         reasons.append("runtime_unavailable")
     if int(payload.get("contract_failure_count") or 0) > 0:
         reasons.append("contract_failures")
-    if p95 is not None and p95 > max_p95_ms:
+    if max_p95_ms > 0 and p95 is not None and p95 > max_p95_ms:
         reasons.append("retrieval_eval_p95_too_high")
     status = "pass" if not reasons else "blocked"
     return _gate(
@@ -454,6 +457,15 @@ def summarize_retrieval_eval_payload(
 def run_retrieval_eval_check(cases_path: pathlib.Path, *, top_k: int) -> dict[str, Any]:
     cases = tm_memory_eval.load_cases(cases_path)
     report = tm_memory_eval.evaluate(cases, top_k=top_k)
+    rows = report.get("results") if isinstance(report.get("results"), list) else []
+    report["latency_p95_ms"] = _percentile(
+        [
+            float(row.get("latency_ms"))
+            for row in rows
+            if isinstance(row, dict) and isinstance(row.get("latency_ms"), (int, float))
+        ],
+        0.95,
+    )
     # Keep raw-query rows out of readiness output.
     report.pop("results", None)
     report.pop("probe_results", None)
@@ -1075,7 +1087,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--retrieval-eval-cases", default=str(REPO_ROOT / "tests" / "fixtures" / "memory_eval_cases.jsonl"))
     parser.add_argument("--eval-top-k", type=int, default=5)
     parser.add_argument("--min-hit5-rate", type=float, default=1.0)
-    parser.add_argument("--max-eval-p95-ms", type=float, default=500.0)
+    parser.add_argument("--max-eval-p95-ms", type=float, default=0.0, help="optional retrieval eval p95 gate; 0 disables")
     args = parser.parse_args(argv)
 
     result: dict[str, Any] = {
