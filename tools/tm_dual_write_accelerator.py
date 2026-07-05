@@ -15,6 +15,7 @@ import pathlib
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 import uuid
@@ -427,6 +428,156 @@ def _shadow_matches(shadow: dict[str, Any] | None, *, state: str | None = None, 
     return True
 
 
+def _read_runtime_events(root: pathlib.Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for path in sorted(root.glob("*/events.jsonl")):
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                item = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                rows.append(item)
+    return rows
+
+
+def _set_env(updates: dict[str, str]) -> dict[str, str | None]:
+    previous = {key: os.environ.get(key) for key in updates}
+    os.environ.update(updates)
+    return previous
+
+
+def _restore_env(previous: dict[str, str | None]) -> None:
+    for key, value in previous.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+def run_fault_drill() -> list[dict[str, Any]]:
+    """Run local-only Phase 1 failure drills without touching production DB."""
+    results: list[dict[str, Any]] = []
+    original_request = tm_core.mem0_request
+    original_base = tm_core.mem0_base
+    original_key = tm_core.mem0_key
+    original_user = tm_core.mem0_user_id
+
+    with tempfile.TemporaryDirectory(prefix="tm-dual-write-fault-") as raw_tmp:
+        tmp = pathlib.Path(raw_tmp)
+        event_root = tmp / "runtime-events"
+        remote_id = "11111111-2222-4333-8444-555555555555"
+
+        def fake_remote_success(_url: str, **_kwargs: Any) -> str:
+            return json.dumps({"id": remote_id, "ok": True})
+
+        def fake_remote_down(_url: str, **_kwargs: Any) -> str:
+            raise RuntimeError("Mem0 unreachable: simulated outage")
+
+        try:
+            tm_core.mem0_base = lambda: "http://127.0.0.1:8765"  # type: ignore[assignment]
+            tm_core.mem0_key = lambda: "test-key"  # type: ignore[assignment]
+            tm_core.mem0_user_id = lambda: "tiger"  # type: ignore[assignment]
+
+            bad_db_path = tmp / "not-a-sqlite-file"
+            bad_db_path.mkdir()
+            previous = _set_env({
+                "TIGERMEMORY_PROFILE": tm_core.TIGERMEMORY_PROFILE_HYBRID,
+                "TM_LOCAL_DUAL_WRITE": "1",
+                "TIGERMEMORY_LOCAL_DB": str(bad_db_path),
+                "TM_RUNTIME_EVENTS_ROOT": str(event_root),
+            })
+            try:
+                tm_core.mem0_request = fake_remote_success  # type: ignore[assignment]
+                raw = tm_core.mem0_write(
+                    "codex",
+                    "systems",
+                    "fault drill shadow write failure must not block remote",
+                    metadata_extra={"fault_drill": "shadow_write_failure"},
+                )
+                payload = _parse_json(raw)
+                events = _read_runtime_events(event_root)
+                failure_events = [
+                    row for row in events
+                    if row.get("event_type") == "memory_local_dual_write"
+                    and row.get("outcome") == "shadow_write_failed"
+                ]
+                results.append({
+                    "name": "shadow_write_failure_non_blocking",
+                    "ok": payload.get("id") == remote_id and bool(failure_events),
+                    "remote_id": payload.get("id"),
+                    "runtime_event_recorded": bool(failure_events),
+                    "production_db_touched": False,
+                })
+            except Exception as exc:
+                results.append({"name": "shadow_write_failure_non_blocking", "ok": False, "error": str(exc)[:500]})
+            finally:
+                _restore_env(previous)
+
+            previous = _set_env({
+                "TIGERMEMORY_PROFILE": tm_core.TIGERMEMORY_PROFILE_HYBRID,
+                "TM_LOCAL_DUAL_WRITE": "1",
+                "TIGERMEMORY_LOCAL_DB": str(tmp / "remote-down.sqlite"),
+                "TM_RUNTIME_EVENTS_ROOT": str(event_root),
+            })
+            try:
+                tm_core.mem0_request = fake_remote_down  # type: ignore[assignment]
+                try:
+                    tm_core.mem0_write(
+                        "codex",
+                        "systems",
+                        "fault drill remote outage should preserve old failure behavior",
+                        metadata_extra={"fault_drill": "remote_down"},
+                    )
+                    results.append({"name": "remote_down_preserves_fail_closed", "ok": False, "error": "write unexpectedly succeeded"})
+                except RuntimeError as exc:
+                    db_path = pathlib.Path(os.environ["TIGERMEMORY_LOCAL_DB"])
+                    results.append({
+                        "name": "remote_down_preserves_fail_closed",
+                        "ok": "simulated outage" in str(exc) and not db_path.exists(),
+                        "local_db_created": db_path.exists(),
+                        "error": str(exc)[:220],
+                    })
+            finally:
+                _restore_env(previous)
+
+            previous = _set_env({
+                "TIGERMEMORY_PROFILE": tm_core.TIGERMEMORY_PROFILE_LOCAL,
+                "TIGERMEMORY_LOCAL_DB": str(tmp / "local-wal.sqlite"),
+            })
+            try:
+                raw = tm_core.mem0_write(
+                    "codex",
+                    "systems",
+                    "fault drill local wal schema and readback",
+                    metadata_extra={"fault_drill": "local_wal"},
+                )
+                payload = _parse_json(raw)
+                conn = sqlite3.connect(os.environ["TIGERMEMORY_LOCAL_DB"])
+                try:
+                    journal_mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+                    count = conn.execute("SELECT COUNT(1) FROM memories WHERE id=?", (payload["id"],)).fetchone()[0]
+                    outbox_count = conn.execute("SELECT COUNT(1) FROM outbox").fetchone()[0]
+                finally:
+                    conn.close()
+                results.append({
+                    "name": "local_wal_schema_readback",
+                    "ok": journal_mode == "wal" and count == 1 and outbox_count == 0,
+                    "journal_mode": journal_mode,
+                    "row_count": count,
+                    "outbox_count": outbox_count,
+                })
+            finally:
+                _restore_env(previous)
+        finally:
+            tm_core.mem0_request = original_request  # type: ignore[assignment]
+            tm_core.mem0_base = original_base  # type: ignore[assignment]
+            tm_core.mem0_key = original_key  # type: ignore[assignment]
+            tm_core.mem0_user_id = original_user  # type: ignore[assignment]
+
+    return results
+
+
 def run_live_canary(http_url: str) -> list[dict[str, Any]]:
     if tm_core.tigermemory_profile() != tm_core.TIGERMEMORY_PROFILE_HYBRID:
         raise RuntimeError("live canary requires TIGERMEMORY_PROFILE=hybrid")
@@ -644,6 +795,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="emit JSON only")
     parser.add_argument("--days", type=int, default=14, help="route event replay window")
     parser.add_argument("--live-canary", action="store_true", help="create and clean live canary writes")
+    parser.add_argument("--fault-drill", action="store_true", help="run local-only failure drills on temporary DBs")
     parser.add_argument("--http-url", default="http://127.0.0.1:8790", help="tm-http base URL for live canary")
     args = parser.parse_args(argv)
 
@@ -659,6 +811,8 @@ def main(argv: list[str] | None = None) -> int:
         "timer_entrypoints": timer_entrypoint_audit(),
         "route_event_replay": route_event_replay(args.days),
     }
+    if args.fault_drill:
+        result["fault_drill"] = run_fault_drill()
     if args.live_canary:
         result["live_canary"] = run_live_canary(args.http_url)
 
@@ -689,6 +843,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"- days={replay['days']} events={replay['event_count']} mem0_events={replay['mem0_event_count']}")
     for row in replay["mem0_signatures"][:20]:
         print(f"  - {row['count']} {row['signature']}")
+    if args.fault_drill:
+        print("\nfault_drill:")
+        for row in result["fault_drill"]:
+            suffix = f" error={row.get('error')}" if row.get("error") else ""
+            print(f"- {row['name']}: ok={row.get('ok')}{suffix}")
     if args.live_canary:
         print("\nlive_canary:")
         for row in result["live_canary"]:

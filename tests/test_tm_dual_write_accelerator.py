@@ -118,6 +118,19 @@ def test_shadow_matches_checks_origin_state_and_shadow_state():
     assert not accel._shadow_matches({"backend_origin": "openmemory"})
 
 
+def test_run_fault_drill_uses_temp_dbs_and_reports_expected_outcomes(monkeypatch, tmp_path):
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(tmp_path / "production.sqlite"))
+    results = {row["name"]: row for row in accel.run_fault_drill()}
+
+    assert results["shadow_write_failure_non_blocking"]["ok"] is True
+    assert results["shadow_write_failure_non_blocking"]["runtime_event_recorded"] is True
+    assert results["remote_down_preserves_fail_closed"]["ok"] is True
+    assert results["remote_down_preserves_fail_closed"]["local_db_created"] is False
+    assert results["local_wal_schema_readback"]["ok"] is True
+    assert results["local_wal_schema_readback"]["journal_mode"] == "wal"
+    assert (tmp_path / "production.sqlite").exists() is False
+
+
 def test_run_tm_io_parses_json_and_reports_stderr(monkeypatch, tmp_path):
     monkeypatch.setattr(accel, "REPO_ROOT", tmp_path)
     seen = {}
