@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import pathlib
+import sqlite3
 import sys
 import types
 
@@ -109,6 +110,61 @@ def test_summarize_shadow_search_logs_flags_latency_and_empty_local(tmp_path):
     assert "local_empty_for_old_hits" in summary["reasons"]
 
 
+def test_summarize_shadow_reconcile_checks_route_ids_against_local_shadow(tmp_path):
+    today = dt.datetime.now(accel.TZ_CN).date().isoformat()
+    event_dir = tmp_path / "events" / today
+    event_dir.mkdir(parents=True)
+    remote_id = "11111111-2222-4333-8444-555555555555"
+    (event_dir / "events.jsonl").write_text(
+        json.dumps({"outcome": "mem0", "target_ref": {"id": remote_id}}) + "\n",
+        encoding="utf-8",
+    )
+    db = tmp_path / "memory.sqlite"
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE memories(
+                legacy_mem0_id TEXT,
+                state TEXT,
+                backend_origin TEXT,
+                shadow_state TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO memories VALUES (?, 'active', 'local-shadow', 'pending')",
+            (remote_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    passed = accel.summarize_shadow_reconcile(route_event_root=tmp_path / "events", db_path=db, days=1)
+    assert passed["status"] == "pass"
+    assert passed["checked_ids"] == 1
+
+    missing = accel.summarize_shadow_reconcile(route_event_root=tmp_path / "events", db_path=tmp_path / "missing.sqlite", days=1)
+    assert missing["status"] == "blocked"
+    assert missing["reason"] == "local_db_missing"
+
+    old_schema_db = tmp_path / "old-schema.sqlite"
+    conn = sqlite3.connect(old_schema_db)
+    try:
+        conn.execute("CREATE TABLE memories(id TEXT, content TEXT)")
+        conn.commit()
+    finally:
+        conn.close()
+    old_schema = accel.summarize_shadow_reconcile(
+        route_event_root=tmp_path / "events",
+        db_path=old_schema_db,
+        days=1,
+    )
+    assert old_schema["status"] == "blocked"
+    assert old_schema["reason"] == "local_db_schema_missing_columns"
+    assert "legacy_mem0_id" in old_schema["missing_columns"]
+
+
 def test_phase_readiness_combines_reconcile_shadow_and_eval_reports(tmp_path):
     today = dt.datetime.now(accel.TZ_CN).date().isoformat()
     shadow_dir = tmp_path / "shadow"
@@ -145,6 +201,8 @@ def test_phase_readiness_combines_reconcile_shadow_and_eval_reports(tmp_path):
         reconcile_input=None,
         local_db=str(tmp_path / "memory.sqlite"),
         reconcile_out=None,
+        check_shadow_reconcile=False,
+        route_event_root=str(tmp_path / "events"),
         shadow_log_dir=str(shadow_dir),
         days=1,
         max_local_p95_ms=500.0,

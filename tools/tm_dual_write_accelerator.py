@@ -363,6 +363,99 @@ def _load_shadow_rows(log_dir: pathlib.Path, days: int) -> list[dict[str, Any]]:
     return rows
 
 
+def _load_route_event_rows(root: pathlib.Path, days: int) -> list[dict[str, Any]]:
+    today = dt.datetime.now(TZ_CN).date()
+    rows: list[dict[str, Any]] = []
+    for offset in range(days):
+        date = (today - dt.timedelta(days=offset)).isoformat()
+        path = root / date / "events.jsonl"
+        if not path.exists():
+            continue
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                item = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                item["_date"] = date
+                rows.append(item)
+    return rows
+
+
+def summarize_shadow_reconcile(
+    *,
+    route_event_root: pathlib.Path,
+    db_path: pathlib.Path,
+    days: int,
+) -> dict[str, Any]:
+    rows = _load_route_event_rows(route_event_root, days)
+    ids: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        flow = str(row.get("outcome") or row.get("route") or row.get("flow_target") or "").lower()
+        if flow != "mem0" and str(row.get("flow_target") or "").lower() != "mem0":
+            continue
+        target_ref = row.get("target_ref") if isinstance(row.get("target_ref"), dict) else {}
+        memory_id = str(target_ref.get("id") or row.get("memory_id") or "").strip()
+        if tm_core.MEM0_UUID_RE.fullmatch(memory_id) and memory_id not in seen:
+            seen.add(memory_id)
+            ids.append(memory_id)
+    if not ids:
+        return _gate("pending", reason="no_mem0_route_event_ids", days=days, route_event_root=str(route_event_root))
+    if not db_path.exists():
+        return _gate("blocked", reason="local_db_missing", local_db=str(db_path), checked_ids=len(ids))
+    conn = sqlite3.connect(str(db_path))
+    try:
+        columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(memories)").fetchall()
+        }
+        required = {"legacy_mem0_id", "state", "backend_origin", "shadow_state"}
+        missing_columns = sorted(required - columns)
+        if missing_columns:
+            return _gate(
+                "blocked",
+                reason="local_db_schema_missing_columns",
+                missing_columns=missing_columns,
+                local_db=str(db_path),
+                checked_ids=len(ids),
+            )
+        placeholders = ",".join("?" for _ in ids)
+        rows = conn.execute(
+            f"""
+            SELECT legacy_mem0_id, state, backend_origin, shadow_state
+            FROM memories
+            WHERE legacy_mem0_id IN ({placeholders})
+            """,
+            ids,
+        ).fetchall()
+    finally:
+        conn.close()
+    found = {str(row[0]): {"state": row[1], "backend_origin": row[2], "shadow_state": row[3]} for row in rows}
+    missing = [memory_id for memory_id in ids if memory_id not in found]
+    wrong_origin = [
+        memory_id for memory_id, row in found.items()
+        if row.get("backend_origin") != "local-shadow"
+    ]
+    reasons: list[str] = []
+    if missing:
+        reasons.append("missing_local_shadow")
+    if wrong_origin:
+        reasons.append("wrong_backend_origin")
+    return _gate(
+        "pass" if not reasons else "blocked",
+        reasons=reasons,
+        checked_ids=len(ids),
+        found_ids=len(found),
+        missing_count=len(missing),
+        missing_samples=missing[:10],
+        wrong_origin_count=len(wrong_origin),
+        wrong_origin_samples=wrong_origin[:10],
+        days=days,
+        local_db=str(db_path),
+    )
+
+
 def summarize_shadow_search_logs(log_dir: pathlib.Path, *, days: int, max_local_p95_ms: float) -> dict[str, Any]:
     rows = _load_shadow_rows(log_dir, days)
     if not rows:
@@ -535,6 +628,13 @@ def phase_readiness(args: argparse.Namespace) -> dict[str, Any]:
         gates["reconcile"] = summarize_reconcile_payload(payload)
     else:
         gates["reconcile"] = _gate("pending", reason="provide --reconcile-input or --reconcile-report")
+
+    if args.check_shadow_reconcile:
+        gates["shadow_reconcile"] = summarize_shadow_reconcile(
+            route_event_root=pathlib.Path(args.route_event_root),
+            db_path=pathlib.Path(args.local_db),
+            days=args.days,
+        )
 
     gates["shadow_search"] = summarize_shadow_search_logs(
         pathlib.Path(args.shadow_log_dir),
@@ -1130,10 +1230,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--readiness", action="store_true", help="summarize Phase 1/2 reconcile and retrieval gates")
     parser.add_argument("--http-url", default="http://127.0.0.1:8790", help="tm-http base URL for live canary")
     parser.add_argument("--local-db", default=str(tm_core._local_db_path()), help="local SQLite DB for readiness reconcile")
+    parser.add_argument("--route-event-root", default=str(REPO_ROOT / ".tmp" / "memory-route-events"), help="route event root for shadow reconcile")
     parser.add_argument("--reconcile-input", default=None, help="OpenMemory export JSONL for readiness reconcile")
     parser.add_argument("--reconcile-report", default=None, help="existing tm_local_memory reconcile JSON report")
     parser.add_argument("--reconcile-out", default=None, help="optional path to write reconcile report when --reconcile-input is used")
     parser.add_argument("--shadow-log-dir", default=str(REPO_ROOT / ".tmp" / "search-shadow"), help="shadow-search log dir")
+    parser.add_argument("--check-shadow-reconcile", action="store_true", help="check recent mem0 route ids against local-shadow rows")
     parser.add_argument("--max-local-p95-ms", type=float, default=500.0, help="max allowed local shadow-search p95")
     parser.add_argument("--run-retrieval-eval", action="store_true", help="run tm_memory_eval in-process for readiness")
     parser.add_argument("--retrieval-eval-report", default=None, help="existing retrieval eval JSON report")
