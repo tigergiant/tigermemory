@@ -490,9 +490,10 @@ def summarize_shadow_reconcile(
     if error is not None:
         return error
     missing = [memory_id for memory_id in ids if memory_id not in found]
+    valid_origins = {"local-shadow", "openmemory-import"}
     wrong_origin = [
         memory_id for memory_id, row in found.items()
-        if row.get("backend_origin") != "local-shadow"
+        if row.get("backend_origin") not in valid_origins
     ]
     reasons: list[str] = []
     if missing:
@@ -517,6 +518,8 @@ def summarize_shadow_reconcile(
         ],
         wrong_origin_count=len(wrong_origin),
         wrong_origin_samples=wrong_origin[:10],
+        imported_origin_count=sum(1 for row in found.values() if row.get("backend_origin") == "openmemory-import"),
+        shadow_origin_count=sum(1 for row in found.values() if row.get("backend_origin") == "local-shadow"),
         days=days,
         since=since,
         local_db=str(db_path),

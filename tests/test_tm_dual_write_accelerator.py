@@ -144,6 +144,16 @@ def test_summarize_shadow_reconcile_checks_route_ids_against_local_shadow(tmp_pa
     assert passed["status"] == "pass"
     assert passed["checked_ids"] == 1
 
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("UPDATE memories SET backend_origin='openmemory-import' WHERE legacy_mem0_id=?", (remote_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    imported = accel.summarize_shadow_reconcile(route_event_root=tmp_path / "events", db_path=db, days=1)
+    assert imported["status"] == "pass"
+    assert imported["imported_origin_count"] == 1
+
     missing = accel.summarize_shadow_reconcile(route_event_root=tmp_path / "events", db_path=tmp_path / "missing.sqlite", days=1)
     assert missing["status"] == "blocked"
     assert missing["reason"] == "local_db_missing"
