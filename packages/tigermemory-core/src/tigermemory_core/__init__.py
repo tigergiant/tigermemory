@@ -1342,6 +1342,80 @@ def _record_local_dual_write_failure(
         pass
 
 
+def _record_local_shadow_sync_failure(
+    *,
+    action: str,
+    memory_ids: list[str],
+    error: Exception,
+) -> None:
+    try:
+        from . import runtime_events
+
+        runtime_events.record_event(
+            event_type="memory_local_dual_write",
+            service="tigermemory-core",
+            component=f"mem0_{action}",
+            ok=False,
+            severity="warning",
+            route="local-shadow",
+            outcome=f"shadow_{action}_failed",
+            target_ref={"legacy_mem0_ids": memory_ids},
+            error=str(error),
+        )
+    except Exception:
+        pass
+
+
+def _local_mark_shadow_deleted(memory_ids: list[str]) -> None:
+    ids = [mid for mid in memory_ids if MEM0_UUID_RE.fullmatch(mid)]
+    if not ids:
+        return
+    conn = _local_db_conn()
+    try:
+        _ensure_local_memory_schema(conn)
+        now_ts = int(time.time())
+        placeholders = ",".join("?" for _ in ids)
+        conn.execute(
+            f"""
+            UPDATE memories
+            SET state='deleted',
+                shadow_state='mem0_deleted',
+                updated_at=?,
+                verified_at=?
+            WHERE legacy_mem0_id IN ({placeholders})
+            """,
+            (now_ts, now_ts, *ids),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _local_update_shadow_content(memory_id: str, memory_content: str) -> None:
+    if not MEM0_UUID_RE.fullmatch(memory_id):
+        return
+    conn = _local_db_conn()
+    try:
+        _ensure_local_memory_schema(conn)
+        now_ts = int(time.time())
+        content_sha256 = hashlib.sha256(memory_content.encode("utf-8")).hexdigest()
+        conn.execute(
+            """
+            UPDATE memories
+            SET content=?,
+                content_sha256=?,
+                shadow_state='mem0_updated',
+                updated_at=?,
+                verified_at=?
+            WHERE legacy_mem0_id=?
+            """,
+            (memory_content, content_sha256, now_ts, now_ts, memory_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _local_fts_query(query: str) -> str:
     terms = flatten_search_query_terms(search_query_term_groups(query))
     if not terms:
@@ -1785,12 +1859,18 @@ def mem0_delete(memory_ids: list[str]) -> str:
     if tigermemory_profile() == TIGERMEMORY_PROFILE_LOCAL:
         return json.dumps({"ok": False, "deleted": 0, "reason": "local profile"})
     payload = json.dumps({"user_id": mem0_user_id(), "memory_ids": ids}).encode("utf-8")
-    return mem0_request(
+    raw_response = mem0_request(
         f"{mem0_base().rstrip('/')}/api/v1/memories/",
         data=payload,
         timeout=MEM0_READ_TIMEOUT,
         method="DELETE",
     )
+    if _local_dual_write_enabled():
+        try:
+            _local_mark_shadow_deleted(ids)
+        except Exception as exc:
+            _record_local_shadow_sync_failure(action="delete", memory_ids=ids, error=exc)
+    return raw_response
 
 
 def mem0_update_content(memory_id: str, memory_content: str) -> str:
@@ -1810,12 +1890,18 @@ def mem0_update_content(memory_id: str, memory_content: str) -> str:
         "user_id": mem0_user_id(),
         "memory_content": memory_content,
     }).encode("utf-8")
-    return mem0_request(
+    raw_response = mem0_request(
         f"{mem0_base().rstrip('/')}/api/v1/memories/{urllib.parse.quote(mem_id)}",
         data=payload,
         timeout=MEM0_WRITE_TIMEOUT,
         method="PUT",
     )
+    if _local_dual_write_enabled():
+        try:
+            _local_update_shadow_content(mem_id, memory_content)
+        except Exception as exc:
+            _record_local_shadow_sync_failure(action="update", memory_ids=[mem_id], error=exc)
+    return raw_response
 
 
 def mem0_search(

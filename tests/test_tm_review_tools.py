@@ -20,6 +20,19 @@ def _fake_run_factory(commands: list[list[str]]):
     return fake_run
 
 
+def test_mem0_delete_by_id_uses_core_delete_chokepoint(monkeypatch):
+    calls = []
+
+    def fake_delete(memory_ids):
+        calls.append(memory_ids)
+        return '{"message": "ok"}'
+
+    monkeypatch.setattr(tm_review_tools.tm_core, "mem0_delete", fake_delete)
+
+    assert tm_review_tools._mem0_delete_by_id("fd65b298-05bd-493c-83ce-e37d84447362") is True
+    assert calls == [["fd65b298-05bd-493c-83ce-e37d84447362"]]
+
+
 def test_execute_promote_writes_valid_codex_wiki_page(tmp_path, monkeypatch):
     commands: list[list[str]] = []
     monkeypatch.setattr(tm_review_tools.tm_core, "REPO_ROOT", tmp_path)
@@ -29,8 +42,8 @@ def test_execute_promote_writes_valid_codex_wiki_page(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "tm_review", types.SimpleNamespace(review_draft=lambda _text: {"score": 80, "issues": []}))
 
     fact = {
-        "id": "inbox/2026-05-08-0006-linter-operations.md",
-        "topic": "operations",
+        "id": "inbox/2026-05-08-0006-linter-systems.md",
+        "topic": "systems",
         "text": "\n".join([
             "---",
             "owner: linter",
@@ -45,9 +58,9 @@ def test_execute_promote_writes_valid_codex_wiki_page(tmp_path, monkeypatch):
         ]),
     }
 
-    result = tm_review_tools.execute_promote(fact, "operations", "lint-linter-systems-minimax-cli-cc19aa")
+    result = tm_review_tools.execute_promote(fact, "systems", "lint-linter-systems-minimax-cli-cc19aa")
 
-    page = tmp_path / "wiki" / "operations" / "lint-linter-systems-minimax-cli-cc19aa.md"
+    page = tmp_path / "wiki" / "systems" / "lint-linter-systems-minimax-cli-cc19aa.md"
     text = page.read_text(encoding="utf-8")
     assert result["ok"] is True
     assert "owner: codex" in text
@@ -56,8 +69,8 @@ def test_execute_promote_writes_valid_codex_wiki_page(tmp_path, monkeypatch):
     assert "## 摘要" in text
     assert "## 来源" in text
     commit_cmd = next(cmd for cmd in commands if cmd[:2] == ["git", "commit"])
-    assert commit_cmd[3].startswith("[codex] create: promote fact 2026-05-08-0006-linter-operations.md")
-    assert commit_cmd[-2:] == ["--", "wiki/operations/lint-linter-systems-minimax-cli-cc19aa.md"]
+    assert commit_cmd[3].startswith("[codex] create: promote fact 2026-05-08-0006-linter-systems.md")
+    assert commit_cmd[-2:] == ["--", "wiki/systems/lint-linter-systems-minimax-cli-cc19aa.md"]
 
 
 def test_execute_promote_can_defer_commit_for_review_ui_batch(tmp_path, monkeypatch):
@@ -126,8 +139,9 @@ def test_append_review_log_writes_runtime_event(tmp_path, monkeypatch):
     saved = tm_review_tools.append_review_log("2026-06-10", {"fact_id": "fact-1", "action": "promote_mem0"})
 
     assert saved is True
-    event_file = tmp_path / "runtime-events" / "2026-06-10" / "events.jsonl"
-    row = json.loads(event_file.read_text(encoding="utf-8"))
+    event_files = sorted((tmp_path / "runtime-events").glob("*/events.jsonl"))
+    assert event_files
+    row = json.loads(event_files[-1].read_text(encoding="utf-8"))
     assert row["event_type"] == "daily_review_action"
     assert row["service"] == "tm-dashboard"
     assert row["outcome"] == "promote_mem0"

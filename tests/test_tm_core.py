@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import pathlib
 import sqlite3
@@ -629,6 +630,69 @@ def test_mem0_write_dual_write_failure_does_not_block_remote(monkeypatch, tmp_pa
     assert event["outcome"] == "shadow_write_failed"
     assert event["target_ref"]["legacy_mem0_id"] == remote_id
     assert "dual write failure remains remote ok" not in event_files[0].read_text(encoding="utf-8")
+
+
+def test_mem0_delete_dual_write_marks_local_shadow_deleted(monkeypatch, tmp_path):
+    _use_hybrid_profile(monkeypatch)
+    db_path = tmp_path / "local-shadow.sqlite"
+    remote_id = "55555555-5555-4555-8555-555555555555"
+    monkeypatch.setenv("TM_LOCAL_DUAL_WRITE", "1")
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(db_path))
+    monkeypatch.setattr(tm_core, "mem0_base", lambda: "http://localhost:8765")
+    monkeypatch.setattr(
+        tm_core,
+        "mem0_request",
+        lambda *_args, **_kwargs: json.dumps({"id": remote_id}),
+    )
+
+    tm_core.mem0_write("codex", "systems", "delete mirror source")
+    tm_core.mem0_delete([remote_id])
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT state, shadow_state FROM memories WHERE legacy_mem0_id=?",
+            (remote_id,),
+        ).fetchone()
+        assert row is not None
+        assert row["state"] == "deleted"
+        assert row["shadow_state"] == "mem0_deleted"
+    finally:
+        conn.close()
+
+
+def test_mem0_update_content_dual_write_updates_local_shadow(monkeypatch, tmp_path):
+    _use_hybrid_profile(monkeypatch)
+    db_path = tmp_path / "local-shadow.sqlite"
+    remote_id = "66666666-6666-4666-8666-666666666666"
+    monkeypatch.setenv("TM_LOCAL_DUAL_WRITE", "1")
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(db_path))
+    monkeypatch.setattr(tm_core, "mem0_base", lambda: "http://localhost:8765")
+    monkeypatch.setattr(
+        tm_core,
+        "mem0_request",
+        lambda *_args, **_kwargs: json.dumps({"id": remote_id}),
+    )
+
+    tm_core.mem0_write("codex", "systems", "update mirror source")
+    tm_core.mem0_update_content(remote_id, "replacement mirrored content")
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT content, shadow_state, content_sha256 FROM memories WHERE legacy_mem0_id=?",
+            (remote_id,),
+        ).fetchone()
+        assert row is not None
+        assert row["content"] == "replacement mirrored content"
+        assert row["shadow_state"] == "mem0_updated"
+        assert row["content_sha256"] == hashlib.sha256(
+            "replacement mirrored content".encode("utf-8")
+        ).hexdigest()
+    finally:
+        conn.close()
 
 
 def test_mem0_update_content_puts_content_only(monkeypatch):
