@@ -55,6 +55,18 @@ TIMER_REPORT_PATTERNS = (
     "cron-intake",
     "tm_memory_reflection",
 )
+DEFERRED_ENTRYPOINTS = (
+    {
+        "entrypoint": "tm-openai-mcp write_memory",
+        "status": "archived",
+        "phase1_gate": False,
+        "reason": (
+            "Deferred by user decision on 2026-07-05; the ChatGPT/OpenAI-facing "
+            "facade has extra OAuth/public-gateway complexity and is out of the "
+            "current SQLite-first migration gate."
+        ),
+    },
+)
 
 
 def _rel(path: pathlib.Path) -> str:
@@ -123,6 +135,10 @@ def service_env_audit() -> list[dict[str, Any]]:
             "uses_openmemory_env": any("runtime/openmemory/.env" in value for value in env_files),
         })
     return rows
+
+
+def deferred_entrypoints() -> list[dict[str, Any]]:
+    return [dict(row) for row in DEFERRED_ENTRYPOINTS]
 
 
 def _repo_script_from_exec_start(value: str) -> pathlib.Path | None:
@@ -639,6 +655,7 @@ def main(argv: list[str] | None = None) -> int:
         "local_db": str(tm_core._local_db_path()),
         "code_entrypoints": scan_code_entrypoints(),
         "service_env": service_env_audit(),
+        "deferred_entrypoints": deferred_entrypoints(),
         "timer_entrypoints": timer_entrypoint_audit(),
         "route_event_replay": route_event_replay(args.days),
     }
@@ -655,6 +672,12 @@ def main(argv: list[str] | None = None) -> int:
     print("\nservice_env:")
     for row in result["service_env"]:
         print(f"- {row['unit']}: openmemory_env={row['uses_openmemory_env']} files={row['environment_files']}")
+    print("\ndeferred_entrypoints:")
+    for row in result["deferred_entrypoints"]:
+        print(
+            f"- {row['entrypoint']}: status={row['status']} "
+            f"phase1_gate={row['phase1_gate']} reason={row['reason']}"
+        )
     print("\ntimer_entrypoints:")
     for row in result["timer_entrypoints"]:
         print(

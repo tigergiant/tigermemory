@@ -54,6 +54,13 @@ def test_service_env_audit_marks_openmemory_env(tmp_path, monkeypatch):
     assert rows["deploy/mcp/other.service"]["uses_openmemory_env"] is False
 
 
+def test_deferred_entrypoints_archive_openai_mcp_gate():
+    rows = {row["entrypoint"]: row for row in accel.deferred_entrypoints()}
+
+    assert rows["tm-openai-mcp write_memory"]["status"] == "archived"
+    assert rows["tm-openai-mcp write_memory"]["phase1_gate"] is False
+
+
 def test_timer_entrypoint_audit_classifies_bound_services(tmp_path, monkeypatch):
     monkeypatch.setattr(accel, "REPO_ROOT", tmp_path)
     deploy = tmp_path / "deploy" / "mcp"
