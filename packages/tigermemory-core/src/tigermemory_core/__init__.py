@@ -935,6 +935,7 @@ MEM0_UUID_RE = re.compile(
 _LOCAL_DB_DEFAULT_REL_PATH = pathlib.Path("data") / "tigermemory" / "memory.sqlite"
 _LOCAL_MEMORY_SCHEMA_VERSION = 3
 _SHADOW_SEARCH_ENV = "TM_SHADOW_SEARCH_ENABLED"
+_LOCAL_DUAL_WRITE_ENV = "TM_LOCAL_DUAL_WRITE"
 _SHADOW_SEARCH_LOG_REL_PATH = pathlib.Path(".tmp") / "search-shadow"
 _LOCAL_CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
 _LOCAL_LATIN_TERM_RE = re.compile(r"[a-z0-9][a-z0-9._:/\\-]*", re.IGNORECASE)
@@ -984,9 +985,17 @@ def _local_db_conn() -> sqlite3.Connection:
     return conn
 
 
-def _shadow_search_enabled() -> bool:
-    raw = os.environ.get(_SHADOW_SEARCH_ENV, "").strip().lower()
+def _env_truthy(name: str) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
     return raw in {"1", "true", "yes", "on"}
+
+
+def _shadow_search_enabled() -> bool:
+    return _env_truthy(_SHADOW_SEARCH_ENV)
+
+
+def _local_dual_write_enabled() -> bool:
+    return _env_truthy(_LOCAL_DUAL_WRITE_ENV)
 
 
 def _shadow_search_log_path() -> pathlib.Path:
@@ -1215,6 +1224,116 @@ def _ensure_local_metadata_json(raw: Any) -> tuple[dict[str, Any], bool]:
     except Exception:
         pass
     return ({"_raw_metadata": str(raw)}, True)
+
+
+def _local_write_memory_record(
+    agent: str,
+    topic: str,
+    text: str,
+    metadata_extra: dict[str, Any] | None = None,
+    *,
+    route_decision: str | None = None,
+    route_score: int | None = None,
+    backend_origin: str = TIGERMEMORY_PROFILE_LOCAL,
+    legacy_mem0_id: str | None = None,
+    shadow_state: str | None = None,
+) -> dict[str, Any]:
+    conn = _local_db_conn()
+    try:
+        _ensure_local_memory_schema(conn)
+        memory_id = str(uuid.uuid4())
+        now_ts = int(time.time())
+        metadata_payload, _ = _ensure_local_metadata_json(metadata_extra)
+        metadata_payload.setdefault("source", agent)
+        metadata_payload.setdefault("topic", topic)
+        route_decision_value = str(
+            route_decision or metadata_payload.get("route_decision") or "mem0"
+        ).strip() or "mem0"
+        try:
+            raw_score = route_score if route_score is not None else metadata_payload.get("route_score")
+            route_score_value = int(raw_score) if raw_score is not None else 0
+        except (TypeError, ValueError):
+            route_score_value = 0
+
+        if legacy_mem0_id:
+            metadata_payload["legacy_mem0_id"] = legacy_mem0_id
+        if shadow_state:
+            metadata_payload["shadow_state"] = shadow_state
+        metadata_payload["routed_from"] = "mem0_write"
+        metadata_payload["source_agent"] = metadata_payload.get("source_agent", agent)
+
+        content_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        legacy_mem0_id_value = str(metadata_payload.get("legacy_mem0_id") or "").strip() or None
+        shadow_state_value = str(metadata_payload.get("shadow_state") or "").strip() or None
+        conn.execute(
+            """
+            INSERT INTO memories(
+                id, content, topic, source_agent, route_decision, route_score,
+                metadata_json, content_sha256, created_at, updated_at, state,
+                backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                memory_id,
+                text,
+                topic,
+                agent,
+                route_decision_value,
+                route_score_value,
+                json.dumps(metadata_payload, ensure_ascii=False),
+                content_sha256,
+                now_ts,
+                now_ts,
+                "active",
+                backend_origin,
+                "fts5_only",
+                legacy_mem0_id_value,
+                shadow_state_value,
+                now_ts,
+            ),
+        )
+        conn.commit()
+        return {
+            "ok": True,
+            "id": memory_id,
+            "route": "local",
+            "route_info": {
+                "backend": backend_origin,
+                "backend_origin": backend_origin,
+                "vector_status": "fts5_only",
+                "route_decision": route_decision_value,
+                "route_score": route_score_value,
+            },
+        }
+    finally:
+        conn.close()
+
+
+def _record_local_dual_write_failure(
+    *,
+    agent: str,
+    topic: str,
+    remote_id: str,
+    error: Exception,
+) -> None:
+    try:
+        from . import runtime_events
+
+        runtime_events.record_event(
+            event_type="memory_local_dual_write",
+            service="tigermemory-core",
+            component="mem0_write",
+            ok=False,
+            severity="warning",
+            agent=agent,
+            route="local-shadow",
+            outcome="shadow_write_failed",
+            target_ref={"legacy_mem0_id": remote_id, "topic": topic},
+            error=str(error),
+            extra={"source_agent": agent},
+        )
+    except Exception:
+        pass
 
 
 def _local_fts_query(query: str) -> str:
@@ -1578,70 +1697,17 @@ def mem0_write(
     if not text.strip():
         raise ValueError("text required")
     if tigermemory_profile() == TIGERMEMORY_PROFILE_LOCAL:
-        conn = _local_db_conn()
-        try:
-            _ensure_local_memory_schema(conn)
-            memory_id = str(uuid.uuid4())
-            now_ts = int(time.time())
-            metadata_payload, _ = _ensure_local_metadata_json(metadata_extra)
-            metadata_payload.setdefault("source", agent)
-            metadata_payload.setdefault("topic", topic)
-            route_decision_value = str(
-                route_decision or metadata_payload.get("route_decision") or "mem0"
-            ).strip() or "mem0"
-            try:
-                raw_score = route_score if route_score is not None else metadata_payload.get("route_score")
-                route_score_value = int(raw_score) if raw_score is not None else 0
-            except (TypeError, ValueError):
-                route_score_value = 0
-
-            metadata_payload["routed_from"] = "mem0_write"
-            metadata_payload["source_agent"] = metadata_payload.get("source_agent", agent)
-            content_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
-            legacy_mem0_id = str(metadata_payload.get("legacy_mem0_id") or "").strip() or None
-            shadow_state = str(metadata_payload.get("shadow_state") or "").strip() or None
-            conn.execute(
-                """
-                INSERT INTO memories(
-                    id, content, topic, source_agent, route_decision, route_score,
-                    metadata_json, content_sha256, created_at, updated_at, state,
-                    backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    memory_id,
-                    text,
-                    topic,
-                    agent,
-                    route_decision_value,
-                    route_score_value,
-                    json.dumps(metadata_payload, ensure_ascii=False),
-                    content_sha256,
-                    now_ts,
-                    now_ts,
-                    "active",
-                    TIGERMEMORY_PROFILE_LOCAL,
-                    "fts5_only",
-                    legacy_mem0_id,
-                    shadow_state,
-                    now_ts,
-                ),
+        return json.dumps(
+            _local_write_memory_record(
+                agent,
+                topic,
+                text,
+                metadata_extra,
+                route_decision=route_decision,
+                route_score=route_score,
+                backend_origin=TIGERMEMORY_PROFILE_LOCAL,
             )
-            conn.commit()
-            return json.dumps({
-                "ok": True,
-                "id": memory_id,
-                "route": "local",
-                "route_info": {
-                    "backend": TIGERMEMORY_PROFILE_LOCAL,
-                    "backend_origin": TIGERMEMORY_PROFILE_LOCAL,
-                    "vector_status": "fts5_only",
-                    "route_decision": route_decision_value,
-                    "route_score": route_score_value,
-                },
-            })
-        finally:
-            conn.close()
+        )
     metadata: dict[str, Any] = {"source": agent, "topic": topic}
     if route_decision is not None:
         metadata["route_decision"] = route_decision
@@ -1657,11 +1723,36 @@ def mem0_write(
         "metadata": metadata,
         "infer": infer,
     }).encode("utf-8")
-    return mem0_request(
+    raw_response = mem0_request(
         f"{mem0_base()}/api/v1/memories/",
         data=payload,
         timeout=timeout,
     )
+    if _local_dual_write_enabled():
+        remote_id = ""
+        try:
+            remote_payload = json.loads(raw_response)
+            remote_id = str(remote_payload.get("id") or "").strip() if isinstance(remote_payload, dict) else ""
+            if MEM0_UUID_RE.fullmatch(remote_id):
+                _local_write_memory_record(
+                    agent,
+                    topic,
+                    text,
+                    metadata,
+                    route_decision=route_decision,
+                    route_score=route_score,
+                    backend_origin="local-shadow",
+                    legacy_mem0_id=remote_id,
+                    shadow_state="pending",
+                )
+        except Exception as exc:
+            _record_local_dual_write_failure(
+                agent=agent,
+                topic=topic,
+                remote_id=remote_id,
+                error=exc,
+            )
+    return raw_response
 
 
 def mem0_get(memory_id: str) -> str:

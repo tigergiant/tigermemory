@@ -503,6 +503,99 @@ def test_local_schema_migrates_existing_db_without_dropping_rows(monkeypatch, tm
         conn.close()
 
 
+def test_mem0_write_dual_write_default_off_does_not_create_local_db(monkeypatch, tmp_path):
+    _use_hybrid_profile(monkeypatch)
+    db_path = tmp_path / "local-shadow.sqlite"
+    remote_id = "11111111-1111-4111-8111-111111111111"
+    monkeypatch.delenv("TM_LOCAL_DUAL_WRITE", raising=False)
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(db_path))
+    monkeypatch.setattr(tm_core, "mem0_base", lambda: "http://localhost:8765")
+    monkeypatch.setattr(
+        tm_core,
+        "mem0_request",
+        lambda *_args, **_kwargs: json.dumps({"id": remote_id}),
+    )
+
+    raw = tm_core.mem0_write("codex", "systems", "default off dual write")
+
+    assert json.loads(raw)["id"] == remote_id
+    assert db_path.exists() is False
+
+
+def test_mem0_write_dual_write_persists_local_shadow(monkeypatch, tmp_path):
+    _use_hybrid_profile(monkeypatch)
+    db_path = tmp_path / "local-shadow.sqlite"
+    remote_id = "22222222-2222-4222-8222-222222222222"
+    monkeypatch.setenv("TM_LOCAL_DUAL_WRITE", "1")
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(db_path))
+    monkeypatch.setattr(tm_core, "mem0_base", lambda: "http://localhost:8765")
+    monkeypatch.setattr(
+        tm_core,
+        "mem0_request",
+        lambda *_args, **_kwargs: json.dumps({"id": remote_id}),
+    )
+
+    raw = tm_core.mem0_write(
+        "codex",
+        "systems",
+        "dual write local shadow",
+        metadata_extra={"route_decision": "mem0", "route_score": 90},
+    )
+
+    assert json.loads(raw)["id"] == remote_id
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT id, content, backend_origin, legacy_mem0_id, shadow_state, route_score
+            FROM memories
+            WHERE legacy_mem0_id=?
+            """,
+            (remote_id,),
+        ).fetchone()
+        assert row is not None
+        assert row["id"] != remote_id
+        assert row["content"] == "dual write local shadow"
+        assert row["backend_origin"] == "local-shadow"
+        assert row["legacy_mem0_id"] == remote_id
+        assert row["shadow_state"] == "pending"
+        assert row["route_score"] == 90
+        assert conn.execute("SELECT COUNT(1) FROM outbox").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_mem0_write_dual_write_failure_does_not_block_remote(monkeypatch, tmp_path):
+    _use_hybrid_profile(monkeypatch)
+    remote_id = "33333333-3333-4333-8333-333333333333"
+    monkeypatch.setenv("TM_LOCAL_DUAL_WRITE", "1")
+    monkeypatch.setenv("TM_RUNTIME_EVENTS_ROOT", str(tmp_path / "runtime-events"))
+    monkeypatch.setattr(tm_core, "mem0_base", lambda: "http://localhost:8765")
+    monkeypatch.setattr(
+        tm_core,
+        "mem0_request",
+        lambda *_args, **_kwargs: json.dumps({"id": remote_id}),
+    )
+    monkeypatch.setattr(
+        tm_core,
+        "_local_write_memory_record",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("local db readonly")),
+    )
+
+    raw = tm_core.mem0_write("codex", "systems", "dual write failure remains remote ok")
+
+    assert json.loads(raw)["id"] == remote_id
+    event_files = list((tmp_path / "runtime-events").glob("*/events.jsonl"))
+    assert len(event_files) == 1
+    event = json.loads(event_files[0].read_text(encoding="utf-8").splitlines()[-1])
+    assert event["event_type"] == "memory_local_dual_write"
+    assert event["ok"] is False
+    assert event["outcome"] == "shadow_write_failed"
+    assert event["target_ref"]["legacy_mem0_id"] == remote_id
+    assert "dual write failure remains remote ok" not in event_files[0].read_text(encoding="utf-8")
+
+
 def test_mem0_update_content_puts_content_only(monkeypatch):
     _use_hybrid_profile(monkeypatch)
     mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"
