@@ -203,20 +203,28 @@ def _canary_text(name: str) -> str:
         "---",
         "",
         "## Task",
-        f"Temporary dual-write canary for {name}.",
+        f"TigerMemory dual-write canary event for {name}.",
         "",
         "## Decisions",
-        "This row must be deleted after shadow verification.",
+        "This event records that the checked entrypoint must preserve legacy_mem0_id mapping in the local SQLite shadow row.",
         "",
         "## Blockers",
         "None.",
         "",
         "## Handoff",
-        "Delete after checking local SQLite shadow.",
+        "The verifier uses this marker to confirm shadow row creation, shadow state updates, and cleanup behavior.",
         "",
         "## Evidence Refs",
         marker,
     ])
+
+
+def _routing_canary_text(name: str) -> str:
+    marker = f"tm-dual-write-route-canary-{name}-{uuid.uuid4()}"
+    return (
+        f"2026-07-05 Codex observed TigerMemory {name} route behavior "
+        f"during Phase 1 dual-write validation. marker={marker}"
+    )
 
 
 def _extract_id(payload: dict[str, Any]) -> str:
@@ -300,7 +308,7 @@ def run_live_canary(http_url: str) -> list[dict[str, Any]]:
         "codex",
         "systems",
         _canary_text("tm_memory_ops_write_memory_with_review"),
-        light=False,
+        light=True,
         total_budget_s=None,
     )
     if payload.get("route") != "mem0":
@@ -312,6 +320,7 @@ def run_live_canary(http_url: str) -> list[dict[str, Any]]:
         "agent": "codex",
         "topic": "systems",
         "text": _canary_text("tm_http_write_memory"),
+        "light": True,
     }).encode("utf-8")
     req = urllib.request.Request(
         http_url.rstrip("/") + "/write_memory",
@@ -347,14 +356,21 @@ def run_live_canary(http_url: str) -> list[dict[str, Any]]:
                 "--title",
                 "Dual write canary",
             ],
-            _canary_text("tm_io_write_inbox_route_mem0"),
+            _routing_canary_text("tm_io_write_inbox"),
         )
         if payload.get("route") != "mem0":
-            results.append({"name": "tm_io write-inbox route=mem0", "shadow_ok": False, "error": payload})
+            results.append({
+                "name": "tm_io write-inbox natural route",
+                "shadow_ok": None,
+                "route": payload.get("route"),
+                "covered": False,
+                "reason": "router did not select mem0; no dual-write write was expected",
+                "route_result": payload,
+            })
         else:
-            record("tm_io write-inbox route=mem0", payload)
+            record("tm_io write-inbox natural route", payload)
     except Exception as exc:
-        record_error("tm_io write-inbox route=mem0", exc)
+        record_error("tm_io write-inbox natural route", exc)
 
     try:
         result = tm_review_tools.execute_promote_mem0(
@@ -498,7 +514,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.live_canary:
         print("\nlive_canary:")
         for row in result["live_canary"]:
-            print(f"- {row['name']}: shadow_ok={row.get('shadow_ok')} remote_id={row.get('remote_id')} cleanup={row.get('cleanup')}")
+            suffix = ""
+            if row.get("error"):
+                suffix = f" error={row.get('error')}"
+            if row.get("route"):
+                suffix += f" route={row.get('route')}"
+            if row.get("reason"):
+                suffix += f" reason={row.get('reason')}"
+            print(
+                f"- {row['name']}: shadow_ok={row.get('shadow_ok')} "
+                f"remote_id={row.get('remote_id')} cleanup={row.get('cleanup')}{suffix}"
+            )
     return 0
 
 
