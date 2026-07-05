@@ -36,6 +36,25 @@ SCAN_PATTERNS = {
     "delete": ("mem0_delete(", "method=\"DELETE\"", 'method="DELETE"'),
     "raw_memories_api": ("/api/v1/memories",),
 }
+TIMER_DIRECT_WRITE_PATTERNS = (
+    "/write_memory",
+    "mem0_write(",
+    "write_memory_with_review(",
+    "session-fallback-generator.py --write",
+    "tm_io.py mem0-write",
+    "tm_io.py write-inbox",
+)
+TIMER_RUNTIME_EVENT_PATTERNS = (
+    "tm_runtime_events.py",
+    "runtime_event",
+)
+TIMER_REPORT_PATTERNS = (
+    "tm_digest.py",
+    "cron-daily-report",
+    "cron-weekly-report",
+    "cron-intake",
+    "tm_memory_reflection",
+)
 
 
 def _rel(path: pathlib.Path) -> str:
@@ -102,6 +121,77 @@ def service_env_audit() -> list[dict[str, Any]]:
             "unit": _rel(unit),
             "environment_files": env_files,
             "uses_openmemory_env": any("runtime/openmemory/.env" in value for value in env_files),
+        })
+    return rows
+
+
+def _repo_script_from_exec_start(value: str) -> pathlib.Path | None:
+    for marker in ("/opt/tigermemory/", "/root/tigermemory/", "%h/tigermemory/"):
+        if marker in value:
+            rel = value.split(marker, 1)[1].split()[0].strip().strip('"').strip("'")
+            candidate = REPO_ROOT / rel
+            return candidate if candidate.is_file() else None
+    parts = value.split()
+    for part in parts:
+        clean = part.strip().strip('"').strip("'")
+        if clean.startswith("tools/") or clean.startswith("deploy/"):
+            candidate = REPO_ROOT / clean
+            return candidate if candidate.is_file() else None
+    return None
+
+
+def timer_entrypoint_audit() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for timer in sorted((REPO_ROOT / "deploy").rglob("*.timer")):
+        try:
+            timer_lines = timer.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        unit_name = ""
+        for line in timer_lines:
+            if line.strip().startswith("Unit="):
+                unit_name = line.split("=", 1)[1].strip()
+                break
+        if not unit_name:
+            unit_name = timer.with_suffix(".service").name
+        service = timer.parent / unit_name
+        service_text = ""
+        exec_start: list[str] = []
+        if service.exists():
+            service_text = service.read_text(encoding="utf-8", errors="replace")
+            exec_start = [
+                line.split("=", 1)[1].strip()
+                for line in service_text.splitlines()
+                if line.strip().startswith("ExecStart=")
+            ]
+        script_texts: list[str] = []
+        for value in exec_start:
+            script = _repo_script_from_exec_start(value)
+            if script is not None:
+                try:
+                    script_texts.append(script.read_text(encoding="utf-8", errors="replace"))
+                except OSError:
+                    pass
+        combined = "\n".join([*timer_lines, service_text, *script_texts])
+        if any(pattern in combined for pattern in TIMER_DIRECT_WRITE_PATTERNS):
+            classification = "direct_memory_write"
+        elif any(pattern in combined for pattern in TIMER_RUNTIME_EVENT_PATTERNS):
+            classification = "runtime_event_only"
+        elif any(pattern in combined for pattern in TIMER_REPORT_PATTERNS):
+            classification = "report_or_digest_only"
+        elif "tm-dashboard.service" in unit_name:
+            classification = "service_warm_only"
+        elif "sync" in unit_name.lower():
+            classification = "repo_sync_only"
+        else:
+            classification = "unknown"
+        rows.append({
+            "timer": _rel(timer),
+            "service": _rel(service),
+            "service_exists": service.exists(),
+            "exec_start": exec_start,
+            "classification": classification,
+            "needs_canary": classification in {"direct_memory_write", "unknown"},
         })
     return rows
 
@@ -549,6 +639,7 @@ def main(argv: list[str] | None = None) -> int:
         "local_db": str(tm_core._local_db_path()),
         "code_entrypoints": scan_code_entrypoints(),
         "service_env": service_env_audit(),
+        "timer_entrypoints": timer_entrypoint_audit(),
         "route_event_replay": route_event_replay(args.days),
     }
     if args.live_canary:
@@ -564,6 +655,12 @@ def main(argv: list[str] | None = None) -> int:
     print("\nservice_env:")
     for row in result["service_env"]:
         print(f"- {row['unit']}: openmemory_env={row['uses_openmemory_env']} files={row['environment_files']}")
+    print("\ntimer_entrypoints:")
+    for row in result["timer_entrypoints"]:
+        print(
+            f"- {row['timer']} -> {row['service']}: "
+            f"classification={row['classification']} needs_canary={row['needs_canary']}"
+        )
     print("\nroute_event_replay:")
     replay = result["route_event_replay"]
     print(f"- days={replay['days']} events={replay['event_count']} mem0_events={replay['mem0_event_count']}")

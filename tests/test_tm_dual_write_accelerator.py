@@ -54,6 +54,38 @@ def test_service_env_audit_marks_openmemory_env(tmp_path, monkeypatch):
     assert rows["deploy/mcp/other.service"]["uses_openmemory_env"] is False
 
 
+def test_timer_entrypoint_audit_classifies_bound_services(tmp_path, monkeypatch):
+    monkeypatch.setattr(accel, "REPO_ROOT", tmp_path)
+    deploy = tmp_path / "deploy" / "mcp"
+    deploy.mkdir(parents=True)
+    (deploy / "direct.timer").write_text("[Timer]\nUnit=direct.service\n", encoding="utf-8")
+    (deploy / "direct.service").write_text(
+        "[Service]\nExecStart=/usr/bin/python tools/session-fallback-generator.py --write\n",
+        encoding="utf-8",
+    )
+    (deploy / "watch.timer").write_text("[Timer]\nUnit=watch.service\n", encoding="utf-8")
+    (deploy / "watch.service").write_text(
+        "[Service]\nExecStart=/opt/tigermemory/tools/tm_runtime_events.py record\n",
+        encoding="utf-8",
+    )
+    (deploy / "digest.timer").write_text("[Timer]\nUnit=digest.service\n", encoding="utf-8")
+    (deploy / "digest.service").write_text(
+        "[Service]\nExecStart=/usr/bin/python3 tools/tm_digest.py --date yesterday\n",
+        encoding="utf-8",
+    )
+    (deploy / "tm-dashboard.timer").write_text("[Timer]\nUnit=tm-dashboard.service\n", encoding="utf-8")
+    (deploy / "tm-dashboard.service").write_text("[Service]\nExecStart=tools/tm_review_ui.py\n", encoding="utf-8")
+
+    rows = {pathlib.Path(row["timer"]).name: row for row in accel.timer_entrypoint_audit()}
+
+    assert rows["direct.timer"]["classification"] == "direct_memory_write"
+    assert rows["direct.timer"]["needs_canary"] is True
+    assert rows["watch.timer"]["classification"] == "runtime_event_only"
+    assert rows["watch.timer"]["needs_canary"] is False
+    assert rows["digest.timer"]["classification"] == "report_or_digest_only"
+    assert rows["tm-dashboard.timer"]["classification"] == "service_warm_only"
+
+
 def test_live_canary_requires_hybrid_profile(monkeypatch):
     monkeypatch.setattr(accel.tm_core, "tigermemory_profile", lambda: accel.tm_core.TIGERMEMORY_PROFILE_LOCAL)
 
