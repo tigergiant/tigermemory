@@ -398,17 +398,16 @@ def _load_route_event_rows(root: pathlib.Path, days: int) -> list[dict[str, Any]
     return rows
 
 
-def summarize_shadow_reconcile(
+def _shadow_reconcile_event_ids(
     *,
     route_event_root: pathlib.Path,
-    db_path: pathlib.Path,
     days: int,
     since: str | None = None,
-) -> dict[str, Any]:
+) -> tuple[list[str], dict[str, dict[str, Any]], dict[str, Any] | None]:
     rows = _load_route_event_rows(route_event_root, days)
     since_dt = _parse_iso_datetime(since) if since else None
     if since and since_dt is None:
-        return _gate("blocked", reason="invalid_shadow_reconcile_since", since=since)
+        return [], {}, _gate("blocked", reason="invalid_shadow_reconcile_since", since=since)
     ids: list[str] = []
     id_rows: dict[str, dict[str, Any]] = {}
     seen: set[str] = set()
@@ -426,16 +425,12 @@ def summarize_shadow_reconcile(
             seen.add(memory_id)
             ids.append(memory_id)
             id_rows[memory_id] = row
-    if not ids:
-        return _gate(
-            "pending",
-            reason="no_mem0_route_event_ids",
-            days=days,
-            since=since,
-            route_event_root=str(route_event_root),
-        )
+    return ids, id_rows, None
+
+
+def _shadow_reconcile_found_rows(db_path: pathlib.Path, ids: list[str]) -> tuple[dict[str, dict[str, Any]], dict[str, Any] | None]:
     if not db_path.exists():
-        return _gate("blocked", reason="local_db_missing", local_db=str(db_path), checked_ids=len(ids))
+        return {}, _gate("blocked", reason="local_db_missing", local_db=str(db_path), checked_ids=len(ids))
     conn = sqlite3.connect(str(db_path))
     try:
         columns = {
@@ -445,7 +440,7 @@ def summarize_shadow_reconcile(
         required = {"legacy_mem0_id", "state", "backend_origin", "shadow_state"}
         missing_columns = sorted(required - columns)
         if missing_columns:
-            return _gate(
+            return {}, _gate(
                 "blocked",
                 reason="local_db_schema_missing_columns",
                 missing_columns=missing_columns,
@@ -463,7 +458,37 @@ def summarize_shadow_reconcile(
         ).fetchall()
     finally:
         conn.close()
-    found = {str(row[0]): {"state": row[1], "backend_origin": row[2], "shadow_state": row[3]} for row in rows}
+    return (
+        {str(row[0]): {"state": row[1], "backend_origin": row[2], "shadow_state": row[3]} for row in rows},
+        None,
+    )
+
+
+def summarize_shadow_reconcile(
+    *,
+    route_event_root: pathlib.Path,
+    db_path: pathlib.Path,
+    days: int,
+    since: str | None = None,
+) -> dict[str, Any]:
+    ids, id_rows, error = _shadow_reconcile_event_ids(
+        route_event_root=route_event_root,
+        days=days,
+        since=since,
+    )
+    if error is not None:
+        return error
+    if not ids:
+        return _gate(
+            "pending",
+            reason="no_mem0_route_event_ids",
+            days=days,
+            since=since,
+            route_event_root=str(route_event_root),
+        )
+    found, error = _shadow_reconcile_found_rows(db_path, ids)
+    if error is not None:
+        return error
     missing = [memory_id for memory_id in ids if memory_id not in found]
     wrong_origin = [
         memory_id for memory_id, row in found.items()
@@ -492,6 +517,99 @@ def summarize_shadow_reconcile(
         ],
         wrong_origin_count=len(wrong_origin),
         wrong_origin_samples=wrong_origin[:10],
+        days=days,
+        since=since,
+        local_db=str(db_path),
+    )
+
+
+def _remote_memory_text(payload: dict[str, Any]) -> str:
+    for key in ("memory", "text", "content"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
+def _remote_memory_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    raw = payload.get("metadata")
+    if not isinstance(raw, (dict, str)):
+        raw = payload.get("metadata_")
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        if isinstance(parsed, dict):
+            return dict(parsed)
+    return {}
+
+
+def repair_shadow_reconcile(
+    *,
+    route_event_root: pathlib.Path,
+    db_path: pathlib.Path,
+    days: int,
+    since: str | None = None,
+) -> dict[str, Any]:
+    ids, id_rows, error = _shadow_reconcile_event_ids(
+        route_event_root=route_event_root,
+        days=days,
+        since=since,
+    )
+    if error is not None:
+        return error
+    if not ids:
+        return _gate("pending", reason="no_mem0_route_event_ids", days=days, since=since)
+    found, error = _shadow_reconcile_found_rows(db_path, ids)
+    if error is not None:
+        return error
+    missing = [memory_id for memory_id in ids if memory_id not in found]
+    repaired = 0
+    failed: list[dict[str, str]] = []
+    old_db_env = os.environ.get("TIGERMEMORY_LOCAL_DB")
+    os.environ["TIGERMEMORY_LOCAL_DB"] = str(db_path)
+    try:
+        for memory_id in missing:
+            row = id_rows.get(memory_id, {})
+            try:
+                payload = json.loads(tm_core.mem0_get(memory_id))
+                if not isinstance(payload, dict):
+                    raise RuntimeError("remote payload is not an object")
+                text = _remote_memory_text(payload)
+                if not text:
+                    raise RuntimeError("remote payload has no memory text")
+                metadata = _remote_memory_metadata(payload)
+                agent = str(metadata.get("source") or row.get("agent") or "unknown")
+                topic = str(metadata.get("topic") or row.get("stored_topic") or "systems")
+                tm_core._local_write_memory_record(
+                    agent,
+                    topic,
+                    text,
+                    metadata,
+                    route_decision=str(row.get("route") or "mem0"),
+                    route_score=int(row.get("score") or 0),
+                    backend_origin="local-shadow",
+                    legacy_mem0_id=memory_id,
+                    shadow_state="mem0_confirmed",
+                )
+                repaired += 1
+            except Exception as exc:
+                failed.append({"id": memory_id, "error": f"{type(exc).__name__}: {exc}"[:220]})
+    finally:
+        if old_db_env is None:
+            os.environ.pop("TIGERMEMORY_LOCAL_DB", None)
+        else:
+            os.environ["TIGERMEMORY_LOCAL_DB"] = old_db_env
+    return _gate(
+        "pass" if not failed else "blocked",
+        checked_ids=len(ids),
+        missing_before=len(missing),
+        repaired_count=repaired,
+        failed_count=len(failed),
+        failed_samples=failed[:10],
         days=days,
         since=since,
         local_db=str(db_path),
@@ -672,6 +790,13 @@ def phase_readiness(args: argparse.Namespace) -> dict[str, Any]:
         gates["reconcile"] = _gate("pending", reason="provide --reconcile-input or --reconcile-report")
 
     if args.check_shadow_reconcile:
+        if args.repair_shadow_reconcile:
+            gates["shadow_reconcile_repair"] = repair_shadow_reconcile(
+                route_event_root=pathlib.Path(args.route_event_root),
+                db_path=pathlib.Path(args.local_db),
+                days=args.days,
+                since=args.shadow_reconcile_since,
+            )
         gates["shadow_reconcile"] = summarize_shadow_reconcile(
             route_event_root=pathlib.Path(args.route_event_root),
             db_path=pathlib.Path(args.local_db),
@@ -1280,6 +1405,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--shadow-log-dir", default=str(REPO_ROOT / ".tmp" / "search-shadow"), help="shadow-search log dir")
     parser.add_argument("--check-shadow-reconcile", action="store_true", help="check recent mem0 route ids against local-shadow rows")
     parser.add_argument("--shadow-reconcile-since", default=None, help="only check route events at or after this ISO timestamp")
+    parser.add_argument("--repair-shadow-reconcile", action="store_true", help="backfill missing local-shadow rows from existing Mem0 ids before checking")
     parser.add_argument("--max-local-p95-ms", type=float, default=500.0, help="max allowed local shadow-search p95")
     parser.add_argument("--run-retrieval-eval", action="store_true", help="run tm_memory_eval in-process for readiness")
     parser.add_argument("--retrieval-eval-report", default=None, help="existing retrieval eval JSON report")

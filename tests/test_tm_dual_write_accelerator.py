@@ -165,7 +165,7 @@ def test_summarize_shadow_reconcile_checks_route_ids_against_local_shadow(tmp_pa
     assert "legacy_mem0_id" in old_schema["missing_columns"]
 
 
-def test_summarize_shadow_reconcile_can_start_from_dual_write_enable_time(tmp_path):
+def test_summarize_shadow_reconcile_can_start_from_dual_write_enable_time(tmp_path, monkeypatch):
     today = dt.datetime.now(accel.TZ_CN).date().isoformat()
     event_dir = tmp_path / "events" / today
     event_dir.mkdir(parents=True)
@@ -180,25 +180,16 @@ def test_summarize_shadow_reconcile_can_start_from_dual_write_enable_time(tmp_pa
         encoding="utf-8",
     )
     db = tmp_path / "memory.sqlite"
-    conn = sqlite3.connect(db)
-    try:
-        conn.execute(
-            """
-            CREATE TABLE memories(
-                legacy_mem0_id TEXT,
-                state TEXT,
-                backend_origin TEXT,
-                shadow_state TEXT
-            )
-            """
-        )
-        conn.execute(
-            "INSERT INTO memories VALUES (?, 'active', 'local-shadow', 'pending')",
-            (after_id,),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(db))
+    accel.tm_core._local_write_memory_record(
+        "codex",
+        "systems",
+        "existing shadow memory text",
+        {"source": "codex", "topic": "systems"},
+        backend_origin="local-shadow",
+        legacy_mem0_id=after_id,
+        shadow_state="pending",
+    )
 
     full_window = accel.summarize_shadow_reconcile(route_event_root=tmp_path / "events", db_path=db, days=1)
     assert full_window["status"] == "blocked"
@@ -215,6 +206,21 @@ def test_summarize_shadow_reconcile_can_start_from_dual_write_enable_time(tmp_pa
     )
     assert since_window["status"] == "pass"
     assert since_window["checked_ids"] == 1
+
+    monkeypatch.setattr(
+        accel.tm_core,
+        "mem0_get",
+        lambda memory_id: json.dumps({
+            "id": memory_id,
+            "memory": "backfilled shadow memory text",
+            "metadata_": {"source": "codex", "topic": "systems"},
+        }),
+    )
+    repaired = accel.repair_shadow_reconcile(route_event_root=tmp_path / "events", db_path=db, days=1)
+    assert repaired["status"] == "pass"
+    assert repaired["repaired_count"] == 1
+    after_repair = accel.summarize_shadow_reconcile(route_event_root=tmp_path / "events", db_path=db, days=1)
+    assert after_repair["status"] == "pass"
 
 
 def test_phase_readiness_combines_reconcile_shadow_and_eval_reports(tmp_path):
