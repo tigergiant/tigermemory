@@ -323,6 +323,72 @@ def test_compare_uses_legacy_mem0_id_mapping(tmp_path, capsys) -> None:
     assert payload["sha_diff"]["symmetric_diff_count"] == 0
 
 
+def test_import_updates_existing_shadow_row_by_legacy_id(tmp_path, capsys) -> None:
+    source = tmp_path / "source.jsonl"
+    _write_jsonl(
+        source,
+        [
+            {
+                "id": "legacy-shadow-1",
+                "content": "historical content replaces shadow",
+                "metadata": {"source": "codex", "topic": "systems"},
+                "created_at": 1717500000,
+            },
+        ],
+    )
+    db = tmp_path / "mem.sqlite"
+    conn = tm_local_memory._conn(db)
+    try:
+        conn.execute(
+            """
+            INSERT INTO memories(
+                id, content, topic, source_agent, route_decision, route_score,
+                metadata_json, content_sha256, created_at, updated_at, state,
+                backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "local-shadow-id",
+                "temporary shadow content",
+                "systems",
+                "codex",
+                "mem0",
+                0,
+                json.dumps({"source": "codex", "topic": "systems"}, ensure_ascii=False),
+                hashlib.sha256("temporary shadow content".encode("utf-8")).hexdigest(),
+                1717500000,
+                1717500000,
+                "active",
+                "local-shadow",
+                "fts5_only",
+                "legacy-shadow-1",
+                "pending",
+                1717500000,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rc = tm_local_memory.main(["import", "--input", str(source), "--db", str(db)])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["updated"] == 1
+
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("SELECT * FROM memories").fetchall()
+        audit = conn.execute("SELECT * FROM migration_audit WHERE legacy_mem0_id='legacy-shadow-1'").fetchone()
+    finally:
+        conn.close()
+    assert len(rows) == 1
+    assert rows[0]["id"] == "local-shadow-id"
+    assert rows[0]["content"] == "historical content replaces shadow"
+    assert rows[0]["backend_origin"] == "openmemory-import"
+    assert audit["new_id"] == "local-shadow-id"
+
+
 def test_verify_reads_back_memory_and_term_search(tmp_path) -> None:
     source = tmp_path / "source.jsonl"
     _write_jsonl(

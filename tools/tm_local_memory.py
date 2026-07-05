@@ -656,6 +656,7 @@ def _record_migration_audit(
     conn: sqlite3.Connection,
     item: NormalizedMemory,
     *,
+    new_id: str | None = None,
     disposition: str = "imported",
     verified: int = 1,
 ) -> None:
@@ -674,7 +675,7 @@ def _record_migration_audit(
         """,
         (
             legacy_id,
-            item.id,
+            new_id or item.id,
             item.content_sha256,
             disposition,
             dt.datetime.now(TZ_CN).isoformat(),
@@ -741,10 +742,62 @@ def cmd_import(args: argparse.Namespace) -> int:
     try:
         for item in normalized:
             existing = _read_memory_by_id(conn, item.id)
-            if existing is None:
+            existing_by_legacy = (
+                _read_memory_by_legacy_id(conn, item.legacy_mem0_id)
+                if item.legacy_mem0_id
+                else None
+            )
+            if existing is None and existing_by_legacy is None:
                 summary["inserted"] += 1
+                target_id = item.id
+            elif existing_by_legacy is not None:
+                summary["updated"] += 1
+                target_id = str(existing_by_legacy["id"])
             else:
                 summary["updated"] += 1
+                target_id = item.id
+            if existing_by_legacy is not None and target_id != item.id:
+                conn.execute(
+                    """
+                    UPDATE memories SET
+                        content=?,
+                        topic=?,
+                        source_agent=?,
+                        route_decision=?,
+                        route_score=?,
+                        metadata_json=?,
+                        content_sha256=?,
+                        created_at=?,
+                        updated_at=?,
+                        state=?,
+                        backend_origin=?,
+                        vector_status=?,
+                        legacy_mem0_id=?,
+                        shadow_state=?,
+                        verified_at=?
+                    WHERE id=?
+                    """,
+                    (
+                        item.content,
+                        item.topic,
+                        item.source_agent,
+                        item.route_decision,
+                        item.route_score,
+                        item.metadata_json,
+                        item.content_sha256,
+                        item.created_at,
+                        item.updated_at,
+                        "active",
+                        item.backend_origin,
+                        item.vector_status,
+                        item.legacy_mem0_id,
+                        item.shadow_state,
+                        int(time.time()),
+                        target_id,
+                    ),
+                )
+                _record_migration_audit(conn, item, new_id=target_id)
+                continue
             conn.execute(
                 """
                 INSERT INTO memories (
@@ -788,7 +841,7 @@ def cmd_import(args: argparse.Namespace) -> int:
                     int(time.time()),
                 ),
             )
-            _record_migration_audit(conn, item)
+            _record_migration_audit(conn, item, new_id=target_id)
         conn.commit()
     except sqlite3.Error as exc:
         conn.rollback()
