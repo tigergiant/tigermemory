@@ -652,6 +652,37 @@ def _read_memory_count_by_ids(conn: sqlite3.Connection, ids: Iterable[str]) -> d
     return out
 
 
+def _record_migration_audit(
+    conn: sqlite3.Connection,
+    item: NormalizedMemory,
+    *,
+    disposition: str = "imported",
+    verified: int = 1,
+) -> None:
+    legacy_id = item.legacy_mem0_id or item.id
+    conn.execute(
+        """
+        INSERT INTO migration_audit (
+            legacy_mem0_id, new_id, content_sha256, disposition, imported_at, verified
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(legacy_mem0_id) DO UPDATE SET
+            new_id=excluded.new_id,
+            content_sha256=excluded.content_sha256,
+            disposition=excluded.disposition,
+            imported_at=excluded.imported_at,
+            verified=excluded.verified
+        """,
+        (
+            legacy_id,
+            item.id,
+            item.content_sha256,
+            disposition,
+            dt.datetime.now(TZ_CN).isoformat(),
+            verified,
+        ),
+    )
+
+
 def cmd_export_openmemory(args: argparse.Namespace) -> int:
     out = Path(args.out).resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -757,6 +788,7 @@ def cmd_import(args: argparse.Namespace) -> int:
                     int(time.time()),
                 ),
             )
+            _record_migration_audit(conn, item)
         conn.commit()
     except sqlite3.Error as exc:
         conn.rollback()
@@ -924,6 +956,10 @@ def cmd_compare(args: argparse.Namespace) -> int:
     elif vector_mismatch_ids and source_vector_expected:
         result["ok"] = False
         result["counts"]["status"] = "semantic_downgrade"
+    if getattr(args, "out", None):
+        out_path = Path(args.out).resolve()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result["ok"] else 1
 
@@ -1370,6 +1406,12 @@ def build_parser() -> argparse.ArgumentParser:
     co = sub.add_parser("compare", help="Compare JSONL dump against local sqlite")
     co.add_argument("--input", required=True)
     co.add_argument("--db", required=True)
+    co.add_argument("--out", default=None)
+
+    rec = sub.add_parser("reconcile", help="Write a compare/reconcile report for OpenMemory dump vs local sqlite")
+    rec.add_argument("--input", required=True)
+    rec.add_argument("--db", required=True)
+    rec.add_argument("--out", default=None)
 
     ba = sub.add_parser("backup", help="Backup local sqlite")
     ba.add_argument("--db", required=True)
@@ -1405,6 +1447,7 @@ def main(argv: list[str] | None = None) -> int:
         "export-openmemory": cmd_export_openmemory,
         "import": cmd_import,
         "compare": cmd_compare,
+        "reconcile": cmd_compare,
         "backup": cmd_backup,
         "restore": cmd_restore,
         "verify": cmd_verify,

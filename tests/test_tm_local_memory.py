@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import os
 import pathlib
@@ -184,6 +185,42 @@ def test_import_creates_migration_audit_and_outbox_tables(tmp_path) -> None:
         conn.close()
 
 
+def test_import_records_migration_audit_rows(tmp_path) -> None:
+    source = tmp_path / "source.jsonl"
+    _write_jsonl(
+        source,
+        [
+            {
+                "id": "legacy-1",
+                "content": "audit row sample",
+                "metadata": {"source": "codex", "topic": "systems"},
+                "created_at": 1717500000,
+            },
+        ],
+    )
+    db = tmp_path / "mem.sqlite"
+
+    assert tm_local_memory.main(["import", "--input", str(source), "--db", str(db)]) == 0
+
+    conn = sqlite3.connect(db)
+    try:
+        row = conn.execute(
+            """
+            SELECT legacy_mem0_id, new_id, content_sha256, disposition, verified
+            FROM migration_audit
+            WHERE legacy_mem0_id='legacy-1'
+            """
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "legacy-1"
+        assert row[1] == "legacy-1"
+        assert row[2] == hashlib.sha256("audit row sample".encode("utf-8")).hexdigest()
+        assert row[3] == "imported"
+        assert row[4] == 1
+    finally:
+        conn.close()
+
+
 def test_compare_detects_lexical_and_semantic_regressions(tmp_path, capsys) -> None:
     source = tmp_path / "source.jsonl"
     _write_jsonl(
@@ -219,6 +256,40 @@ def test_compare_detects_lexical_and_semantic_regressions(tmp_path, capsys) -> N
         ],
     )
     assert tm_local_memory.main(["compare", "--input", str(source), "--db", str(db)]) == 1
+
+
+def test_reconcile_writes_report_file(tmp_path, capsys) -> None:
+    source = tmp_path / "source.jsonl"
+    _write_jsonl(
+        source,
+        [
+            {
+                "id": "m1",
+                "content": "reconcile report sample",
+                "metadata": {"source": "codex", "topic": "systems"},
+                "created_at": 1717500000,
+            },
+        ],
+    )
+    db = tmp_path / "mem.sqlite"
+    report = tmp_path / "reconcile.json"
+    assert tm_local_memory.main(["import", "--input", str(source), "--db", str(db)]) == 0
+    capsys.readouterr()
+
+    rc = tm_local_memory.main([
+        "reconcile",
+        "--input", str(source),
+        "--db", str(db),
+        "--out", str(report),
+    ])
+    stdout_payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert stdout_payload["ok"] is True
+    assert report.exists()
+    file_payload = json.loads(report.read_text(encoding="utf-8"))
+    assert file_payload["conservation"]["balanced"] is True
+    assert file_payload["sha_diff"]["symmetric_diff_count"] == 0
 
 
 def test_compare_uses_legacy_mem0_id_mapping(tmp_path, capsys) -> None:
