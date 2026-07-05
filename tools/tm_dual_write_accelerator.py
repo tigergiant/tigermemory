@@ -411,6 +411,7 @@ def summarize_retrieval_eval_payload(
     *,
     min_hit5_rate: float,
     max_p95_ms: float,
+    missing_path_policy: str = "block",
 ) -> dict[str, Any]:
     if not payload:
         return _gate("pending", reason="missing_retrieval_eval_payload")
@@ -438,8 +439,11 @@ def summarize_retrieval_eval_payload(
         reasons.append("runtime_unavailable")
     if int(payload.get("contract_failure_count") or 0) > 0:
         reasons.append("contract_failures")
-    if int(payload.get("expected_path_missing_count") or 0) > 0:
+    missing_count = int(payload.get("expected_path_missing_count") or 0)
+    if missing_count > 0 and missing_path_policy == "block":
         reasons.append("eval_expected_paths_missing")
+    if int(payload.get("evaluated_case_count") or payload.get("case_count") or 0) == 0:
+        reasons.append("no_evaluable_cases")
     if max_p95_ms > 0 and p95 is not None and p95 > max_p95_ms:
         reasons.append("retrieval_eval_p95_too_high")
     status = "pass" if not reasons else "blocked"
@@ -451,8 +455,11 @@ def summarize_retrieval_eval_payload(
         min_hit5_rate=min_hit5_rate,
         runtime_unavailable_count=payload.get("runtime_unavailable_count"),
         contract_failure_count=payload.get("contract_failure_count"),
-        expected_path_missing_count=payload.get("expected_path_missing_count"),
+        expected_path_missing_policy=missing_path_policy,
+        expected_path_missing_count=missing_count,
         expected_path_missing_samples=payload.get("expected_path_missing_samples") or [],
+        evaluated_case_count=payload.get("evaluated_case_count") or payload.get("case_count"),
+        excluded_missing_expected_path_count=payload.get("excluded_missing_expected_path_count", 0),
         latency_p95_ms=p95,
         max_p95_ms=max_p95_ms,
     )
@@ -478,10 +485,19 @@ def _missing_expected_paths(cases: list[Any]) -> list[dict[str, Any]]:
     return missing
 
 
-def run_retrieval_eval_check(cases_path: pathlib.Path, *, top_k: int) -> dict[str, Any]:
+def run_retrieval_eval_check(
+    cases_path: pathlib.Path,
+    *,
+    top_k: int,
+    missing_path_policy: str = "block",
+) -> dict[str, Any]:
     cases = tm_memory_eval.load_cases(cases_path)
     missing = _missing_expected_paths(cases)
-    report = tm_memory_eval.evaluate(cases, top_k=top_k)
+    missing_ids = {str(row.get("id") or "") for row in missing}
+    eval_cases = cases
+    if missing_path_policy == "exclude" and missing_ids:
+        eval_cases = [case for case in cases if getattr(case, "id", "") not in missing_ids]
+    report = tm_memory_eval.evaluate(eval_cases, top_k=top_k)
     rows = report.get("results") if isinstance(report.get("results"), list) else []
     report["latency_p95_ms"] = _percentile(
         [
@@ -493,6 +509,10 @@ def run_retrieval_eval_check(cases_path: pathlib.Path, *, top_k: int) -> dict[st
     )
     report["expected_path_missing_count"] = len(missing)
     report["expected_path_missing_samples"] = missing[:10]
+    report["expected_path_missing_policy"] = missing_path_policy
+    report["source_case_count"] = len(cases)
+    report["evaluated_case_count"] = len(eval_cases)
+    report["excluded_missing_expected_path_count"] = len(cases) - len(eval_cases)
     # Keep raw-query rows out of readiness output.
     report.pop("results", None)
     report.pop("probe_results", None)
@@ -529,16 +549,22 @@ def phase_readiness(args: argparse.Namespace) -> dict[str, Any]:
                 eval_payload,
                 min_hit5_rate=args.min_hit5_rate,
                 max_p95_ms=args.max_eval_p95_ms,
+                missing_path_policy=args.eval_missing_path_policy,
             )
         except Exception as exc:
             gates["retrieval_eval"] = _gate("blocked", reason=f"retrieval_eval_report_error: {exc}")
     elif args.run_retrieval_eval:
         try:
-            eval_payload = run_retrieval_eval_check(pathlib.Path(args.retrieval_eval_cases), top_k=args.eval_top_k)
+            eval_payload = run_retrieval_eval_check(
+                pathlib.Path(args.retrieval_eval_cases),
+                top_k=args.eval_top_k,
+                missing_path_policy=args.eval_missing_path_policy,
+            )
             gates["retrieval_eval"] = summarize_retrieval_eval_payload(
                 eval_payload,
                 min_hit5_rate=args.min_hit5_rate,
                 max_p95_ms=args.max_eval_p95_ms,
+                missing_path_policy=args.eval_missing_path_policy,
             )
         except Exception as exc:
             gates["retrieval_eval"] = _gate("blocked", reason=f"retrieval_eval_error: {exc}")
@@ -1113,6 +1139,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--retrieval-eval-report", default=None, help="existing retrieval eval JSON report")
     parser.add_argument("--retrieval-eval-cases", default=str(REPO_ROOT / "tests" / "fixtures" / "memory_eval_cases.jsonl"))
     parser.add_argument("--eval-top-k", type=int, default=5)
+    parser.add_argument("--eval-missing-path-policy", choices=["block", "exclude"], default="block")
     parser.add_argument("--min-hit5-rate", type=float, default=1.0)
     parser.add_argument("--max-eval-p95-ms", type=float, default=0.0, help="optional retrieval eval p95 gate; 0 disables")
     args = parser.parse_args(argv)

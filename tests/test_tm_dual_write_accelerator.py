@@ -152,6 +152,7 @@ def test_phase_readiness_combines_reconcile_shadow_and_eval_reports(tmp_path):
         run_retrieval_eval=False,
         retrieval_eval_cases=str(tmp_path / "cases.jsonl"),
         eval_top_k=5,
+        eval_missing_path_policy="block",
         min_hit5_rate=1.0,
         max_eval_p95_ms=500.0,
     ))
@@ -196,6 +197,27 @@ def test_summarize_retrieval_eval_payload_flags_missing_expected_paths():
     assert summary["status"] == "blocked"
     assert "eval_expected_paths_missing" in summary["reasons"]
     assert summary["expected_path_missing_count"] == 1
+
+
+def test_summarize_retrieval_eval_payload_can_exclude_missing_expected_paths():
+    summary = accel.summarize_retrieval_eval_payload(
+        {
+            "case_count": 1,
+            "evaluated_case_count": 1,
+            "quality_hit5_rate": 1.0,
+            "runtime_unavailable_count": 0,
+            "contract_failure_count": 0,
+            "expected_path_missing_count": 23,
+            "excluded_missing_expected_path_count": 23,
+        },
+        min_hit5_rate=1.0,
+        max_p95_ms=0.0,
+        missing_path_policy="exclude",
+    )
+
+    assert summary["status"] == "pass"
+    assert summary["expected_path_missing_policy"] == "exclude"
+    assert summary["excluded_missing_expected_path_count"] == 23
 
 
 def test_timer_entrypoint_audit_classifies_bound_services(tmp_path, monkeypatch):
