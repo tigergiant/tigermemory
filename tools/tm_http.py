@@ -532,6 +532,10 @@ async def lifespan(app: FastAPI):
     app.state.mem0_reachable = _probe_mem0_reachable()
     app.state.tm_core_version = _git_sha()
     try:
+        app.state.outbox_worker_started = tm_memory_ops.start_outbox_worker()
+    except Exception:
+        app.state.outbox_worker_started = False
+    try:
         tm_runtime_events.record_event(
             event_type="service_start",
             service="tm-http",
@@ -541,6 +545,7 @@ async def lifespan(app: FastAPI):
                 "git_sha": app.state.tm_core_version,
                 "mem0_reachable": app.state.mem0_reachable,
                 "profile": tm_core.tigermemory_profile(),
+                "outbox_worker": app.state.outbox_worker_started,
             },
             source_log="systemd:tm-http.service",
         )

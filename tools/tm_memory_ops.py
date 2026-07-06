@@ -76,7 +76,22 @@ def _refresh_digest_today() -> None:
 
 
 def schedule_digest_refresh() -> None:
-    """Debounced digest refresh used by every write path."""
+    """Debounced digest refresh used by every write path.
+
+    With TM_OUTBOX_WORKER enabled the debounce is a durable outbox UPSERT
+    (survives process restarts); otherwise the legacy in-process Timer runs.
+    """
+    if tm_core.outbox_worker_enabled():
+        try:
+            tm_core.outbox_upsert(
+                "digest_refresh", {}, delay_seconds=DIGEST_DEBOUNCE_SECONDS
+            )
+            return
+        except Exception as exc:
+            print(
+                f"[tm_memory_ops] WARN outbox digest upsert failed; falling back to timer: {exc}",
+                file=sys.stderr,
+            )
     global _digest_timer
     with _digest_lock:
         if _digest_timer is not None:
@@ -125,6 +140,24 @@ def schedule_embed_refresh(
     if scope not in {"wiki", "wiki_only", "sources_only"}:
         raise ValueError("scope must be one of: wiki, wiki_only, sources_only")
     path_list = list(paths or [])
+    if tm_core.outbox_worker_enabled():
+        try:
+            tm_core.outbox_upsert(
+                f"embed_refresh:{scope}",
+                {"scope": scope, "reason": reason, "paths": path_list},
+                delay_seconds=EMBED_REFRESH_DEBOUNCE_SECONDS,
+            )
+            return {
+                "embed_refresh_scheduled": True,
+                "embed_refresh_scope": scope,
+                "embed_refresh_debounce_seconds": EMBED_REFRESH_DEBOUNCE_SECONDS,
+                "embed_refresh_via": "outbox",
+            }
+        except Exception as exc:
+            print(
+                f"[tm_memory_ops] WARN outbox embed upsert failed; falling back to timer: {exc}",
+                file=sys.stderr,
+            )
     with _embed_lock:
         existing = _embed_timers.get(scope)
         if existing is not None:
@@ -142,6 +175,99 @@ def schedule_embed_refresh(
         "embed_refresh_scope": scope,
         "embed_refresh_debounce_seconds": EMBED_REFRESH_DEBOUNCE_SECONDS,
     }
+
+
+# ---------- outbox worker (durable deferred actions) ----------
+
+OUTBOX_POLL_SECONDS = int(os.environ.get("TM_OUTBOX_POLL_SECONDS", "5"))
+_outbox_thread: threading.Thread | None = None
+_outbox_thread_lock = threading.Lock()
+
+
+def _handle_outbox_row(row: dict[str, Any]) -> None:
+    """Dispatch one claimed outbox row. Raises on failure so poll_once retries."""
+    kind = str(row.get("kind") or "")
+    payload = row.get("payload") or {}
+    if kind == "digest_refresh":
+        _refresh_digest_today()
+        return
+    if kind.startswith("embed_refresh:"):
+        scope = str(payload.get("scope") or kind.split(":", 1)[1])
+        _refresh_embed_index(
+            scope,
+            str(payload.get("reason") or ""),
+            list(payload.get("paths") or []),
+        )
+        return
+    raise RuntimeError(f"unknown outbox kind: {kind}")
+
+
+def _record_outbox_dead(row: dict[str, Any], error: str) -> None:
+    try:
+        tm_runtime_events.record_event(
+            event_type="outbox_dead",
+            service="tm-memory-ops",
+            component="outbox_worker",
+            ok=False,
+            severity="warning",
+            outcome="max_attempts_exceeded",
+            target_ref={"outbox_id": row.get("id"), "kind": row.get("kind")},
+            error=str(error)[:500],
+        )
+    except Exception:
+        pass
+
+
+def outbox_poll_once(limit: int = 10) -> dict[str, Any]:
+    """Claim and run due outbox rows once. Safe to call from tests or the worker."""
+    stats = {"claimed": 0, "done": 0, "retried": 0, "dead": 0}
+    for row in tm_core.outbox_claim_due(limit=limit):
+        stats["claimed"] += 1
+        try:
+            _handle_outbox_row(row)
+        except Exception as exc:
+            result = tm_core.outbox_fail(int(row["id"]), str(exc))
+            if result.get("status") == "dead":
+                stats["dead"] += 1
+                _record_outbox_dead(row, str(exc))
+            else:
+                stats["retried"] += 1
+        else:
+            tm_core.outbox_complete(int(row["id"]))
+            stats["done"] += 1
+    return stats
+
+
+def _outbox_worker_loop(poll_seconds: float) -> None:
+    while True:
+        try:
+            outbox_poll_once()
+        except Exception as exc:
+            print(f"[tm_memory_ops] WARN outbox poll failed: {exc}", file=sys.stderr)
+        time.sleep(poll_seconds)
+
+
+def start_outbox_worker(poll_seconds: float | None = None) -> bool:
+    """Start the in-process outbox worker thread (idempotent, opt-in).
+
+    Returns True when the worker is running after this call. No-ops unless
+    TM_OUTBOX_WORKER is enabled (shell env or runtime/openmemory/.env).
+    """
+    global _outbox_thread
+    if not tm_core.outbox_worker_enabled():
+        return False
+    with _outbox_thread_lock:
+        if _outbox_thread is not None and _outbox_thread.is_alive():
+            return True
+        thread = threading.Thread(
+            target=_outbox_worker_loop,
+            args=(float(poll_seconds or OUTBOX_POLL_SECONDS),),
+            name="tm-outbox-worker",
+            daemon=True,
+        )
+        thread.start()
+        _outbox_thread = thread
+        return True
 
 
 def extract_mem0_id(data: dict[str, Any]) -> str:

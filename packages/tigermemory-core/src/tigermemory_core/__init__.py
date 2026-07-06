@@ -130,6 +130,12 @@ __all__ = [
     "mem0_user_id",
     "mem0_write",
     "now",
+    "outbox_claim_due",
+    "outbox_complete",
+    "outbox_counts",
+    "outbox_fail",
+    "outbox_upsert",
+    "outbox_worker_enabled",
     "primary_search_scope",
     "propose_wiki_admin_page",
     "resolve_app_root",
@@ -1360,6 +1366,228 @@ def _record_local_shadow_sync_failure(
         )
     except Exception:
         pass
+
+
+# ---------- outbox (durable deferred actions; schema v3 `outbox` table) ----------
+#
+# The outbox replaces in-process threading.Timer debounce for deferred side
+# effects (digest refresh, embed refresh, future mem0 dual-write). Rows are
+# durable in the local SQLite DB, so pending work survives process restarts.
+# The polling worker lives in tools/tm_memory_ops.py; these helpers only own
+# row lifecycle: pending -> running -> done | pending(retry) | dead.
+
+OUTBOX_BACKOFF_SECONDS = (60, 300, 1800)
+OUTBOX_MAX_ATTEMPTS = 8
+OUTBOX_STALE_CLAIM_SECONDS = 600
+_OUTBOX_WORKER_ENV = "TM_OUTBOX_WORKER"
+
+
+def outbox_worker_enabled() -> bool:
+    """Read TM_OUTBOX_WORKER from shell env first, then runtime/openmemory/.env.
+
+    Mirrors _local_dual_write_enabled() so stdio-spawned MCP processes that do
+    not inherit systemd Environment= still see the same switch.
+    """
+    if os.environ.get(_OUTBOX_WORKER_ENV) is not None:
+        return _env_truthy(_OUTBOX_WORKER_ENV)
+    try:
+        raw = _env_value(_OUTBOX_WORKER_ENV)
+    except RuntimeError:
+        return False
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _outbox_ts(moment: datetime.datetime | None = None) -> str:
+    """Sortable ISO timestamp in Asia/Shanghai; lexicographic order == time order."""
+    value = moment or datetime.datetime.now(TZ_CN)
+    return value.astimezone(TZ_CN).strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
+def _outbox_row_dict(row: sqlite3.Row) -> dict[str, Any]:
+    payload: dict[str, Any]
+    try:
+        parsed = json.loads(str(row["payload_json"] or "{}"))
+        payload = parsed if isinstance(parsed, dict) else {}
+    except (TypeError, ValueError):
+        payload = {}
+    return {
+        "id": int(row["id"]),
+        "kind": str(row["kind"]),
+        "memory_id": row["memory_id"],
+        "payload": payload,
+        "status": str(row["status"]),
+        "attempts": int(row["attempts"]),
+        "next_attempt_at": row["next_attempt_at"],
+        "last_error": row["last_error"],
+        "created_at": row["created_at"],
+        "done_at": row["done_at"],
+    }
+
+
+def outbox_upsert(
+    kind: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    delay_seconds: int = 0,
+    memory_id: str | None = None,
+) -> dict[str, Any]:
+    """Debounced enqueue: keep at most one pending row per kind.
+
+    If a pending row for `kind` exists, refresh its payload and push
+    next_attempt_at forward (Timer.cancel+restart equivalent, but durable).
+    """
+    if not kind.strip():
+        raise ValueError("kind required")
+    now = datetime.datetime.now(TZ_CN)
+    due_at = _outbox_ts(now + datetime.timedelta(seconds=max(0, delay_seconds)))
+    payload_json = json.dumps(payload or {}, ensure_ascii=False)
+    conn = _local_db_conn()
+    try:
+        _ensure_local_memory_schema(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            """
+            UPDATE outbox
+            SET payload_json=?, next_attempt_at=?, memory_id=?
+            WHERE kind=? AND status='pending'
+            """,
+            (payload_json, due_at, memory_id, kind),
+        )
+        action = "updated"
+        if cur.rowcount == 0:
+            conn.execute(
+                """
+                INSERT INTO outbox(kind, memory_id, payload_json, status,
+                                   attempts, next_attempt_at, created_at)
+                VALUES (?, ?, ?, 'pending', 0, ?, ?)
+                """,
+                (kind, memory_id, payload_json, due_at, _outbox_ts(now)),
+            )
+            action = "inserted"
+        conn.commit()
+        return {"ok": True, "action": action, "kind": kind, "next_attempt_at": due_at}
+    finally:
+        conn.close()
+
+
+def outbox_claim_due(limit: int = 10) -> list[dict[str, Any]]:
+    """Atomically claim due pending rows (and recover stale running rows).
+
+    Claimed rows move to status='running' with next_attempt_at set to a stale
+    deadline; a worker that dies mid-task leaves the row reclaimable after
+    OUTBOX_STALE_CLAIM_SECONDS.
+    """
+    now = datetime.datetime.now(TZ_CN)
+    now_ts = _outbox_ts(now)
+    stale_deadline = _outbox_ts(
+        now + datetime.timedelta(seconds=OUTBOX_STALE_CLAIM_SECONDS)
+    )
+    claimed: list[dict[str, Any]] = []
+    conn = _local_db_conn()
+    try:
+        _ensure_local_memory_schema(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            UPDATE outbox SET status='pending'
+            WHERE status='running' AND next_attempt_at IS NOT NULL AND next_attempt_at<=?
+            """,
+            (now_ts,),
+        )
+        rows = conn.execute(
+            """
+            SELECT id FROM outbox
+            WHERE status='pending' AND (next_attempt_at IS NULL OR next_attempt_at<=?)
+            ORDER BY id LIMIT ?
+            """,
+            (now_ts, max(1, limit)),
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                "UPDATE outbox SET status='running', next_attempt_at=? WHERE id=? AND status='pending'",
+                (stale_deadline, int(row["id"])),
+            )
+        if rows:
+            ids = [int(row["id"]) for row in rows]
+            placeholders = ",".join("?" for _ in ids)
+            claimed = [
+                _outbox_row_dict(item)
+                for item in conn.execute(
+                    f"SELECT * FROM outbox WHERE id IN ({placeholders}) AND status='running'",
+                    ids,
+                ).fetchall()
+            ]
+        conn.commit()
+        return claimed
+    finally:
+        conn.close()
+
+
+def outbox_complete(outbox_id: int) -> None:
+    conn = _local_db_conn()
+    try:
+        _ensure_local_memory_schema(conn)
+        conn.execute(
+            "UPDATE outbox SET status='done', done_at=?, next_attempt_at=NULL, last_error=NULL WHERE id=?",
+            (_outbox_ts(), int(outbox_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def outbox_fail(outbox_id: int, error: str) -> dict[str, Any]:
+    """Record a failed attempt: exponential backoff, then dead at max attempts."""
+    conn = _local_db_conn()
+    try:
+        _ensure_local_memory_schema(conn)
+        row = conn.execute(
+            "SELECT attempts FROM outbox WHERE id=?", (int(outbox_id),)
+        ).fetchone()
+        if row is None:
+            return {"ok": False, "reason": "not_found", "id": int(outbox_id)}
+        attempts = int(row["attempts"]) + 1
+        error_text = str(error)[:500]
+        if attempts >= OUTBOX_MAX_ATTEMPTS:
+            conn.execute(
+                "UPDATE outbox SET status='dead', attempts=?, last_error=?, next_attempt_at=NULL WHERE id=?",
+                (attempts, error_text, int(outbox_id)),
+            )
+            conn.commit()
+            return {"ok": True, "status": "dead", "attempts": attempts, "id": int(outbox_id)}
+        backoff_idx = min(attempts - 1, len(OUTBOX_BACKOFF_SECONDS) - 1)
+        retry_at = _outbox_ts(
+            datetime.datetime.now(TZ_CN)
+            + datetime.timedelta(seconds=OUTBOX_BACKOFF_SECONDS[backoff_idx])
+        )
+        conn.execute(
+            "UPDATE outbox SET status='pending', attempts=?, last_error=?, next_attempt_at=? WHERE id=?",
+            (attempts, error_text, retry_at, int(outbox_id)),
+        )
+        conn.commit()
+        return {
+            "ok": True,
+            "status": "pending",
+            "attempts": attempts,
+            "next_attempt_at": retry_at,
+            "id": int(outbox_id),
+        }
+    finally:
+        conn.close()
+
+
+def outbox_counts() -> dict[str, int]:
+    conn = _local_db_conn()
+    try:
+        _ensure_local_memory_schema(conn)
+        counts: dict[str, int] = {"pending": 0, "running": 0, "done": 0, "dead": 0}
+        for row in conn.execute(
+            "SELECT status, COUNT(*) AS n FROM outbox GROUP BY status"
+        ).fetchall():
+            counts[str(row["status"])] = int(row["n"])
+        return counts
+    finally:
+        conn.close()
 
 
 def _local_mark_shadow_deleted(memory_ids: list[str]) -> None:

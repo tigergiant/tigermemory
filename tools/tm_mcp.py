@@ -2090,6 +2090,12 @@ if __name__ == "__main__":
         file=sys.stderr,
     )
 
+    try:
+        if tm_memory_ops.start_outbox_worker():
+            print("tm_mcp outbox worker started", file=sys.stderr)
+    except Exception as exc:
+        print(f"tm_mcp WARN outbox worker start failed: {exc}", file=sys.stderr)
+
     if args.http:
         # HTTP mode: load API key and wrap FastMCP's Starlette app with a
         # simple Bearer middleware. We bypass FastMCP's OAuth/AuthSettings
