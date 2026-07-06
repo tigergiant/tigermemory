@@ -119,6 +119,8 @@ __all__ = [
     "is_auto_generated_path",
     "lint_page_errors",
     "lint_repo_scan",
+    "local_memory_stats",
+    "local_shadow_stats",
     "mcp_api_key",
     "mem0_base",
     "mem0_delete",
@@ -1707,6 +1709,89 @@ def outbox_counts() -> dict[str, int]:
         ).fetchall():
             counts[str(row["status"])] = int(row["n"])
         return counts
+    finally:
+        conn.close()
+
+
+def _schema_meta_value(conn: sqlite3.Connection, key: str) -> str | None:
+    try:
+        row = conn.execute(
+            "SELECT value FROM schema_meta WHERE key=?", (key,)
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    return str(row["value"]) if row else None
+
+
+def local_memory_stats() -> dict[str, Any]:
+    """Read-only migration observability for the local memories table.
+
+    Powers tm-http /ops/db-stats. Never writes. Safe to call against the live
+    shadow DB on WSL.
+    """
+    conn = _local_db_conn()
+    try:
+        _ensure_local_memory_schema(conn)
+        total = int(conn.execute("SELECT COUNT(*) AS n FROM memories").fetchone()["n"])
+        by_state: dict[str, int] = {}
+        for row in conn.execute(
+            "SELECT state, COUNT(*) AS n FROM memories GROUP BY state"
+        ).fetchall():
+            by_state[str(row["state"] or "unknown")] = int(row["n"])
+        by_origin: dict[str, int] = {}
+        for row in conn.execute(
+            "SELECT backend_origin, COUNT(*) AS n FROM memories GROUP BY backend_origin"
+        ).fetchall():
+            by_origin[str(row["backend_origin"] or "unknown")] = int(row["n"])
+        vectored = int(
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM memories WHERE vector_status != 'fts5_only'"
+            ).fetchone()["n"]
+        )
+        return {
+            "total": total,
+            "by_state": by_state,
+            "by_backend_origin": by_origin,
+            "schema_version": _schema_meta_value(conn, "schema_version"),
+            "fts_tokenizer": _schema_meta_value(conn, "fts_tokenizer"),
+            "vectored_rows": vectored,
+            "db_path": str(_local_db_path()),
+        }
+    finally:
+        conn.close()
+
+
+def local_shadow_stats() -> dict[str, Any]:
+    """Read-only shadow/reconcile-readiness signal for the local memories table.
+
+    Powers tm-http /ops/shadow-status. Reports the local-shadow rows written by
+    dual-write and their shadow_state distribution, plus legacy-id coverage.
+    Never writes.
+    """
+    conn = _local_db_conn()
+    try:
+        _ensure_local_memory_schema(conn)
+        shadow_rows = int(
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM memories WHERE backend_origin='local-shadow'"
+            ).fetchone()["n"]
+        )
+        with_legacy = int(
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM memories WHERE legacy_mem0_id IS NOT NULL"
+            ).fetchone()["n"]
+        )
+        by_shadow_state: dict[str, int] = {}
+        for row in conn.execute(
+            "SELECT shadow_state, COUNT(*) AS n FROM memories "
+            "WHERE backend_origin='local-shadow' GROUP BY shadow_state"
+        ).fetchall():
+            by_shadow_state[str(row["shadow_state"] or "null")] = int(row["n"])
+        return {
+            "local_shadow_rows": shadow_rows,
+            "rows_with_legacy_mem0_id": with_legacy,
+            "by_shadow_state": by_shadow_state,
+        }
     finally:
         conn.close()
 

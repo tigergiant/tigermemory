@@ -682,6 +682,84 @@ async def retention_audit(req: RetentionAuditRequest):
         log_json("info", trace_id, "/retention/audit", 200, (time.time() - start) * 1000)
 
 
+# ---------- Ops observability (R2-B; read-only migration verification) ----------
+# These endpoints let a remote operator (e.g. the isolated VM over the direct
+# REST channel) observe migration state on the WSL live DB WITHOUT any shell or
+# write access. All are read-only; Bearer auth applies via the middleware.
+# Write/restart actions are intentionally NOT exposed here (deferred to a gated
+# v2 pending an explicit trust-boundary decision).
+
+def _ops_db_stats() -> dict:
+    return tm_core.local_memory_stats()
+
+
+def _ops_outbox_status() -> dict:
+    return {"counts": tm_core.outbox_counts()}
+
+
+def _ops_shadow_status() -> dict:
+    return tm_core.local_shadow_stats()
+
+
+@app.get("/ops/db-stats")
+async def ops_db_stats():
+    trace_id = str(uuid.uuid4())
+    start = time.time()
+    try:
+        return _ops_db_stats()
+    except Exception as e:
+        log_json("error", trace_id, "/ops/db-stats", 500, (time.time() - start) * 1000, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"ops db-stats failed: {e}")
+    finally:
+        log_json("info", trace_id, "/ops/db-stats", 200, (time.time() - start) * 1000)
+
+
+@app.get("/ops/outbox-status")
+async def ops_outbox_status():
+    trace_id = str(uuid.uuid4())
+    start = time.time()
+    try:
+        return _ops_outbox_status()
+    except Exception as e:
+        log_json("error", trace_id, "/ops/outbox-status", 500, (time.time() - start) * 1000, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"ops outbox-status failed: {e}")
+    finally:
+        log_json("info", trace_id, "/ops/outbox-status", 200, (time.time() - start) * 1000)
+
+
+@app.get("/ops/shadow-status")
+async def ops_shadow_status():
+    trace_id = str(uuid.uuid4())
+    start = time.time()
+    try:
+        return _ops_shadow_status()
+    except Exception as e:
+        log_json("error", trace_id, "/ops/shadow-status", 500, (time.time() - start) * 1000, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"ops shadow-status failed: {e}")
+    finally:
+        log_json("info", trace_id, "/ops/shadow-status", 200, (time.time() - start) * 1000)
+
+
+@app.get("/ops/status")
+async def ops_status():
+    """Aggregate migration snapshot: db + outbox + shadow in one read-only call."""
+    trace_id = str(uuid.uuid4())
+    start = time.time()
+    try:
+        return {
+            "schema": "tm-ops-status-v1",
+            "profile": tm_core.tigermemory_profile(),
+            "db": _ops_db_stats(),
+            "outbox": _ops_outbox_status(),
+            "shadow": _ops_shadow_status(),
+        }
+    except Exception as e:
+        log_json("error", trace_id, "/ops/status", 500, (time.time() - start) * 1000, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"ops status failed: {e}")
+    finally:
+        log_json("info", trace_id, "/ops/status", 200, (time.time() - start) * 1000)
+
+
 def _normalize_mem0_item(item: dict) -> dict:
     """Normalize a Mem0 record for OpenClaw consumption.
 
