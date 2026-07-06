@@ -180,7 +180,7 @@ def test_import_creates_migration_audit_and_outbox_tables(tmp_path) -> None:
         assert conn.execute("SELECT COUNT(1) FROM outbox").fetchone()[0] == 0
         assert conn.execute(
             "SELECT value FROM schema_meta WHERE key='schema_version'"
-        ).fetchone()[0] == "3"
+        ).fetchone()[0] == "4"
     finally:
         conn.close()
 

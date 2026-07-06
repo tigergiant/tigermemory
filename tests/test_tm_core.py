@@ -484,7 +484,7 @@ def test_local_schema_has_migration_audit_and_outbox(monkeypatch, tmp_path):
         schema_version = conn.execute(
             "SELECT value FROM schema_meta WHERE key='schema_version'"
         ).fetchone()[0]
-        assert schema_version == "3"
+        assert schema_version == "4"
 
         outbox_count = conn.execute("SELECT COUNT(1) FROM outbox").fetchone()[0]
         assert outbox_count == 0
@@ -561,7 +561,7 @@ def test_local_schema_migrates_existing_db_without_dropping_rows(monkeypatch, tm
         assert conn.execute("SELECT COUNT(1) FROM outbox").fetchone()[0] == 0
         assert conn.execute(
             "SELECT value FROM schema_meta WHERE key='schema_version'"
-        ).fetchone()[0] == "3"
+        ).fetchone()[0] == "4"
     finally:
         conn.close()
 

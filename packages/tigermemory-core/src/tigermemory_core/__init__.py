@@ -939,7 +939,7 @@ MEM0_UUID_RE = re.compile(
 )
 
 _LOCAL_DB_DEFAULT_REL_PATH = pathlib.Path("data") / "tigermemory" / "memory.sqlite"
-_LOCAL_MEMORY_SCHEMA_VERSION = 3
+_LOCAL_MEMORY_SCHEMA_VERSION = 4
 _SHADOW_SEARCH_ENV = "TM_SHADOW_SEARCH_ENABLED"
 _LOCAL_DUAL_WRITE_ENV = "TM_LOCAL_DUAL_WRITE"
 _SHADOW_SEARCH_LOG_REL_PATH = pathlib.Path(".tmp") / "search-shadow"
@@ -1206,6 +1206,22 @@ def _ensure_local_memory_schema(conn: sqlite3.Connection) -> None:
         ON outbox(status, next_attempt_at)
         """
     )
+    fts_tokenizer = _ensure_local_fts_trigram(conn)
+    _demote_duplicate_active_memories(conn)
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_active_sha_topic
+        ON memories(content_sha256, topic)
+        WHERE state = 'active' AND content_sha256 IS NOT NULL
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO schema_meta (key, value, updated_at)
+        VALUES ('fts_tokenizer', ?, ?)
+        """,
+        (fts_tokenizer, datetime.datetime.now(TZ_CN).isoformat()),
+    )
     conn.execute(
         """
         INSERT OR REPLACE INTO schema_meta (key, value, updated_at)
@@ -1214,6 +1230,79 @@ def _ensure_local_memory_schema(conn: sqlite3.Connection) -> None:
         (str(_LOCAL_MEMORY_SCHEMA_VERSION), datetime.datetime.now(TZ_CN).isoformat()),
     )
     conn.commit()
+
+
+def _ensure_local_fts_trigram(conn: sqlite3.Connection) -> str:
+    """Upgrade memories_fts to the trigram tokenizer (schema v4).
+
+    The default FTS5 tokenizer cannot segment Chinese, so pre-v4 DBs rely on
+    the O(n) substring fallback for CJK queries. Trigram makes CJK substrings
+    first-class FTS matches. Rebuild is idempotent and cheap at current scale;
+    on SQLite builds without trigram (< 3.34) the default table is kept and
+    schema_meta records fts_tokenizer=default so readiness checks can see it.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='memories_fts'"
+    ).fetchone()
+    existing_sql = str(row["sql"] or "") if row is not None else ""
+    if "trigram" in existing_sql:
+        return "trigram"
+    try:
+        conn.execute("DROP TABLE IF EXISTS memories_fts")
+        conn.execute(
+            """
+            CREATE VIRTUAL TABLE memories_fts USING fts5(
+                id UNINDEXED,
+                content,
+                tokenize='trigram'
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO memories_fts(id, content) SELECT id, content FROM memories"
+        )
+        return "trigram"
+    except sqlite3.OperationalError:
+        # trigram unsupported on this SQLite build: restore the default table.
+        conn.execute("DROP TABLE IF EXISTS memories_fts")
+        conn.execute(
+            """
+            CREATE VIRTUAL TABLE memories_fts USING fts5(
+                id UNINDEXED,
+                content
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO memories_fts(id, content) SELECT id, content FROM memories"
+        )
+        return "default"
+
+
+def _demote_duplicate_active_memories(conn: sqlite3.Connection) -> int:
+    """Keep the earliest active row per (content_sha256, topic); demote the rest.
+
+    Demoted rows become state='superseded_dup' (rows are never deleted, per the
+    migration contract's exact-dedup rule). Must run before creating the
+    partial unique index or legacy DBs with duplicate actives would fail.
+    """
+    cur = conn.execute(
+        """
+        UPDATE memories SET state='superseded_dup', updated_at=?
+        WHERE id IN (
+            SELECT id FROM (
+                SELECT id, ROW_NUMBER() OVER (
+                    PARTITION BY content_sha256, topic
+                    ORDER BY created_at ASC, id ASC
+                ) AS rn
+                FROM memories
+                WHERE state='active' AND content_sha256 IS NOT NULL
+            ) WHERE rn > 1
+        )
+        """,
+        (int(time.time()),),
+    )
+    return int(cur.rowcount or 0)
 
 
 def _row_value(row: sqlite3.Row, key: str, default: Any = None) -> Any:
@@ -1273,15 +1362,34 @@ def _local_write_memory_record(
         content_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
         legacy_mem0_id_value = str(metadata_payload.get("legacy_mem0_id") or "").strip() or None
         shadow_state_value = str(metadata_payload.get("shadow_state") or "").strip() or None
-        conn.execute(
+
+        # Exact dedup (schema v4): one active row per (content_sha256, topic).
+        # Duplicate writes are stored for audit but marked superseded_dup so
+        # they never surface in search; rows are not deleted.
+        state_value = "active"
+        dup_row = conn.execute(
             """
+            SELECT id FROM memories
+            WHERE content_sha256=? AND topic=? AND state='active'
+            LIMIT 1
+            """,
+            (content_sha256, topic),
+        ).fetchone()
+        dup_of = str(dup_row["id"]) if dup_row is not None else None
+        if dup_of:
+            state_value = "superseded_dup"
+            metadata_payload["dup_of"] = dup_of
+
+        insert_sql = """
             INSERT INTO memories(
                 id, content, topic, source_agent, route_decision, route_score,
                 metadata_json, content_sha256, created_at, updated_at, state,
                 backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
+        """
+
+        def _insert_params(state: str) -> tuple[Any, ...]:
+            return (
                 memory_id,
                 text,
                 topic,
@@ -1292,16 +1400,24 @@ def _local_write_memory_record(
                 content_sha256,
                 now_ts,
                 now_ts,
-                "active",
+                state,
                 backend_origin,
                 "fts5_only",
                 legacy_mem0_id_value,
                 shadow_state_value,
                 now_ts,
-            ),
-        )
+            )
+
+        try:
+            conn.execute(insert_sql, _insert_params(state_value))
+        except sqlite3.IntegrityError:
+            # Race backstop: another writer created the active row between our
+            # pre-check and insert; store this write as a superseded duplicate.
+            state_value = "superseded_dup"
+            metadata_payload["dup_of"] = "unknown-active-duplicate"
+            conn.execute(insert_sql, _insert_params(state_value))
         conn.commit()
-        return {
+        result: dict[str, Any] = {
             "ok": True,
             "id": memory_id,
             "route": "local",
@@ -1313,6 +1429,11 @@ def _local_write_memory_record(
                 "route_score": route_score_value,
             },
         }
+        if state_value == "superseded_dup":
+            result["route_info"]["dedup"] = "superseded_dup"
+            if dup_of:
+                result["route_info"]["dup_of"] = dup_of
+        return result
     finally:
         conn.close()
 
@@ -1644,7 +1765,12 @@ def _local_fts_query(query: str) -> str:
     terms = flatten_search_query_terms(search_query_term_groups(query))
     if not terms:
         terms = [t for t in query.split() if t.strip()]
-    terms = [term.strip().replace('"', '""') for term in terms if term.strip()]
+    # The trigram tokenizer (schema v4) matches nothing for terms shorter than
+    # 3 characters, and a too-short term inside an AND query would poison the
+    # whole match. Short terms are dropped here and covered by the substring
+    # fallback path instead (same effective behavior as the default tokenizer,
+    # which never usefully matched short CJK fragments either).
+    terms = [term.strip().replace('"', '""') for term in terms if len(term.strip()) >= 3]
     if not terms:
         return ""
     return " AND ".join(f'"{term}"' for term in terms)
@@ -1820,7 +1946,8 @@ def _local_search_local_memory(conn: sqlite3.Connection, query: str, size: int =
                        m.metadata_json, m.content_sha256, m.created_at, m.updated_at, m.state,
                        m.backend_origin, m.vector_status, m.legacy_mem0_id, m.shadow_state, m.verified_at
                 FROM memories AS m
-                WHERE m.id IN (
+                WHERE m.state = 'active'
+                  AND m.id IN (
                     SELECT id FROM memories_fts WHERE memories_fts MATCH ?
                 )
                 ORDER BY m.created_at DESC

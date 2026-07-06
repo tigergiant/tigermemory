@@ -39,7 +39,7 @@ DEFAULT_MEM0_URL = "http://localhost:8765"
 DEFAULT_MEM0_USER = "tiger"
 DEFAULT_EXPORT_PAGE_SIZE = 100
 DEFAULT_TOPICS_SAMPLE = 5
-SQLITE_SCHEMA_VERSION = 3
+SQLITE_SCHEMA_VERSION = 4
 FTS_QUERY_TOKEN_RE = re.compile(r"\s+")
 CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
 LATIN_TERM_RE = re.compile(r"[a-z0-9][a-z0-9._:/\\-]*", re.IGNORECASE)
@@ -337,6 +337,22 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         ON outbox(status, next_attempt_at)
         """
     )
+    fts_tokenizer = _ensure_fts_trigram(conn)
+    _demote_duplicate_active_rows(conn)
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_active_sha_topic
+        ON memories(content_sha256, topic)
+        WHERE state = 'active' AND content_sha256 IS NOT NULL
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO schema_meta (key, value, updated_at)
+        VALUES ('fts_tokenizer', ?, ?)
+        """,
+        (fts_tokenizer, dt.datetime.now(dt.UTC).isoformat()),
+    )
     conn.execute(
         """
         INSERT OR REPLACE INTO schema_meta (key, value, updated_at)
@@ -345,6 +361,75 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         (str(SQLITE_SCHEMA_VERSION), dt.datetime.now(dt.UTC).isoformat()),
     )
     conn.commit()
+
+
+def _ensure_fts_trigram(conn: sqlite3.Connection) -> str:
+    """Schema v4: rebuild memories_fts with the trigram tokenizer.
+
+    Mirrors tigermemory_core._ensure_local_fts_trigram; keep both in sync.
+    Returns 'trigram' or 'default' (SQLite build without trigram support).
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='memories_fts'"
+    ).fetchone()
+    existing_sql = str(row["sql"] or "") if row is not None else ""
+    if "trigram" in existing_sql:
+        return "trigram"
+    try:
+        conn.execute("DROP TABLE IF EXISTS memories_fts")
+        conn.execute(
+            """
+            CREATE VIRTUAL TABLE memories_fts USING fts5(
+                id UNINDEXED,
+                content,
+                tokenize='trigram'
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO memories_fts(id, content) SELECT id, content FROM memories"
+        )
+        return "trigram"
+    except sqlite3.OperationalError:
+        conn.execute("DROP TABLE IF EXISTS memories_fts")
+        conn.execute(
+            """
+            CREATE VIRTUAL TABLE memories_fts USING fts5(
+                id UNINDEXED,
+                content
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO memories_fts(id, content) SELECT id, content FROM memories"
+        )
+        return "default"
+
+
+def _demote_duplicate_active_rows(conn: sqlite3.Connection) -> int:
+    """Schema v4 exact dedup: keep earliest active row per (content_sha256, topic).
+
+    Later duplicates become state='superseded_dup'; rows are never deleted.
+    Must run before creating the partial unique index. Mirrors
+    tigermemory_core._demote_duplicate_active_memories.
+    """
+    cur = conn.execute(
+        """
+        UPDATE memories SET state='superseded_dup', updated_at=?
+        WHERE id IN (
+            SELECT id FROM (
+                SELECT id, ROW_NUMBER() OVER (
+                    PARTITION BY content_sha256, topic
+                    ORDER BY created_at ASC, id ASC
+                ) AS rn
+                FROM memories
+                WHERE state='active' AND content_sha256 IS NOT NULL
+            ) WHERE rn > 1
+        )
+        """,
+        (int(time.time()),),
+    )
+    return int(cur.rowcount or 0)
 
 
 def _conn(path: Path) -> sqlite3.Connection:
@@ -753,27 +838,84 @@ def cmd_import(args: argparse.Namespace) -> int:
                 summary["updated"] += 1
                 target_id = item.id
             if existing_by_legacy is not None and target_id != item.id:
+
+                def _update_row(state: str) -> None:
+                    conn.execute(
+                        """
+                        UPDATE memories SET
+                            content=?,
+                            topic=?,
+                            source_agent=?,
+                            route_decision=?,
+                            route_score=?,
+                            metadata_json=?,
+                            content_sha256=?,
+                            created_at=?,
+                            updated_at=?,
+                            state=?,
+                            backend_origin=?,
+                            vector_status=?,
+                            legacy_mem0_id=?,
+                            shadow_state=?,
+                            verified_at=?
+                        WHERE id=?
+                        """,
+                        (
+                            item.content,
+                            item.topic,
+                            item.source_agent,
+                            item.route_decision,
+                            item.route_score,
+                            item.metadata_json,
+                            item.content_sha256,
+                            item.created_at,
+                            item.updated_at,
+                            state,
+                            item.backend_origin,
+                            item.vector_status,
+                            item.legacy_mem0_id,
+                            item.shadow_state,
+                            int(time.time()),
+                            target_id,
+                        ),
+                    )
+
+                try:
+                    _update_row("active")
+                except sqlite3.IntegrityError:
+                    # Another active row already holds this (content_sha256,
+                    # topic); keep this row for audit as an exact duplicate.
+                    _update_row("superseded_dup")
+                _record_migration_audit(conn, item, new_id=target_id)
+                continue
+
+            def _insert_row(state: str) -> None:
                 conn.execute(
                     """
-                    UPDATE memories SET
-                        content=?,
-                        topic=?,
-                        source_agent=?,
-                        route_decision=?,
-                        route_score=?,
-                        metadata_json=?,
-                        content_sha256=?,
-                        created_at=?,
-                        updated_at=?,
-                        state=?,
-                        backend_origin=?,
-                        vector_status=?,
-                        legacy_mem0_id=?,
-                        shadow_state=?,
-                        verified_at=?
-                    WHERE id=?
+                    INSERT INTO memories (
+                        id, content, topic, source_agent, route_decision, route_score,
+                        metadata_json, content_sha256, created_at, updated_at, state,
+                        backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        content=excluded.content,
+                        topic=excluded.topic,
+                        source_agent=excluded.source_agent,
+                        route_decision=excluded.route_decision,
+                        route_score=excluded.route_score,
+                        metadata_json=excluded.metadata_json,
+                        content_sha256=excluded.content_sha256,
+                        created_at=excluded.created_at,
+                        updated_at=excluded.updated_at,
+                        state=excluded.state,
+                        backend_origin=excluded.backend_origin,
+                        vector_status=excluded.vector_status,
+                        legacy_mem0_id=excluded.legacy_mem0_id,
+                        shadow_state=excluded.shadow_state,
+                        verified_at=excluded.verified_at
                     """,
                     (
+                        item.id,
                         item.content,
                         item.topic,
                         item.source_agent,
@@ -783,60 +925,21 @@ def cmd_import(args: argparse.Namespace) -> int:
                         item.content_sha256,
                         item.created_at,
                         item.updated_at,
-                        "active",
+                        state,
                         item.backend_origin,
                         item.vector_status,
                         item.legacy_mem0_id,
                         item.shadow_state,
                         int(time.time()),
-                        target_id,
                     ),
                 )
-                _record_migration_audit(conn, item, new_id=target_id)
-                continue
-            conn.execute(
-                """
-                INSERT INTO memories (
-                    id, content, topic, source_agent, route_decision, route_score,
-                    metadata_json, content_sha256, created_at, updated_at, state,
-                    backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    content=excluded.content,
-                    topic=excluded.topic,
-                    source_agent=excluded.source_agent,
-                    route_decision=excluded.route_decision,
-                    route_score=excluded.route_score,
-                    metadata_json=excluded.metadata_json,
-                    content_sha256=excluded.content_sha256,
-                    created_at=excluded.created_at,
-                    updated_at=excluded.updated_at,
-                    state=excluded.state,
-                    backend_origin=excluded.backend_origin,
-                    vector_status=excluded.vector_status,
-                    legacy_mem0_id=excluded.legacy_mem0_id,
-                    shadow_state=excluded.shadow_state,
-                    verified_at=excluded.verified_at
-                """,
-                (
-                    item.id,
-                    item.content,
-                    item.topic,
-                    item.source_agent,
-                    item.route_decision,
-                    item.route_score,
-                    item.metadata_json,
-                    item.content_sha256,
-                    item.created_at,
-                    item.updated_at,
-                    "active",
-                    item.backend_origin,
-                    item.vector_status,
-                    item.legacy_mem0_id,
-                    item.shadow_state,
-                    int(time.time()),
-                ),
-            )
+
+            try:
+                _insert_row("active")
+            except sqlite3.IntegrityError:
+                # Exact duplicate of another active row (schema v4 unique
+                # index): keep the row, mark it superseded_dup, never delete.
+                _insert_row("superseded_dup")
             _record_migration_audit(conn, item, new_id=target_id)
         conn.commit()
     except sqlite3.Error as exc:
