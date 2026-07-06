@@ -52,6 +52,7 @@ tools/openclaw-expense-adapter/
 
 # Local memory backend state (P4.1 local profile)
 data/tigermemory/*.sqlite
+data/tigermemory/*.sqlite.bak-*
 data/tigermemory/*.sqlite-shm
 data/tigermemory/*.sqlite-wal
 

@@ -366,6 +366,68 @@ def test_local_schema_v2_has_migration_fields(monkeypatch, tmp_path):
         conn.close()
 
 
+def test_local_schema_migrates_old_table_before_index_creation(monkeypatch, tmp_path):
+    monkeypatch.setenv("TIGERMEMORY_PROFILE", tm_core.TIGERMEMORY_PROFILE_LOCAL)
+    db_path = tmp_path / "memory.sqlite"
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(db_path))
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE memories (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                source_agent TEXT NOT NULL,
+                route_decision TEXT NOT NULL,
+                route_score INTEGER NOT NULL DEFAULT 0,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                state TEXT NOT NULL DEFAULT 'active',
+                backend_origin TEXT NOT NULL DEFAULT 'local',
+                vector_status TEXT NOT NULL DEFAULT 'fts5_only'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO memories (
+                id, content, topic, source_agent, route_decision,
+                route_score, metadata_json, created_at, updated_at,
+                state, backend_origin, vector_status
+            ) VALUES (
+                'old-1', 'old local schema migration smoke', 'systems',
+                'codex', 'mem0', 90, '{}', 1717500000, 1717500000,
+                'active', 'local', 'fts5_only'
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    payload = json.loads(tm_core.mem0_search("old local schema", size=3))
+
+    assert payload["count"] >= 1
+    conn = sqlite3.connect(str(db_path))
+    try:
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(memories)").fetchall()
+        }
+        assert {"content_sha256", "legacy_mem0_id", "shadow_state", "verified_at"} <= columns
+        index_names = {
+            row[1]
+            for row in conn.execute("PRAGMA index_list(memories)").fetchall()
+        }
+        assert "idx_memories_content_sha_topic" in index_names
+        assert "idx_memories_legacy_mem0_id" in index_names
+    finally:
+        conn.close()
+
+
 def test_local_schema_has_migration_audit_and_outbox(monkeypatch, tmp_path):
     monkeypatch.setenv("TIGERMEMORY_PROFILE", tm_core.TIGERMEMORY_PROFILE_LOCAL)
     db_path = tmp_path / "memory.sqlite"

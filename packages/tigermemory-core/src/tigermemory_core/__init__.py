@@ -1095,10 +1095,6 @@ def _local_schema_ddl() -> str:
         shadow_state TEXT,
         verified_at INTEGER
     );
-    CREATE INDEX IF NOT EXISTS idx_memories_content_sha_topic
-        ON memories(content_sha256, topic);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_legacy_mem0_id
-        ON memories(legacy_mem0_id) WHERE legacy_mem0_id IS NOT NULL;
     CREATE TABLE IF NOT EXISTS migration_audit (
         legacy_mem0_id TEXT PRIMARY KEY,
         new_id TEXT,

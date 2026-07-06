@@ -185,6 +185,64 @@ def test_import_creates_migration_audit_and_outbox_tables(tmp_path) -> None:
         conn.close()
 
 
+def test_import_migrates_old_memory_table_before_index_creation(tmp_path) -> None:
+    db = tmp_path / "mem.sqlite"
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE memories (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                source_agent TEXT NOT NULL,
+                route_decision TEXT NOT NULL,
+                route_score INTEGER NOT NULL DEFAULT 0,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                state TEXT NOT NULL DEFAULT 'active',
+                backend_origin TEXT NOT NULL DEFAULT 'local',
+                vector_status TEXT NOT NULL DEFAULT 'fts5_only'
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    source = tmp_path / "source.jsonl"
+    _write_jsonl(
+        source,
+        [
+            {
+                "id": "legacy-old-schema",
+                "content": "old schema command import sample",
+                "metadata": {"source": "codex", "topic": "systems"},
+                "created_at": 1717500000,
+            },
+        ],
+    )
+
+    assert tm_local_memory.main(["import", "--input", str(source), "--db", str(db)]) == 0
+
+    conn = sqlite3.connect(db)
+    try:
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(memories)").fetchall()
+        }
+        assert {"content_sha256", "legacy_mem0_id", "shadow_state", "verified_at"} <= columns
+        index_names = {
+            row[1]
+            for row in conn.execute("PRAGMA index_list(memories)").fetchall()
+        }
+        assert "idx_memories_content_sha_topic" in index_names
+        assert "idx_memories_legacy_mem0_id" in index_names
+    finally:
+        conn.close()
+
+
 def test_import_records_migration_audit_rows(tmp_path) -> None:
     source = tmp_path / "source.jsonl"
     _write_jsonl(
