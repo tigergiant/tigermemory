@@ -1743,15 +1743,19 @@ def local_memory_stats() -> dict[str, Any]:
             "SELECT backend_origin, COUNT(*) AS n FROM memories GROUP BY backend_origin"
         ).fetchall():
             by_origin[str(row["backend_origin"] or "unknown")] = int(row["n"])
-        vectored = int(
-            conn.execute(
-                "SELECT COUNT(*) AS n FROM memories WHERE vector_status != 'fts5_only'"
-            ).fetchone()["n"]
-        )
+        by_vector_status: dict[str, int] = {}
+        for row in conn.execute(
+            "SELECT vector_status, COUNT(*) AS n FROM memories GROUP BY vector_status"
+        ).fetchall():
+            by_vector_status[str(row["vector_status"] or "unknown")] = int(row["n"])
+        # "vectored" means a usable local vector exists. fts5_only / not_migrated
+        # / none / error all mean NO usable vector — only 'available' counts.
+        vectored = by_vector_status.get("available", 0)
         return {
             "total": total,
             "by_state": by_state,
             "by_backend_origin": by_origin,
+            "by_vector_status": by_vector_status,
             "schema_version": _schema_meta_value(conn, "schema_version"),
             "fts_tokenizer": _schema_meta_value(conn, "fts_tokenizer"),
             "vectored_rows": vectored,

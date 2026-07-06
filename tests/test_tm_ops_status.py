@@ -60,7 +60,8 @@ def test_local_memory_stats_shape(seeded_db):
     assert stats["by_state"]["superseded_dup"] == 1  # the exact dup
     assert "local" in stats["by_backend_origin"]
     assert stats["by_backend_origin"].get("local-shadow") == 1
-    assert stats["vectored_rows"] == 0  # no embeddings yet
+    assert stats["vectored_rows"] == 0  # only vector_status='available' counts
+    assert stats["by_vector_status"].get("fts5_only", 0) >= 4  # all rows fts-only
     assert stats["db_path"].endswith("memory.sqlite")
 
 
