@@ -1,0 +1,24 @@
+{
+  "_doc": "Local event-memory retrieval eval. corpus = memories to seed into a temp DB; cases = queries + the corpus key they must recall. Dimensions: plain (lexical overlap, FTS must keep hitting), cross_language (query and memory use different words for the same thing -> FTS cannot, vector should), paraphrase (same meaning reworded -> FTS mostly cannot), distractor (a similar-but-wrong memory must not outrank the right one). Corpus texts for cross_language/paraphrase are deliberately lexically DISJOINT from their query so the FTS-only baseline honestly shows the gap that direction-1 (local vectors) must close.",
+  "corpus": [
+    {"key": "macbook",  "topic": "systems",     "text": "虎哥主力开发用的是 MacBook Pro"},
+    {"key": "volc",     "topic": "systems",     "text": "tigermemory 生产环境跑在火山引擎的服务器上"},
+    {"key": "vector",   "topic": "systems",     "text": "本地记忆打算用向量余弦做二阶段重排提升召回"},
+    {"key": "outbox",   "topic": "systems",     "text": "outbox worker 失败任务按 1 分钟 5 分钟 30 分钟退避重试"},
+    {"key": "dedup",    "topic": "systems",     "text": "schema v4 用 content_sha256 加 topic 做精确去重"},
+    {"key": "dividend", "topic": "investment",  "text": "组合最高权重主题是高股息现金流底仓"},
+    {"key": "apple_stock", "topic": "investment", "text": "苹果公司股票目前不在虎哥的投资组合里"},
+    {"key": "handoff",  "topic": "operations",  "text": "上一段会话在 Cursor 里改检索代码卡在了单元测试"}
+  ],
+  "cases": [
+    {"id": "plain-outbox",   "query": "outbox 退避重试",     "expect": "outbox",   "dimension": "plain"},
+    {"id": "plain-dedup",    "query": "精确去重 content_sha256", "expect": "dedup", "dimension": "plain"},
+    {"id": "plain-dividend", "query": "高股息现金流",         "expect": "dividend", "dimension": "plain"},
+    {"id": "xlang-mac",      "query": "苹果电脑",             "expect": "macbook",  "dimension": "cross_language"},
+    {"id": "xlang-volc",     "query": "Volcengine VPS",       "expect": "volc",     "dimension": "cross_language"},
+    {"id": "xlang-laptop",   "query": "笔记本电脑",           "expect": "macbook",  "dimension": "cross_language"},
+    {"id": "para-semantic",  "query": "语义搜索是怎么实现的", "expect": "vector",   "dimension": "paraphrase"},
+    {"id": "para-dividend",  "query": "高分红打底的板块",     "expect": "dividend", "dimension": "paraphrase"},
+    {"id": "distract-apple", "query": "苹果笔记本",           "expect": "macbook",  "dimension": "distractor", "not_outranked_by": "apple_stock"}
+  ]
+}
