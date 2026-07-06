@@ -102,11 +102,20 @@ _DEFAULT_ALLOWED_HOSTS = [
     "tm.doodiu.cloud", "tm-api.doodiu.cloud",
 ]
 _allowed_hosts_env = os.environ.get("TM_MCP_ALLOWED_HOSTS", "").strip()
-_allowed_hosts = (
+# TM_MCP_ALLOWED_HOSTS fully REPLACES the defaults (advanced / full override).
+# TM_MCP_EXTRA_ALLOWED_HOSTS APPENDS to whatever base list is in effect, so
+# adding a new direct-access peer (e.g. a portproxy host IP) can't accidentally
+# drop localhost / tigermemory-wsl / Cloudflare from the allowlist. Prefer EXTRA.
+_base_allowed_hosts = (
     [h.strip() for h in _allowed_hosts_env.split(",") if h.strip()]
     if _allowed_hosts_env
-    else _DEFAULT_ALLOWED_HOSTS
+    else list(_DEFAULT_ALLOWED_HOSTS)
 )
+_extra_allowed_hosts_env = os.environ.get("TM_MCP_EXTRA_ALLOWED_HOSTS", "").strip()
+_extra_allowed_hosts = [
+    h.strip() for h in _extra_allowed_hosts_env.split(",") if h.strip()
+]
+_allowed_hosts = list(dict.fromkeys(_base_allowed_hosts + _extra_allowed_hosts))
 
 # Role-based access control (P2-11). Default 'writer' can call all tools;
 # 'reader' is blocked by _require_writer() on write tools.
