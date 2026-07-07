@@ -2040,8 +2040,32 @@ def _local_vector_candidates(conn: sqlite3.Connection, query_vec: list[float], t
         """
     ).fetchall()
     scored: list[tuple[float, str]] = []
+    if _np is not None:
+        q = _np.asarray(query_vec, dtype=_np.float32)
+        q_norm = float(_np.linalg.norm(q))
+        if not q_norm:
+            return []
+        for row in rows:
+            vec = _np.frombuffer(row["vec"], dtype=_np.float32)
+            denom = q_norm * float(_np.linalg.norm(vec))
+            sim = float(_np.dot(q, vec) / denom) if denom else 0.0
+            scored.append((sim, str(row["memory_id"])))
+        scored.sort(key=lambda t: t[0], reverse=True)
+        return [mid for _, mid in scored[:top_n]]
+
+    query = [float(x) for x in query_vec]
+    query_norm = math.sqrt(sum(x * x for x in query))
+    if not query_norm:
+        return []
     for row in rows:
-        sim = _cosine(query_vec, _unpack_vec(row["vec"]))
+        vec = _unpack_vec(row["vec"])
+        dot = 0.0
+        vec_norm_sq = 0.0
+        for x, y in zip(query, vec):
+            dot += x * y
+            vec_norm_sq += y * y
+        denom = query_norm * math.sqrt(vec_norm_sq)
+        sim = dot / denom if denom else 0.0
         scored.append((sim, str(row["memory_id"])))
     scored.sort(key=lambda t: t[0], reverse=True)
     return [mid for _, mid in scored[:top_n]]

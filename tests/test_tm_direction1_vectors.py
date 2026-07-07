@@ -113,6 +113,32 @@ def test_hybrid_surfaces_lexically_disjoint_memory_via_vector(local_db):
     assert hybrid_ids[0] == macbook  # and it ranks first (closest vector)
 
 
+def test_vector_candidates_reuse_query_norm(local_db, monkeypatch):
+    ids = [_write(f"vector perf memory {i}") for i in range(3)]
+    for idx, mid in enumerate(ids):
+        tm_core.store_memory_embedding(mid, [1.0 - idx * 0.1, idx * 0.1, 0.0], model="mock")
+
+    monkeypatch.setattr(tm_core, "_np", None)
+    sqrt_calls = 0
+    original_sqrt = tm_core.math.sqrt
+
+    def counted_sqrt(value):
+        nonlocal sqrt_calls
+        sqrt_calls += 1
+        return original_sqrt(value)
+
+    monkeypatch.setattr(tm_core.math, "sqrt", counted_sqrt)
+    conn = tm_core._local_db_conn()
+    try:
+        tm_core._ensure_local_memory_schema(conn)
+        candidates = tm_core._local_vector_candidates(conn, [1.0, 0.0, 0.0], top_n=3)
+    finally:
+        conn.close()
+
+    assert candidates[0] == ids[0]
+    assert sqrt_calls == 4  # one query norm + one stored-vector norm per row
+
+
 def test_hybrid_graceful_when_embed_raises(local_db):
     mid = _write("outbox 退避重试机制")
     tm_core.store_memory_embedding(mid, [1.0, 0.0], model="mock")
