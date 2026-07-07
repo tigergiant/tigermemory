@@ -752,6 +752,7 @@ async def ops_status():
         return {
             "schema": "tm-ops-status-v1",
             "profile": tm_core.tigermemory_profile(),
+            "read_backend": tm_core.memory_read_backend(),
             "db": _ops_db_stats(),
             "outbox": _ops_outbox_status(),
             "shadow": _ops_shadow_status(),

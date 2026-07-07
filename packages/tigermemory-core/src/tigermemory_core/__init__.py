@@ -126,6 +126,7 @@ __all__ = [
     "local_search_hybrid",
     "local_shadow_stats",
     "local_vector_search_enabled",
+    "memory_read_backend",
     "backfill_embeddings",
     "embed_and_store_memory",
     "get_memory_embedding",
@@ -955,6 +956,7 @@ _LOCAL_MEMORY_SCHEMA_VERSION = 4
 _SHADOW_SEARCH_ENV = "TM_SHADOW_SEARCH_ENABLED"
 _LOCAL_DUAL_WRITE_ENV = "TM_LOCAL_DUAL_WRITE"
 _LOCAL_VECTOR_SEARCH_ENV = "TM_LOCAL_VECTOR_SEARCH"
+_MEMORY_READ_BACKEND_ENV = "TM_MEMORY_READ_BACKEND"
 _SHADOW_SEARCH_LOG_REL_PATH = pathlib.Path(".tmp") / "search-shadow"
 _LOCAL_CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
 _LOCAL_LATIN_TERM_RE = re.compile(r"[a-z0-9][a-z0-9._:/\\-]*", re.IGNORECASE)
@@ -1040,6 +1042,24 @@ def local_vector_search_enabled() -> bool:
     except RuntimeError:
         return False
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def memory_read_backend() -> str:
+    """Which backend serves memory reads: 'local' or 'openmemory' (default).
+
+    The Phase-2 read cutover. Default 'openmemory' — production behaviour is
+    unchanged until this is explicitly set to 'local' (shell env first, then
+    runtime/openmemory/.env). Only meaningful under profile=hybrid; the local
+    profile always reads local regardless. Reversible: unset to revert reads to
+    OpenMemory. When 'local', mem0_search reads local hybrid search and, on any
+    local error, falls back to OpenMemory ONCE (see mem0_search)."""
+    raw = os.environ.get(_MEMORY_READ_BACKEND_ENV)
+    if raw is None:
+        try:
+            raw = _env_value(_MEMORY_READ_BACKEND_ENV)
+        except RuntimeError:
+            raw = ""
+    return "local" if str(raw).strip().lower() == "local" else "openmemory"
 
 
 def _shadow_search_log_path() -> pathlib.Path:
@@ -1558,6 +1578,29 @@ def _record_local_shadow_sync_failure(
             outcome=f"shadow_{action}_failed",
             target_ref={"legacy_mem0_ids": memory_ids},
             error=str(error),
+        )
+    except Exception:
+        pass
+
+
+def _record_read_cutover_fallback(query: str, error: Exception) -> None:
+    """Record that a local read (TM_MEMORY_READ_BACKEND=local) failed and fell
+    back to OpenMemory. This is the visibility half of the fuse — a rising count
+    of these means local read has a real problem that must be fixed before the
+    cutover can be trusted (it is not a silent success)."""
+    try:
+        from . import runtime_events
+
+        runtime_events.record_event(
+            event_type="memory_read_cutover_fallback",
+            service="tigermemory-core",
+            component="mem0_search",
+            ok=False,
+            severity="warning",
+            route="openmemory-fallback",
+            outcome="local_read_failed_fell_back",
+            target_ref={"query_sha256_12": hashlib.sha256(query.encode("utf-8")).hexdigest()[:12]},
+            error=str(error)[:300],
         )
     except Exception:
         pass
@@ -2703,6 +2746,26 @@ def mem0_search(
             "search_backend": backend,
         }
         return json.dumps(payload)
+
+    # Phase-2 read cutover (profile=hybrid): serve reads from local SQLite hybrid
+    # search instead of OpenMemory when TM_MEMORY_READ_BACKEND=local. Fail-safe:
+    # on ANY local error, fall back to OpenMemory ONCE and record the event, so a
+    # direct cutover can never take reads down — it degrades to the old backend.
+    if memory_read_backend() == "local":
+        try:
+            results = local_search_hybrid(query, size=size)["results"]
+            payload = {
+                "count": len(results),
+                "results": results,
+                "items": results,
+                "warnings": [],
+                "search_backend": "local-cutover",
+            }
+            return json.dumps(payload)
+        except Exception as exc:  # noqa: BLE001 - fuse: never let local read fail the request
+            _record_read_cutover_fallback(query, exc)
+            # fall through to the OpenMemory path below
+
     params = urllib.parse.urlencode(
         # OpenMemory's patched GET /api/v1/memories/ filters on search_query.
         # Older tigermemory docs and clients used query=; the router keeps that
