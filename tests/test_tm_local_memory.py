@@ -692,6 +692,146 @@ def test_run_shadow_search_captures_openmemory_fetch_exception(tmp_path) -> None
     assert any("openmemory_fetch_exception" in w for w in record["warnings"])
 
 
+def test_summarize_cutover_coverage_splits_content_and_id_contract(tmp_path) -> None:
+    db = tmp_path / "mem.sqlite"
+    conn = tm_local_memory._conn(db)
+    try:
+        content = "duplicate handoff content"
+        sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        for memory_id, state in (("active-1", "active"), ("dup-1", "superseded_dup")):
+            conn.execute(
+                """
+                INSERT INTO memories(
+                    id, content, topic, source_agent, route_decision, route_score,
+                    metadata_json, content_sha256, created_at, updated_at, state,
+                    backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
+                ) VALUES (?, ?, 'systems', 'codex', 'mem0', 90, '{}', ?, 1, 1, ?,
+                    'openmemory-import', 'available', ?, 'pending', 1)
+                """,
+                (memory_id, content, sha, state, memory_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    summary = tm_local_memory.summarize_cutover_coverage(
+        [
+            {"id": "active-1", "content": content, "metadata": {"topic": "systems"}},
+            {"id": "dup-1", "content": content, "metadata": {"topic": "systems"}},
+        ],
+        db,
+    )
+
+    assert summary["strict_active_count_pass"] is False
+    assert summary["content_coverage_pass"] is True
+    assert summary["id_contract_pass"] is False
+    assert summary["openmemory_ids_non_active_local"] == 1
+    assert summary["non_active_with_active_same_content_topic"] == 1
+
+
+def test_summarize_cutover_shadow_probe_flags_zero_overlap() -> None:
+    rows = [
+        {
+            "old_count": 1,
+            "local_count": 1,
+            "id_intersection_count": 0,
+            "content_sha_intersection_count": 0,
+            "local_latency_ms": 10.0,
+            "warnings": [],
+        },
+        {
+            "old_count": 1,
+            "local_count": 0,
+            "id_intersection_count": 0,
+            "content_sha_intersection_count": 0,
+            "local_latency_ms": 20.0,
+            "warnings": [],
+        },
+    ]
+
+    summary = tm_local_memory.summarize_cutover_shadow_probe(rows, min_queries=2)
+
+    assert summary["status"] == "blocked"
+    assert summary["local_empty_but_old_had"] == 1
+    assert summary["id_zero_overlap_when_both_nonempty"] == 1
+    assert summary["content_zero_overlap_when_both_nonempty"] == 1
+    assert "local_empty_but_old_had" in summary["reasons"]
+    assert "content_zero_overlap" in summary["reasons"]
+
+
+def test_run_cutover_shadow_probe_compares_id_and_content_overlap(tmp_path) -> None:
+    rows = tm_local_memory.run_cutover_shadow_probe(
+        ["same content query"],
+        db_path=tmp_path / "unused.sqlite",
+        openmemory_fetch=lambda query, *, size=5: ([{"id": "old-1", "content": "same content"}], []),
+        local_search=lambda query, *, size=5, db_path=None: [{"id": "local-1", "content": "same content"}],
+    )
+
+    assert rows[0]["old_count"] == 1
+    assert rows[0]["local_count"] == 1
+    assert rows[0]["id_intersection_count"] == 0
+    assert rows[0]["content_sha_intersection_count"] == 1
+    assert rows[0]["warnings"] == []
+
+
+def test_cutover_gates_cli_reports_blocked_gates(tmp_path, capsys) -> None:
+    db = tmp_path / "mem.sqlite"
+    conn = tm_local_memory._conn(db)
+    try:
+        content = "cutover cli content"
+        conn.execute(
+            """
+            INSERT INTO memories(
+                id, content, topic, source_agent, route_decision, route_score,
+                metadata_json, content_sha256, created_at, updated_at, state,
+                backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
+            ) VALUES ('local-1', ?, 'systems', 'codex', 'mem0', 90, '{}', ?, 1, 1,
+                'active', 'openmemory-import', 'available', 'local-1', 'pending', 1)
+            """,
+            (content, hashlib.sha256(content.encode("utf-8")).hexdigest()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    dump = tmp_path / "openmemory.jsonl"
+    _write_jsonl(
+        dump,
+        [
+            {"id": "local-1", "content": content, "metadata": {"topic": "systems"}},
+            {"id": "missing-1", "content": "missing content", "metadata": {"topic": "systems"}},
+        ],
+    )
+    shadow = tmp_path / "shadow.jsonl"
+    _write_jsonl(
+        shadow,
+        [
+            {
+                "old_count": 1,
+                "local_count": 0,
+                "id_intersection_count": 0,
+                "content_sha_intersection_count": 0,
+                "local_latency_ms": 10.0,
+                "warnings": [],
+            }
+        ],
+    )
+
+    rc = tm_local_memory.main([
+        "cutover-gates",
+        "--db", str(db),
+        "--openmemory-dump", str(dump),
+        "--shadow-probe-log", str(shadow),
+        "--min-queries", "1",
+    ])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 1
+    assert payload["status"] == "blocked"
+    assert payload["coverage"]["openmemory_ids_missing_local_any_state"] == 1
+    assert payload["shadow_probe"]["local_empty_but_old_had"] == 1
+
+
 def test_run_shadow_search_does_not_create_missing_db(tmp_path) -> None:
     missing_db = tmp_path / "missing.sqlite"
     log_dir = tmp_path / "search-shadow"

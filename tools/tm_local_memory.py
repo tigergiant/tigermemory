@@ -1301,6 +1301,297 @@ def _extract_ids_from_openmemory_body(body: str | dict[str, Any] | None) -> list
     return ids
 
 
+def _memory_item_text(item: dict[str, Any]) -> str:
+    return str(item.get("content") or item.get("text") or item.get("memory") or "")
+
+
+def _memory_item_topic(item: dict[str, Any]) -> str:
+    meta = item.get("metadata") or item.get("metadata_") or {}
+    if not isinstance(meta, dict):
+        meta = {}
+    return str(meta.get("topic") or item.get("topic") or "cross")
+
+
+def _memory_item_sha(item: dict[str, Any]) -> str | None:
+    text = _memory_item_text(item)
+    if not text:
+        return None
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _readonly_conn(db_path: Path) -> sqlite3.Connection:
+    uri = f"{db_path.resolve().as_uri()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def summarize_cutover_coverage(openmemory_items: list[dict[str, Any]], db_path: Path) -> dict[str, Any]:
+    """Summarize read-cutover Gate A without mutating the local DB."""
+    db = Path(db_path)
+    if not db.exists():
+        return {"status": "blocked", "reason": "local_db_missing", "db_path": str(db)}
+
+    conn = _readonly_conn(db)
+    try:
+        local_active = int(
+            conn.execute("SELECT COUNT(*) AS n FROM memories WHERE state='active'").fetchone()["n"]
+        )
+        local_total = int(conn.execute("SELECT COUNT(*) AS n FROM memories").fetchone()["n"])
+        state_counts = {
+            str(row["state"]): int(row["n"])
+            for row in conn.execute("SELECT state, COUNT(*) AS n FROM memories GROUP BY state").fetchall()
+        }
+        shadow_counts = {
+            str(row["shadow_state"]): int(row["n"])
+            for row in conn.execute(
+                """
+                SELECT shadow_state, COUNT(*) AS n
+                FROM memories
+                WHERE backend_origin='local-shadow'
+                GROUP BY shadow_state
+                """
+            ).fetchall()
+        }
+
+        missing = 0
+        non_active = 0
+        non_active_with_equiv = 0
+        non_active_without_equiv = 0
+        for item in openmemory_items:
+            memory_id = str(item.get("id") or "")
+            if not memory_id:
+                continue
+            row = conn.execute(
+                """
+                SELECT id, state, topic
+                FROM memories
+                WHERE id=? OR legacy_mem0_id=?
+                LIMIT 1
+                """,
+                (memory_id, memory_id),
+            ).fetchone()
+            if row is None:
+                missing += 1
+                continue
+            if str(row["state"]) == "active":
+                continue
+            non_active += 1
+            item_sha = _memory_item_sha(item)
+            topic = str(row["topic"] or _memory_item_topic(item))
+            equiv = None
+            if item_sha:
+                equiv = conn.execute(
+                    """
+                    SELECT 1
+                    FROM memories
+                    WHERE state='active' AND topic=? AND content_sha256=?
+                    LIMIT 1
+                    """,
+                    (topic, item_sha),
+                ).fetchone()
+            if equiv:
+                non_active_with_equiv += 1
+            else:
+                non_active_without_equiv += 1
+    finally:
+        conn.close()
+
+    openmemory_count = len([item for item in openmemory_items if isinstance(item, dict) and item.get("id")])
+    strict_active_count_pass = local_active >= openmemory_count
+    content_coverage_pass = missing == 0 and non_active_without_equiv == 0
+    id_contract_pass = missing == 0 and non_active == 0
+    return {
+        "status": "pass" if strict_active_count_pass and content_coverage_pass and id_contract_pass else "blocked",
+        "openmemory_count": openmemory_count,
+        "local_active": local_active,
+        "local_total": local_total,
+        "active_minus_openmemory": local_active - openmemory_count,
+        "strict_active_count_pass": strict_active_count_pass,
+        "content_coverage_pass": content_coverage_pass,
+        "id_contract_pass": id_contract_pass,
+        "openmemory_ids_missing_local_any_state": missing,
+        "openmemory_ids_non_active_local": non_active,
+        "non_active_with_active_same_content_topic": non_active_with_equiv,
+        "non_active_without_active_same_content_topic": non_active_without_equiv,
+        "state_counts": state_counts,
+        "shadow_counts": shadow_counts,
+        "db_path": str(db),
+    }
+
+
+def _percentile(values: list[float], q: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    idx = int(round((len(ordered) - 1) * q))
+    idx = max(0, min(idx, len(ordered) - 1))
+    return round(ordered[idx], 2)
+
+
+def summarize_cutover_shadow_probe(
+    rows: list[dict[str, Any]],
+    *,
+    min_queries: int = 30,
+    max_local_p95_ms: float = 500.0,
+) -> dict[str, Any]:
+    local_empty = sum(
+        1 for row in rows if int(row.get("old_count") or 0) > 0 and int(row.get("local_count") or 0) == 0
+    )
+    id_zero_overlap = sum(
+        1
+        for row in rows
+        if int(row.get("old_count") or 0) > 0
+        and int(row.get("local_count") or 0) > 0
+        and int(row.get("id_intersection_count") or 0) == 0
+    )
+    content_zero_overlap = sum(
+        1
+        for row in rows
+        if int(row.get("old_count") or 0) > 0
+        and int(row.get("local_count") or 0) > 0
+        and int(row.get("content_sha_intersection_count") or 0) == 0
+    )
+    warning_count = sum(1 for row in rows if row.get("warnings"))
+    latencies = [
+        float(row["local_latency_ms"])
+        for row in rows
+        if isinstance(row.get("local_latency_ms"), (int, float))
+    ]
+    p95 = _percentile(latencies, 0.95)
+    reasons: list[str] = []
+    if len(rows) < min_queries:
+        reasons.append("not_enough_queries")
+    if local_empty:
+        reasons.append("local_empty_but_old_had")
+    if id_zero_overlap:
+        reasons.append("id_zero_overlap")
+    if content_zero_overlap:
+        reasons.append("content_zero_overlap")
+    if warning_count:
+        reasons.append("warnings_present")
+    if p95 is not None and p95 > max_local_p95_ms:
+        reasons.append("local_latency_p95_too_high")
+    return {
+        "status": "pass" if not reasons else "blocked",
+        "reasons": reasons,
+        "query_count": len(rows),
+        "old_nonempty_count": sum(1 for row in rows if int(row.get("old_count") or 0) > 0),
+        "local_empty_but_old_had": local_empty,
+        "id_zero_overlap_when_both_nonempty": id_zero_overlap,
+        "content_zero_overlap_when_both_nonempty": content_zero_overlap,
+        "warning_count": warning_count,
+        "local_latency_p95_ms": p95,
+        "max_local_p95_ms": max_local_p95_ms,
+    }
+
+
+def _shadow_openmemory_search_items(
+    query: str,
+    *,
+    size: int = 5,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    warnings: list[str] = []
+    try:
+        url = _env_value("MEM0_URL", DEFAULT_MEM0_URL).rstrip("/")
+        api_key = _env_value("MEM0_API_KEY", "")
+        uid = _env_value("MEM0_USER_ID", DEFAULT_MEM0_USER)
+        qs = urllib.parse.urlencode(
+            {
+                "user_id": uid,
+                "search_query": query,
+                "page": 1,
+                "size": size,
+                "match_mode": "id_first",
+            }
+        )
+        payload = _http_json(f"{url}/api/v1/memories/?{qs}", bearer=api_key or None)
+        return _extract_items(payload), warnings
+    except Exception as exc:
+        warnings.append(f"openmemory_search_error: {exc}")
+        return [], warnings
+
+
+def _local_hybrid_search_items(
+    query: str,
+    *,
+    size: int = 5,
+    db_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    import tigermemory_core as tm_core
+
+    old_db_env = os.environ.get(SHADOW_LOCAL_DB_ENV)
+    if db_path is not None:
+        os.environ[SHADOW_LOCAL_DB_ENV] = str(db_path)
+    try:
+        payload = tm_core.local_search_hybrid(query, size=size)
+    finally:
+        if db_path is not None:
+            if old_db_env is None:
+                os.environ.pop(SHADOW_LOCAL_DB_ENV, None)
+            else:
+                os.environ[SHADOW_LOCAL_DB_ENV] = old_db_env
+    rows = payload.get("results") if isinstance(payload, dict) else []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def run_cutover_shadow_probe(
+    queries: list[str],
+    *,
+    db_path: Path,
+    size: int = 5,
+    openmemory_fetch=None,
+    local_search=None,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    fetch_old = openmemory_fetch or _shadow_openmemory_search_items
+    fetch_local = local_search or _local_hybrid_search_items
+    for query in queries:
+        q = str(query or "").strip()
+        if not q:
+            continue
+        warnings: list[str] = []
+        old_t0 = time.monotonic()
+        try:
+            old_items, old_warnings = fetch_old(q, size=size)
+            if isinstance(old_warnings, list):
+                warnings.extend(old_warnings)
+        except Exception as exc:
+            old_items = []
+            warnings.append(f"openmemory_fetch_exception: {exc}")
+        old_latency_ms = (time.monotonic() - old_t0) * 1000.0
+
+        local_t0 = time.monotonic()
+        try:
+            local_items = fetch_local(q, size=size, db_path=Path(db_path))
+        except Exception as exc:
+            local_items = []
+            warnings.append(f"local_hybrid_exception: {exc}")
+        local_latency_ms = (time.monotonic() - local_t0) * 1000.0
+
+        old_ids = [str(item.get("id")) for item in old_items if isinstance(item, dict) and item.get("id")]
+        local_ids = [str(item.get("id")) for item in local_items if isinstance(item, dict) and item.get("id")]
+        old_shas = {_memory_item_sha(item) for item in old_items if isinstance(item, dict)}
+        local_shas = {_memory_item_sha(item) for item in local_items if isinstance(item, dict)}
+        old_shas.discard(None)
+        local_shas.discard(None)
+        rows.append(
+            {
+                "timestamp": dt.datetime.now(TZ_CN).isoformat(),
+                "query": q,
+                "size": size,
+                "old_count": len(old_ids),
+                "local_count": len(local_ids),
+                "id_intersection_count": len(set(old_ids) & set(local_ids)),
+                "content_sha_intersection_count": len(old_shas & local_shas),
+                "old_latency_ms": round(old_latency_ms, 2),
+                "local_latency_ms": round(local_latency_ms, 2),
+                "warnings": warnings,
+            }
+        )
+    return rows
+
+
 def _shadow_local_search_ids(conn: sqlite3.Connection, query: str, *, size: int = 5) -> list[str]:
     """Run a local SQLite lexical search and return ordered ids.
 
@@ -1546,6 +1837,69 @@ def cmd_shadow_search(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_cutover_gates(args: argparse.Namespace) -> int:
+    db_path = Path(args.db).resolve()
+    if args.openmemory_dump:
+        openmemory_items = list(_iter_jsonl(Path(args.openmemory_dump).resolve()))
+        openmemory_source = str(Path(args.openmemory_dump).resolve())
+    else:
+        openmemory_items = _fetch_openmemory_records()
+        openmemory_source = "openmemory-list-api"
+
+    coverage = summarize_cutover_coverage(openmemory_items, db_path)
+
+    if args.queries_file:
+        queries_path = Path(args.queries_file).resolve()
+        queries = [
+            line.strip()
+            for line in queries_path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        shadow_rows = run_cutover_shadow_probe(queries, db_path=db_path, size=args.size)
+        shadow_source = str(queries_path)
+        shadow_probe = summarize_cutover_shadow_probe(
+            shadow_rows,
+            min_queries=args.min_queries,
+            max_local_p95_ms=args.max_local_p95_ms,
+        )
+    elif args.shadow_probe_log:
+        shadow_rows = list(_iter_jsonl(Path(args.shadow_probe_log).resolve()))
+        shadow_source = str(Path(args.shadow_probe_log).resolve())
+        shadow_probe = summarize_cutover_shadow_probe(
+            shadow_rows,
+            min_queries=args.min_queries,
+            max_local_p95_ms=args.max_local_p95_ms,
+        )
+    else:
+        shadow_source = None
+        shadow_probe = {
+            "status": "pending",
+            "reasons": ["missing_shadow_probe_log"],
+            "query_count": 0,
+        }
+
+    status = "pass" if coverage.get("status") == "pass" and shadow_probe.get("status") == "pass" else "blocked"
+    result = {
+        "schema": "tm-read-cutover-gates-v1",
+        "generated_at": dt.datetime.now(TZ_CN).isoformat(),
+        "status": status,
+        "coverage": coverage,
+        "shadow_probe": shadow_probe,
+        "inputs": {
+            "db": str(db_path),
+            "openmemory_source": openmemory_source,
+            "shadow_probe_source": shadow_source,
+        },
+    }
+
+    if args.out:
+        out_path = Path(args.out).resolve()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if status == "pass" else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="OpenMemory/local memory migration helpers")
     sub = ap.add_subparsers(dest="command", required=True)
@@ -1592,6 +1946,16 @@ def build_parser() -> argparse.ArgumentParser:
     ss.add_argument("--size", type=int, default=5)
     ss.add_argument("--log-dir", default=None)
 
+    cg = sub.add_parser("cutover-gates", help="Summarize read-cutover Gate A/B readiness")
+    cg.add_argument("--db", required=True)
+    cg.add_argument("--openmemory-dump", default=None, help="optional OpenMemory JSONL dump; default fetches list API")
+    cg.add_argument("--queries-file", default=None, help="optional newline-separated real queries for live hybrid probe")
+    cg.add_argument("--shadow-probe-log", default=None, help="JSONL rows from a cutover shadow probe")
+    cg.add_argument("--size", type=int, default=5)
+    cg.add_argument("--min-queries", type=int, default=30)
+    cg.add_argument("--max-local-p95-ms", type=float, default=500.0)
+    cg.add_argument("--out", default=None)
+
     return ap
 
 
@@ -1607,6 +1971,7 @@ def main(argv: list[str] | None = None) -> int:
         "restore": cmd_restore,
         "verify": cmd_verify,
         "shadow-search": cmd_shadow_search,
+        "cutover-gates": cmd_cutover_gates,
     }
     start = time.monotonic()
     try:
