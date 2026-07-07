@@ -32,9 +32,12 @@ tool that hard-fails on that is useless. Read-only; never writes.
 from __future__ import annotations
 
 import argparse
+import datetime
+import difflib
 import json
 import os
 import pathlib
+import shutil
 import sys
 import urllib.request
 
@@ -497,6 +500,155 @@ def render_continuity_text(result: dict) -> str:
     return "\n".join(lines).rstrip()
 
 
+# ---------- F3: one-click config fix (diff-preview, explicit --apply) ----------
+#
+# Safety posture (deliberately conservative, matching tm_agent_connect.py's
+# established convention in this codebase): the Authorization header written
+# by --apply is ALWAYS the placeholder "<TM_MCP_API_KEY>" — this tool never
+# writes a real Bearer token into a file automatically. The user swaps in the
+# real value themselves (it lives in runtime/openmemory/.env). This keeps the
+# blast radius of an automated multi-file writer bounded: worst case it writes
+# a config with a placeholder that doesn't work yet, never a leaked secret.
+#
+# Only JSON mcpServers configs are auto-writable. TOML (Codex) has no safe
+# stdlib round-trip writer, so `fix` refuses to touch it and returns the
+# existing manual hint instead.
+
+TOKEN_PLACEHOLDER = "<TM_MCP_API_KEY>"
+
+
+def _http_server_value() -> dict:
+    return {
+        "type": "http",
+        "url": "https://tm.doodiu.cloud/mcp",
+        "headers": {"Authorization": f"Bearer {TOKEN_PLACEHOLDER}"},
+    }
+
+
+def build_fix_plan(ide_id: str) -> dict:
+    """Compute what `fix` would change for one IDE, without writing anything."""
+    entry = next((e for e in _registry() if e["id"] == ide_id), None)
+    if entry is None:
+        return {"ide_id": ide_id, "writable": False, "reason": f"unknown ide id: {ide_id}"}
+    if entry["kind"] != "config_file" or entry.get("format") != "json":
+        return {
+            "ide_id": ide_id,
+            "name": entry["name"],
+            "writable": False,
+            "reason": (
+                f"F3 只自动写 JSON mcpServers 配置；{entry['name']} "
+                f"用的是 {entry.get('format') or '远程连接器'}，只能手动配置"
+            ),
+            "hint": entry["hint"],
+        }
+    existing_path = next((p for p in entry["candidates"] if p.exists()), None)
+    target_path = existing_path or (entry["candidates"][0] if entry["candidates"] else None)
+    if target_path is None:
+        return {
+            "ide_id": ide_id,
+            "name": entry["name"],
+            "writable": False,
+            "reason": "no candidate config path known for this platform",
+        }
+    before_text = ""
+    before_data: dict = {}
+    if existing_path is not None:
+        before_text = existing_path.read_text(encoding="utf-8", errors="replace")
+        try:
+            before_data = json.loads(before_text)
+            if not isinstance(before_data, dict):
+                raise ValueError("config root is not a JSON object")
+        except (json.JSONDecodeError, ValueError) as exc:
+            return {
+                "ide_id": ide_id,
+                "name": entry["name"],
+                "writable": False,
+                "reason": f"{existing_path} 不是合法 JSON（{exc}），需要先手动修复",
+            }
+    already_configured = "tigermemory" in (before_data.get("mcpServers") or {})
+    after_data = json.loads(json.dumps(before_data)) if before_data else {}
+    after_data.setdefault("mcpServers", {})
+    after_data["mcpServers"]["tigermemory"] = _http_server_value()
+    after_text = json.dumps(after_data, ensure_ascii=False, indent=2) + "\n"
+    diff_lines = list(
+        difflib.unified_diff(
+            before_text.splitlines(keepends=True),
+            after_text.splitlines(keepends=True),
+            fromfile=str(target_path) if existing_path else "(不存在，将新建)",
+            tofile=str(target_path),
+        )
+    )
+    return {
+        "ide_id": ide_id,
+        "name": entry["name"],
+        "config_path": str(target_path),
+        "exists_before": existing_path is not None,
+        "already_configured": already_configured,
+        "before_text": before_text,
+        "after_text": after_text,
+        "diff": "".join(diff_lines),
+        "writable": True,
+    }
+
+
+def apply_fix_plan(plan: dict) -> dict:
+    """Write the planned change to disk. Call only after showing the diff.
+
+    Backs up any existing file first. No-ops (does not touch the file) when
+    already_configured is True.
+    """
+    if not plan.get("writable"):
+        return {"ok": False, "reason": plan.get("reason", "not writable")}
+    if plan.get("already_configured"):
+        return {"ok": True, "action": "noop", "reason": "tigermemory already configured"}
+    target_path = pathlib.Path(plan["config_path"])
+    backup_path = None
+    if plan.get("exists_before"):
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = target_path.with_name(f"{target_path.name}.bak_{timestamp}")
+        shutil.copy2(target_path, backup_path)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(plan["after_text"], encoding="utf-8")
+    return {
+        "ok": True,
+        "action": "written",
+        "config_path": str(target_path),
+        "backup_path": str(backup_path) if backup_path else None,
+        "token_is_placeholder": True,
+    }
+
+
+def render_fix_plan_text(plan: dict, applied: dict | None = None) -> str:
+    if not plan.get("writable"):
+        lines = [f"⚪ {plan.get('name', plan['ide_id'])}: 不能自动改"]
+        lines.append(f"   原因: {plan.get('reason', 'unknown')}")
+        if plan.get("hint"):
+            lines.append(f"   手动修复: {plan['hint']}")
+        return "\n".join(lines)
+    if plan.get("already_configured"):
+        return f"🟢 {plan['name']}: 已经配置好了，无需修复（{plan['config_path']}）"
+    lines = [f"计划修改: {plan['name']}  ({plan['config_path']})", ""]
+    lines.append(plan["diff"] if plan["diff"] else "(新建文件，无 diff 可比)")
+    lines.append("")
+    lines.append(
+        f"注意：Authorization 里的 {TOKEN_PLACEHOLDER} 是占位符，写入后需要你自己"
+        "换成 runtime/openmemory/.env 里的真实 TM_MCP_API_KEY 值——本工具不会自动"
+        "写入真实密钥。"
+    )
+    if applied is None:
+        lines.append("这是预览，尚未写入。加 --apply 才会真的写文件（写入前自动备份原文件）。")
+    elif applied.get("ok"):
+        if applied.get("action") == "written":
+            lines.append(f"✅ 已写入 {applied['config_path']}")
+            if applied.get("backup_path"):
+                lines.append(f"   原文件已备份到 {applied['backup_path']}")
+        else:
+            lines.append(f"（{applied.get('reason')}，未改动文件）")
+    else:
+        lines.append(f"❌ 写入失败: {applied.get('reason')}")
+    return "\n".join(lines)
+
+
 def gather_full(check_health: bool = False, limit: int = 5) -> dict:
     """F1 + F2 combined: the one-shot "what's my situation" snapshot."""
     return {
@@ -529,6 +681,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     ct.add_argument("--json", action="store_true", help="emit JSON instead of text")
     ct.add_argument("--limit", type=int, default=5, help="how many recent handoff cards to show")
+    fx = sub.add_parser(
+        "fix",
+        help="preview (and, with --apply, write) the tigermemory MCP config for one IDE (F3)",
+    )
+    fx.add_argument("ide_id", help="IDE id from `status` output, e.g. cursor, windsurf, gemini")
+    fx.add_argument("--apply", action="store_true", help="actually write the file (default: preview only)")
+    fx.add_argument("--json", action="store_true", help="emit JSON instead of text")
     args = ap.parse_args(argv)
 
     if args.command is None:
@@ -557,6 +716,20 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(render_continuity_text(result))
         return 0 if result.get("ok") else 1
+    if args.command == "fix":
+        plan = build_fix_plan(args.ide_id)
+        applied = None
+        if args.apply and plan.get("writable") and not plan.get("already_configured"):
+            applied = apply_fix_plan(plan)
+        if args.json:
+            print(json.dumps({"plan": plan, "applied": applied}, ensure_ascii=False, indent=2))
+        else:
+            print(render_fix_plan_text(plan, applied))
+        if not plan.get("writable"):
+            return 1
+        if applied is not None and not applied.get("ok"):
+            return 1
+        return 0
     ap.print_help()
     return 2
 
