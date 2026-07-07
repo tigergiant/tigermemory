@@ -274,6 +274,26 @@ def test_gather_continuity_filters_out_non_handoff_hits():
     assert [c["id"] for c in result["cards"]] == ["real"]
 
 
+def test_gather_continuity_fetches_extra_before_filtering_noise():
+    calls = []
+    rows = [
+        {"id": "noise1", "created_at": 1779775000, "content": "regular fuzzy hit 1"},
+        {"id": "noise2", "created_at": 1779774000, "content": "regular fuzzy hit 2"},
+        {"id": "noise3", "created_at": 1779773000, "content": "regular fuzzy hit 3"},
+        {"id": "real2", "created_at": 1779772000, "content": SAMPLE_CARD_WITH_BLOCKER},
+        {"id": "real1", "created_at": 1779771000, "content": SAMPLE_CARD},
+    ]
+
+    def fetcher(base_url, query, limit, api_key, timeout, bypass_proxy):
+        calls.append(limit)
+        return {"results": rows[:limit]}
+
+    result = tm_ide_fleet.gather_continuity(limit=2, fetcher=fetcher)
+
+    assert calls == [6]
+    assert [c["id"] for c in result["cards"]] == ["real2", "real1"]
+
+
 def test_format_created_at_epoch_and_passthrough():
     assert "2026" in tm_ide_fleet._format_created_at(1779772973)
     assert tm_ide_fleet._format_created_at("not-a-number") == "not-a-number"

@@ -444,12 +444,14 @@ def gather_continuity(limit: int = 5, timeout: float = 8.0, fetcher=None) -> dic
         }
     fetch = fetcher or _search_memories_via_http
     last_error = "no channel attempted"
+    display_limit = max(0, int(limit))
+    fetch_limit = min(max(display_limit, 1) * 3, 30)
     for base in CONTINUITY_BASES:
         try:
             payload = fetch(
                 base["url"],
                 "memory_type session-handoff",
-                limit,
+                fetch_limit,
                 api_key,
                 timeout,
                 base["bypass_proxy"],
@@ -461,7 +463,7 @@ def gather_continuity(limit: int = 5, timeout: float = 8.0, fetcher=None) -> dic
             rec for rec in (_card_record(r) for r in (payload.get("results") or [])) if rec is not None
         ]
         cards.sort(key=lambda c: str(c.get("created_at_raw") or ""), reverse=True)
-        cards = cards[:limit]
+        cards = cards[:display_limit]
         return {
             "schema": "tm-ide-continuity-v1",
             "ok": True,
