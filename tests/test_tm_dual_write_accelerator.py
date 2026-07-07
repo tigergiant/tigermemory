@@ -405,6 +405,7 @@ def test_shadow_matches_checks_origin_state_and_shadow_state():
 
 def test_run_fault_drill_uses_temp_dbs_and_reports_expected_outcomes(monkeypatch, tmp_path):
     monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(tmp_path / "production.sqlite"))
+    monkeypatch.setenv("TM_OUTBOX_WORKER", "1")
     results = {row["name"]: row for row in accel.run_fault_drill()}
 
     assert results["shadow_write_failure_non_blocking"]["ok"] is True
@@ -413,6 +414,7 @@ def test_run_fault_drill_uses_temp_dbs_and_reports_expected_outcomes(monkeypatch
     assert results["remote_down_preserves_fail_closed"]["local_db_created"] is False
     assert results["local_wal_schema_readback"]["ok"] is True
     assert results["local_wal_schema_readback"]["journal_mode"] == "wal"
+    assert results["local_wal_schema_readback"]["outbox_count"] == 0
     assert (tmp_path / "production.sqlite").exists() is False
 
 

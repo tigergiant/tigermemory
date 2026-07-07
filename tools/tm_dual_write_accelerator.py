@@ -1146,6 +1146,7 @@ def run_fault_drill() -> list[dict[str, Any]]:
             previous = _set_env({
                 "TIGERMEMORY_PROFILE": tm_core.TIGERMEMORY_PROFILE_LOCAL,
                 "TIGERMEMORY_LOCAL_DB": str(tmp / "local-wal.sqlite"),
+                "TM_OUTBOX_WORKER": "0",
             })
             try:
                 raw = tm_core.mem0_write(
