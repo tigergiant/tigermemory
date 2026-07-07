@@ -12,6 +12,10 @@ This answers the three questions a user has when switching IDEs:
   2) if the one I just opened isn't configured, what is the ONE fix?
   3) (with --check-health) is tigermemory itself reachable right now?
 
+Running with no subcommand shows F1 (fleet status) + F2 (continuity) together
+-- the one command to run at the start of any session. `status` / `continuity`
+remain available standalone for scripting.
+
 Design: detection is a raw text-contains check for tigermemory markers, so it
 stays robust across config formats and never depends on tomllib. JSON configs
 are additionally parsed to report transport (http/stdio) when possible.
@@ -493,21 +497,50 @@ def render_continuity_text(result: dict) -> str:
     return "\n".join(lines).rstrip()
 
 
+def gather_full(check_health: bool = False, limit: int = 5) -> dict:
+    """F1 + F2 combined: the one-shot "what's my situation" snapshot."""
+    return {
+        "schema": "tm-ide-fleet-full-v1",
+        "fleet": gather_fleet(check_health=check_health),
+        "continuity": gather_continuity(limit=limit),
+    }
+
+
+def render_full_text(full: dict) -> str:
+    return render_text(full["fleet"]) + "\n\n" + render_continuity_text(full["continuity"])
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--json", action="store_true", help="emit JSON instead of text")
+    ap.add_argument(
+        "--check-health", action="store_true", help="also probe tigermemory /healthz (default view only)"
+    )
+    ap.add_argument(
+        "--limit", type=int, default=5, help="how many recent handoff cards to show (default view only)"
+    )
     sub = ap.add_subparsers(dest="command")
-    st = sub.add_parser("status", help="show multi-IDE fleet status (read-only)")
+    st = sub.add_parser("status", help="show multi-IDE fleet status only (read-only)")
     st.add_argument("--json", action="store_true", help="emit JSON instead of text")
     st.add_argument("--check-health", action="store_true", help="also probe tigermemory /healthz")
     ct = sub.add_parser(
         "continuity",
-        help="show where the last session left off, across IDEs (F2, read-only)",
+        help="show where the last session left off only, across IDEs (F2, read-only)",
     )
     ct.add_argument("--json", action="store_true", help="emit JSON instead of text")
     ct.add_argument("--limit", type=int, default=5, help="how many recent handoff cards to show")
     args = ap.parse_args(argv)
 
-    if args.command in (None, "status"):
+    if args.command is None:
+        # Default: F1 + F2 together — the one command to run at the start of
+        # any session, regardless of which IDE you just opened.
+        full = gather_full(check_health=args.check_health, limit=args.limit)
+        if args.json:
+            print(json.dumps(full, ensure_ascii=False, indent=2))
+        else:
+            print(render_full_text(full))
+        return 0
+    if args.command == "status":
         check_health = getattr(args, "check_health", False)
         as_json = getattr(args, "json", False)
         fleet = gather_fleet(check_health=check_health)

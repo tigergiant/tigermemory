@@ -23,6 +23,11 @@ def fake_home(monkeypatch, tmp_path):
     monkeypatch.setenv("TM_IDE_FLEET_HOME", str(tmp_path))
     monkeypatch.delenv("APPDATA", raising=False)
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    # The default (no-subcommand) command also gathers F2 continuity, which
+    # would otherwise read the real runtime/openmemory/.env key and attempt
+    # real network calls. Force the "not configured" fast path instead.
+    monkeypatch.delenv("TM_MCP_API_KEY", raising=False)
+    monkeypatch.setattr(tm_ide_fleet, "_api_key", lambda: None)
     return tmp_path
 
 
@@ -147,3 +152,28 @@ def test_default_command_is_status(fake_home, capsys):
     rc = tm_ide_fleet.main([])
     assert rc == 0
     assert "舰队状态" in capsys.readouterr().out
+
+
+def test_default_command_combines_fleet_and_continuity(fake_home, capsys):
+    # fake_home forces continuity into the "not configured" fast path (no
+    # network), so this only proves the combined view wires both sections in.
+    rc = tm_ide_fleet.main([])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "IDE 舰队状态" in out
+    assert "session handoff" in out or "读不到" in out
+
+
+def test_default_command_json_has_both_sections(fake_home, capsys):
+    rc = tm_ide_fleet.main(["--json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema"] == "tm-ide-fleet-full-v1"
+    assert "fleet" in payload and "continuity" in payload
+
+
+def test_status_subcommand_still_works_standalone(fake_home, capsys):
+    rc = tm_ide_fleet.main(["status", "--json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema"] == "tm-ide-fleet-v1"
