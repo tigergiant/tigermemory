@@ -124,6 +124,7 @@ __all__ = [
     "local_memory_stats",
     "local_search_hybrid",
     "local_shadow_stats",
+    "local_vector_search_enabled",
     "backfill_embeddings",
     "embed_and_store_memory",
     "get_memory_embedding",
@@ -952,6 +953,7 @@ _LOCAL_DB_DEFAULT_REL_PATH = pathlib.Path("data") / "tigermemory" / "memory.sqli
 _LOCAL_MEMORY_SCHEMA_VERSION = 4
 _SHADOW_SEARCH_ENV = "TM_SHADOW_SEARCH_ENABLED"
 _LOCAL_DUAL_WRITE_ENV = "TM_LOCAL_DUAL_WRITE"
+_LOCAL_VECTOR_SEARCH_ENV = "TM_LOCAL_VECTOR_SEARCH"
 _SHADOW_SEARCH_LOG_REL_PATH = pathlib.Path(".tmp") / "search-shadow"
 _LOCAL_CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
 _LOCAL_LATIN_TERM_RE = re.compile(r"[a-z0-9][a-z0-9._:/\\-]*", re.IGNORECASE)
@@ -1015,6 +1017,23 @@ def _local_dual_write_enabled() -> bool:
         return _env_truthy(_LOCAL_DUAL_WRITE_ENV)
     try:
         raw = _env_value(_LOCAL_DUAL_WRITE_ENV)
+    except RuntimeError:
+        return False
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def local_vector_search_enabled() -> bool:
+    """Whether local mem0_search should use the vector-augmented hybrid path.
+
+    Default OFF (pure lexical, unchanged). Same env-read order as the dual-write
+    flag so stdio-spawned processes see it. WSL turns this on AFTER the
+    embedding backfill so live local search gains semantic recall; reversible by
+    unsetting the flag.
+    """
+    if os.environ.get(_LOCAL_VECTOR_SEARCH_ENV) is not None:
+        return _env_truthy(_LOCAL_VECTOR_SEARCH_ENV)
+    try:
+        raw = _env_value(_LOCAL_VECTOR_SEARCH_ENV)
     except RuntimeError:
         return False
     return raw.strip().lower() in {"1", "true", "yes", "on"}
@@ -2615,20 +2634,27 @@ def mem0_search(
     if match_mode not in {"id_first", "token_and", "substring"}:
         raise ValueError("match_mode must be one of: id_first, token_and, substring")
     if tigermemory_profile() == TIGERMEMORY_PROFILE_LOCAL:
-        conn = _local_db_conn()
-        try:
-            _ensure_local_memory_schema(conn)
-            results = _local_search_local_memory(conn, query, size=size)
-            payload = {
-                "count": len(results),
-                "results": results,
-                "items": results,
-                "warnings": [],
-                "search_backend": TIGERMEMORY_PROFILE_LOCAL,
-            }
-            return json.dumps(payload)
-        finally:
-            conn.close()
+        if local_vector_search_enabled():
+            # Vector-augmented hybrid (opt-in). Degrades to lexical internally
+            # when embeddings/backend are absent, so this is safe once enabled.
+            results = local_search_hybrid(query, size=size)["results"]
+            backend = "local+vector"
+        else:
+            conn = _local_db_conn()
+            try:
+                _ensure_local_memory_schema(conn)
+                results = _local_search_local_memory(conn, query, size=size)
+            finally:
+                conn.close()
+            backend = TIGERMEMORY_PROFILE_LOCAL
+        payload = {
+            "count": len(results),
+            "results": results,
+            "items": results,
+            "warnings": [],
+            "search_backend": backend,
+        }
+        return json.dumps(payload)
     params = urllib.parse.urlencode(
         # OpenMemory's patched GET /api/v1/memories/ filters on search_query.
         # Older tigermemory docs and clients used query=; the router keeps that

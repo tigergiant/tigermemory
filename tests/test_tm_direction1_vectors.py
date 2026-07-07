@@ -130,3 +130,22 @@ def test_rrf_scores_normalized_range(local_db):
     assert all(0.2 - 1e-9 <= v <= 1.0 + 1e-9 for v in fused.values())
     # 'c' appears in both lists -> should score highest.
     assert fused["c"] == max(fused.values())
+
+
+def test_mem0_search_gated_vector_wiring(local_db, monkeypatch):
+    # Default OFF: local mem0_search stays pure lexical (search_backend=local).
+    monkeypatch.delenv("TM_LOCAL_VECTOR_SEARCH", raising=False)
+    mac = _write("虎哥主力开发用的是 MacBook Pro")
+    tm_core.store_memory_embedding(mac, [1.0, 0.0, 0.0], model="mock")
+    import json as _json
+    off = _json.loads(tm_core.mem0_search("苹果电脑", size=5))
+    assert off["search_backend"] == "local"
+    assert mac not in [r["id"] for r in off["results"]]  # lexical can't cross languages
+
+    # Flag ON: local mem0_search uses hybrid; with a query embedding close to the
+    # macbook vector, the lexically-disjoint memory is now recalled.
+    monkeypatch.setenv("TM_LOCAL_VECTOR_SEARCH", "1")
+    monkeypatch.setattr(tm_core, "embed_one", lambda q: [0.98, 0.02, 0.0])
+    on = _json.loads(tm_core.mem0_search("苹果电脑", size=5))
+    assert on["search_backend"] == "local+vector"
+    assert mac in [r["id"] for r in on["results"]]
