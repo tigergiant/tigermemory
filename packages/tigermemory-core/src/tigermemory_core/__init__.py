@@ -27,7 +27,9 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import array
 import json
+import math
 import os
 import ipaddress
 import pathlib
@@ -120,7 +122,13 @@ __all__ = [
     "lint_page_errors",
     "lint_repo_scan",
     "local_memory_stats",
+    "local_search_hybrid",
     "local_shadow_stats",
+    "backfill_embeddings",
+    "embed_and_store_memory",
+    "get_memory_embedding",
+    "memories_without_embedding",
+    "store_memory_embedding",
     "mcp_api_key",
     "mem0_base",
     "mem0_delete",
@@ -1208,6 +1216,20 @@ def _ensure_local_memory_schema(conn: sqlite3.Connection) -> None:
         ON outbox(status, next_attempt_at)
         """
     )
+    # Direction-1 local semantic search: optional per-memory embedding vectors.
+    # Additive side table (a memory with no row here is simply not vectorized
+    # yet and falls back to lexical). float32 packed as bytes via array('f').
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS memory_embeddings (
+            memory_id TEXT PRIMARY KEY,
+            dim INTEGER NOT NULL,
+            vec BLOB NOT NULL,
+            model TEXT,
+            created_at INTEGER NOT NULL
+        )
+        """
+    )
     fts_tokenizer = _ensure_local_fts_trigram(conn)
     _demote_duplicate_active_memories(conn)
     conn.execute(
@@ -1435,6 +1457,13 @@ def _local_write_memory_record(
             result["route_info"]["dedup"] = "superseded_dup"
             if dup_of:
                 result["route_info"]["dup_of"] = dup_of
+        # Direction-1: enqueue async embedding for active rows when the outbox
+        # worker is enabled. Best-effort — a failure here never blocks the write.
+        if state_value == "active" and outbox_worker_enabled():
+            try:
+                outbox_upsert(f"embed_memory:{memory_id}", {"memory_id": memory_id})
+            except Exception:  # noqa: BLE001
+                pass
         return result
     finally:
         conn.close()
@@ -1796,6 +1825,237 @@ def local_shadow_stats() -> dict[str, Any]:
             "rows_with_legacy_mem0_id": with_legacy,
             "by_shadow_state": by_shadow_state,
         }
+    finally:
+        conn.close()
+
+
+# ---------- Direction-1: local semantic search (vectors in SQLite) ----------
+#
+# Design (per migration contract §2): float32 BLOB in a side table + in-process
+# brute-force cosine, NO ANN / sqlite-vec / Qdrant. Retrieval fuses lexical
+# (FTS+fallback) and vector candidates with RRF(k=60) normalized to [0.2, 1.0],
+# matching the existing format_search_hit score range. Every path degrades
+# gracefully to pure lexical when the embedding service or vectors are absent —
+# vectors are an enhancement, never a hard dependency.
+
+_RRF_K = 60
+_VECTOR_TOP_N = 20
+_LEXICAL_TOP_N = 20
+
+try:  # optional acceleration; pure-python fallback keeps core numpy-free
+    import numpy as _np  # type: ignore
+except Exception:  # noqa: BLE001
+    _np = None
+
+
+def _pack_vec(vec: list[float]) -> bytes:
+    return array.array("f", [float(x) for x in vec]).tobytes()
+
+
+def _unpack_vec(blob: bytes) -> array.array:
+    arr = array.array("f")
+    arr.frombytes(blob)
+    return arr
+
+
+def _cosine(a: "array.array | list[float]", b: "array.array | list[float]") -> float:
+    if _np is not None:
+        va = _np.frombuffer(_pack_vec(list(a)), dtype=_np.float32) if not isinstance(a, array.array) else _np.frombuffer(a.tobytes(), dtype=_np.float32)
+        vb = _np.frombuffer(_pack_vec(list(b)), dtype=_np.float32) if not isinstance(b, array.array) else _np.frombuffer(b.tobytes(), dtype=_np.float32)
+        denom = float(_np.linalg.norm(va) * _np.linalg.norm(vb))
+        return float(_np.dot(va, vb) / denom) if denom else 0.0
+    dot = 0.0
+    na = 0.0
+    nb = 0.0
+    for x, y in zip(a, b):
+        dot += x * y
+        na += x * x
+        nb += y * y
+    denom = math.sqrt(na) * math.sqrt(nb)
+    return dot / denom if denom else 0.0
+
+
+def store_memory_embedding(memory_id: str, vec: list[float], *, model: str | None = None) -> None:
+    conn = _local_db_conn()
+    try:
+        _ensure_local_memory_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO memory_embeddings(memory_id, dim, vec, model, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(memory_id) DO UPDATE SET
+                dim=excluded.dim, vec=excluded.vec, model=excluded.model,
+                created_at=excluded.created_at
+            """,
+            (memory_id, len(vec), _pack_vec(vec), model, int(time.time())),
+        )
+        conn.execute(
+            "UPDATE memories SET vector_status='available' WHERE id=?", (memory_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_memory_embedding(memory_id: str) -> list[float] | None:
+    conn = _local_db_conn()
+    try:
+        _ensure_local_memory_schema(conn)
+        row = conn.execute(
+            "SELECT vec FROM memory_embeddings WHERE memory_id=?", (memory_id,)
+        ).fetchone()
+        return list(_unpack_vec(row["vec"])) if row else None
+    finally:
+        conn.close()
+
+
+def memories_without_embedding(limit: int = 200) -> list[dict[str, Any]]:
+    """Active memories that have no embedding row yet (for backfill)."""
+    conn = _local_db_conn()
+    try:
+        _ensure_local_memory_schema(conn)
+        rows = conn.execute(
+            """
+            SELECT m.id, m.content FROM memories AS m
+            LEFT JOIN memory_embeddings AS e ON e.memory_id = m.id
+            WHERE m.state='active' AND e.memory_id IS NULL
+            ORDER BY m.created_at DESC
+            LIMIT ?
+            """,
+            (max(1, limit),),
+        ).fetchall()
+        return [{"id": str(r["id"]), "content": str(r["content"])} for r in rows]
+    finally:
+        conn.close()
+
+
+def embed_and_store_memory(memory_id: str, *, embed_fn: Any = None) -> bool:
+    """Compute and store the embedding for one memory. Returns False if the
+    memory is missing or embedding is unavailable (never raises for the worker)."""
+    conn = _local_db_conn()
+    try:
+        _ensure_local_memory_schema(conn)
+        row = conn.execute(
+            "SELECT content FROM memories WHERE id=?", (memory_id,)
+        ).fetchone()
+        if row is None:
+            return False
+        content = str(row["content"])
+    finally:
+        conn.close()
+    fn = embed_fn or embed_one
+    try:
+        vec = fn(content)
+    except Exception:  # noqa: BLE001 - embedding backend may be down
+        return False
+    if not vec:
+        return False
+    model = None
+    try:
+        model = str(embedding_config().get("model"))
+    except Exception:  # noqa: BLE001
+        pass
+    store_memory_embedding(memory_id, list(vec), model=model)
+    return True
+
+
+def backfill_embeddings(*, limit: int = 200, embed_fn: Any = None) -> dict[str, int]:
+    """Embed a batch of not-yet-vectorized memories. For the WSL one-shot backfill."""
+    pending = memories_without_embedding(limit=limit)
+    done = 0
+    failed = 0
+    for item in pending:
+        if embed_and_store_memory(item["id"], embed_fn=embed_fn):
+            done += 1
+        else:
+            failed += 1
+    return {"attempted": len(pending), "embedded": done, "failed": failed}
+
+
+def _rrf_fuse(lexical_ids: list[str], vector_ids: list[str]) -> dict[str, float]:
+    """Reciprocal Rank Fusion, then min-max normalize to [0.2, 1.0]."""
+    scores: dict[str, float] = {}
+    for rank, mid in enumerate(lexical_ids):
+        scores[mid] = scores.get(mid, 0.0) + 1.0 / (_RRF_K + rank + 1)
+    for rank, mid in enumerate(vector_ids):
+        scores[mid] = scores.get(mid, 0.0) + 1.0 / (_RRF_K + rank + 1)
+    if not scores:
+        return {}
+    lo = min(scores.values())
+    hi = max(scores.values())
+    if hi <= lo:
+        return {mid: 1.0 for mid in scores}
+    return {mid: 0.2 + 0.8 * (s - lo) / (hi - lo) for mid, s in scores.items()}
+
+
+def _local_vector_candidates(conn: sqlite3.Connection, query_vec: list[float], top_n: int) -> list[str]:
+    rows = conn.execute(
+        """
+        SELECT e.memory_id, e.vec FROM memory_embeddings AS e
+        JOIN memories AS m ON m.id = e.memory_id
+        WHERE m.state='active'
+        """
+    ).fetchall()
+    scored: list[tuple[float, str]] = []
+    for row in rows:
+        sim = _cosine(query_vec, _unpack_vec(row["vec"]))
+        scored.append((sim, str(row["memory_id"])))
+    scored.sort(key=lambda t: t[0], reverse=True)
+    return [mid for _, mid in scored[:top_n]]
+
+
+def local_search_hybrid(query: str, size: int = 5, *, embed_fn: Any = None) -> dict[str, Any]:
+    """Lexical (FTS+fallback) + vector (brute-force cosine) fused with RRF.
+
+    Returns the same {"results": [...]} shape as mem0_search's local path.
+    Degrades to pure lexical when the embedding backend or vectors are absent —
+    vectors never become a hard dependency.
+    """
+    limit = max(1, int(size))
+    conn = _local_db_conn()
+    try:
+        _ensure_local_memory_schema(conn)
+        lexical_items = _local_search_local_memory(conn, query, size=_LEXICAL_TOP_N)
+        lexical_ids = [str(it.get("id")) for it in lexical_items if it.get("id")]
+
+        vector_ids: list[str] = []
+        has_vectors = conn.execute(
+            "SELECT 1 FROM memory_embeddings LIMIT 1"
+        ).fetchone() is not None
+        if has_vectors:
+            fn = embed_fn or embed_one
+            try:
+                qvec = fn(query)
+            except Exception:  # noqa: BLE001 - embed backend down -> lexical only
+                qvec = None
+            if qvec:
+                vector_ids = _local_vector_candidates(conn, list(qvec), _VECTOR_TOP_N)
+
+        if not vector_ids:
+            # No vector signal: identical to the current lexical path.
+            return {"results": lexical_items[:limit]}
+
+        fused = _rrf_fuse(lexical_ids, vector_ids)
+        # Load rows for any id we do not already have from the lexical pass.
+        item_by_id: dict[str, dict[str, Any]] = {
+            str(it["id"]): it for it in lexical_items if it.get("id")
+        }
+        for mid in fused:
+            if mid not in item_by_id:
+                row = _local_read_memory_by_id(conn, mid)
+                if row:
+                    item_by_id[mid] = row
+        ranked = sorted(
+            (mid for mid in fused if mid in item_by_id),
+            key=lambda m: fused[m],
+            reverse=True,
+        )
+        results = []
+        for mid in ranked[:limit]:
+            item = dict(item_by_id[mid])
+            item["score"] = round(fused[mid], 4)
+            results.append(item)
+        return {"results": results}
     finally:
         conn.close()
 

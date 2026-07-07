@@ -199,6 +199,13 @@ def _handle_outbox_row(row: dict[str, Any]) -> None:
             list(payload.get("paths") or []),
         )
         return
+    if kind.startswith("embed_memory:"):
+        memory_id = str(payload.get("memory_id") or kind.split(":", 1)[1])
+        # Returns False when the embedding backend is unavailable; raise so the
+        # outbox retries with backoff instead of marking it done.
+        if not tm_core.embed_and_store_memory(memory_id):
+            raise RuntimeError(f"embed_memory failed or backend unavailable: {memory_id}")
+        return
     raise RuntimeError(f"unknown outbox kind: {kind}")
 
 
