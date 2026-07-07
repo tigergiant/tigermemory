@@ -9,6 +9,7 @@ import json
 import pathlib
 import sqlite3
 import sys
+import threading
 import time
 import uuid
 
@@ -49,6 +50,19 @@ def _meta(db_path: pathlib.Path, key: str) -> str | None:
             "SELECT value FROM schema_meta WHERE key=?", (key,)
         ).fetchone()
         return str(row[0]) if row else None
+    finally:
+        conn.close()
+
+
+def _meta_rows(db_path: pathlib.Path) -> dict[str, tuple[str, str]]:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return {
+            str(row[0]): (str(row[1]), str(row[2]))
+            for row in conn.execute(
+                "SELECT key, value, updated_at FROM schema_meta ORDER BY key"
+            ).fetchall()
+        }
     finally:
         conn.close()
 
@@ -129,6 +143,89 @@ def test_new_db_gets_trigram_and_unique_index(local_db):
         assert "state = 'active'" in idx[0]
     finally:
         conn.close()
+
+
+def test_schema_ensure_cached_after_first_connection(local_db, monkeypatch):
+    calls = 0
+    original = tm_core._demote_duplicate_active_memories
+    if hasattr(tm_core, "_LOCAL_MEMORY_SCHEMA_ENSURED_PATHS"):
+        tm_core._LOCAL_MEMORY_SCHEMA_ENSURED_PATHS.clear()
+
+    def counted(conn):
+        nonlocal calls
+        calls += 1
+        return original(conn)
+
+    monkeypatch.setattr(tm_core, "_demote_duplicate_active_memories", counted)
+    written = json.loads(tm_core.mem0_write("codex", "systems", "schema cache smoke"))
+    before_meta = _meta_rows(local_db)
+
+    payload = json.loads(tm_core.mem0_search("schema cache smoke", size=5))
+    after_meta = _meta_rows(local_db)
+
+    assert written["id"] in [item["id"] for item in payload["results"]]
+    assert calls == 1
+    assert after_meta == before_meta
+
+
+def test_schema_ensure_cache_is_per_db_path(tmp_path, monkeypatch):
+    calls = 0
+    original = tm_core._demote_duplicate_active_memories
+    if hasattr(tm_core, "_LOCAL_MEMORY_SCHEMA_ENSURED_PATHS"):
+        tm_core._LOCAL_MEMORY_SCHEMA_ENSURED_PATHS.clear()
+
+    def counted(conn):
+        nonlocal calls
+        calls += 1
+        return original(conn)
+
+    monkeypatch.setenv("TIGERMEMORY_PROFILE", tm_core.TIGERMEMORY_PROFILE_LOCAL)
+    monkeypatch.setattr(tm_core, "_demote_duplicate_active_memories", counted)
+
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(tmp_path / "one.sqlite"))
+    tm_core.mem0_write("codex", "systems", "first db schema cache smoke")
+    tm_core.mem0_search("first db schema cache smoke", size=5)
+
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(tmp_path / "two.sqlite"))
+    tm_core.mem0_write("codex", "systems", "second db schema cache smoke")
+
+    assert calls == 2
+
+
+def test_schema_ensure_cache_is_thread_safe(local_db, monkeypatch):
+    calls = 0
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+    original = tm_core._demote_duplicate_active_memories
+    if hasattr(tm_core, "_LOCAL_MEMORY_SCHEMA_ENSURED_PATHS"):
+        tm_core._LOCAL_MEMORY_SCHEMA_ENSURED_PATHS.clear()
+
+    def counted(conn):
+        nonlocal calls
+        with lock:
+            calls += 1
+        time.sleep(0.01)
+        return original(conn)
+
+    def worker():
+        conn = sqlite3.connect(str(local_db))
+        conn.row_factory = sqlite3.Row
+        try:
+            tm_core._ensure_local_memory_schema(conn)
+        except BaseException as exc:  # pragma: no cover - surfaced by assertion
+            errors.append(exc)
+        finally:
+            conn.close()
+
+    monkeypatch.setattr(tm_core, "_demote_duplicate_active_memories", counted)
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    assert calls == 1
 
 
 @pytest.mark.skipif(not TRIGRAM_SUPPORTED, reason="sqlite < 3.34 lacks trigram")

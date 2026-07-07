@@ -39,6 +39,7 @@ import sqlite3
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -974,6 +975,8 @@ _LOCAL_CJK_STOP_TERMS = {
     "是",
     "需要",
 }
+_LOCAL_MEMORY_SCHEMA_ENSURED_PATHS: set[str] = set()
+_LOCAL_MEMORY_SCHEMA_LOCK = threading.Lock()
 
 
 def _local_db_path() -> pathlib.Path:
@@ -1175,7 +1178,28 @@ def _local_schema_ddl() -> str:
     """
 
 
+def _local_schema_cache_key(conn: sqlite3.Connection) -> str:
+    for row in conn.execute("PRAGMA database_list").fetchall():
+        name = row["name"] if isinstance(row, sqlite3.Row) else row[1]
+        if str(name) == "main":
+            raw_path = row["file"] if isinstance(row, sqlite3.Row) else row[2]
+            if raw_path:
+                return str(pathlib.Path(str(raw_path)).resolve())
+    return str(_local_db_path().resolve())
+
+
 def _ensure_local_memory_schema(conn: sqlite3.Connection) -> None:
+    cache_key = _local_schema_cache_key(conn)
+    if cache_key in _LOCAL_MEMORY_SCHEMA_ENSURED_PATHS:
+        return
+    with _LOCAL_MEMORY_SCHEMA_LOCK:
+        if cache_key in _LOCAL_MEMORY_SCHEMA_ENSURED_PATHS:
+            return
+        _ensure_local_memory_schema_uncached(conn)
+        _LOCAL_MEMORY_SCHEMA_ENSURED_PATHS.add(cache_key)
+
+
+def _ensure_local_memory_schema_uncached(conn: sqlite3.Connection) -> None:
     conn.executescript(_local_schema_ddl())
     existing_columns = {
         str(row["name"])
