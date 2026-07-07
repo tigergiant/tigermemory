@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import os
 import pathlib
 from typing import Any
 
@@ -59,6 +60,28 @@ def _write_jsonl(path: pathlib.Path, row: dict[str, Any]) -> None:
     )
 
 
+def _event_root(event_root: pathlib.Path | str | None = None) -> pathlib.Path:
+    if event_root is not None:
+        return pathlib.Path(event_root)
+    env_root = os.getenv("TM_ROUTE_EVENTS_ROOT")
+    if env_root:
+        return pathlib.Path(env_root)
+    return DEFAULT_EVENT_ROOT
+
+
+def _disabled(event_root: pathlib.Path | str | None = None) -> bool:
+    disabled = os.getenv("TM_ROUTE_EVENTS_DISABLED", "").strip().lower()
+    if disabled in {"1", "true", "yes", "on"}:
+        return True
+    # Unit tests must not leak synthetic routing failures into the real repo
+    # ledger unless the test explicitly points the ledger at a temporary root.
+    return (
+        event_root is None
+        and bool(os.getenv("PYTEST_CURRENT_TEST"))
+        and not bool(os.getenv("TM_ROUTE_EVENTS_ROOT"))
+    )
+
+
 def _target_ref(result: dict[str, Any]) -> dict[str, Any]:
     ref: dict[str, Any] = {}
     for key in ("id", "path", "commit_sha", "url"):
@@ -84,7 +107,18 @@ def record_route_event(
     """Append one final route outcome and return lightweight file metadata."""
     now = (now or _now_local()).astimezone(tm_core.TZ_CN)
     date = _event_date(now)
-    root = pathlib.Path(event_root or DEFAULT_EVENT_ROOT)
+    if _disabled(event_root):
+        route = str(result.get("route") or decision.route or "").strip().lower() or "unknown"
+        final_outcome = str(outcome or result.get("outcome") or route).strip().lower() or route
+        flow_target = ROUTE_TO_FLOW.get(final_outcome) or ROUTE_TO_FLOW.get(route) or "inbox"
+        return {
+            "ok": False,
+            "skipped": "disabled",
+            "date": date,
+            "outcome": final_outcome,
+            "flow_target": flow_target,
+        }
+    root = _event_root(event_root)
     route = str(result.get("route") or decision.route or "").strip().lower() or "unknown"
     final_outcome = str(outcome or result.get("outcome") or route).strip().lower() or route
     flow_target = ROUTE_TO_FLOW.get(final_outcome) or ROUTE_TO_FLOW.get(route) or "inbox"
@@ -138,7 +172,7 @@ def load_route_events(
     dates: list[str] | set[str] | tuple[str, ...],
     event_root: pathlib.Path | None = None,
 ) -> list[dict[str, Any]]:
-    root = pathlib.Path(event_root or DEFAULT_EVENT_ROOT)
+    root = _event_root(event_root)
     rows: list[dict[str, Any]] = []
     for date in sorted({str(item) for item in dates if item}):
         path = root / date / "events.jsonl"
@@ -180,7 +214,7 @@ def summarize_route_events(
         agent = str(row.get("agent") or "unknown")
         agent_counts[agent] = agent_counts.get(agent, 0) + 1
     requested_dates = sorted({str(item) for item in dates if item})
-    root = pathlib.Path(event_root or DEFAULT_EVENT_ROOT)
+    root = _event_root(event_root)
     return {
         "event_count": len(events),
         "flow_counts": flow_counts,

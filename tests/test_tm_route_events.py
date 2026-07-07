@@ -59,3 +59,45 @@ def test_route_events_concurrent_writes_remain_valid_jsonl(tmp_path, monkeypatch
     assert {row["target_ref"]["id"] for row in rows} == {f"m-{index}" for index in range(40)}
     assert all(row["flow_target"] == "mem0" for row in rows)
     assert not path.with_name(path.name + ".lock").exists()
+
+
+def test_route_events_do_not_leak_from_pytest_by_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("TM_ROUTE_EVENTS_ROOT", raising=False)
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/test_tm_route_events.py::case")
+    monkeypatch.setattr(tm_route_events, "DEFAULT_EVENT_ROOT", tmp_path / "repo-events")
+    now = dt.datetime(2026, 6, 10, 12, 0, tzinfo=TZ_CN)
+
+    result = tm_route_events.record_route_event(
+        agent="codex",
+        requested_topic="systems",
+        storage_topic="systems",
+        text="synthetic fallback route event from test",
+        decision=_decision(),
+        result={"route": "mem0", "id": "m-1"},
+        outcome="mem0",
+        now=now,
+    )
+
+    assert result["skipped"] == "disabled"
+    assert not (tmp_path / "repo-events").exists()
+
+
+def test_route_events_pytest_can_write_to_explicit_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/test_tm_route_events.py::case")
+    root = tmp_path / "explicit-events"
+    now = dt.datetime(2026, 6, 10, 12, 0, tzinfo=TZ_CN)
+
+    result = tm_route_events.record_route_event(
+        agent="codex",
+        requested_topic="systems",
+        storage_topic="systems",
+        text="explicit route event test root",
+        decision=_decision(),
+        result={"route": "mem0", "id": "m-2"},
+        outcome="mem0",
+        event_root=root,
+        now=now,
+    )
+
+    assert result["ok"] is True
+    assert (root / "2026-06-10" / "events.jsonl").exists()
