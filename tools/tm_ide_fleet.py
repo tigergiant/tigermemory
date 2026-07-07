@@ -15,6 +15,15 @@ This answers the three questions a user has when switching IDEs:
 Design: detection is a raw text-contains check for tigermemory markers, so it
 stays robust across config formats and never depends on tomllib. JSON configs
 are additionally parsed to report transport (http/stdio) when possible.
+
+F2 (continuity, `continuity` subcommand): answers a fourth question — "no
+matter which IDE the last session ran in, where did it leave off, and is there
+an unresolved blocker?" It reads the most recent Session Handoff Cards
+(memory_type=session-handoff) via /search_memories, trying the internal direct
+channel first and falling back to the public Cloudflare tunnel — because the
+internal channel (VM<->host portproxy) has been observed to drop between
+sessions (host-side firewall rule not surviving a restart), and a continuity
+tool that hard-fails on that is useless. Read-only; never writes.
 """
 from __future__ import annotations
 
@@ -27,6 +36,14 @@ import urllib.request
 
 MARKERS = ("tigermemory", "tm.doodiu.cloud", "tm_mcp", "tigermemory-wsl")
 PUBLIC_HEALTH_URL = "https://tm.doodiu.cloud/healthz"
+
+# F2 continuity: try internal direct channel first (fast, but has been observed
+# to go stale across VM/host restarts), then the public Cloudflare tunnel.
+CONTINUITY_BASES = [
+    {"name": "internal", "url": "http://172.20.160.1:8790", "bypass_proxy": True},
+    {"name": "public", "url": "https://tm-api.doodiu.cloud", "bypass_proxy": False},
+]
+_EMPTY_BLOCKER_MARKERS = {"", "无", "none", "n/a", "无阻塞", "无遗留", "无。"}
 
 
 def _home() -> pathlib.Path:
@@ -277,12 +294,217 @@ def render_text(fleet: dict) -> str:
     return "\n".join(lines)
 
 
+# ---------- F2: multi-IDE switching continuity ----------
+
+
+def _api_key() -> str | None:
+    val = os.environ.get("TM_MCP_API_KEY", "").strip()
+    if val:
+        return val
+    repo_root = pathlib.Path(__file__).resolve().parent.parent
+    env_path = repo_root / "runtime" / "openmemory" / ".env"
+    if not env_path.exists():
+        return None
+    try:
+        text = env_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if line.startswith("TM_MCP_API_KEY="):
+            return line.split("=", 1)[1].strip()
+    return None
+
+
+def _search_memories_via_http(
+    base_url: str, query: str, limit: int, api_key: str, timeout: float, bypass_proxy: bool
+) -> dict:
+    req = urllib.request.Request(
+        f"{base_url}/search_memories",
+        data=json.dumps({"query": query, "limit": limit}).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "tigermemory-ide-fleet/1.0",
+        },
+        method="POST",
+    )
+    opener = (
+        urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        if bypass_proxy
+        else urllib.request.build_opener()
+    )
+    with opener.open(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+
+def _parse_handoff_card(content: str) -> dict:
+    """Split a Session Handoff Card's raw text into frontmatter dict + body sections.
+
+    Cards are `--- key: value ... --- \\n## Task\\n...\\n## Blockers\\n...`
+    (see wiki/systems/session-handoff-protocol.md). Simple line-based parsing —
+    values here are flat scalars, no need for a YAML dependency.
+    """
+    frontmatter: dict[str, str] = {}
+    body = content
+    if content.lstrip().startswith("---"):
+        stripped = content.lstrip()
+        end = stripped.find("\n---", 3)
+        if end != -1:
+            fm_block = stripped[3:end]
+            body = stripped[end + 4 :].lstrip("\n")
+            for line in fm_block.splitlines():
+                if ":" not in line:
+                    continue
+                key, _, value = line.partition(":")
+                key = key.strip().lstrip("-").strip()
+                if key:
+                    frontmatter[key] = value.strip()
+    sections: dict[str, str] = {}
+    current: str | None = None
+    buf: list[str] = []
+    for line in body.splitlines():
+        if line.startswith("## "):
+            if current is not None:
+                sections[current] = "\n".join(buf).strip()
+            current = line[3:].strip()
+            buf = []
+        elif current is not None:
+            buf.append(line)
+    if current is not None:
+        sections[current] = "\n".join(buf).strip()
+    return {"frontmatter": frontmatter, "sections": sections}
+
+
+def _format_created_at(raw_value: object) -> str:
+    """Best-effort human-readable timestamp; falls back to the raw value."""
+    if raw_value is None:
+        return "?"
+    text = str(raw_value)
+    try:
+        num = float(text)
+    except ValueError:
+        return text
+    try:
+        import datetime as _dt
+
+        return _dt.datetime.fromtimestamp(num, _dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    except (OverflowError, OSError, ValueError):
+        return text
+
+
+def _card_record(raw: dict) -> dict | None:
+    """Return a normalized handoff record, or None if this isn't actually a
+    session-handoff card (search is semantic/fuzzy and can surface unrelated
+    memories that merely mention similar words)."""
+    parsed = _parse_handoff_card(str(raw.get("content") or ""))
+    fm, sections = parsed["frontmatter"], parsed["sections"]
+    if fm.get("memory_type") != "session-handoff":
+        return None
+    return {
+        "id": raw.get("id"),
+        "created_at": _format_created_at(raw.get("created_at")),
+        "created_at_raw": raw.get("created_at"),
+        "session_id": fm.get("session_id"),
+        "ide": fm.get("ide"),
+        "agent": fm.get("agent"),
+        "confidence": fm.get("confidence"),
+        "source": fm.get("source"),
+        "task": sections.get("Task", "").strip(),
+        "blockers": sections.get("Blockers", "").strip(),
+        "handoff": sections.get("Handoff", "").strip(),
+    }
+
+
+def _has_open_blocker(blockers_text: str) -> bool:
+    normalized = (blockers_text or "").strip().lower()
+    return bool(normalized) and normalized not in _EMPTY_BLOCKER_MARKERS
+
+
+def gather_continuity(limit: int = 5, timeout: float = 8.0, fetcher=None) -> dict:
+    """Read the most recent Session Handoff Cards across all IDEs.
+
+    Tries CONTINUITY_BASES in order (internal direct channel, then the public
+    Cloudflare tunnel) and returns the first that succeeds. Never raises on
+    network failure — reports ok=False with the last error instead.
+    """
+    api_key = _api_key()
+    if not api_key:
+        return {
+            "schema": "tm-ide-continuity-v1",
+            "ok": False,
+            "error": "TM_MCP_API_KEY not configured (checked env and runtime/openmemory/.env)",
+            "cards": [],
+        }
+    fetch = fetcher or _search_memories_via_http
+    last_error = "no channel attempted"
+    for base in CONTINUITY_BASES:
+        try:
+            payload = fetch(
+                base["url"],
+                "memory_type session-handoff",
+                limit,
+                api_key,
+                timeout,
+                base["bypass_proxy"],
+            )
+        except Exception as exc:  # noqa: BLE001 - any channel may fail; try the next
+            last_error = f"{base['name']}: {str(exc)[:200]}"
+            continue
+        cards = [
+            rec for rec in (_card_record(r) for r in (payload.get("results") or [])) if rec is not None
+        ]
+        cards.sort(key=lambda c: str(c.get("created_at_raw") or ""), reverse=True)
+        cards = cards[:limit]
+        return {
+            "schema": "tm-ide-continuity-v1",
+            "ok": True,
+            "source": base["name"],
+            "cards": cards,
+            "any_open_blocker": any(_has_open_blocker(c["blockers"]) for c in cards),
+        }
+    return {
+        "schema": "tm-ide-continuity-v1",
+        "ok": False,
+        "error": f"all channels failed ({last_error})",
+        "cards": [],
+    }
+
+
+def render_continuity_text(result: dict) -> str:
+    if not result.get("ok"):
+        return f"⚠️ 读不到 session handoff（{result.get('error', 'unknown error')}）"
+    lines = [f"最近的 session handoff（来源：{result['source']}）", ""]
+    if not result["cards"]:
+        lines.append("（暂无 session-handoff 记录）")
+        return "\n".join(lines)
+    for c in result["cards"]:
+        open_blocker = _has_open_blocker(c["blockers"])
+        icon = "🔴" if open_blocker else "🟢"
+        lines.append(f"{icon} {c.get('created_at', '?')}  [{c.get('ide', '?')}/{c.get('agent', '?')}]")
+        if c["task"]:
+            lines.append(f"   任务: {c['task'][:150]}")
+        if open_blocker:
+            lines.append(f"   ⚠️ 未决 blocker: {c['blockers'][:200]}")
+        elif c["handoff"]:
+            lines.append(f"   接力: {c['handoff'][:150]}")
+        lines.append("")
+    if result.get("any_open_blocker"):
+        lines.append("有未决 blocker，接手前先看清楚上面标 🔴 的那条。")
+    return "\n".join(lines).rstrip()
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(dest="command")
     st = sub.add_parser("status", help="show multi-IDE fleet status (read-only)")
     st.add_argument("--json", action="store_true", help="emit JSON instead of text")
     st.add_argument("--check-health", action="store_true", help="also probe tigermemory /healthz")
+    ct = sub.add_parser(
+        "continuity",
+        help="show where the last session left off, across IDEs (F2, read-only)",
+    )
+    ct.add_argument("--json", action="store_true", help="emit JSON instead of text")
+    ct.add_argument("--limit", type=int, default=5, help="how many recent handoff cards to show")
     args = ap.parse_args(argv)
 
     if args.command in (None, "status"):
@@ -294,6 +516,14 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(render_text(fleet))
         return 0
+    if args.command == "continuity":
+        as_json = getattr(args, "json", False)
+        result = gather_continuity(limit=args.limit)
+        if as_json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(render_continuity_text(result))
+        return 0 if result.get("ok") else 1
     ap.print_help()
     return 2
 
