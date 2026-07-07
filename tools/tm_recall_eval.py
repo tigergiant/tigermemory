@@ -49,24 +49,35 @@ def _seed_corpus(corpus: list[dict]) -> dict[str, str]:
     return key_to_id
 
 
-def _search_ids(query: str, size: int, arm: str) -> list[str]:
+def _search_ids(query: str, size: int, arm: str, embed_fn=None) -> list[str]:
     if arm == "vector":
-        # Direction-1 hook: a hybrid FTS+cosine local search. Until it exists,
-        # fail loudly rather than silently scoring the FTS baseline as "vector".
+        # Direction-1 hybrid FTS+cosine local search. Until it exists, fail
+        # loudly rather than silently scoring the FTS baseline as "vector".
         search = getattr(tm_core, "local_search_hybrid", None)
         if search is None:
             raise SystemExit(
                 "arm=vector requires tigermemory_core.local_search_hybrid "
                 "(direction-1 local vectors) which is not built yet."
             )
-        payload = search(query, size=size)
+        payload = search(query, size=size, embed_fn=embed_fn)
     else:
         payload = json.loads(tm_core.mem0_search(query, size=size))
     return [str(r.get("id")) for r in payload.get("results", []) if r.get("id")]
 
 
-def run_eval(fixture: dict, *, k: int = 5, arm: str = "current") -> dict:
+def run_eval(fixture: dict, *, k: int = 5, arm: str = "current", embed_fn=None) -> dict:
     key_to_id = _seed_corpus(fixture["corpus"])
+    if arm == "vector":
+        # The vector arm must embed the seeded corpus (the throwaway eval DB has
+        # no vectors otherwise). On WSL embed_fn defaults to the real backend;
+        # tests inject a mock. If nothing gets embedded, arm=vector is meaningless.
+        res = tm_core.backfill_embeddings(limit=len(fixture["corpus"]) + 1, embed_fn=embed_fn)
+        if res["embedded"] == 0:
+            raise SystemExit(
+                "arm=vector: no embeddings were produced (embedding backend "
+                "unreachable?). Run this on WSL where :19190 is reachable, or "
+                "pass a mock embed_fn."
+            )
     cases = fixture["cases"]
     by_dim: dict[str, dict[str, int]] = {}
     misses: list[dict] = []
@@ -76,7 +87,7 @@ def run_eval(fixture: dict, *, k: int = 5, arm: str = "current") -> dict:
         by_dim.setdefault(dim, {"hit": 0, "total": 0})
         by_dim[dim]["total"] += 1
         expect_id = key_to_id.get(str(case["expect"]))
-        ids = _search_ids(str(case["query"]), k, arm)
+        ids = _search_ids(str(case["query"]), k, arm, embed_fn=embed_fn)
         hit = expect_id in ids
         # distractor: the wrong memory must not outrank the right one.
         if hit and case.get("not_outranked_by"):

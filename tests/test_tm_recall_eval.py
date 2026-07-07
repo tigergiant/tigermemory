@@ -72,6 +72,51 @@ def test_render_text_smoke(local_db):
     assert "cross_language" in text
 
 
+# A concept-level mock embedder: texts sharing a concept get identical vectors,
+# different concepts are orthogonal. This proves the eval->hybrid->vector
+# pipeline lifts the semantic dimensions WITHOUT needing the real :19190 model
+# (real model quality is validated on WSL).
+_CONCEPTS = {
+    "computer": ["macbook", "苹果", "电脑", "笔记本"],
+    "cloud": ["火山", "volcengine", "服务器", "vps"],
+    "vecsearch": ["向量", "余弦", "语义", "搜索", "重排", "检索"],
+    "dividend": ["股息", "分红", "现金流", "底仓", "板块", "高"],
+    "outbox": ["outbox", "退避", "重试"],
+    "dedup": ["去重", "sha256", "精确"],
+    "handoff": ["cursor", "会话", "接力"],
+}
+_CONCEPT_NAMES = sorted(_CONCEPTS)
+
+
+def _concept_embed(text: str) -> list[float]:
+    low = text.lower()
+    best = None
+    best_hits = 0
+    for name in _CONCEPT_NAMES:
+        hits = sum(1 for kw in _CONCEPTS[name] if kw in low)
+        if hits > best_hits:
+            best_hits = hits
+            best = name
+    vec = [0.0] * (len(_CONCEPT_NAMES) + 1)
+    if best is None:
+        vec[-1] = 1.0  # "other" bucket
+    else:
+        vec[_CONCEPT_NAMES.index(best)] = 1.0
+    return vec
+
+
+def test_vector_arm_lifts_semantic_dimensions(local_db):
+    result = tm_recall_eval.run_eval(FIXTURE, k=5, arm="vector", embed_fn=_concept_embed)
+    dims = result["by_dimension"]
+    # The whole point: semantic dimensions go from 0 (baseline) up.
+    assert dims["cross_language"]["recall"] == 1.0
+    assert dims["paraphrase"]["recall"] == 1.0
+    # And lexical cases must not regress.
+    assert dims["plain"]["recall"] == 1.0
+    # Overall clearly beats the 3/9 lexical baseline.
+    assert result["overall_recall"] >= 0.77
+
+
 def test_cli_json(local_db, tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(tmp_path / "cli.sqlite"))
     rc = tm_recall_eval.main(["--json", "--db", str(tmp_path / "cli.sqlite")])
