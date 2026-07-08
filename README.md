@@ -1,5 +1,7 @@
 <div align="center">
 
+[English](README.md) | [中文](README.zh-CN.md)
+
 # TigerMemory
 
 **Your personal AI brain — local-first, evidence-grounded, yours to own.**
