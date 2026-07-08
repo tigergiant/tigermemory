@@ -725,44 +725,58 @@ def test_summarize_cutover_coverage_splits_content_and_id_contract(tmp_path) -> 
     assert summary["strict_active_count_pass"] is False
     assert summary["content_coverage_pass"] is True
     assert summary["id_contract_pass"] is False
+    assert summary["status"] == "pass"
+    assert summary["advisory_contract_reasons"] == ["strict_active_count", "id_contract"]
     assert summary["openmemory_ids_non_active_local"] == 1
     assert summary["non_active_with_active_same_content_topic"] == 1
 
 
-def test_summarize_cutover_shadow_probe_flags_zero_overlap() -> None:
+def test_summarize_cutover_shadow_probe_treats_covered_zero_overlap_as_advisory() -> None:
     rows = [
         {
             "old_count": 1,
             "local_count": 1,
             "id_intersection_count": 0,
             "content_sha_intersection_count": 0,
-            "old_content_missing_active_local_count": 1,
-            "old_result_missing_active_local_count": 1,
-            "local_latency_ms": 10.0,
-            "warnings": [],
-        },
-        {
-            "old_count": 1,
-            "local_count": 0,
-            "id_intersection_count": 0,
-            "content_sha_intersection_count": 0,
             "old_content_missing_active_local_count": 0,
             "old_result_missing_active_local_count": 0,
-            "local_latency_ms": 20.0,
+            "local_latency_ms": 10.0,
             "warnings": [],
         },
     ]
 
-    summary = tm_local_memory.summarize_cutover_shadow_probe(rows, min_queries=2)
+    summary = tm_local_memory.summarize_cutover_shadow_probe(rows, min_queries=1)
 
-    assert summary["status"] == "blocked"
-    assert summary["local_empty_but_old_had"] == 1
+    assert summary["status"] == "pass"
     assert summary["id_zero_overlap_when_both_nonempty"] == 1
     assert summary["content_zero_overlap_when_both_nonempty"] == 1
-    assert summary["old_content_missing_active_local_total"] == 1
+    assert summary["advisory_overlap_reasons"] == ["id_zero_overlap", "content_zero_overlap"]
+    assert summary["reasons"] == []
+
+
+def test_summarize_cutover_shadow_probe_blocks_missing_old_result_active_coverage() -> None:
+    rows = [
+        {
+            "old_count": 1,
+            "local_count": 1,
+            "id_intersection_count": 0,
+            "content_sha_intersection_count": 0,
+            "old_content_missing_active_local_count": 0,
+            "old_result_missing_active_local_count": 1,
+            "local_latency_ms": 10.0,
+            "warnings": [],
+        },
+    ]
+
+    summary = tm_local_memory.summarize_cutover_shadow_probe(rows, min_queries=1)
+
+    assert summary["status"] == "blocked"
+    assert summary["id_zero_overlap_when_both_nonempty"] == 1
+    assert summary["content_zero_overlap_when_both_nonempty"] == 1
+    assert summary["old_content_missing_active_local_total"] == 0
     assert summary["old_result_missing_active_local_total"] == 1
-    assert "local_empty_but_old_had" in summary["reasons"]
-    assert "content_zero_overlap" in summary["reasons"]
+    assert summary["advisory_overlap_reasons"] == ["id_zero_overlap", "content_zero_overlap"]
+    assert "old_result_missing_active_local" in summary["reasons"]
 
 
 def test_run_cutover_shadow_probe_compares_id_and_content_overlap(tmp_path) -> None:

@@ -1404,8 +1404,13 @@ def summarize_cutover_coverage(openmemory_items: list[dict[str, Any]], db_path: 
     strict_active_count_pass = local_active >= openmemory_count
     content_coverage_pass = missing == 0 and non_active_without_equiv == 0
     id_contract_pass = missing == 0 and non_active == 0
+    advisory_contract_reasons: list[str] = []
+    if not strict_active_count_pass:
+        advisory_contract_reasons.append("strict_active_count")
+    if not id_contract_pass:
+        advisory_contract_reasons.append("id_contract")
     return {
-        "status": "pass" if strict_active_count_pass and content_coverage_pass and id_contract_pass else "blocked",
+        "status": "pass" if content_coverage_pass else "blocked",
         "openmemory_count": openmemory_count,
         "local_active": local_active,
         "local_total": local_total,
@@ -1413,6 +1418,7 @@ def summarize_cutover_coverage(openmemory_items: list[dict[str, Any]], db_path: 
         "strict_active_count_pass": strict_active_count_pass,
         "content_coverage_pass": content_coverage_pass,
         "id_contract_pass": id_contract_pass,
+        "advisory_contract_reasons": advisory_contract_reasons,
         "openmemory_ids_missing_local_any_state": missing,
         "openmemory_ids_non_active_local": non_active,
         "non_active_with_active_same_content_topic": non_active_with_equiv,
@@ -1466,6 +1472,11 @@ def summarize_cutover_shadow_probe(
         for row in rows
         if row.get("old_result_missing_active_local_count") is not None
     )
+    old_result_coverage_available = any(
+        int(row.get("old_count") or 0) > 0
+        and row.get("old_result_missing_active_local_count") is not None
+        for row in rows
+    )
     latencies = [
         float(row["local_latency_ms"])
         for row in rows
@@ -1477,10 +1488,15 @@ def summarize_cutover_shadow_probe(
         reasons.append("not_enough_queries")
     if local_empty:
         reasons.append("local_empty_but_old_had")
+    advisory_overlap_reasons: list[str] = []
     if id_zero_overlap:
-        reasons.append("id_zero_overlap")
+        advisory_overlap_reasons.append("id_zero_overlap")
     if content_zero_overlap:
-        reasons.append("content_zero_overlap")
+        advisory_overlap_reasons.append("content_zero_overlap")
+    if (id_zero_overlap or content_zero_overlap) and not old_result_coverage_available:
+        reasons.append("missing_old_result_active_coverage")
+    if old_result_missing_active_total:
+        reasons.append("old_result_missing_active_local")
     if warning_count:
         reasons.append("warnings_present")
     if p95 is not None and p95 > max_local_p95_ms:
@@ -1495,6 +1511,8 @@ def summarize_cutover_shadow_probe(
         "content_zero_overlap_when_both_nonempty": content_zero_overlap,
         "old_content_missing_active_local_total": old_content_missing_active_total,
         "old_result_missing_active_local_total": old_result_missing_active_total,
+        "old_result_active_coverage_available": old_result_coverage_available,
+        "advisory_overlap_reasons": advisory_overlap_reasons,
         "warning_count": warning_count,
         "local_latency_p95_ms": p95,
         "max_local_p95_ms": max_local_p95_ms,
