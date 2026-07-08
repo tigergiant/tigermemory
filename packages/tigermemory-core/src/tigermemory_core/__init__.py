@@ -2208,6 +2208,7 @@ def _local_update_shadow_content(memory_id: str, memory_content: str) -> None:
             UPDATE memories
             SET content=?,
                 content_sha256=?,
+                state='active',
                 shadow_state='mem0_updated',
                 updated_at=?,
                 verified_at=?

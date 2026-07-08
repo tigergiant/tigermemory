@@ -757,6 +757,38 @@ def test_mem0_update_content_dual_write_updates_local_shadow(monkeypatch, tmp_pa
         conn.close()
 
 
+def test_mem0_update_content_reactivates_deleted_local_shadow(monkeypatch, tmp_path):
+    _use_hybrid_profile(monkeypatch)
+    db_path = tmp_path / "local-shadow.sqlite"
+    remote_id = "77777777-7777-4777-8777-777777777777"
+    monkeypatch.setenv("TM_LOCAL_DUAL_WRITE", "1")
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(db_path))
+    monkeypatch.setattr(tm_core, "mem0_base", lambda: "http://localhost:8765")
+    monkeypatch.setattr(
+        tm_core,
+        "mem0_request",
+        lambda *_args, **_kwargs: json.dumps({"id": remote_id}),
+    )
+
+    tm_core.mem0_write("codex", "systems", "update after delete source")
+    tm_core.mem0_delete([remote_id])
+    tm_core.mem0_update_content(remote_id, "reactivated content")
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT content, state, shadow_state FROM memories WHERE legacy_mem0_id=?",
+            (remote_id,),
+        ).fetchone()
+        assert row is not None
+        assert row["content"] == "reactivated content"
+        assert row["state"] == "active"
+        assert row["shadow_state"] == "mem0_updated"
+    finally:
+        conn.close()
+
+
 def test_mem0_update_content_puts_content_only(monkeypatch):
     _use_hybrid_profile(monkeypatch)
     mem_id = "fd65b298-05bd-493c-83ce-e37d84447362"
