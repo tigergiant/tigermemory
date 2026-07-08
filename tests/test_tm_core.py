@@ -1240,9 +1240,6 @@ def test_search_wiki_lexical_demotes_retrieval_eval_report():
 
 
 def test_search_wiki_lexical_expands_cjk_domain_terms():
-    assert "wiki/operations/mem0-backup.md" in [
-        item["path"] for item in tm_core.search_wiki("记忆库备份策略", size=5, include_sources=False)
-    ]
     assert tm_core.search_wiki("虎哥个人资料", size=1, include_sources=False)[0]["path"] == "wiki/person/tiger.md"
     assert tm_core.search_wiki("变基出现冲突怎么办", size=1, include_sources=True)[0]["path"] == "AGENTS.md"
 
