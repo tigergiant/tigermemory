@@ -1,0 +1,14 @@
+# TigerMemory Codex MCP example
+#
+# Start with project rules:
+#   tm agent status
+#   tm agent apply --target codex --yes
+#
+# MCP is an advanced optional adapter. Do not paste an active config until
+# `tm agent print-config --client codex` reports ok=true on your machine.
+#
+# Example shape after a TigerMemory MCP server command is installed:
+#
+# [mcp_servers.tigermemory]
+# command = "tm-mcp"
+# args = ["--role=reader", "--tool-profile=memory"]
