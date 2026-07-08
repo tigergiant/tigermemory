@@ -736,6 +736,8 @@ def test_summarize_cutover_shadow_probe_flags_zero_overlap() -> None:
             "local_count": 1,
             "id_intersection_count": 0,
             "content_sha_intersection_count": 0,
+            "old_content_missing_active_local_count": 1,
+            "old_result_missing_active_local_count": 1,
             "local_latency_ms": 10.0,
             "warnings": [],
         },
@@ -744,6 +746,8 @@ def test_summarize_cutover_shadow_probe_flags_zero_overlap() -> None:
             "local_count": 0,
             "id_intersection_count": 0,
             "content_sha_intersection_count": 0,
+            "old_content_missing_active_local_count": 0,
+            "old_result_missing_active_local_count": 0,
             "local_latency_ms": 20.0,
             "warnings": [],
         },
@@ -755,6 +759,8 @@ def test_summarize_cutover_shadow_probe_flags_zero_overlap() -> None:
     assert summary["local_empty_but_old_had"] == 1
     assert summary["id_zero_overlap_when_both_nonempty"] == 1
     assert summary["content_zero_overlap_when_both_nonempty"] == 1
+    assert summary["old_content_missing_active_local_total"] == 1
+    assert summary["old_result_missing_active_local_total"] == 1
     assert "local_empty_but_old_had" in summary["reasons"]
     assert "content_zero_overlap" in summary["reasons"]
 
@@ -772,6 +778,72 @@ def test_run_cutover_shadow_probe_compares_id_and_content_overlap(tmp_path) -> N
     assert rows[0]["id_intersection_count"] == 0
     assert rows[0]["content_sha_intersection_count"] == 1
     assert rows[0]["warnings"] == []
+
+
+def test_run_cutover_shadow_probe_reports_old_content_active_coverage(tmp_path) -> None:
+    db = tmp_path / "mem.sqlite"
+    conn = tm_local_memory._conn(db)
+    try:
+        content = "covered but ranked elsewhere"
+        conn.execute(
+            """
+            INSERT INTO memories(
+                id, content, topic, source_agent, route_decision, route_score,
+                metadata_json, content_sha256, created_at, updated_at, state,
+                backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
+            ) VALUES ('local-covered', ?, 'systems', 'codex', 'mem0', 90, '{}', ?, 1, 1,
+                'active', 'openmemory-import', 'available', 'old-covered', 'pending', 1)
+            """,
+            (content, hashlib.sha256(content.encode("utf-8")).hexdigest()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rows = tm_local_memory.run_cutover_shadow_probe(
+        ["ranking drift query"],
+        db_path=db,
+        openmemory_fetch=lambda query, *, size=5: ([{"id": "old-covered", "content": content}], []),
+        local_search=lambda query, *, size=5, db_path=None: [{"id": "other", "content": "other result"}],
+    )
+
+    assert rows[0]["content_sha_intersection_count"] == 0
+    assert rows[0]["old_content_active_local_count"] == 1
+    assert rows[0]["old_content_missing_active_local_count"] == 0
+    assert rows[0]["old_result_active_local_count"] == 1
+    assert rows[0]["old_result_missing_active_local_count"] == 0
+
+
+def test_run_cutover_shadow_probe_counts_legacy_id_active_when_content_differs(tmp_path) -> None:
+    db = tmp_path / "mem.sqlite"
+    conn = tm_local_memory._conn(db)
+    try:
+        content = "covered through legacy id"
+        conn.execute(
+            """
+            INSERT INTO memories(
+                id, content, topic, source_agent, route_decision, route_score,
+                metadata_json, content_sha256, created_at, updated_at, state,
+                backend_origin, vector_status, legacy_mem0_id, shadow_state, verified_at
+            ) VALUES ('local-shadow', ?, 'systems', 'codex', 'mem0', 90, '{}', ?, 1, 1,
+                'active', 'local-shadow', 'available', 'old-id', 'pending', 1)
+            """,
+            (content, hashlib.sha256(content.encode("utf-8")).hexdigest()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rows = tm_local_memory.run_cutover_shadow_probe(
+        ["legacy drift query"],
+        db_path=db,
+        openmemory_fetch=lambda query, *, size=5: ([{"id": "old-id", "content": content + "\n"}], []),
+        local_search=lambda query, *, size=5, db_path=None: [{"id": "other", "content": "other result"}],
+    )
+
+    assert rows[0]["old_content_active_local_count"] == 0
+    assert rows[0]["old_result_active_local_count"] == 1
+    assert rows[0]["old_result_missing_active_local_count"] == 0
 
 
 def test_cutover_gates_cli_reports_blocked_gates(tmp_path, capsys) -> None:

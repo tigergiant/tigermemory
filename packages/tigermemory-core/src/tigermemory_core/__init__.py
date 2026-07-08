@@ -2394,6 +2394,8 @@ def _local_search_local_memory(conn: sqlite3.Connection, query: str, size: int =
     q = query.strip()
     if MEM0_UUID_RE.fullmatch(q):
         row = _local_read_memory_by_id(conn, q)
+        if not row:
+            row = _local_read_memory_by_legacy_id(conn, q)
         return [row] if row else []
     fts_query = _local_fts_query(q)
     rows: list[sqlite3.Row] = []
@@ -2404,12 +2406,11 @@ def _local_search_local_memory(conn: sqlite3.Connection, query: str, size: int =
                 SELECT m.id, m.content, m.topic, m.source_agent, m.route_decision, m.route_score,
                        m.metadata_json, m.content_sha256, m.created_at, m.updated_at, m.state,
                        m.backend_origin, m.vector_status, m.legacy_mem0_id, m.shadow_state, m.verified_at
-                FROM memories AS m
+                FROM memories_fts
+                JOIN memories AS m ON m.id = memories_fts.id
                 WHERE m.state = 'active'
-                  AND m.id IN (
-                    SELECT id FROM memories_fts WHERE memories_fts MATCH ?
-                )
-                ORDER BY m.created_at DESC
+                  AND memories_fts MATCH ?
+                ORDER BY bm25(memories_fts), m.created_at DESC
                 LIMIT ?
                 """,
                 (fts_query, limit),

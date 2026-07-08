@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import json
 import pathlib
+import sqlite3
 import subprocess
 import sys
 import urllib.error
@@ -562,6 +563,49 @@ def test_local_profile_mem0_search_uses_local_fts(monkeypatch, tmp_path):
     assert payload["results"][0]["source_agent"] == "codex"
     assert payload["search_backend"] == tm_core.TIGERMEMORY_PROFILE_LOCAL
     assert payload["results"][0]["route_info"]["vector_status"] == "fts5_only"
+
+
+def test_local_profile_mem0_search_resolves_legacy_uuid(monkeypatch, tmp_path):
+    db_path = str(tmp_path / "local.sqlite")
+    monkeypatch.setattr(tm_core, "tigermemory_profile", lambda: tm_core.TIGERMEMORY_PROFILE_LOCAL)
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", db_path)
+    legacy_id = "22222222-2222-4222-8222-222222222222"
+
+    raw = tm_core.mem0_write(
+        "codex",
+        "systems",
+        "legacy uuid searchable local record",
+        metadata_extra={"legacy_mem0_id": legacy_id},
+    )
+    local_id = json.loads(raw)["id"]
+
+    payload = json.loads(tm_core.mem0_search(legacy_id, size=3))
+
+    assert payload["count"] == 1
+    assert payload["results"][0]["id"] == local_id
+    assert payload["results"][0]["legacy_mem0_id"] == legacy_id
+
+
+def test_local_profile_mem0_search_ranks_fts_relevance_before_recency(monkeypatch, tmp_path):
+    db_path = tmp_path / "local.sqlite"
+    monkeypatch.setattr(tm_core, "tigermemory_profile", lambda: tm_core.TIGERMEMORY_PROFILE_LOCAL)
+    monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", str(db_path))
+
+    strong = json.loads(
+        tm_core.mem0_write("codex", "systems", "project canvas project canvas authoritative note")
+    )["id"]
+    weak = json.loads(tm_core.mem0_write("codex", "systems", "project weak note canvas"))["id"]
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute("UPDATE memories SET created_at=1, updated_at=1 WHERE id=?", (strong,))
+        conn.execute("UPDATE memories SET created_at=9, updated_at=9 WHERE id=?", (weak,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    payload = json.loads(tm_core.mem0_search("project canvas", size=2))
+
+    assert [item["id"] for item in payload["results"]] == [strong, weak]
 
 
 def test_local_profile_mem0_search_bridges_chinese_natural_query(monkeypatch, tmp_path):

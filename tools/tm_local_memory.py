@@ -1456,6 +1456,16 @@ def summarize_cutover_shadow_probe(
         and int(row.get("content_sha_intersection_count") or 0) == 0
     )
     warning_count = sum(1 for row in rows if row.get("warnings"))
+    old_content_missing_active_total = sum(
+        int(row.get("old_content_missing_active_local_count") or 0)
+        for row in rows
+        if row.get("old_content_missing_active_local_count") is not None
+    )
+    old_result_missing_active_total = sum(
+        int(row.get("old_result_missing_active_local_count") or 0)
+        for row in rows
+        if row.get("old_result_missing_active_local_count") is not None
+    )
     latencies = [
         float(row["local_latency_ms"])
         for row in rows
@@ -1483,6 +1493,8 @@ def summarize_cutover_shadow_probe(
         "local_empty_but_old_had": local_empty,
         "id_zero_overlap_when_both_nonempty": id_zero_overlap,
         "content_zero_overlap_when_both_nonempty": content_zero_overlap,
+        "old_content_missing_active_local_total": old_content_missing_active_total,
+        "old_result_missing_active_local_total": old_result_missing_active_total,
         "warning_count": warning_count,
         "local_latency_p95_ms": p95,
         "max_local_p95_ms": max_local_p95_ms,
@@ -1549,6 +1561,13 @@ def run_cutover_shadow_probe(
     rows: list[dict[str, Any]] = []
     fetch_old = openmemory_fetch or _shadow_openmemory_search_items
     fetch_local = local_search or _local_hybrid_search_items
+    conn: sqlite3.Connection | None = None
+    try:
+        db = Path(db_path)
+        if db.exists():
+            conn = _readonly_conn(db)
+    except sqlite3.Error:
+        conn = None
     for query in queries:
         q = str(query or "").strip()
         if not q:
@@ -1578,6 +1597,58 @@ def run_cutover_shadow_probe(
         local_shas = {_memory_item_sha(item) for item in local_items if isinstance(item, dict)}
         old_shas.discard(None)
         local_shas.discard(None)
+        old_content_any_local_count = None
+        old_content_active_local_count = None
+        old_result_active_local_count = None
+        if conn is not None and old_shas:
+            placeholders = ",".join("?" for _ in old_shas)
+            old_content_any_local_count = int(
+                conn.execute(
+                    f"SELECT COUNT(DISTINCT content_sha256) AS n FROM memories WHERE content_sha256 IN ({placeholders})",
+                    tuple(old_shas),
+                ).fetchone()["n"]
+            )
+            old_content_active_local_count = int(
+                conn.execute(
+                    f"""
+                    SELECT COUNT(DISTINCT content_sha256) AS n
+                    FROM memories
+                    WHERE state='active' AND content_sha256 IN ({placeholders})
+                    """,
+                    tuple(old_shas),
+                ).fetchone()["n"]
+            )
+        if conn is not None and old_items:
+            old_result_active_local_count = 0
+            for item in old_items:
+                if not isinstance(item, dict):
+                    continue
+                item_id = str(item.get("id") or "")
+                item_sha = _memory_item_sha(item)
+                row = None
+                if item_sha and item_id:
+                    row = conn.execute(
+                        """
+                        SELECT 1
+                        FROM memories
+                        WHERE state='active'
+                          AND (content_sha256=? OR id=? OR legacy_mem0_id=?)
+                        LIMIT 1
+                        """,
+                        (item_sha, item_id, item_id),
+                    ).fetchone()
+                elif item_sha:
+                    row = conn.execute(
+                        "SELECT 1 FROM memories WHERE state='active' AND content_sha256=? LIMIT 1",
+                        (item_sha,),
+                    ).fetchone()
+                elif item_id:
+                    row = conn.execute(
+                        "SELECT 1 FROM memories WHERE state='active' AND (id=? OR legacy_mem0_id=?) LIMIT 1",
+                        (item_id, item_id),
+                    ).fetchone()
+                if row:
+                    old_result_active_local_count += 1
         rows.append(
             {
                 "timestamp": dt.datetime.now(TZ_CN).isoformat(),
@@ -1587,11 +1658,26 @@ def run_cutover_shadow_probe(
                 "local_count": len(local_ids),
                 "id_intersection_count": len(set(old_ids) & set(local_ids)),
                 "content_sha_intersection_count": len(old_shas & local_shas),
+                "old_content_any_local_count": old_content_any_local_count,
+                "old_content_active_local_count": old_content_active_local_count,
+                "old_content_missing_active_local_count": (
+                    len(old_shas) - old_content_active_local_count
+                    if old_content_active_local_count is not None
+                    else None
+                ),
+                "old_result_active_local_count": old_result_active_local_count,
+                "old_result_missing_active_local_count": (
+                    len(old_ids) - old_result_active_local_count
+                    if old_result_active_local_count is not None
+                    else None
+                ),
                 "old_latency_ms": round(old_latency_ms, 2),
                 "local_latency_ms": round(local_latency_ms, 2),
                 "warnings": warnings,
             }
         )
+    if conn is not None:
+        conn.close()
     return rows
 
 
@@ -1616,12 +1702,12 @@ def _shadow_local_search_ids(conn: sqlite3.Connection, query: str, *, size: int 
         try:
             rows = conn.execute(
                 """
-                SELECT id FROM memories
-                WHERE id IN (
-                    SELECT id FROM memories_fts WHERE memories_fts MATCH ?
-                )
-                  AND state = 'active'
-                ORDER BY created_at DESC
+                SELECT m.id
+                FROM memories_fts
+                JOIN memories AS m ON m.id = memories_fts.id
+                WHERE memories_fts MATCH ?
+                  AND m.state = 'active'
+                ORDER BY bm25(memories_fts), m.created_at DESC
                 LIMIT ?
                 """,
                 (fts_query, limit),
