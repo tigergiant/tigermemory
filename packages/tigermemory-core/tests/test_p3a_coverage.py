@@ -553,6 +553,7 @@ def test_local_profile_mem0_search_uses_local_fts(monkeypatch, tmp_path):
     db_path = str(tmp_path / "local.sqlite")
     monkeypatch.setattr(tm_core, "tigermemory_profile", lambda: tm_core.TIGERMEMORY_PROFILE_LOCAL)
     monkeypatch.setenv("TIGERMEMORY_LOCAL_DB", db_path)
+    monkeypatch.setenv("TM_LOCAL_VECTOR_SEARCH", "0")
 
     payload = json.loads(tm_core.mem0_write("codex", "systems", "dashboard local backend searchable"))
     mem_id = payload["id"]
