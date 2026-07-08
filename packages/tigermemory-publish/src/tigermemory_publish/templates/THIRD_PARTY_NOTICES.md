@@ -27,6 +27,6 @@ access:
 ## Notes
 
 - The TigerMemory framework files in this public snapshot are distributed under
-  AGPL-3.0-or-later; see `LICENSE`.
+  the MIT License; see `LICENSE`.
 - User wiki content, local memories, runtime databases, `.env` files, and
   private worktree notes are not part of the public snapshot license boundary.

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import pathlib
@@ -173,7 +173,7 @@ def _build_fake_repo(root: pathlib.Path) -> None:
                 encoding="utf-8",
             )
         elif dst == "LICENSE":
-            path.write_text("AGPL-3.0-or-later\n", encoding="utf-8")
+            path.write_text("MIT License\n\nCopyright (c) 2026 tigergiant\n", encoding="utf-8")
         elif dst == "THIRD_PARTY_NOTICES.md":
             path.write_text("# Third-Party Notices\n\nTailwind CSS — MIT\n", encoding="utf-8")
         elif dst == ".codex/config.toml.example":
@@ -211,7 +211,7 @@ def _build_fake_repo(root: pathlib.Path) -> None:
             path.write_text(
                 "[project]\n"
                 "name='tigermemory'\n"
-                "license = { text = 'AGPL-3.0-or-later' }\n"
+                "license = { text = 'MIT' }\n"
                 "\n[project.scripts]\n"
                 "tm = 'tigermemory_cli:main'\n",
                 encoding="utf-8",
@@ -454,10 +454,10 @@ def test_execute_plan_copies_files(tmp_path: pathlib.Path) -> None:
     assert "tm llm status" in (dest / "index.md").read_text(encoding="utf-8")
     assert "tm ask --offline" in (dest / "index.md").read_text(encoding="utf-8")
     public_pyproject = (dest / "pyproject.toml").read_text(encoding="utf-8")
-    assert "AGPL-3.0-or-later" in public_pyproject
+    assert "MIT" in public_pyproject
     assert "tm = 'tigermemory_cli:main'" in public_pyproject
     assert "Internal; open-source release pending" not in public_pyproject
-    assert (dest / "LICENSE").read_text(encoding="utf-8").startswith("AGPL-3.0-or-later")
+    assert (dest / "LICENSE").read_text(encoding="utf-8").startswith("MIT License")
     assert "Tailwind CSS" in (dest / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
     assert not (dest / "wiki" / "operations" / "project-canvas.md").exists()
     starter_page = (dest / "wiki" / "projects" / "getting-started-with-ai-brain.md").read_text(encoding="utf-8")

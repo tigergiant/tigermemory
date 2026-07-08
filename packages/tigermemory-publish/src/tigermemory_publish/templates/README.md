@@ -37,8 +37,8 @@ package name and this README will say so explicitly.
 
 ## License
 
-The public TigerMemory framework snapshot is distributed under
-AGPL-3.0-or-later. See `LICENSE`.
+The public TigerMemory framework snapshot is distributed under the MIT License.
+See `LICENSE`. Free to use, modify, and distribute, including commercial use.
 
 Third-party dependency and vendored dashboard asset notices are listed in
 `THIRD_PARTY_NOTICES.md`.

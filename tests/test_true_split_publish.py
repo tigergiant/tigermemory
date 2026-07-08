@@ -38,7 +38,7 @@ def _publish_public_core(dest: pathlib.Path, repo_root: pathlib.Path) -> None:
                 'name = "tigermemory"',
                 'version = "0.0.0"',
                 'description = "TigerMemory public core test fixture"',
-                'license = { text = "AGPL-3.0-or-later" }',
+                'license = { text = "MIT" }',
                 "",
                 "[project.scripts]",
                 'tm = "tigermemory_cli:main"',
