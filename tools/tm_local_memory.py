@@ -1364,7 +1364,7 @@ def summarize_cutover_coverage(openmemory_items: list[dict[str, Any]], db_path: 
                 continue
             row = conn.execute(
                 """
-                SELECT id, state, topic
+                SELECT id, state, topic, content_sha256
                 FROM memories
                 WHERE id=? OR legacy_mem0_id=?
                 LIMIT 1
@@ -1378,9 +1378,10 @@ def summarize_cutover_coverage(openmemory_items: list[dict[str, Any]], db_path: 
                 continue
             non_active += 1
             item_sha = _memory_item_sha(item)
+            stored_sha = str(row["content_sha256"] or "")
             topic = str(row["topic"] or _memory_item_topic(item))
             equiv = None
-            if item_sha:
+            for candidate_sha in {sha for sha in (item_sha, stored_sha) if sha}:
                 equiv = conn.execute(
                     """
                     SELECT 1
@@ -1388,8 +1389,10 @@ def summarize_cutover_coverage(openmemory_items: list[dict[str, Any]], db_path: 
                     WHERE state='active' AND topic=? AND content_sha256=?
                     LIMIT 1
                     """,
-                    (topic, item_sha),
+                    (topic, candidate_sha),
                 ).fetchone()
+                if equiv:
+                    break
             if equiv:
                 non_active_with_equiv += 1
             else:

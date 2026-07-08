@@ -717,7 +717,7 @@ def test_summarize_cutover_coverage_splits_content_and_id_contract(tmp_path) -> 
     summary = tm_local_memory.summarize_cutover_coverage(
         [
             {"id": "active-1", "content": content, "metadata": {"topic": "systems"}},
-            {"id": "dup-1", "content": content, "metadata": {"topic": "systems"}},
+            {"id": "dup-1", "content": content + "\n", "metadata": {"topic": "systems"}},
         ],
         db,
     )
